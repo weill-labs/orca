@@ -47,7 +47,6 @@ type App struct {
 	daemon  daemon.Controller
 	state   state.Reader
 	stdout  io.Writer
-	stderr  io.Writer
 	version string
 	cwd     func() (string, error)
 }
@@ -70,7 +69,6 @@ func New(options Options) *App {
 		daemon:  options.Daemon,
 		state:   options.State,
 		stdout:  options.Stdout,
-		stderr:  options.Stderr,
 		version: version,
 		cwd:     options.Cwd,
 	}

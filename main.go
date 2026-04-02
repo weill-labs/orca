@@ -36,11 +36,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	if args[0] == "version" {
-		commit := BuildCommit
-		if commit == "" {
-			commit = "dev"
-		}
-		fmt.Fprintf(stdout, "orca %s\n", commit)
+		fmt.Fprintf(stdout, "orca %s\n", resolvedBuildCommit())
 		return 0
 	}
 
@@ -71,7 +67,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		State:   store,
 		Stdout:  stdout,
 		Stderr:  stderr,
-		Version: BuildCommit,
+		Version: resolvedBuildCommit(),
 		Cwd:     os.Getwd,
 	})
 
@@ -120,4 +116,11 @@ func runDaemonProcess(args []string) error {
 		StateDB: stateDB,
 		PIDFile: pidFile,
 	})
+}
+
+func resolvedBuildCommit() string {
+	if BuildCommit == "" {
+		return "dev"
+	}
+	return BuildCommit
 }
