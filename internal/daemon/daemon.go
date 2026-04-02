@@ -48,6 +48,7 @@ type assignment struct {
 	cancel       context.CancelFunc
 	captureTick  Ticker
 	pollTick     Ticker
+	pending      bool
 	profile      AgentProfile
 	task         Task
 	worker       Worker
@@ -212,20 +213,39 @@ func (d *Daemon) Assign(ctx context.Context, issue, prompt, agentProfile string)
 		profile.Name = agentProfile
 	}
 
+	placeholder := &assignment{
+		pending: true,
+		task: Task{
+			Project: d.project,
+			Issue:   issue,
+			Branch:  issue,
+		},
+	}
 	d.mu.Lock()
 	if _, exists := d.assignments[issue]; exists {
 		d.mu.Unlock()
 		return fmt.Errorf("issue %s already assigned", issue)
 	}
+	d.assignments[issue] = placeholder
 	d.mu.Unlock()
+
+	releaseReservation := func() {
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		if current, ok := d.assignments[issue]; ok && current == placeholder {
+			delete(d.assignments, issue)
+		}
+	}
 
 	clone, err := d.pool.Acquire(ctx, d.project, issue)
 	if err != nil {
+		releaseReservation()
 		return fmt.Errorf("acquire clone: %w", err)
 	}
 
 	if err := d.prepareClone(ctx, clone.Path, issue); err != nil {
 		_ = d.pool.Release(ctx, d.project, clone)
+		releaseReservation()
 		return fmt.Errorf("prepare clone: %w", err)
 	}
 
@@ -236,6 +256,7 @@ func (d *Daemon) Assign(ctx context.Context, issue, prompt, agentProfile string)
 	})
 	if err != nil {
 		_ = d.cleanupCloneAndRelease(ctx, clone, issue)
+		releaseReservation()
 		return fmt.Errorf("spawn pane: %w", err)
 	}
 
@@ -246,6 +267,7 @@ func (d *Daemon) Assign(ctx context.Context, issue, prompt, agentProfile string)
 		"task":          issue,
 	}); err != nil {
 		_ = d.rollbackAssignment(ctx, clone, pane, issue)
+		releaseReservation()
 		return fmt.Errorf("set pane metadata: %w", err)
 	}
 
@@ -263,6 +285,7 @@ func (d *Daemon) Assign(ctx context.Context, issue, prompt, agentProfile string)
 			Message:      err.Error(),
 		})
 		_ = d.rollbackAssignment(ctx, clone, pane, issue)
+		releaseReservation()
 		return fmt.Errorf("send prompt: %w", err)
 	}
 
@@ -291,10 +314,12 @@ func (d *Daemon) Assign(ctx context.Context, issue, prompt, agentProfile string)
 	}
 	if err := d.state.PutTask(ctx, task); err != nil {
 		_ = d.rollbackAssignment(ctx, clone, pane, issue)
+		releaseReservation()
 		return fmt.Errorf("store task: %w", err)
 	}
 	if err := d.state.PutWorker(ctx, worker); err != nil {
 		_ = d.rollbackAssignment(ctx, clone, pane, issue)
+		releaseReservation()
 		return fmt.Errorf("store worker: %w", err)
 	}
 
@@ -515,26 +540,27 @@ func (d *Daemon) nudgeOrEscalate(active *assignment, reason string) {
 func (d *Daemon) finishAssignment(ctx context.Context, active *assignment, status, eventType string, merged bool) error {
 	var result error
 	active.cleanupOnce.Do(func() {
+		cleanupCtx := context.WithoutCancel(ctx)
 		active.cancel()
 
 		if merged {
-			if err := d.amux.SendKeys(ctx, active.pane.ID, mergedWrapUpPrompt); err != nil {
+			if err := d.amux.SendKeys(cleanupCtx, active.pane.ID, mergedWrapUpPrompt); err != nil {
 				result = errors.Join(result, err)
 			}
-			if err := d.amux.WaitIdle(ctx, active.pane.ID, d.mergeGracePeriod); err != nil {
-				result = errors.Join(result, d.amux.KillPane(ctx, active.pane.ID))
+			if err := d.amux.WaitIdle(cleanupCtx, active.pane.ID, d.mergeGracePeriod); err != nil {
+				result = errors.Join(result, d.amux.KillPane(cleanupCtx, active.pane.ID))
 			}
 		} else {
-			result = errors.Join(result, d.amux.KillPane(ctx, active.pane.ID))
+			result = errors.Join(result, d.amux.KillPane(cleanupCtx, active.pane.ID))
 		}
 
-		result = errors.Join(result, d.cleanupCloneAndRelease(ctx, active.clone, active.task.Branch))
+		result = errors.Join(result, d.cleanupCloneAndRelease(cleanupCtx, active.clone, active.task.Branch))
 
 		active.task.Status = status
 		active.task.PRNumber = active.prNumber
 		active.task.UpdatedAt = d.now()
-		result = errors.Join(result, d.state.PutTask(ctx, active.task))
-		result = errors.Join(result, d.state.DeleteWorker(ctx, d.project, active.pane.ID))
+		result = errors.Join(result, d.state.PutTask(cleanupCtx, active.task))
+		result = errors.Join(result, d.state.DeleteWorker(cleanupCtx, d.project, active.pane.ID))
 
 		d.mu.Lock()
 		delete(d.assignments, active.task.Issue)
@@ -544,7 +570,7 @@ func (d *Daemon) finishAssignment(ctx context.Context, active *assignment, statu
 		if status == TaskStatusCancelled {
 			message = "task cancelled"
 		}
-		d.emit(ctx, Event{
+		d.emit(cleanupCtx, Event{
 			Time:         d.now(),
 			Type:         eventType,
 			Project:      d.project,
@@ -647,6 +673,9 @@ func (d *Daemon) assignment(issue string) (*assignment, error) {
 	active, ok := d.assignments[issue]
 	if !ok {
 		return nil, ErrTaskNotFound
+	}
+	if active.pending {
+		return nil, fmt.Errorf("issue %s assignment is still starting", issue)
 	}
 	return active, nil
 }

@@ -172,6 +172,51 @@ func TestAssignRollsBackOnPromptSendFailure(t *testing.T) {
 	deps.events.requireTypes(t, EventDaemonStarted, EventTaskAssignFailed)
 }
 
+func TestAssignRejectsConcurrentDuplicateIssueBeforeCloneAcquire(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker(), newFakeTicker(), newFakeTicker())
+	deps.pool.acquireStarted = make(chan struct{}, 1)
+	deps.pool.acquireRelease = make(chan struct{})
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	firstErr := make(chan error, 1)
+	go func() {
+		firstErr <- d.Assign(ctx, "LAB-689", "Implement daemon core", "codex")
+	}()
+
+	select {
+	case <-deps.pool.acquireStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for first clone acquisition")
+	}
+
+	secondErr := d.Assign(ctx, "LAB-689", "Implement daemon core again", "codex")
+	if secondErr == nil {
+		t.Fatal("second Assign() succeeded, want duplicate assignment error")
+	}
+	if !strings.Contains(secondErr.Error(), "already assigned") {
+		t.Fatalf("second Assign() error = %v, want duplicate assignment error", secondErr)
+	}
+	if got, want := deps.pool.acquireCallCount(), 1; got != want {
+		t.Fatalf("pool acquire calls = %d, want %d", got, want)
+	}
+
+	close(deps.pool.acquireRelease)
+	if err := <-firstErr; err != nil {
+		t.Fatalf("first Assign() error = %v", err)
+	}
+}
+
 func TestCancelKillsAgentCleansCloneAndFreesResources(t *testing.T) {
 	t.Parallel()
 
@@ -349,6 +394,9 @@ func TestPRMergePollingSendsWrapUpAndCleansClone(t *testing.T) {
 	captureTicker := newFakeTicker()
 	prTicker := newFakeTicker()
 	deps.tickers.enqueue(captureTicker, prTicker)
+	deps.amux.rejectCanceledContext = true
+	deps.pool.rejectCanceledContext = true
+	deps.state.rejectCanceledContext = true
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":"2026-04-02T12:00:00Z"}`, nil)
 
@@ -535,10 +583,11 @@ func (c *fakeConfig) AgentProfile(_ context.Context, name string) (AgentProfile,
 }
 
 type fakeState struct {
-	mu      sync.Mutex
-	tasks   map[string]Task
-	workers map[string]Worker
-	events  []Event
+	mu                    sync.Mutex
+	rejectCanceledContext bool
+	tasks                 map[string]Task
+	workers               map[string]Worker
+	events                []Event
 }
 
 func newFakeState() *fakeState {
@@ -548,14 +597,10 @@ func newFakeState() *fakeState {
 	}
 }
 
-func (s *fakeState) PutTask(_ context.Context, task Task) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.tasks[task.Issue] = task
-	return nil
-}
-
-func (s *fakeState) TaskByIssue(_ context.Context, project, issue string) (Task, error) {
+func (s *fakeState) TaskByIssue(ctx context.Context, project, issue string) (Task, error) {
+	if s.rejectCanceledContext && ctx.Err() != nil {
+		return Task{}, ctx.Err()
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	task, ok := s.tasks[issue]
@@ -565,14 +610,30 @@ func (s *fakeState) TaskByIssue(_ context.Context, project, issue string) (Task,
 	return task, nil
 }
 
-func (s *fakeState) PutWorker(_ context.Context, worker Worker) error {
+func (s *fakeState) PutTask(ctx context.Context, task Task) error {
+	if s.rejectCanceledContext && ctx.Err() != nil {
+		return ctx.Err()
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tasks[task.Issue] = task
+	return nil
+}
+
+func (s *fakeState) PutWorker(ctx context.Context, worker Worker) error {
+	if s.rejectCanceledContext && ctx.Err() != nil {
+		return ctx.Err()
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.workers[worker.PaneID] = worker
 	return nil
 }
 
-func (s *fakeState) DeleteWorker(_ context.Context, project, paneID string) error {
+func (s *fakeState) DeleteWorker(ctx context.Context, project, paneID string) error {
+	if s.rejectCanceledContext && ctx.Err() != nil {
+		return ctx.Err()
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	worker, ok := s.workers[paneID]
@@ -583,7 +644,10 @@ func (s *fakeState) DeleteWorker(_ context.Context, project, paneID string) erro
 	return nil
 }
 
-func (s *fakeState) RecordEvent(_ context.Context, event Event) error {
+func (s *fakeState) RecordEvent(ctx context.Context, event Event) error {
+	if s.rejectCanceledContext && ctx.Err() != nil {
+		return ctx.Err()
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.events = append(s.events, event)
@@ -605,13 +669,35 @@ func (s *fakeState) worker(paneID string) (Worker, bool) {
 }
 
 type fakePool struct {
-	mu       sync.Mutex
-	clone    Clone
-	acquired bool
-	released []Clone
+	mu                    sync.Mutex
+	rejectCanceledContext bool
+	acquireStarted        chan struct{}
+	acquireRelease        chan struct{}
+	acquireCalls          int
+	clone                 Clone
+	acquired              bool
+	released              []Clone
 }
 
-func (p *fakePool) Acquire(_ context.Context, project, issue string) (Clone, error) {
+func (p *fakePool) Acquire(ctx context.Context, project, issue string) (Clone, error) {
+	if p.rejectCanceledContext && ctx.Err() != nil {
+		return Clone{}, ctx.Err()
+	}
+	p.mu.Lock()
+	p.acquireCalls++
+	callNumber := p.acquireCalls
+	p.mu.Unlock()
+
+	if callNumber == 1 && p.acquireStarted != nil {
+		select {
+		case p.acquireStarted <- struct{}{}:
+		default:
+		}
+	}
+	if callNumber == 1 && p.acquireRelease != nil {
+		<-p.acquireRelease
+	}
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.acquired {
@@ -621,12 +707,21 @@ func (p *fakePool) Acquire(_ context.Context, project, issue string) (Clone, err
 	return p.clone, nil
 }
 
-func (p *fakePool) Release(_ context.Context, project string, clone Clone) error {
+func (p *fakePool) Release(ctx context.Context, project string, clone Clone) error {
+	if p.rejectCanceledContext && ctx.Err() != nil {
+		return ctx.Err()
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.acquired = false
 	p.released = append(p.released, clone)
 	return nil
+}
+
+func (p *fakePool) acquireCallCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.acquireCalls
 }
 
 func (p *fakePool) releasedClones() []Clone {
@@ -638,17 +733,18 @@ func (p *fakePool) releasedClones() []Clone {
 }
 
 type fakeAmux struct {
-	mu            sync.Mutex
-	spawnPane     Pane
-	sendKeysErr   error
-	waitIdleErr   error
-	spawnRequests []SpawnRequest
-	metadata      map[string]map[string]string
-	sentKeys      map[string][]string
-	captures      map[string][]string
-	captureCalls  map[string]int
-	killCalls     []string
-	waitIdleCalls []waitIdleCall
+	mu                    sync.Mutex
+	spawnPane             Pane
+	sendKeysErr           error
+	waitIdleErr           error
+	rejectCanceledContext bool
+	spawnRequests         []SpawnRequest
+	metadata              map[string]map[string]string
+	sentKeys              map[string][]string
+	captures              map[string][]string
+	captureCalls          map[string]int
+	killCalls             []string
+	waitIdleCalls         []waitIdleCall
 }
 
 type waitIdleCall struct {
@@ -656,7 +752,10 @@ type waitIdleCall struct {
 	Timeout time.Duration
 }
 
-func (a *fakeAmux) Spawn(_ context.Context, req SpawnRequest) (Pane, error) {
+func (a *fakeAmux) Spawn(ctx context.Context, req SpawnRequest) (Pane, error) {
+	if a.rejectCanceledContext && ctx.Err() != nil {
+		return Pane{}, ctx.Err()
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.spawnRequests = append(a.spawnRequests, req)
@@ -669,7 +768,10 @@ func (a *fakeAmux) Spawn(_ context.Context, req SpawnRequest) (Pane, error) {
 	return a.spawnPane, nil
 }
 
-func (a *fakeAmux) SetMetadata(_ context.Context, paneID string, metadata map[string]string) error {
+func (a *fakeAmux) SetMetadata(ctx context.Context, paneID string, metadata map[string]string) error {
+	if a.rejectCanceledContext && ctx.Err() != nil {
+		return ctx.Err()
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.metadata == nil {
@@ -683,7 +785,10 @@ func (a *fakeAmux) SetMetadata(_ context.Context, paneID string, metadata map[st
 	return nil
 }
 
-func (a *fakeAmux) SendKeys(_ context.Context, paneID, keys string) error {
+func (a *fakeAmux) SendKeys(ctx context.Context, paneID, keys string) error {
+	if a.rejectCanceledContext && ctx.Err() != nil {
+		return ctx.Err()
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.sentKeys == nil {
@@ -693,7 +798,10 @@ func (a *fakeAmux) SendKeys(_ context.Context, paneID, keys string) error {
 	return a.sendKeysErr
 }
 
-func (a *fakeAmux) Capture(_ context.Context, paneID string) (string, error) {
+func (a *fakeAmux) Capture(ctx context.Context, paneID string) (string, error) {
+	if a.rejectCanceledContext && ctx.Err() != nil {
+		return "", ctx.Err()
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.captureCalls == nil {
@@ -712,14 +820,20 @@ func (a *fakeAmux) Capture(_ context.Context, paneID string) (string, error) {
 	return value, nil
 }
 
-func (a *fakeAmux) KillPane(_ context.Context, paneID string) error {
+func (a *fakeAmux) KillPane(ctx context.Context, paneID string) error {
+	if a.rejectCanceledContext && ctx.Err() != nil {
+		return ctx.Err()
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.killCalls = append(a.killCalls, paneID)
 	return nil
 }
 
-func (a *fakeAmux) WaitIdle(_ context.Context, paneID string, timeout time.Duration) error {
+func (a *fakeAmux) WaitIdle(ctx context.Context, paneID string, timeout time.Duration) error {
+	if a.rejectCanceledContext && ctx.Err() != nil {
+		return ctx.Err()
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.waitIdleCalls = append(a.waitIdleCalls, waitIdleCall{PaneID: paneID, Timeout: timeout})
