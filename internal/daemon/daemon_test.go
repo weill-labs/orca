@@ -320,7 +320,9 @@ func TestStuckDetectionUsesIdleTimeoutAndRecoversOnOutputChange(t *testing.T) {
 	}
 
 	captureTicker.tick(deps.clock.Now())
-	time.Sleep(10 * time.Millisecond)
+	waitFor(t, "initial capture", func() bool {
+		return deps.amux.captureCount("pane-1") == 1
+	})
 	if got := deps.amux.countKey("pane-1", "\n"); got != 0 {
 		t.Fatalf("unexpected nudge count after initial activity = %d", got)
 	}
@@ -455,9 +457,9 @@ func newTestDeps(t *testing.T) *testDeps {
 				},
 			},
 		},
-		state:   newFakeState(),
-		pool:    &fakePool{clone: Clone{Name: "clone-01", Path: clonePath}},
-		amux:    &fakeAmux{spawnPane: Pane{ID: "pane-1", Name: "worker-1"}, captures: make(map[string][]string)},
+		state:    newFakeState(),
+		pool:     &fakePool{clone: Clone{Name: "clone-01", Path: clonePath}},
+		amux:     &fakeAmux{spawnPane: Pane{ID: "pane-1", Name: "worker-1"}, captures: make(map[string][]string)},
 		commands: newFakeCommands(),
 		events:   newFakeEvents(),
 		tickers:  &fakeTickerFactory{},
@@ -644,6 +646,7 @@ type fakeAmux struct {
 	metadata      map[string]map[string]string
 	sentKeys      map[string][]string
 	captures      map[string][]string
+	captureCalls  map[string]int
 	killCalls     []string
 	waitIdleCalls []waitIdleCall
 }
@@ -693,6 +696,10 @@ func (a *fakeAmux) SendKeys(_ context.Context, paneID, keys string) error {
 func (a *fakeAmux) Capture(_ context.Context, paneID string) (string, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.captureCalls == nil {
+		a.captureCalls = make(map[string]int)
+	}
+	a.captureCalls[paneID]++
 	sequence := a.captures[paneID]
 	if len(sequence) == 0 {
 		return "", nil
@@ -739,6 +746,12 @@ func (a *fakeAmux) countKey(paneID, key string) int {
 	return count
 }
 
+func (a *fakeAmux) captureCount(paneID string) int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.captureCalls[paneID]
+}
+
 func (a *fakeAmux) requireMetadata(t *testing.T, paneID string, want map[string]string) {
 	t.Helper()
 	a.mu.Lock()
@@ -758,9 +771,9 @@ func (a *fakeAmux) requireSentKeys(t *testing.T, paneID string, want []string) {
 }
 
 type fakeCommands struct {
-	mu      sync.Mutex
-	calls   []commandCall
-	queued  map[string][]commandResult
+	mu     sync.Mutex
+	calls  []commandCall
+	queued map[string][]commandResult
 }
 
 type commandCall struct {
@@ -848,6 +861,10 @@ func (c *fakeCommands) key(name string, args []string) string {
 type fakeEvents struct {
 	mu     sync.Mutex
 	events []Event
+}
+
+func newFakeEvents() *fakeEvents {
+	return &fakeEvents{}
 }
 
 func (e *fakeEvents) Emit(_ context.Context, event Event) error {
