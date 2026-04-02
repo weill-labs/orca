@@ -1,0 +1,435 @@
+package pool_test
+
+import (
+	"context"
+	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/weill-labs/orca/internal/pool"
+	"github.com/weill-labs/orca/internal/state"
+)
+
+type staticConfig struct {
+	pattern string
+}
+
+func (c staticConfig) PoolPattern() string {
+	return c.pattern
+}
+
+func TestManagerDiscover(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name         string
+		setup        func(t *testing.T, root string, store *state.SQLiteStore, project string) string
+		wantPaths    []string
+		wantStatuses map[string]pool.Status
+	}{
+		{
+			name: "returns only marked directories matching glob",
+			setup: func(t *testing.T, root string, store *state.SQLiteStore, project string) string {
+				t.Helper()
+
+				mustMkdir(t, filepath.Join(root, "orca01"))
+				mustTouch(t, filepath.Join(root, "orca01", ".orca-pool"))
+				mustMkdir(t, filepath.Join(root, "orca02"))
+				mustMkdir(t, filepath.Join(root, "notes"))
+				mustTouch(t, filepath.Join(root, "notes", ".orca-pool"))
+
+				return filepath.Join(root, "orca*")
+			},
+			wantPaths: []string{
+				"orca01",
+			},
+			wantStatuses: map[string]pool.Status{
+				"orca01": pool.StatusFree,
+			},
+		},
+		{
+			name: "preserves occupied status from state",
+			setup: func(t *testing.T, root string, store *state.SQLiteStore, project string) string {
+				t.Helper()
+
+				path := filepath.Join(root, "orca01")
+				mustMkdir(t, path)
+				mustTouch(t, filepath.Join(path, ".orca-pool"))
+
+				if _, err := store.EnsureClone(context.Background(), project, path); err != nil {
+					t.Fatalf("EnsureClone() setup error = %v", err)
+				}
+				ok, err := store.TryOccupyClone(context.Background(), project, path, "LAB-687", "LAB-687")
+				if err != nil {
+					t.Fatalf("TryOccupyClone() setup error = %v", err)
+				}
+				if !ok {
+					t.Fatal("TryOccupyClone() setup = false, want true")
+				}
+
+				return filepath.Join(root, "orca*")
+			},
+			wantPaths: []string{
+				"orca01",
+			},
+			wantStatuses: map[string]pool.Status{
+				"orca01": pool.StatusOccupied,
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			root := t.TempDir()
+			project := filepath.Join(root, "project")
+			store := newStore(t)
+
+			pattern := tc.setup(t, root, store, project)
+			manager := newManager(t, project, pattern, store)
+
+			clones, err := manager.Discover(context.Background())
+			if err != nil {
+				t.Fatalf("Discover() error = %v", err)
+			}
+
+			if len(clones) != len(tc.wantPaths) {
+				t.Fatalf("len(clones) = %d, want %d", len(clones), len(tc.wantPaths))
+			}
+
+			for i, clone := range clones {
+				gotBase := filepath.Base(clone.Path)
+				if gotBase != tc.wantPaths[i] {
+					t.Fatalf("clone[%d].Path base = %q, want %q", i, gotBase, tc.wantPaths[i])
+				}
+				if clone.Status != tc.wantStatuses[gotBase] {
+					t.Fatalf("clone[%d].Status = %q, want %q", i, clone.Status, tc.wantStatuses[gotBase])
+				}
+			}
+		})
+	}
+}
+
+func TestManagerAllocate(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		run  func(t *testing.T, manager *pool.Manager, store *state.SQLiteStore, project string, clones []string)
+	}{
+		{
+			name: "allocates free clone and creates issue branch",
+			run: func(t *testing.T, manager *pool.Manager, store *state.SQLiteStore, project string, clones []string) {
+				t.Helper()
+
+				clone, err := manager.Allocate(context.Background(), "LAB-687", "LAB-687")
+				if err != nil {
+					t.Fatalf("Allocate() error = %v", err)
+				}
+
+				if clone.Path != clones[0] {
+					t.Fatalf("clone.Path = %q, want %q", clone.Path, clones[0])
+				}
+				if clone.Status != pool.StatusOccupied {
+					t.Fatalf("clone.Status = %q, want %q", clone.Status, pool.StatusOccupied)
+				}
+
+				if branch := gitCurrentBranch(t, clone.Path); branch != "LAB-687" {
+					t.Fatalf("current branch = %q, want %q", branch, "LAB-687")
+				}
+
+				record := lookupClone(t, store, project, clone.Path)
+				if record.Status != state.CloneStatusOccupied {
+					t.Fatalf("record.Status = %q, want %q", record.Status, state.CloneStatusOccupied)
+				}
+				if record.CurrentBranch != "LAB-687" {
+					t.Fatalf("record.CurrentBranch = %q, want %q", record.CurrentBranch, "LAB-687")
+				}
+				if record.AssignedTask != "LAB-687" {
+					t.Fatalf("record.AssignedTask = %q, want %q", record.AssignedTask, "LAB-687")
+				}
+			},
+		},
+		{
+			name: "returns no free clone error when pool is exhausted",
+			run: func(t *testing.T, manager *pool.Manager, store *state.SQLiteStore, project string, clones []string) {
+				t.Helper()
+
+				if _, err := store.EnsureClone(context.Background(), project, clones[0]); err != nil {
+					t.Fatalf("EnsureClone() setup error = %v", err)
+				}
+				ok, err := store.TryOccupyClone(context.Background(), project, clones[0], "LAB-600", "LAB-600")
+				if err != nil {
+					t.Fatalf("TryOccupyClone() setup error = %v", err)
+				}
+				if !ok {
+					t.Fatal("TryOccupyClone() setup = false, want true")
+				}
+
+				_, err = manager.Allocate(context.Background(), "LAB-687", "LAB-687")
+				if !errors.Is(err, pool.ErrNoFreeClones) {
+					t.Fatalf("Allocate() error = %v, want ErrNoFreeClones", err)
+				}
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			root := t.TempDir()
+			project := filepath.Join(root, "project")
+			origin := newOrigin(t)
+			clones := []string{
+				newClone(t, origin, filepath.Join(root, "orca01")),
+				newClone(t, origin, filepath.Join(root, "orca02")),
+			}
+			store := newStore(t)
+			manager := newManager(t, project, filepath.Join(root, "orca*"), store)
+
+			tc.run(t, manager, store, project, clones)
+		})
+	}
+}
+
+func TestManagerRelease(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		run  func(t *testing.T, manager *pool.Manager, store *state.SQLiteStore, project string, clones []string)
+	}{
+		{
+			name: "cleans clone and marks it free",
+			run: func(t *testing.T, manager *pool.Manager, store *state.SQLiteStore, project string, clones []string) {
+				t.Helper()
+
+				clone, err := manager.Allocate(context.Background(), "LAB-687", "LAB-687")
+				if err != nil {
+					t.Fatalf("Allocate() setup error = %v", err)
+				}
+
+				mustWriteFile(t, filepath.Join(clone.Path, "junk.txt"), "junk")
+				mustWriteFile(t, filepath.Join(clone.Path, "README.md"), "modified")
+
+				if err := manager.Release(context.Background(), clone.Path, "LAB-687"); err != nil {
+					t.Fatalf("Release() error = %v", err)
+				}
+
+				if branch := gitCurrentBranch(t, clone.Path); branch != "main" {
+					t.Fatalf("current branch = %q, want %q", branch, "main")
+				}
+				if _, err := os.Stat(filepath.Join(clone.Path, "junk.txt")); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("junk.txt stat error = %v, want not exist", err)
+				}
+				if _, err := os.Stat(filepath.Join(clone.Path, ".orca-pool")); err != nil {
+					t.Fatalf(".orca-pool stat error = %v", err)
+				}
+				if gitBranchExists(t, clone.Path, "LAB-687") {
+					t.Fatal("task branch still exists after Release()")
+				}
+
+				record := lookupClone(t, store, project, clone.Path)
+				if record.Status != state.CloneStatusFree {
+					t.Fatalf("record.Status = %q, want %q", record.Status, state.CloneStatusFree)
+				}
+				if record.CurrentBranch != "" {
+					t.Fatalf("record.CurrentBranch = %q, want empty", record.CurrentBranch)
+				}
+				if record.AssignedTask != "" {
+					t.Fatalf("record.AssignedTask = %q, want empty", record.AssignedTask)
+				}
+			},
+		},
+		{
+			name: "leaves clone occupied when cleanup fails",
+			run: func(t *testing.T, manager *pool.Manager, store *state.SQLiteStore, project string, clones []string) {
+				t.Helper()
+
+				path := filepath.Join(t.TempDir(), "orca-bad")
+				mustMkdir(t, path)
+				mustTouch(t, filepath.Join(path, ".orca-pool"))
+
+				if _, err := store.EnsureClone(context.Background(), project, path); err != nil {
+					t.Fatalf("EnsureClone() setup error = %v", err)
+				}
+				ok, err := store.TryOccupyClone(context.Background(), project, path, "LAB-687", "LAB-687")
+				if err != nil {
+					t.Fatalf("TryOccupyClone() setup error = %v", err)
+				}
+				if !ok {
+					t.Fatal("TryOccupyClone() setup = false, want true")
+				}
+
+				err = manager.Release(context.Background(), path, "LAB-687")
+				if err == nil {
+					t.Fatal("Release() error = nil, want non-nil")
+				}
+
+				record := lookupClone(t, store, project, path)
+				if record.Status != state.CloneStatusOccupied {
+					t.Fatalf("record.Status = %q, want %q", record.Status, state.CloneStatusOccupied)
+				}
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			root := t.TempDir()
+			project := filepath.Join(root, "project")
+			origin := newOrigin(t)
+			clones := []string{
+				newClone(t, origin, filepath.Join(root, "orca01")),
+			}
+			store := newStore(t)
+			manager := newManager(t, project, filepath.Join(root, "orca*"), store)
+
+			tc.run(t, manager, store, project, clones)
+		})
+	}
+}
+
+func newStore(t *testing.T) *state.SQLiteStore {
+	t.Helper()
+
+	dbPath := filepath.Join(t.TempDir(), "state.db")
+	store, err := state.OpenSQLite(dbPath)
+	if err != nil {
+		t.Fatalf("OpenSQLite() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	})
+
+	return store
+}
+
+func newManager(t *testing.T, project, pattern string, store *state.SQLiteStore) *pool.Manager {
+	t.Helper()
+
+	manager, err := pool.New(project, staticConfig{pattern: pattern}, store)
+	if err != nil {
+		t.Fatalf("pool.New() error = %v", err)
+	}
+
+	return manager
+}
+
+func newOrigin(t *testing.T) string {
+	t.Helper()
+
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	mustRun(t, "", "git", "init", "-b", "main", source)
+	mustRun(t, source, "git", "config", "user.name", "Orca Tests")
+	mustRun(t, source, "git", "config", "user.email", "orca-tests@example.com")
+	mustWriteFile(t, filepath.Join(source, "README.md"), "hello")
+	mustRun(t, source, "git", "add", "README.md")
+	mustRun(t, source, "git", "commit", "-m", "initial commit")
+
+	origin := filepath.Join(root, "origin.git")
+	mustRun(t, "", "git", "clone", "--bare", source, origin)
+
+	return origin
+}
+
+func newClone(t *testing.T, origin, dest string) string {
+	t.Helper()
+
+	mustRun(t, "", "git", "clone", origin, dest)
+	mustTouch(t, filepath.Join(dest, ".orca-pool"))
+
+	return dest
+}
+
+func lookupClone(t *testing.T, store *state.SQLiteStore, project, path string) state.CloneRecord {
+	t.Helper()
+
+	records, err := store.ListClones(context.Background(), project)
+	if err != nil {
+		t.Fatalf("ListClones() error = %v", err)
+	}
+
+	for _, record := range records {
+		if record.Path == path {
+			return record
+		}
+	}
+
+	t.Fatalf("clone %q not found in state", path)
+	return state.CloneRecord{}
+}
+
+func gitCurrentBranch(t *testing.T, dir string) string {
+	t.Helper()
+
+	return strings.TrimSpace(mustOutput(t, dir, "git", "rev-parse", "--abbrev-ref", "HEAD"))
+}
+
+func gitBranchExists(t *testing.T, dir, branch string) bool {
+	t.Helper()
+
+	cmd := exec.Command("git", "show-ref", "--verify", "--quiet", "refs/heads/"+branch)
+	cmd.Dir = dir
+	err := cmd.Run()
+	return err == nil
+}
+
+func mustMkdir(t *testing.T, path string) {
+	t.Helper()
+
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", path, err)
+	}
+}
+
+func mustTouch(t *testing.T, path string) {
+	t.Helper()
+
+	mustWriteFile(t, path, "")
+}
+
+func mustWriteFile(t *testing.T, path, contents string) {
+	t.Helper()
+
+	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", path, err)
+	}
+}
+
+func mustRun(t *testing.T, dir, name string, args ...string) {
+	t.Helper()
+
+	cmd := exec.Command(name, args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%s %v failed: %v\n%s", name, args, err, out)
+	}
+}
+
+func mustOutput(t *testing.T, dir, name string, args ...string) string {
+	t.Helper()
+
+	cmd := exec.Command(name, args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%s %v failed: %v\n%s", name, args, err, out)
+	}
+
+	return string(out)
+}
