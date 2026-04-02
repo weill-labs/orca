@@ -50,12 +50,30 @@ jobs:
 
       - name: Vet
         if: steps.changes.outputs.code_changed == 'true'
-        run: go vet ./...
+        run: make vet
 
-      - name: Tests with coverage
+      - name: Race tests
         if: steps.changes.outputs.code_changed == 'true'
-        run: |
-          go test -race -coverprofile=coverage.txt -covermode=atomic -timeout 120s ./...
+        run: make test-race
+
+      - name: Standard test suite
+        if: steps.changes.outputs.code_changed == 'true'
+        run: make test
+
+      - name: Coverage report
+        if: steps.changes.outputs.code_changed == 'true'
+        run: make coverage
+
+      - name: Flake check
+        if: steps.changes.outputs.code_changed == 'true'
+        run: make test-flakes
+
+      - name: GoReleaser snapshot
+        if: steps.changes.outputs.code_changed == 'true'
+        uses: goreleaser/goreleaser-action@v7.0.0
+        with:
+          version: "~> v2"
+          args: release --snapshot --clean
 
       - name: Upload coverage to Codecov
         if: ${{ always() && steps.changes.outputs.code_changed == 'true' && hashFiles('coverage.txt') != '' }}
