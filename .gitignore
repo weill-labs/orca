@@ -29,6 +29,9 @@ Thumbs.db
 coverage.html
 coverage.txt
 merged-coverage.txt
+coverage-summary.txt
+results.json
+results.junit.xml
 
 # SQLite
 *.db
