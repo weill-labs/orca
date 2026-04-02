@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/weill-labs/orca/internal/daemon"
-	"github.com/weill-labs/orca/internal/state"
+	state "github.com/weill-labs/orca/internal/daemonstate"
 )
 
 func TestAppRunDispatchesCommands(t *testing.T) {
@@ -125,6 +125,25 @@ func TestAppRunDispatchesCommands(t *testing.T) {
 				}
 				if d.assignRequest.Agent != "codex" {
 					t.Fatalf("expected default agent codex, got %q", d.assignRequest.Agent)
+				}
+				if !strings.Contains(stdout, "LAB-690") {
+					t.Fatalf("expected issue in output, got %q", stdout)
+				}
+			},
+		},
+		{
+			name: "assign flags before issue",
+			args: []string{"assign", "--prompt", "Implement CLI wiring", "--agent", "claude", "LAB-690"},
+			assert: func(t *testing.T, d *fakeDaemon, _ *fakeState, stdout, _ string) {
+				t.Helper()
+				if d.assignRequest == nil {
+					t.Fatal("expected assign to be called")
+				}
+				if d.assignRequest.Issue != "LAB-690" {
+					t.Fatalf("expected issue LAB-690, got %q", d.assignRequest.Issue)
+				}
+				if d.assignRequest.Agent != "claude" {
+					t.Fatalf("expected agent claude, got %q", d.assignRequest.Agent)
 				}
 				if !strings.Contains(stdout, "LAB-690") {
 					t.Fatalf("expected issue in output, got %q", stdout)
