@@ -33,6 +33,7 @@ type Clone struct {
 
 type Config interface {
 	PoolPattern() string
+	BaseBranch() string
 }
 
 type Store interface {
@@ -48,11 +49,12 @@ type Runner interface {
 type Option func(*Manager)
 
 type Manager struct {
-	project string
-	pattern string
-	store   Store
-	runner  Runner
-	homeDir string
+	project    string
+	pattern    string
+	baseBranch string
+	store      Store
+	runner     Runner
+	homeDir    string
 }
 
 func New(project string, cfg Config, store Store, opts ...Option) (*Manager, error) {
@@ -77,11 +79,12 @@ func New(project string, cfg Config, store Store, opts ...Option) (*Manager, err
 	}
 
 	manager := &Manager{
-		project: filepath.Clean(absProject),
-		pattern: cfg.PoolPattern(),
-		store:   store,
-		runner:  execRunner{},
-		homeDir: homeDir,
+		project:    filepath.Clean(absProject),
+		pattern:    cfg.PoolPattern(),
+		baseBranch: defaultBaseBranch(cfg.BaseBranch()),
+		store:      store,
+		runner:     execRunner{},
+		homeDir:    homeDir,
 	}
 
 	for _, opt := range opts {
@@ -237,7 +240,7 @@ func (m *Manager) expandPattern(pattern string) (string, error) {
 
 func (m *Manager) prepareClone(ctx context.Context, path, issueBranch string) error {
 	commands := [][]string{
-		{"checkout", "main"},
+		{"checkout", m.baseBranch},
 		{"pull"},
 		{"checkout", "-B", issueBranch},
 	}
@@ -254,10 +257,9 @@ func (m *Manager) prepareClone(ctx context.Context, path, issueBranch string) er
 func (m *Manager) cleanupClone(ctx context.Context, path, taskBranch string) error {
 	commands := [][]string{
 		{"reset", "--hard"},
-		{"checkout", "main"},
+		{"checkout", m.baseBranch},
 		{"pull"},
 		{"clean", "-fdx", "--exclude=.orca-pool"},
-		{"branch", "-D", taskBranch},
 	}
 
 	for _, args := range commands {
@@ -266,7 +268,48 @@ func (m *Manager) cleanupClone(ctx context.Context, path, taskBranch string) err
 		}
 	}
 
+	exists, err := branchExists(ctx, path, taskBranch)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return nil
+	}
+
+	if err := m.runner.Run(ctx, path, "git", "branch", "-D", taskBranch); err != nil {
+		return err
+	}
+
 	return nil
+}
+
+func defaultBaseBranch(baseBranch string) string {
+	if strings.TrimSpace(baseBranch) == "" {
+		return "main"
+	}
+
+	return baseBranch
+}
+
+func branchExists(ctx context.Context, path, branch string) (bool, error) {
+	if strings.TrimSpace(branch) == "" {
+		return false, nil
+	}
+
+	cmd := exec.CommandContext(ctx, "git", "show-ref", "--verify", "--quiet", "refs/heads/"+branch)
+	cmd.Dir = path
+
+	err := cmd.Run()
+	if err == nil {
+		return true, nil
+	}
+
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+		return false, nil
+	}
+
+	return false, fmt.Errorf("git show-ref --verify --quiet refs/heads/%s: %w", branch, err)
 }
 
 func fromState(record state.CloneRecord) Clone {

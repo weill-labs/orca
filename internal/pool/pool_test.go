@@ -14,11 +14,16 @@ import (
 )
 
 type staticConfig struct {
-	pattern string
+	pattern    string
+	baseBranch string
 }
 
 func (c staticConfig) PoolPattern() string {
 	return c.pattern
+}
+
+func (c staticConfig) BaseBranch() string {
+	return c.baseBranch
 }
 
 func TestManagerDiscover(t *testing.T) {
@@ -117,7 +122,7 @@ func TestManagerDiscover(t *testing.T) {
 			if tc.options != nil {
 				options = tc.options(root)
 			}
-			manager := newManager(t, project, pattern, store, options...)
+			manager := newManager(t, project, staticConfig{pattern: pattern}, store, options...)
 
 			clones, err := manager.Discover(context.Background())
 			if err != nil {
@@ -145,8 +150,9 @@ func TestManagerAllocate(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		name string
-		run  func(t *testing.T, manager *pool.Manager, store *state.SQLiteStore, project string, clones []string)
+		name       string
+		baseBranch string
+		run        func(t *testing.T, manager *pool.Manager, store *state.SQLiteStore, project string, clones []string)
 	}{
 		{
 			name: "allocates free clone and creates issue branch",
@@ -214,13 +220,16 @@ func TestManagerAllocate(t *testing.T) {
 
 			root := t.TempDir()
 			project := filepath.Join(root, "project")
-			origin := newOrigin(t)
+			origin := newOrigin(t, defaultBaseBranch(tc.baseBranch))
 			clones := []string{
 				newClone(t, origin, filepath.Join(root, "orca01")),
 				newClone(t, origin, filepath.Join(root, "orca02")),
 			}
 			store := newStore(t)
-			manager := newManager(t, project, filepath.Join(root, "orca*"), store)
+			manager := newManager(t, project, staticConfig{
+				pattern:    filepath.Join(root, "orca*"),
+				baseBranch: tc.baseBranch,
+			}, store)
 
 			tc.run(t, manager, store, project, clones)
 		})
@@ -231,8 +240,9 @@ func TestManagerRelease(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		name string
-		run  func(t *testing.T, manager *pool.Manager, store *state.SQLiteStore, project string, clones []string)
+		name       string
+		baseBranch string
+		run        func(t *testing.T, manager *pool.Manager, store *state.SQLiteStore, project string, clones []string)
 	}{
 		{
 			name: "cleans clone and marks it free",
@@ -277,6 +287,49 @@ func TestManagerRelease(t *testing.T) {
 			},
 		},
 		{
+			name:       "uses configured base branch throughout lifecycle",
+			baseBranch: "trunk",
+			run: func(t *testing.T, manager *pool.Manager, store *state.SQLiteStore, project string, clones []string) {
+				t.Helper()
+
+				clone, err := manager.Allocate(context.Background(), "LAB-687", "LAB-687")
+				if err != nil {
+					t.Fatalf("Allocate() setup error = %v", err)
+				}
+
+				if err := manager.Release(context.Background(), clone.Path, "LAB-687"); err != nil {
+					t.Fatalf("Release() error = %v", err)
+				}
+
+				if branch := gitCurrentBranch(t, clone.Path); branch != "trunk" {
+					t.Fatalf("current branch = %q, want %q", branch, "trunk")
+				}
+			},
+		},
+		{
+			name: "marks clone free when task branch is already missing",
+			run: func(t *testing.T, manager *pool.Manager, store *state.SQLiteStore, project string, clones []string) {
+				t.Helper()
+
+				clone, err := manager.Allocate(context.Background(), "LAB-687", "LAB-687")
+				if err != nil {
+					t.Fatalf("Allocate() setup error = %v", err)
+				}
+
+				mustRun(t, clone.Path, "git", "checkout", "main")
+				mustRun(t, clone.Path, "git", "branch", "-D", "LAB-687")
+
+				if err := manager.Release(context.Background(), clone.Path, "LAB-687"); err != nil {
+					t.Fatalf("Release() error = %v", err)
+				}
+
+				record := lookupClone(t, store, project, clone.Path)
+				if record.Status != state.CloneStatusFree {
+					t.Fatalf("record.Status = %q, want %q", record.Status, state.CloneStatusFree)
+				}
+			},
+		},
+		{
 			name: "leaves clone occupied when cleanup fails",
 			run: func(t *testing.T, manager *pool.Manager, store *state.SQLiteStore, project string, clones []string) {
 				t.Helper()
@@ -316,12 +369,15 @@ func TestManagerRelease(t *testing.T) {
 
 			root := t.TempDir()
 			project := filepath.Join(root, "project")
-			origin := newOrigin(t)
+			origin := newOrigin(t, defaultBaseBranch(tc.baseBranch))
 			clones := []string{
 				newClone(t, origin, filepath.Join(root, "orca01")),
 			}
 			store := newStore(t)
-			manager := newManager(t, project, filepath.Join(root, "orca*"), store)
+			manager := newManager(t, project, staticConfig{
+				pattern:    filepath.Join(root, "orca*"),
+				baseBranch: tc.baseBranch,
+			}, store)
 
 			tc.run(t, manager, store, project, clones)
 		})
@@ -345,10 +401,10 @@ func newStore(t *testing.T) *state.SQLiteStore {
 	return store
 }
 
-func newManager(t *testing.T, project, pattern string, store *state.SQLiteStore, options ...pool.Option) *pool.Manager {
+func newManager(t *testing.T, project string, cfg staticConfig, store *state.SQLiteStore, options ...pool.Option) *pool.Manager {
 	t.Helper()
 
-	manager, err := pool.New(project, staticConfig{pattern: pattern}, store, options...)
+	manager, err := pool.New(project, cfg, store, options...)
 	if err != nil {
 		t.Fatalf("pool.New() error = %v", err)
 	}
@@ -356,12 +412,12 @@ func newManager(t *testing.T, project, pattern string, store *state.SQLiteStore,
 	return manager
 }
 
-func newOrigin(t *testing.T) string {
+func newOrigin(t *testing.T, baseBranch string) string {
 	t.Helper()
 
 	root := t.TempDir()
 	source := filepath.Join(root, "source")
-	mustRun(t, "", "git", "init", "-b", "main", source)
+	mustRun(t, "", "git", "init", "-b", baseBranch, source)
 	mustRun(t, source, "git", "config", "user.name", "Orca Tests")
 	mustRun(t, source, "git", "config", "user.email", "orca-tests@example.com")
 	mustWriteFile(t, filepath.Join(source, "README.md"), "hello")
@@ -372,6 +428,14 @@ func newOrigin(t *testing.T) string {
 	mustRun(t, "", "git", "clone", "--bare", source, origin)
 
 	return origin
+}
+
+func defaultBaseBranch(baseBranch string) string {
+	if strings.TrimSpace(baseBranch) == "" {
+		return "main"
+	}
+
+	return baseBranch
 }
 
 func newClone(t *testing.T, origin, dest string) string {
