@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Prevent committing planning artifacts
+for f in task_plan.md findings.md progress.md; do
+  if git diff --cached --name-only | grep -q "^${f}$"; then
+    echo "error: $f is staged — these are session-specific, not repo knowledge"
+    exit 1
+  fi
+done
+
+# Run go vet on staged Go files
+if git diff --cached --name-only | grep -q '\.go$'; then
+  echo "Running go vet..."
+  go vet ./...
+fi

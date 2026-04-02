@@ -1,0 +1,51 @@
+# CLAUDE.md
+
+## What is orca
+
+Orca is a deterministic agent orchestration daemon for amux. It manages the full lifecycle of coding tasks: clone allocation, agent spawning, health monitoring, PR merge detection, and cleanup. It owns no AI — all non-deterministic intelligence lives in the worker agents (Claude Code, Codex, etc.).
+
+See [docs/specs/orca-design.md](docs/specs/orca-design.md) for the full design document.
+
+## Architecture
+
+- **Daemon**: long-lived background process per project, SQLite state at `~/.config/orca/state.db`
+- **Clone pool**: convention-based discovery of independent git clones (not worktrees)
+- **Agent profiles**: pluggable configs for codex, claude, aider encoding agent-specific quirks
+- **amux consumer**: orca calls amux CLI commands and subscribes to amux events — amux knows nothing about orca
+
+## Development
+
+### Build and Test
+
+```bash
+make setup    # activate git hooks
+make install  # install to ~/.local/bin/orca
+make test     # run all tests
+make coverage # test coverage report
+```
+
+### TDD Workflow
+
+Red-green-refactor with separate commits per phase:
+1. **Red** — write failing tests, commit alone
+2. **Green** — minimal code to pass, commit separately
+3. **Refactor** — simplify, commit separately
+
+### Test Philosophy
+
+- Table-driven tests with `t.Run` and `t.Parallel()`
+- Integration tests for daemon lifecycle and amux interaction
+- Golden files for CLI output where applicable
+- Run targeted test slices with `-count=100` before calling work done
+
+### Pre-Push
+
+Rebase onto `origin/main` before first push.
+
+## Configuration
+
+```
+~/.config/orca/config.toml    # global: fleet hosts, agent profiles
+~/.config/orca/state.db       # global: tasks, workers, clones, event log
+.orca/config.toml             # per-project overrides
+```

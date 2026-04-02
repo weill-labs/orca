@@ -1,0 +1,57 @@
+version: 2
+
+project_name: orca
+
+builds:
+  - id: orca
+    binary: orca
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.BuildCommit={{.ShortCommit}}
+
+archives:
+  - id: archive
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats:
+      - tar.gz
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+release:
+  github:
+    owner: weill-labs
+    name: orca
+  replace_existing_artifacts: true
+  make_latest: true
+
+brews:
+  - name: orca
+    ids:
+      - archive
+    repository:
+      owner: weill-labs
+      name: homebrew-tap
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    directory: Formula
+    commit_author:
+      name: github-actions[bot]
+      email: 41898282+github-actions[bot]@users.noreply.github.com
+    commit_msg_template: "Update orca formula to {{ .Tag }}"
+    homepage: https://github.com/weill-labs/orca
+    description: Deterministic agent orchestration daemon for amux
+    license: MIT
+    url_template: "https://github.com/weill-labs/orca/releases/download/{{ .Tag }}/{{ .ArtifactName }}"
+    test: |
+      system "#{bin}/orca", "version"

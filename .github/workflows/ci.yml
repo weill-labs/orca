@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6.0.2
+        with:
+          fetch-depth: 2
+
+      - name: Fetch PR base for diff
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: git fetch --no-tags --depth=1 origin "$BASE_SHA"
+
+      - name: Check for code changes
+        id: changes
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            BASE="$PR_BASE_SHA"
+          else
+            BASE="$PUSH_BEFORE_SHA"
+          fi
+          CODE_CHANGED=$(git diff --name-only "$BASE" HEAD | grep -vE '\.(md)$|^docs/|^LICENSE$' | head -1)
+          if [ -z "$CODE_CHANGED" ]; then
+            echo "code_changed=false" >> "$GITHUB_OUTPUT"
+            echo "Docs-only change, skipping tests"
+          else
+            echo "code_changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-go@v6.3.0
+        if: steps.changes.outputs.code_changed == 'true'
+        with:
+          go-version: "1.25"
+
+      - name: Build
+        if: steps.changes.outputs.code_changed == 'true'
+        run: go build ./...
+
+      - name: Vet
+        if: steps.changes.outputs.code_changed == 'true'
+        run: go vet ./...
+
+      - name: Tests with coverage
+        if: steps.changes.outputs.code_changed == 'true'
+        run: |
+          go test -race -coverprofile=coverage.txt -covermode=atomic -timeout 120s ./...
+
+      - name: Upload coverage to Codecov
+        if: ${{ always() && steps.changes.outputs.code_changed == 'true' && hashFiles('coverage.txt') != '' }}
+        uses: codecov/codecov-action@v5.5.3
+        with:
+          files: coverage.txt
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
