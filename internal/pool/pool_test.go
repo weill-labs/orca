@@ -27,6 +27,7 @@ func TestManagerDiscover(t *testing.T) {
 	cases := []struct {
 		name         string
 		setup        func(t *testing.T, root string, store *state.SQLiteStore, project string) string
+		options      func(root string) []pool.Option
 		wantPaths    []string
 		wantStatuses map[string]pool.Status
 	}{
@@ -42,6 +43,27 @@ func TestManagerDiscover(t *testing.T) {
 				mustTouch(t, filepath.Join(root, "notes", ".orca-pool"))
 
 				return filepath.Join(root, "orca*")
+			},
+			wantPaths: []string{
+				"orca01",
+			},
+			wantStatuses: map[string]pool.Status{
+				"orca01": pool.StatusFree,
+			},
+		},
+		{
+			name: "expands tilde in pool pattern",
+			setup: func(t *testing.T, root string, store *state.SQLiteStore, project string) string {
+				t.Helper()
+
+				path := filepath.Join(root, "clones", "orca01")
+				mustMkdir(t, path)
+				mustTouch(t, filepath.Join(path, ".orca-pool"))
+
+				return filepath.Join("~", "clones", "orca*")
+			},
+			options: func(root string) []pool.Option {
+				return []pool.Option{pool.WithHomeDir(root)}
 			},
 			wantPaths: []string{
 				"orca01",
@@ -91,7 +113,11 @@ func TestManagerDiscover(t *testing.T) {
 			store := newStore(t)
 
 			pattern := tc.setup(t, root, store, project)
-			manager := newManager(t, project, pattern, store)
+			var options []pool.Option
+			if tc.options != nil {
+				options = tc.options(root)
+			}
+			manager := newManager(t, project, pattern, store, options...)
 
 			clones, err := manager.Discover(context.Background())
 			if err != nil {
@@ -160,18 +186,20 @@ func TestManagerAllocate(t *testing.T) {
 			run: func(t *testing.T, manager *pool.Manager, store *state.SQLiteStore, project string, clones []string) {
 				t.Helper()
 
-				if _, err := store.EnsureClone(context.Background(), project, clones[0]); err != nil {
-					t.Fatalf("EnsureClone() setup error = %v", err)
-				}
-				ok, err := store.TryOccupyClone(context.Background(), project, clones[0], "LAB-600", "LAB-600")
-				if err != nil {
-					t.Fatalf("TryOccupyClone() setup error = %v", err)
-				}
-				if !ok {
-					t.Fatal("TryOccupyClone() setup = false, want true")
+				for _, clonePath := range clones {
+					if _, err := store.EnsureClone(context.Background(), project, clonePath); err != nil {
+						t.Fatalf("EnsureClone() setup error = %v", err)
+					}
+					ok, err := store.TryOccupyClone(context.Background(), project, clonePath, "LAB-600", "LAB-600")
+					if err != nil {
+						t.Fatalf("TryOccupyClone() setup error = %v", err)
+					}
+					if !ok {
+						t.Fatal("TryOccupyClone() setup = false, want true")
+					}
 				}
 
-				_, err = manager.Allocate(context.Background(), "LAB-687", "LAB-687")
+				_, err := manager.Allocate(context.Background(), "LAB-687", "LAB-687")
 				if !errors.Is(err, pool.ErrNoFreeClones) {
 					t.Fatalf("Allocate() error = %v, want ErrNoFreeClones", err)
 				}
@@ -317,10 +345,10 @@ func newStore(t *testing.T) *state.SQLiteStore {
 	return store
 }
 
-func newManager(t *testing.T, project, pattern string, store *state.SQLiteStore) *pool.Manager {
+func newManager(t *testing.T, project, pattern string, store *state.SQLiteStore, options ...pool.Option) *pool.Manager {
 	t.Helper()
 
-	manager, err := pool.New(project, staticConfig{pattern: pattern}, store)
+	manager, err := pool.New(project, staticConfig{pattern: pattern}, store, options...)
 	if err != nil {
 		t.Fatalf("pool.New() error = %v", err)
 	}
