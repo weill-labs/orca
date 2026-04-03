@@ -296,9 +296,15 @@ func (d *Daemon) Assign(ctx context.Context, issue, prompt, agentProfile string)
 		return fmt.Errorf("agent handshake: %w", err)
 	}
 
-	if err := d.amux.SendKeys(ctx, pane.ID, ensureTrailingNewline(prompt)); err != nil {
+	if err := d.amux.SendKeys(ctx, pane.ID, prompt); err != nil {
 		d.failPendingAssignment(ctx, issue, clone, pane, profile, err, releaseReservation)
 		return fmt.Errorf("send prompt: %w", err)
+	}
+	// Brief wait for the agent to render the prompt text before submitting.
+	_ = d.amux.WaitIdle(ctx, pane.ID, 3*time.Second)
+	if err := d.amux.SendKeys(ctx, pane.ID, "Enter"); err != nil {
+		d.failPendingAssignment(ctx, issue, clone, pane, profile, err, releaseReservation)
+		return fmt.Errorf("send Enter after prompt: %w", err)
 	}
 
 	now := d.now()
@@ -403,7 +409,7 @@ func (d *Daemon) agentHandshake(ctx context.Context, paneID string, profile Agen
 		return nil
 	}
 
-	if err := d.amux.SendKeys(ctx, paneID, "\n"); err != nil {
+	if err := d.amux.SendKeys(ctx, paneID, "Enter"); err != nil {
 		return fmt.Errorf("confirm trust prompt: %w", err)
 	}
 
