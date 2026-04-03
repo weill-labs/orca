@@ -183,7 +183,7 @@ func (c *CLIClient) KillPane(ctx context.Context, paneID string) error {
 
 // WaitIdle waits for a pane to become idle before returning.
 func (c *CLIClient) WaitIdle(ctx context.Context, paneID string, timeout time.Duration) error {
-	_, err := c.run(ctx, c.session, "wait", "idle", paneID, "--settle", "2s", "--timeout", timeout.String())
+	_, err := c.run(ctx, c.session, "wait", "idle", paneID, "--timeout", timeout.String())
 	return err
 }
 
