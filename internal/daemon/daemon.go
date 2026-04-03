@@ -449,6 +449,9 @@ func (d *Daemon) handlePRPoll(active *assignment) {
 			active.task.PRNumber = prNumber
 			active.task.UpdatedAt = d.now()
 			_ = d.state.PutTask(active.ctx, active.task)
+			_ = d.amux.SetMetadata(active.ctx, active.pane.ID, map[string]string{
+				"pr": fmt.Sprintf("%d", prNumber),
+			})
 			d.emit(active.ctx, Event{
 				Time:         d.now(),
 				Type:         EventPRDetected,
