@@ -1,10 +1,12 @@
 package amux
 
 import (
+	"context"
 	"errors"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 type recordedCommand struct {
@@ -18,7 +20,7 @@ type fakeRunner struct {
 	calls  []recordedCommand
 }
 
-func (r *fakeRunner) Run(name string, args []string) ([]byte, error) {
+func (r *fakeRunner) Run(_ context.Context, name string, args []string) ([]byte, error) {
 	r.calls = append(r.calls, recordedCommand{
 		name: name,
 		args: append([]string(nil), args...),
@@ -38,50 +40,47 @@ func TestCLIClientSpawn(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name       string
-		config     Config
-		opts       SpawnOptions
-		output     string
-		runErr     error
-		wantCmd    recordedCommand
-		wantPaneID string
-		wantErr    string
+		name     string
+		config   Config
+		req      SpawnRequest
+		output   string
+		runErr   error
+		wantCmd  recordedCommand
+		wantPane Pane
+		wantErr  string
 	}{
 		{
-			name: "builds spawn command with all supported flags",
+			name: "builds spawn command with cwd and command",
 			config: Config{
 				Binary:  "/usr/local/bin/amux",
 				Session: "orca-dev",
 			},
-			opts: SpawnOptions{
-				Name:       "worker-1",
-				Host:       "lambda-a100",
-				Task:       "LAB-688",
-				Color:      "rosewater",
-				Background: true,
+			req: SpawnRequest{
+				Session: "override-session",
+				CWD:     "/tmp/clone-01",
+				Command: "codex --yolo",
 			},
-			output: "Spawned worker-1 in pane 7\n",
+			output: "Spawned clone-01 in pane 7\n",
 			wantCmd: recordedCommand{
 				name: "/usr/local/bin/amux",
 				args: []string{
-					"-s", "orca-dev",
+					"-s", "override-session",
 					"spawn",
-					"--name", "worker-1",
-					"--host", "lambda-a100",
-					"--task", "LAB-688",
-					"--color", "rosewater",
-					"--background",
+					"--name", "clone-01",
+					"--cwd", "/tmp/clone-01",
+					"--command", "codex --yolo",
 				},
 			},
-			wantPaneID: "pane-7",
+			wantPane: Pane{ID: "pane-7", Name: "clone-01"},
 		},
 		{
-			name: "defaults binary name and omits empty flags",
+			name: "defaults binary name and session",
 			config: Config{
 				Session: "default",
 			},
-			opts: SpawnOptions{
-				Name: "worker-2",
+			req: SpawnRequest{
+				CWD:     "/tmp/worker-2",
+				Command: "claude --dangerously-skip-permissions",
 			},
 			output: "Spawned worker-2 in pane 12\n",
 			wantCmd: recordedCommand{
@@ -90,17 +89,19 @@ func TestCLIClientSpawn(t *testing.T) {
 					"-s", "default",
 					"spawn",
 					"--name", "worker-2",
+					"--cwd", "/tmp/worker-2",
+					"--command", "claude --dangerously-skip-permissions",
 				},
 			},
-			wantPaneID: "pane-12",
+			wantPane: Pane{ID: "pane-12", Name: "worker-2"},
 		},
 		{
 			name: "returns runner error",
 			config: Config{
 				Session: "default",
 			},
-			opts: SpawnOptions{
-				Name: "worker-3",
+			req: SpawnRequest{
+				CWD: "/tmp/worker-3",
 			},
 			runErr: errors.New("exit status 1"),
 			wantCmd: recordedCommand{
@@ -109,6 +110,7 @@ func TestCLIClientSpawn(t *testing.T) {
 					"-s", "default",
 					"spawn",
 					"--name", "worker-3",
+					"--cwd", "/tmp/worker-3",
 				},
 			},
 			wantErr: "exit status 1",
@@ -118,8 +120,8 @@ func TestCLIClientSpawn(t *testing.T) {
 			config: Config{
 				Session: "default",
 			},
-			opts: SpawnOptions{
-				Name: "worker-4",
+			req: SpawnRequest{
+				CWD: "/tmp/worker-4",
 			},
 			output: "Spawned worker-4\n",
 			wantCmd: recordedCommand{
@@ -128,6 +130,7 @@ func TestCLIClientSpawn(t *testing.T) {
 					"-s", "default",
 					"spawn",
 					"--name", "worker-4",
+					"--cwd", "/tmp/worker-4",
 				},
 			},
 			wantErr: "parse pane id",
@@ -145,7 +148,7 @@ func TestCLIClientSpawn(t *testing.T) {
 			}
 			client := newTestClient(tt.config, runner)
 
-			gotPaneID, err := client.Spawn(tt.opts)
+			gotPane, err := client.Spawn(context.Background(), tt.req)
 			if tt.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 					t.Fatalf("Spawn() error = %v, want substring %q", err, tt.wantErr)
@@ -158,8 +161,8 @@ func TestCLIClientSpawn(t *testing.T) {
 				t.Fatalf("Spawn() commands = %#v, want %#v", runner.calls, []recordedCommand{tt.wantCmd})
 			}
 
-			if gotPaneID != tt.wantPaneID {
-				t.Fatalf("Spawn() paneID = %q, want %q", gotPaneID, tt.wantPaneID)
+			if gotPane != tt.wantPane {
+				t.Fatalf("Spawn() pane = %#v, want %#v", gotPane, tt.wantPane)
 			}
 		})
 	}
@@ -223,7 +226,7 @@ func TestCLIClientSendKeys(t *testing.T) {
 			runner := &fakeRunner{err: tt.runErr}
 			client := newTestClient(tt.config, runner)
 
-			err := client.SendKeys(tt.paneID, tt.text)
+			err := client.SendKeys(context.Background(), tt.paneID, tt.text)
 			if tt.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 					t.Fatalf("SendKeys() error = %v, want substring %q", err, tt.wantErr)
@@ -337,7 +340,7 @@ func TestCLIClientCapture(t *testing.T) {
 			}
 			client := newTestClient(tt.config, runner)
 
-			gotOutput, err := client.Capture(tt.paneID)
+			gotOutput, err := client.Capture(context.Background(), tt.paneID)
 			if tt.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 					t.Fatalf("Capture() error = %v, want substring %q", err, tt.wantErr)
@@ -357,15 +360,14 @@ func TestCLIClientCapture(t *testing.T) {
 	}
 }
 
-func TestCLIClientMeta(t *testing.T) {
+func TestCLIClientSetMetadata(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		name    string
 		config  Config
 		paneID  string
-		key     string
-		value   string
+		meta    map[string]string
 		runErr  error
 		wantCmd recordedCommand
 		wantErr string
@@ -376,14 +378,17 @@ func TestCLIClientMeta(t *testing.T) {
 				Session: "orca-dev",
 			},
 			paneID: "pane-13",
-			key:    "task",
-			value:  "LAB-688",
+			meta: map[string]string{
+				"issue": "LAB-688",
+				"task":  "LAB-688",
+			},
 			wantCmd: recordedCommand{
 				name: "amux",
 				args: []string{
 					"-s", "orca-dev",
 					"set-meta",
 					"pane-13",
+					"issue=LAB-688",
 					"task=LAB-688",
 				},
 			},
@@ -394,8 +399,9 @@ func TestCLIClientMeta(t *testing.T) {
 				Session: "orca-dev",
 			},
 			paneID: "pane-14",
-			key:    "issue",
-			value:  "LAB-688",
+			meta: map[string]string{
+				"issue": "LAB-688",
+			},
 			runErr: errors.New("exit status 1"),
 			wantCmd: recordedCommand{
 				name: "amux",
@@ -418,23 +424,23 @@ func TestCLIClientMeta(t *testing.T) {
 			runner := &fakeRunner{err: tt.runErr}
 			client := newTestClient(tt.config, runner)
 
-			err := client.Meta(tt.paneID, tt.key, tt.value)
+			err := client.SetMetadata(context.Background(), tt.paneID, tt.meta)
 			if tt.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-					t.Fatalf("Meta() error = %v, want substring %q", err, tt.wantErr)
+					t.Fatalf("SetMetadata() error = %v, want substring %q", err, tt.wantErr)
 				}
 			} else if err != nil {
-				t.Fatalf("Meta() error = %v", err)
+				t.Fatalf("SetMetadata() error = %v", err)
 			}
 
 			if !reflect.DeepEqual(runner.calls, []recordedCommand{tt.wantCmd}) {
-				t.Fatalf("Meta() commands = %#v, want %#v", runner.calls, []recordedCommand{tt.wantCmd})
+				t.Fatalf("SetMetadata() commands = %#v, want %#v", runner.calls, []recordedCommand{tt.wantCmd})
 			}
 		})
 	}
 }
 
-func TestCLIClientKill(t *testing.T) {
+func TestCLIClientKillPane(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -487,19 +493,45 @@ func TestCLIClientKill(t *testing.T) {
 			runner := &fakeRunner{err: tt.runErr}
 			client := newTestClient(tt.config, runner)
 
-			err := client.Kill(tt.paneID)
+			err := client.KillPane(context.Background(), tt.paneID)
 			if tt.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-					t.Fatalf("Kill() error = %v, want substring %q", err, tt.wantErr)
+					t.Fatalf("KillPane() error = %v, want substring %q", err, tt.wantErr)
 				}
 			} else if err != nil {
-				t.Fatalf("Kill() error = %v", err)
+				t.Fatalf("KillPane() error = %v", err)
 			}
 
 			if !reflect.DeepEqual(runner.calls, []recordedCommand{tt.wantCmd}) {
-				t.Fatalf("Kill() commands = %#v, want %#v", runner.calls, []recordedCommand{tt.wantCmd})
+				t.Fatalf("KillPane() commands = %#v, want %#v", runner.calls, []recordedCommand{tt.wantCmd})
 			}
 		})
+	}
+}
+
+func TestCLIClientWaitIdle(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeRunner{}
+	client := newTestClient(Config{Session: "orca-dev"}, runner)
+
+	if err := client.WaitIdle(context.Background(), "pane-17", 45*time.Second); err != nil {
+		t.Fatalf("WaitIdle() error = %v", err)
+	}
+
+	want := []recordedCommand{{
+		name: "amux",
+		args: []string{
+			"-s", "orca-dev",
+			"wait",
+			"idle",
+			"pane-17",
+			"--settle", "2s",
+			"--timeout", "45s",
+		},
+	}}
+	if !reflect.DeepEqual(runner.calls, want) {
+		t.Fatalf("WaitIdle() commands = %#v, want %#v", runner.calls, want)
 	}
 }
 
@@ -507,40 +539,43 @@ func TestMockClientRecordsCalls(t *testing.T) {
 	t.Parallel()
 
 	mock := &MockClient{
-		SpawnFunc: func(opts SpawnOptions) (string, error) {
-			return "pane-20", nil
+		SpawnFunc: func(_ context.Context, req SpawnRequest) (Pane, error) {
+			return Pane{ID: "pane-20", Name: paneName(req.CWD)}, nil
 		},
-		CaptureFunc: func(paneID string) (string, error) {
+		CaptureFunc: func(_ context.Context, paneID string) (string, error) {
 			return "captured output", nil
 		},
 	}
 
-	gotPaneID, err := mock.Spawn(SpawnOptions{Name: "worker-20"})
+	gotPane, err := mock.Spawn(context.Background(), SpawnRequest{CWD: "/tmp/worker-20"})
 	if err != nil {
 		t.Fatalf("Spawn() error = %v", err)
 	}
-	if gotPaneID != "pane-20" {
-		t.Fatalf("Spawn() paneID = %q, want %q", gotPaneID, "pane-20")
+	if gotPane.ID != "pane-20" {
+		t.Fatalf("Spawn() paneID = %q, want %q", gotPane.ID, "pane-20")
 	}
 
-	if err := mock.SendKeys("pane-20", "make test"); err != nil {
+	if err := mock.SendKeys(context.Background(), "pane-20", "make test"); err != nil {
 		t.Fatalf("SendKeys() error = %v", err)
 	}
-	gotCapture, err := mock.Capture("pane-20")
+	gotCapture, err := mock.Capture(context.Background(), "pane-20")
 	if err != nil {
 		t.Fatalf("Capture() error = %v", err)
 	}
 	if gotCapture != "captured output" {
 		t.Fatalf("Capture() output = %q, want %q", gotCapture, "captured output")
 	}
-	if err := mock.Meta("pane-20", "task", "LAB-688"); err != nil {
-		t.Fatalf("Meta() error = %v", err)
+	if err := mock.SetMetadata(context.Background(), "pane-20", map[string]string{"task": "LAB-688"}); err != nil {
+		t.Fatalf("SetMetadata() error = %v", err)
 	}
-	if err := mock.Kill("pane-20"); err != nil {
-		t.Fatalf("Kill() error = %v", err)
+	if err := mock.KillPane(context.Background(), "pane-20"); err != nil {
+		t.Fatalf("KillPane() error = %v", err)
+	}
+	if err := mock.WaitIdle(context.Background(), "pane-20", 10*time.Second); err != nil {
+		t.Fatalf("WaitIdle() error = %v", err)
 	}
 
-	if !reflect.DeepEqual(mock.SpawnCalls, []SpawnOptions{{Name: "worker-20"}}) {
+	if !reflect.DeepEqual(mock.SpawnCalls, []SpawnRequest{{CWD: "/tmp/worker-20"}}) {
 		t.Fatalf("SpawnCalls = %#v", mock.SpawnCalls)
 	}
 	if !reflect.DeepEqual(mock.SendKeysCalls, []SendKeysCall{{PaneID: "pane-20", Text: "make test"}}) {
@@ -549,14 +584,16 @@ func TestMockClientRecordsCalls(t *testing.T) {
 	if !reflect.DeepEqual(mock.CaptureCalls, []string{"pane-20"}) {
 		t.Fatalf("CaptureCalls = %#v", mock.CaptureCalls)
 	}
-	if !reflect.DeepEqual(mock.MetaCalls, []MetaCall{{
-		PaneID: "pane-20",
-		Key:    "task",
-		Value:  "LAB-688",
+	if !reflect.DeepEqual(mock.SetMetadataCalls, []MetadataCall{{
+		PaneID:   "pane-20",
+		Metadata: map[string]string{"task": "LAB-688"},
 	}}) {
-		t.Fatalf("MetaCalls = %#v", mock.MetaCalls)
+		t.Fatalf("SetMetadataCalls = %#v", mock.SetMetadataCalls)
 	}
-	if !reflect.DeepEqual(mock.KillCalls, []string{"pane-20"}) {
-		t.Fatalf("KillCalls = %#v", mock.KillCalls)
+	if !reflect.DeepEqual(mock.KillPaneCalls, []string{"pane-20"}) {
+		t.Fatalf("KillPaneCalls = %#v", mock.KillPaneCalls)
+	}
+	if got := len(mock.WaitIdleCalls); got != 1 {
+		t.Fatalf("WaitIdleCalls count = %d, want 1", got)
 	}
 }
