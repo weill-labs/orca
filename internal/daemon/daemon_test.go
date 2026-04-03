@@ -174,11 +174,12 @@ func TestAssignEnforcesCodexYoloFlag(t *testing.T) {
 	deps := newTestDeps(t)
 	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
 	deps.config.profiles["codex"] = AgentProfile{
-		Name:            "codex",
-		StartCommand:    "codex",
-		StuckTimeout:    5 * time.Minute,
-		NudgeCommand:    "\n",
-		MaxNudgeRetries: 3,
+		Name:              "codex",
+		StartCommand:      "codex",
+		PostmortemEnabled: true,
+		StuckTimeout:      5 * time.Minute,
+		NudgeCommand:      "\n",
+		MaxNudgeRetries:   3,
 	}
 	d := deps.newDaemon(t)
 	ctx := context.Background()
@@ -719,6 +720,58 @@ func TestCancelSkipsPostmortemWhenSessionAlreadyRecorded(t *testing.T) {
 	}
 }
 
+func TestCancelSkipsPostmortemWhenProfileDisablesIt(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	deps.config.profiles["claude"] = AgentProfile{
+		Name:            "claude",
+		StartCommand:    "claude --dangerously-skip-permissions",
+		StuckTimeout:    5 * time.Minute,
+		NudgeCommand:    "\n",
+		MaxNudgeRetries: 2,
+	}
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-690", "Implement daemon core", "claude"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	deps.commands.reset()
+	deps.amux.waitIdleCalls = nil
+	deps.amux.killCalls = nil
+
+	if err := d.Cancel(ctx, "LAB-690"); err != nil {
+		t.Fatalf("Cancel() error = %v", err)
+	}
+
+	waitFor(t, "task cancellation", func() bool {
+		task, ok := deps.state.task("LAB-690")
+		return ok && task.Status == TaskStatusCancelled
+	})
+
+	deps.amux.requireSentKeys(t, "pane-1", []string{"Implement daemon core", "Enter"})
+	if got := deps.amux.waitIdleCalls; len(got) != 0 {
+		t.Fatalf("waitIdle calls = %#v, want none", got)
+	}
+	if got, want := deps.amux.killCalls, []string{"pane-1"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("kill calls = %#v, want %#v", got, want)
+	}
+	if got := deps.commands.callsByName("git"); len(got) != 0 {
+		t.Fatalf("git calls = %#v, want none during daemon cleanup", got)
+	}
+}
+
 func TestStuckDetectionMatchesTextPatternsThenEscalates(t *testing.T) {
 	t.Parallel()
 
@@ -913,6 +966,15 @@ func TestPRMergeCleanupContinuesWhenIssueTrackerDoneUpdateFails(t *testing.T) {
 	captureTicker := newFakeTicker()
 	prTicker := newFakeTicker()
 	deps.tickers.enqueue(captureTicker, prTicker)
+	deps.config.profiles["codex"] = AgentProfile{
+		Name:              "codex",
+		StartCommand:      "codex --yolo",
+		ResumeSequence:    []string{"codex --yolo resume", "Enter", "."},
+		PostmortemEnabled: false,
+		StuckTimeout:      5 * time.Minute,
+		NudgeCommand:      "\n",
+		MaxNudgeRetries:   3,
+	}
 	deps.amux.rejectCanceledContext = true
 	deps.pool.rejectCanceledContext = true
 	deps.state.rejectCanceledContext = true
@@ -944,7 +1006,12 @@ func TestPRMergeCleanupContinuesWhenIssueTrackerDoneUpdateFails(t *testing.T) {
 	if _, ok := deps.state.worker("pane-1"); ok {
 		t.Fatal("worker still present after merge cleanup")
 	}
-	if got, want := deps.pool.releasedClones(), []Clone{deps.pool.clone}; !reflect.DeepEqual(got, want) {
+	if got, want := deps.pool.releasedClones(), []Clone{{
+		Name:          deps.pool.clone.Name,
+		Path:          deps.pool.clone.Path,
+		CurrentBranch: "LAB-689",
+		AssignedTask:  "LAB-689",
+	}}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("released clones = %#v, want %#v", got, want)
 	}
 	if got, want := deps.issueTracker.statuses(), []issueStatusUpdate{
@@ -957,6 +1024,80 @@ func TestPRMergeCleanupContinuesWhenIssueTrackerDoneUpdateFails(t *testing.T) {
 		t.Fatal("missing PR merged event")
 	} else if !strings.Contains(event.Message, "failed to update Linear issue status") {
 		t.Fatalf("PR merged event message = %q, want tracker failure context", event.Message)
+	}
+}
+
+func TestPRMergePollingReportsCompletionFailureWhenPostmortemNotRecorded(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	deps := newTestDeps(t)
+	captureTicker := newFakeTicker()
+	prTicker := newFakeTicker()
+	deps.tickers.enqueue(captureTicker, prTicker)
+	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-690", "--json", "number"}, `[{"number":42}]`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":"2026-04-02T12:00:00Z"}`, nil)
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-690", "Implement daemon core", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	prTicker.tick(deps.clock.Now())
+	waitFor(t, "task completion failure event", func() bool {
+		return deps.events.countType(EventTaskCompletionFailed) == 1
+	})
+
+	task, ok := deps.state.task("LAB-690")
+	if !ok {
+		t.Fatal("task missing after merge completion failure")
+	}
+	if got, want := task.Status, TaskStatusActive; got != want {
+		t.Fatalf("task.Status = %q, want %q", got, want)
+	}
+	if _, ok := deps.state.worker("pane-1"); !ok {
+		t.Fatal("worker removed after merge completion failure, want worker to remain active")
+	}
+	if got := deps.pool.releasedClones(); len(got) != 0 {
+		t.Fatalf("released clones = %#v, want none", got)
+	}
+	if got, want := deps.issueTracker.statuses(), []issueStatusUpdate{
+		{Issue: "LAB-690", State: IssueStateInProgress},
+		{Issue: "LAB-690", State: IssueStateDone},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("issue tracker statuses = %#v, want %#v", got, want)
+	}
+	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
+		{PaneID: "pane-1", Timeout: 30 * time.Second},
+		{PaneID: "pane-1", Timeout: 2 * time.Minute},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("wait idle calls = %#v, want %#v", got, want)
+	}
+	deps.amux.requireSentKeys(t, "pane-1", []string{
+		"Implement daemon core\n",
+		"$postmortem\n",
+	})
+	deps.events.requireTypes(t, EventDaemonStarted, EventTaskAssigned, EventPRDetected, EventPRMerged, EventTaskCompletionFailed)
+
+	deps.events.mu.Lock()
+	defer deps.events.mu.Unlock()
+	var failure Event
+	for _, event := range deps.events.events {
+		if event.Type == EventTaskCompletionFailed {
+			failure = event
+			break
+		}
+	}
+	if !strings.Contains(failure.Message, "postmortem not recorded") {
+		t.Fatalf("failure.Message = %q, want to contain %q", failure.Message, "postmortem not recorded")
 	}
 }
 
@@ -1515,12 +1656,13 @@ func newTestDeps(t *testing.T) *testDeps {
 		config: &fakeConfig{
 			profiles: map[string]AgentProfile{
 				"codex": {
-					Name:            "codex",
-					StartCommand:    "codex --yolo",
-					ResumeSequence:  []string{"codex --yolo resume", "Enter", "."},
-					StuckTimeout:    5 * time.Minute,
-					NudgeCommand:    "\n",
-					MaxNudgeRetries: 3,
+					Name:              "codex",
+					StartCommand:      "codex --yolo",
+					ResumeSequence:    []string{"codex --yolo resume", "Enter", "."},
+					PostmortemEnabled: true,
+					StuckTimeout:      5 * time.Minute,
+					NudgeCommand:      "\n",
+					MaxNudgeRetries:   3,
 				},
 			},
 		},

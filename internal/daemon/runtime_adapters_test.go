@@ -19,7 +19,8 @@ func TestConfigAdapterAgentProfile(t *testing.T) {
 	adapter := configAdapter{cfg: config.Config{
 		Agents: map[string]config.AgentProfile{
 			"codex": {
-				StartCommand:      "codex",
+				StartCommand:      "codex --yolo",
+				PostmortemEnabled: true,
 				StuckTimeout:      5 * time.Minute,
 				StuckTextPatterns: []string{"permission prompt"},
 				NudgeCommand:      "y\n",
@@ -37,6 +38,9 @@ func TestConfigAdapterAgentProfile(t *testing.T) {
 	}
 	if got, want := profile.ResumeSequence, []string{"codex --yolo resume", "Enter", "."}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("profile.ResumeSequence = %#v, want %#v", got, want)
+	}
+	if !profile.PostmortemEnabled {
+		t.Fatal("profile.PostmortemEnabled = false, want true")
 	}
 
 	if _, err := adapter.AgentProfile(context.Background(), "missing"); err == nil {

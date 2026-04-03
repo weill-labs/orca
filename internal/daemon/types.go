@@ -21,22 +21,23 @@ const (
 	WorkerHealthHealthy = "healthy"
 	WorkerHealthStuck   = "stuck"
 
-	EventDaemonStarted      = "daemon.started"
-	EventDaemonStopped      = "daemon.stopped"
-	EventTaskAssigned       = "task.assigned"
-	EventTaskAssignFailed   = "task.assign_failed"
-	EventTaskCancelled      = "task.cancelled"
-	EventTaskCompleted      = "task.completed"
-	EventWorkerNudged       = "worker.nudged"
-	EventWorkerNudgedCI     = "worker.nudged_ci"
-	EventWorkerNudgedReview = "worker.nudged_review"
-	EventWorkerEscalated    = "worker.escalated"
-	EventWorkerRecovered    = "worker.recovered"
-	EventPRDetected         = "pr.detected"
-	EventPREnqueued         = "pr.enqueued"
-	EventPRLandingStarted   = "pr.landing_started"
-	EventPRLandingFailed    = "pr.landing_failed"
-	EventPRMerged           = "pr.merged"
+	EventDaemonStarted        = "daemon.started"
+	EventDaemonStopped        = "daemon.stopped"
+	EventTaskAssigned         = "task.assigned"
+	EventTaskAssignFailed     = "task.assign_failed"
+	EventTaskCancelled        = "task.cancelled"
+	EventTaskCompleted        = "task.completed"
+	EventTaskCompletionFailed = "task.completion_failed"
+	EventWorkerNudged         = "worker.nudged"
+	EventWorkerNudgedCI       = "worker.nudged_ci"
+	EventWorkerNudgedReview   = "worker.nudged_review"
+	EventWorkerEscalated      = "worker.escalated"
+	EventWorkerRecovered      = "worker.recovered"
+	EventPRDetected           = "pr.detected"
+	EventPREnqueued           = "pr.enqueued"
+	EventPRLandingStarted     = "pr.landing_started"
+	EventPRLandingFailed      = "pr.landing_failed"
+	EventPRMerged             = "pr.merged"
 )
 
 var (
@@ -112,6 +113,7 @@ type AgentProfile struct {
 	Name              string
 	StartCommand      string
 	ResumeSequence    []string
+	PostmortemEnabled bool
 	StuckTextPatterns []string
 	StuckTimeout      time.Duration
 	NudgeCommand      string

@@ -38,6 +38,7 @@ clone_origin = "git@github.com:weill-labs/amux.git"
 
 [agents.codex]
 start_command = "codex --yolo"
+postmortem_enabled = true
 idle_timeout = "30s"
 stuck_timeout = "5m"
 stuck_text_patterns = ["permission prompt"]
@@ -100,6 +101,7 @@ max_nudge_retries = 1
 						},
 						"codex": {
 							StartCommand:      "codex --yolo",
+							PostmortemEnabled: true,
 							IdleTimeout:       30 * time.Second,
 							StuckTimeout:      9 * time.Minute,
 							StuckTextPatterns: []string{"tool denied", "approval required"},

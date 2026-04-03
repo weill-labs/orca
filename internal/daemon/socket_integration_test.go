@@ -30,6 +30,7 @@ pattern = "`+filepath.Join(clonesRoot, "orca*")+`"
 
 [agents.codex]
 start_command = "codex --yolo"
+postmortem_enabled = true
 stuck_timeout = "5m"
 nudge_command = "\n"
 max_nudge_retries = 1

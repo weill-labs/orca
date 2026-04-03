@@ -26,6 +26,7 @@ const (
 	ciStatePass                  = "pass"
 	ciStateCancel                = "cancel"
 	ciStateSkipping              = "skipping"
+	postmortemCommand            = "$postmortem"
 )
 
 var autonomousBacklogPromptPattern = regexp.MustCompile(`(?i)pick up.*(work|issue|task|ticket)|from.*(backlog|queue|linear)|new work|next (issue|task|ticket)|find.*(issue|task|work).*backlog`)
@@ -57,6 +58,7 @@ type Daemon struct {
 	mergeQueued map[int]struct{}
 	activeMerge int
 	mergeBusy   bool
+	postmortems map[string]time.Time
 	wg          sync.WaitGroup
 }
 
@@ -71,6 +73,7 @@ type assignment struct {
 	worker          Worker
 	clone           Clone
 	pane            Pane
+	startedAt       time.Time
 	lastOutput      string
 	lastActivity    time.Time
 	prNumber        int
@@ -167,6 +170,7 @@ func New(opts Options) (*Daemon, error) {
 		mergeGracePeriod: opts.MergeGracePeriod,
 		assignments:      make(map[string]*assignment),
 		mergeQueued:      make(map[int]struct{}),
+		postmortems:      make(map[string]time.Time),
 	}, nil
 }
 
@@ -247,6 +251,7 @@ func (d *Daemon) Assign(ctx context.Context, issue, prompt, agentProfile string)
 	if profile.Name == "" {
 		profile.Name = agentProfile
 	}
+	profile = enforceLifecycleProfile(profile)
 
 	placeholder := &assignment{
 		pending: true,
@@ -288,6 +293,8 @@ func (d *Daemon) Assign(ctx context.Context, issue, prompt, agentProfile string)
 		releaseReservation()
 		return fmt.Errorf("prepare clone: %w", err)
 	}
+	clone.CurrentBranch = issue
+	clone.AssignedTask = issue
 
 	pane, err := d.amux.Spawn(ctx, SpawnRequest{
 		Session: d.session,
@@ -368,6 +375,7 @@ func (d *Daemon) Assign(ctx context.Context, issue, prompt, agentProfile string)
 		worker:       worker,
 		clone:        clone,
 		pane:         pane,
+		startedAt:    now,
 		lastActivity: now,
 	}
 
@@ -758,7 +766,22 @@ func (d *Daemon) handlePRPoll(active *assignment) {
 		PRNumber:     active.prNumber,
 		Message:      message,
 	})
-	_ = d.finishAssignment(active.ctx, active, TaskStatusDone, EventTaskCompleted, true)
+	if err := d.finishAssignment(active.ctx, active, TaskStatusDone, EventTaskCompleted, true); err != nil {
+		d.emit(active.ctx, Event{
+			Time:         d.now(),
+			Type:         EventTaskCompletionFailed,
+			Project:      d.project,
+			Issue:        active.task.Issue,
+			PaneID:       active.pane.ID,
+			PaneName:     active.pane.Name,
+			CloneName:    active.clone.Name,
+			ClonePath:    active.clone.Path,
+			Branch:       active.task.Branch,
+			AgentProfile: active.profile.Name,
+			PRNumber:     active.prNumber,
+			Message:      err.Error(),
+		})
+	}
 }
 
 func (d *Daemon) handlePRReviewPoll(active *assignment) {
@@ -899,6 +922,10 @@ func (d *Daemon) nudgeForCIFailure(active *assignment) bool {
 }
 
 func (d *Daemon) finishAssignment(ctx context.Context, active *assignment, status, eventType string, merged bool) error {
+	if err := d.ensurePostmortem(ctx, active); err != nil {
+		return err
+	}
+
 	var result error
 	active.cleanupOnce.Do(func() {
 		cleanupCtx := context.WithoutCancel(ctx)
@@ -956,9 +983,13 @@ func (d *Daemon) rollbackAssignment(ctx context.Context, clone Clone, pane Pane,
 }
 
 func (d *Daemon) cleanupCloneAndRelease(ctx context.Context, clone Clone, branch string) error {
-	result := d.cleanupClone(ctx, clone.Path, branch)
-	result = errors.Join(result, d.pool.Release(ctx, d.project, clone))
-	return result
+	if clone.CurrentBranch == "" {
+		clone.CurrentBranch = branch
+	}
+	if clone.AssignedTask == "" {
+		clone.AssignedTask = branch
+	}
+	return d.pool.Release(ctx, d.project, clone)
 }
 
 func (d *Daemon) prepareClone(ctx context.Context, clonePath, branch string) error {
@@ -975,22 +1006,6 @@ func (d *Daemon) prepareClone(ctx context.Context, clonePath, branch string) err
 	return nil
 }
 
-func (d *Daemon) cleanupClone(ctx context.Context, clonePath, branch string) error {
-	commands := [][]string{
-		{"reset", "--hard"},
-		{"checkout", "main"},
-		{"pull"},
-		{"clean", "-fdx", "--exclude=.orca-pool"},
-		{"branch", "-D", branch},
-	}
-	var result error
-	for _, args := range commands {
-		_, err := d.commands.Run(ctx, clonePath, "git", args...)
-		result = errors.Join(result, err)
-	}
-	return result
-}
-
 func (d *Daemon) rebaseQueuedPR(ctx context.Context, prNumber int) error {
 	_, err := d.commands.Run(ctx, d.project, "gh", "pr", "update-branch", fmt.Sprintf("%d", prNumber), "--rebase")
 	return err
@@ -1005,7 +1020,6 @@ func (d *Daemon) mergeQueuedPR(ctx context.Context, prNumber int) error {
 	_, err := d.commands.Run(ctx, d.project, "gh", "pr", "merge", fmt.Sprintf("%d", prNumber), "--squash")
 	return err
 }
-
 func (d *Daemon) lookupPRNumber(ctx context.Context, branch string) (int, error) {
 	output, err := d.commands.Run(ctx, d.project, "gh", "pr", "list", "--head", branch, "--json", "number")
 	if err != nil {
