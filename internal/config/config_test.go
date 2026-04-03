@@ -42,7 +42,7 @@ postmortem_enabled = true
 idle_timeout = "30s"
 stuck_timeout = "5m"
 stuck_text_patterns = ["permission prompt"]
-nudge_command = "y\n"
+nudge_command = "Enter"
 max_nudge_retries = 3
 
 [agents.claude]
@@ -50,7 +50,7 @@ start_command = "claude --dangerously-skip-permissions"
 idle_timeout = "45s"
 stuck_timeout = "7m"
 stuck_text_patterns = ["tool denied"]
-nudge_command = "\n"
+nudge_command = "Enter"
 max_nudge_retries = 2
 `,
 			projectTOML: `
@@ -96,7 +96,7 @@ max_nudge_retries = 1
 							IdleTimeout:       45 * time.Second,
 							StuckTimeout:      7 * time.Minute,
 							StuckTextPatterns: []string{"tool denied"},
-							NudgeCommand:      "\n",
+							NudgeCommand:      "Enter",
 							MaxNudgeRetries:   2,
 						},
 						"codex": {
@@ -105,8 +105,30 @@ max_nudge_retries = 1
 							IdleTimeout:       30 * time.Second,
 							StuckTimeout:      9 * time.Minute,
 							StuckTextPatterns: []string{"tool denied", "approval required"},
-							NudgeCommand:      "y\n",
+							NudgeCommand:      "Enter",
 							MaxNudgeRetries:   3,
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "normalizes legacy enter-like nudge commands",
+			globalTOML: `
+[agents.codex]
+nudge_command = "y\n"
+
+[agents.claude]
+nudge_command = "\n"
+`,
+			want: want{
+				cfg: Config{
+					Agents: map[string]AgentProfile{
+						"claude": {
+							NudgeCommand: "Enter",
+						},
+						"codex": {
+							NudgeCommand: "Enter",
 						},
 					},
 				},

@@ -289,7 +289,7 @@ func (r rawAgentProfile) toConfig(prefix string) (AgentProfile, error) {
 	}
 
 	if r.NudgeCommand != nil {
-		cfg.NudgeCommand = *r.NudgeCommand
+		cfg.NudgeCommand = normalizeNudgeCommand(*r.NudgeCommand)
 	}
 
 	if r.MaxNudgeRetries != nil {
@@ -297,6 +297,22 @@ func (r rawAgentProfile) toConfig(prefix string) (AgentProfile, error) {
 	}
 
 	return cfg, nil
+}
+
+func normalizeNudgeCommand(command string) string {
+	if command == "" {
+		return ""
+	}
+
+	trimmedNewlines := strings.TrimRight(command, "\r\n")
+	switch {
+	case trimmedNewlines == "":
+		return "Enter"
+	case strings.EqualFold(trimmedNewlines, "y"):
+		return "Enter"
+	default:
+		return command
+	}
 }
 
 func expandHome(value string) string {
