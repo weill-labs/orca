@@ -102,6 +102,7 @@ type Ticker interface {
 type AgentProfile struct {
 	Name              string
 	StartCommand      string
+	ResumeSequence    []string
 	StuckTextPatterns []string
 	StuckTimeout      time.Duration
 	NudgeCommand      string

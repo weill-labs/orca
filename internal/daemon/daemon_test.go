@@ -152,7 +152,7 @@ func TestAssignConfirmsCodexTrustPromptBeforeSendingPrompt(t *testing.T) {
 	})
 
 	deps.amux.requireSentKeys(t, "pane-1", []string{"Enter", "Implement handshake", "Enter"})
-	if got, want := deps.amux.captureCount("pane-1"), 1; got != want {
+	if got, want := deps.amux.captureCount("pane-1"), 2; got != want {
 		t.Fatalf("capture count = %d, want %d", got, want)
 	}
 	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
@@ -1096,6 +1096,7 @@ func newTestDeps(t *testing.T) *testDeps {
 				"codex": {
 					Name:            "codex",
 					StartCommand:    "codex --yolo",
+					ResumeSequence:  []string{"codex --yolo resume", "Enter", "."},
 					StuckTimeout:    5 * time.Minute,
 					NudgeCommand:    "\n",
 					MaxNudgeRetries: 3,

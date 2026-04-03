@@ -17,19 +17,46 @@ type configAdapter struct {
 }
 
 func (a configAdapter) AgentProfile(_ context.Context, name string) (AgentProfile, error) {
-	profile, ok := a.cfg.Agents[name]
+	cfgProfile, ok := a.cfg.Agents[name]
 	if !ok {
 		return AgentProfile{}, fmt.Errorf("agent profile %q not found", name)
 	}
 
-	return AgentProfile{
+	profile := AgentProfile{
 		Name:              name,
-		StartCommand:      profile.StartCommand,
-		StuckTextPatterns: append([]string(nil), profile.StuckTextPatterns...),
-		StuckTimeout:      profile.StuckTimeout,
-		NudgeCommand:      profile.NudgeCommand,
-		MaxNudgeRetries:   profile.MaxNudgeRetries,
-	}, nil
+		StartCommand:      cfgProfile.StartCommand,
+		StuckTextPatterns: append([]string(nil), cfgProfile.StuckTextPatterns...),
+		StuckTimeout:      cfgProfile.StuckTimeout,
+		NudgeCommand:      cfgProfile.NudgeCommand,
+		MaxNudgeRetries:   cfgProfile.MaxNudgeRetries,
+	}
+
+	return applyAgentProfileQuirks(profile), nil
+}
+
+func applyAgentProfileQuirks(profile AgentProfile) AgentProfile {
+	switch strings.ToLower(profile.Name) {
+	case "codex":
+		profile.StartCommand = normalizeCodexStartCommand(profile.StartCommand)
+		profile.ResumeSequence = []string{
+			profile.StartCommand + " resume",
+			"Enter",
+			".",
+		}
+	}
+
+	return profile
+}
+
+func normalizeCodexStartCommand(command string) string {
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return "codex --yolo"
+	}
+	if strings.Contains(command, "--yolo") {
+		return command
+	}
+	return command + " --yolo"
 }
 
 type sqliteStateAdapter struct {
