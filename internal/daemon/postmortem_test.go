@@ -112,48 +112,59 @@ func TestEnsureFlag(t *testing.T) {
 	}
 }
 
-func TestEnsurePostmortemErrorPathsAndCache(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-
-	startedAt := time.Date(2026, 4, 2, 12, 0, 0, 0, time.UTC)
-	newActive := func() *assignment {
-		return &assignment{
-			profile:   AgentProfile{Name: "codex", PostmortemEnabled: true},
-			task:      Task{Issue: "LAB-730", Branch: "LAB-730"},
-			pane:      Pane{ID: "pane-1"},
-			startedAt: startedAt,
+func TestEnsurePostmortemErrorPathsAndExistingRecord(t *testing.T) {
+	newActive := func(startedAt time.Time) ActiveAssignment {
+		return ActiveAssignment{
+			Task: Task{
+				Issue:        "LAB-730",
+				Branch:       "LAB-730",
+				PaneID:       "pane-1",
+				AgentProfile: "codex",
+				CreatedAt:    startedAt,
+				UpdatedAt:    startedAt,
+			},
 		}
 	}
 
 	t.Run("request failure", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+
 		deps := newTestDeps(t)
 		deps.amux.sendKeysErr = errors.New("send failed")
 		d := deps.newDaemon(t)
 
-		err := d.ensurePostmortem(context.Background(), newActive())
+		err := d.ensurePostmortem(context.Background(), newActive(time.Date(2026, 4, 2, 12, 0, 0, 0, time.UTC)))
 		if err == nil || !strings.Contains(err.Error(), "request postmortem") {
 			t.Fatalf("ensurePostmortem() error = %v, want request postmortem failure", err)
 		}
 	})
 
 	t.Run("wait failure", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+
 		deps := newTestDeps(t)
 		deps.amux.waitIdleErr = errors.New("idle timeout")
 		d := deps.newDaemon(t)
 
-		err := d.ensurePostmortem(context.Background(), newActive())
+		err := d.ensurePostmortem(context.Background(), newActive(time.Date(2026, 4, 2, 12, 0, 0, 0, time.UTC)))
 		if err == nil || !strings.Contains(err.Error(), "wait for postmortem") {
 			t.Fatalf("ensurePostmortem() error = %v, want wait for postmortem failure", err)
 		}
 	})
 
-	t.Run("cached postmortem skips send", func(t *testing.T) {
+	t.Run("existing postmortem skips send", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+
+		startedAt := time.Date(2026, 4, 2, 12, 0, 0, 0, time.UTC)
+		writePostmortemLog(t, filepath.Join(home, "sync", "postmortems"), "LAB-730", startedAt.Add(time.Minute))
+
 		deps := newTestDeps(t)
 		d := deps.newDaemon(t)
-		d.postmortems["pane-1"] = startedAt
 
-		if err := d.ensurePostmortem(context.Background(), newActive()); err != nil {
+		if err := d.ensurePostmortem(context.Background(), newActive(startedAt)); err != nil {
 			t.Fatalf("ensurePostmortem() error = %v", err)
 		}
 		if got := deps.amux.sentKeys["pane-1"]; len(got) != 0 {
@@ -187,15 +198,23 @@ func TestFindPostmortemHelpers(t *testing.T) {
 		}
 	}
 
+	newActive := func(issue string, startedAt time.Time) ActiveAssignment {
+		return ActiveAssignment{
+			Task: Task{
+				Issue:     issue,
+				Branch:    issue,
+				CreatedAt: startedAt,
+				UpdatedAt: startedAt,
+			},
+		}
+	}
+
 	t.Run("findPostmortemInDir filters by session and modtime", func(t *testing.T) {
 		t.Parallel()
 
 		dir := t.TempDir()
 		startedAt := time.Date(2026, 4, 2, 12, 0, 0, 0, time.UTC)
-		active := &assignment{
-			startedAt: startedAt,
-			task:      Task{Issue: "LAB-731", Branch: "LAB-731"},
-		}
+		active := newActive("LAB-731", startedAt)
 
 		writeFixture(t, dir, "stale.md", "LAB-731", "LAB-731", startedAt.Add(-time.Minute))
 		writeFixture(t, dir, "wrong.md", "LAB-999", "LAB-999", startedAt.Add(time.Minute))
@@ -216,7 +235,7 @@ func TestFindPostmortemHelpers(t *testing.T) {
 	t.Run("findPostmortemInDir missing dir", func(t *testing.T) {
 		t.Parallel()
 
-		active := &assignment{startedAt: time.Now(), task: Task{Issue: "LAB-731", Branch: "LAB-731"}}
+		active := newActive("LAB-731", time.Now())
 		recordedAt, ok, err := findPostmortemInDir(filepath.Join(t.TempDir(), "missing"), active)
 		if err != nil {
 			t.Fatalf("findPostmortemInDir() error = %v", err)
@@ -238,10 +257,7 @@ func TestFindPostmortemHelpers(t *testing.T) {
 			t.Fatalf("Symlink(%q) error = %v", path, err)
 		}
 
-		active := &assignment{
-			startedAt: time.Date(2026, 4, 2, 12, 0, 0, 0, time.UTC),
-			task:      Task{Issue: "LAB-731", Branch: "LAB-731"},
-		}
+		active := newActive("LAB-731", time.Date(2026, 4, 2, 12, 0, 0, 0, time.UTC))
 		if _, _, err := findPostmortemInDir(dir, active); err == nil || !strings.Contains(err.Error(), "read postmortem") {
 			t.Fatalf("findPostmortemInDir() error = %v, want read postmortem failure", err)
 		}
@@ -252,10 +268,7 @@ func TestFindPostmortemHelpers(t *testing.T) {
 		t.Setenv("HOME", home)
 
 		startedAt := time.Date(2026, 4, 2, 12, 0, 0, 0, time.UTC)
-		active := &assignment{
-			startedAt: startedAt,
-			task:      Task{Issue: "LAB-732", Branch: "LAB-732"},
-		}
+		active := newActive("LAB-732", startedAt)
 
 		writeFixture(t, filepath.Join(home, "sync", "postmortems"), "older.md", "LAB-732", "LAB-732", startedAt.Add(time.Minute))
 		writeFixture(t, filepath.Join(home, ".local", "share", "postmortems"), "newer.md", "LAB-732", "LAB-732", startedAt.Add(2*time.Minute))

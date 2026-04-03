@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	orcacheckconfig "github.com/weill-labs/orca/internal/config"
@@ -80,9 +81,11 @@ func (a *sqliteStateAdapter) PutTask(ctx context.Context, task Task) error {
 		Issue:     task.Issue,
 		Status:    task.Status,
 		Agent:     task.AgentProfile,
+		Prompt:    task.Prompt,
 		WorkerID:  task.PaneID,
 		ClonePath: task.ClonePath,
 		PRNumber:  prNumber,
+		CreatedAt: task.CreatedAt,
 		UpdatedAt: task.UpdatedAt,
 	})
 }
@@ -101,10 +104,17 @@ func (a *sqliteStateAdapter) TaskByIssue(ctx context.Context, project, issue str
 		Project:      project,
 		Issue:        task.Issue,
 		Status:       task.Status,
+		Prompt:       task.Prompt,
 		PaneID:       task.WorkerID,
+		PaneName:     task.WorkerID,
 		ClonePath:    task.ClonePath,
+		Branch:       task.Issue,
 		AgentProfile: task.Agent,
+		CreatedAt:    task.CreatedAt,
 		UpdatedAt:    task.UpdatedAt,
+	}
+	if task.ClonePath != "" {
+		out.CloneName = filepath.Base(task.ClonePath)
 	}
 	if task.PRNumber != nil {
 		out.PRNumber = *task.PRNumber
@@ -112,14 +122,77 @@ func (a *sqliteStateAdapter) TaskByIssue(ctx context.Context, project, issue str
 	return out, nil
 }
 
+func (a *sqliteStateAdapter) ClaimTask(ctx context.Context, task Task) (*Task, error) {
+	var prNumber *int
+	if task.PRNumber > 0 {
+		value := task.PRNumber
+		prNumber = &value
+	}
+
+	claimed, err := a.store.ClaimTask(ctx, task.Project, state.Task{
+		Issue:     task.Issue,
+		Status:    task.Status,
+		Agent:     task.AgentProfile,
+		Prompt:    task.Prompt,
+		WorkerID:  task.PaneID,
+		ClonePath: task.ClonePath,
+		PRNumber:  prNumber,
+		CreatedAt: task.CreatedAt,
+		UpdatedAt: task.UpdatedAt,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if claimed == nil {
+		return nil, nil
+	}
+
+	previous := Task{
+		Project:      task.Project,
+		Issue:        claimed.Issue,
+		Status:       claimed.Status,
+		Prompt:       claimed.Prompt,
+		PaneID:       claimed.WorkerID,
+		ClonePath:    claimed.ClonePath,
+		AgentProfile: claimed.Agent,
+		CreatedAt:    claimed.CreatedAt,
+		UpdatedAt:    claimed.UpdatedAt,
+	}
+	if claimed.PRNumber != nil {
+		previous.PRNumber = *claimed.PRNumber
+	}
+	return &previous, nil
+}
+
+func (a *sqliteStateAdapter) RestoreTask(ctx context.Context, project, issue string, previous *Task) error {
+	if previous == nil {
+		return a.DeleteTask(ctx, project, issue)
+	}
+	return a.PutTask(ctx, *previous)
+}
+
+func (a *sqliteStateAdapter) DeleteTask(ctx context.Context, project, issue string) error {
+	err := a.store.DeleteTask(ctx, project, issue)
+	if errors.Is(err, state.ErrNotFound) {
+		return ErrTaskNotFound
+	}
+	return err
+}
+
 func (a *sqliteStateAdapter) PutWorker(ctx context.Context, worker Worker) error {
 	return a.store.UpsertWorker(ctx, worker.Project, state.Worker{
-		PaneID:    worker.PaneID,
-		Agent:     worker.AgentProfile,
-		State:     worker.Health,
-		Issue:     worker.Issue,
-		ClonePath: worker.ClonePath,
-		UpdatedAt: worker.UpdatedAt,
+		PaneID:             worker.PaneID,
+		Agent:              worker.AgentProfile,
+		State:              worker.Health,
+		Issue:              worker.Issue,
+		ClonePath:          worker.ClonePath,
+		LastReviewCount:    worker.LastReviewCount,
+		LastCIState:        worker.LastCIState,
+		LastMergeableState: worker.LastMergeableState,
+		NudgeCount:         worker.NudgeCount,
+		LastCapture:        worker.LastCapture,
+		LastActivityAt:     worker.LastActivityAt,
+		UpdatedAt:          worker.UpdatedAt,
 	})
 }
 
@@ -127,6 +200,111 @@ func (a *sqliteStateAdapter) DeleteWorker(ctx context.Context, project, paneID s
 	err := a.store.DeleteWorker(ctx, project, paneID)
 	if errors.Is(err, state.ErrNotFound) {
 		return ErrWorkerNotFound
+	}
+	return err
+}
+
+func (a *sqliteStateAdapter) ActiveAssignments(ctx context.Context, project string) ([]ActiveAssignment, error) {
+	assignments, err := a.store.ActiveAssignments(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]ActiveAssignment, 0, len(assignments))
+	for _, assignment := range assignments {
+		out = append(out, convertAssignment(project, assignment))
+	}
+	return out, nil
+}
+
+func (a *sqliteStateAdapter) ActiveAssignmentByIssue(ctx context.Context, project, issue string) (ActiveAssignment, error) {
+	assignment, err := a.store.ActiveAssignmentByIssue(ctx, project, issue)
+	if errors.Is(err, state.ErrNotFound) {
+		return ActiveAssignment{}, ErrTaskNotFound
+	}
+	if err != nil {
+		return ActiveAssignment{}, err
+	}
+	return convertAssignment(project, assignment), nil
+}
+
+func (a *sqliteStateAdapter) ActiveAssignmentByPRNumber(ctx context.Context, project string, prNumber int) (ActiveAssignment, error) {
+	assignment, err := a.store.ActiveAssignmentByPRNumber(ctx, project, prNumber)
+	if errors.Is(err, state.ErrNotFound) {
+		return ActiveAssignment{}, ErrTaskNotFound
+	}
+	if err != nil {
+		return ActiveAssignment{}, err
+	}
+	return convertAssignment(project, assignment), nil
+}
+
+func (a *sqliteStateAdapter) EnqueueMerge(ctx context.Context, entry MergeQueueEntry) (int, error) {
+	return a.store.EnqueueMergeEntry(ctx, state.MergeQueueEntry{
+		Project:   entry.Project,
+		Issue:     entry.Issue,
+		PRNumber:  entry.PRNumber,
+		Status:    entry.Status,
+		CreatedAt: entry.CreatedAt,
+		UpdatedAt: entry.UpdatedAt,
+	})
+}
+
+func (a *sqliteStateAdapter) NextMergeEntry(ctx context.Context, project string) (*MergeQueueEntry, error) {
+	entry, err := a.store.NextMergeEntry(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	if entry == nil {
+		return nil, nil
+	}
+	return &MergeQueueEntry{
+		Project:   entry.Project,
+		Issue:     entry.Issue,
+		PRNumber:  entry.PRNumber,
+		Status:    entry.Status,
+		CreatedAt: entry.CreatedAt,
+		UpdatedAt: entry.UpdatedAt,
+	}, nil
+}
+
+func (a *sqliteStateAdapter) MergeEntry(ctx context.Context, project string, prNumber int) (*MergeQueueEntry, error) {
+	entry, err := a.store.MergeEntry(ctx, project, prNumber)
+	if err != nil {
+		return nil, err
+	}
+	if entry == nil {
+		return nil, nil
+	}
+	return &MergeQueueEntry{
+		Project:   entry.Project,
+		Issue:     entry.Issue,
+		PRNumber:  entry.PRNumber,
+		Status:    entry.Status,
+		CreatedAt: entry.CreatedAt,
+		UpdatedAt: entry.UpdatedAt,
+	}, nil
+}
+
+func (a *sqliteStateAdapter) UpdateMergeEntry(ctx context.Context, entry MergeQueueEntry) error {
+	err := a.store.UpdateMergeEntry(ctx, state.MergeQueueEntry{
+		Project:   entry.Project,
+		Issue:     entry.Issue,
+		PRNumber:  entry.PRNumber,
+		Status:    entry.Status,
+		CreatedAt: entry.CreatedAt,
+		UpdatedAt: entry.UpdatedAt,
+	})
+	if errors.Is(err, state.ErrNotFound) {
+		return ErrTaskNotFound
+	}
+	return err
+}
+
+func (a *sqliteStateAdapter) DeleteMergeEntry(ctx context.Context, project string, prNumber int) error {
+	err := a.store.DeleteMergeEntry(ctx, project, prNumber)
+	if errors.Is(err, state.ErrNotFound) {
+		return ErrTaskNotFound
 	}
 	return err
 }
@@ -146,6 +324,50 @@ func (a *sqliteStateAdapter) RecordEvent(ctx context.Context, event Event) error
 		CreatedAt: event.Time,
 	})
 	return err
+}
+
+func convertAssignment(project string, assignment state.Assignment) ActiveAssignment {
+	task := Task{
+		Project:      project,
+		Issue:        assignment.Task.Issue,
+		Status:       assignment.Task.Status,
+		Prompt:       assignment.Task.Prompt,
+		PaneID:       assignment.Task.WorkerID,
+		PaneName:     assignment.Worker.PaneID,
+		ClonePath:    assignment.Task.ClonePath,
+		Branch:       assignment.Task.Issue,
+		AgentProfile: assignment.Task.Agent,
+		CreatedAt:    assignment.Task.CreatedAt,
+		UpdatedAt:    assignment.Task.UpdatedAt,
+	}
+	if assignment.Task.ClonePath != "" {
+		task.CloneName = filepath.Base(assignment.Task.ClonePath)
+	}
+	if assignment.Task.PRNumber != nil {
+		task.PRNumber = *assignment.Task.PRNumber
+	}
+
+	worker := Worker{
+		Project:            project,
+		PaneID:             assignment.Worker.PaneID,
+		PaneName:           assignment.Worker.PaneID,
+		Issue:              assignment.Worker.Issue,
+		ClonePath:          assignment.Worker.ClonePath,
+		AgentProfile:       assignment.Worker.Agent,
+		Health:             assignment.Worker.State,
+		LastReviewCount:    assignment.Worker.LastReviewCount,
+		LastCIState:        assignment.Worker.LastCIState,
+		LastMergeableState: assignment.Worker.LastMergeableState,
+		NudgeCount:         assignment.Worker.NudgeCount,
+		LastCapture:        assignment.Worker.LastCapture,
+		LastActivityAt:     assignment.Worker.LastActivityAt,
+		UpdatedAt:          assignment.Worker.UpdatedAt,
+	}
+
+	return ActiveAssignment{
+		Task:   task,
+		Worker: worker,
+	}
 }
 
 type execCommandRunner struct{}

@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -40,52 +39,10 @@ type Daemon struct {
 	pollInterval     time.Duration
 	mergeGracePeriod time.Duration
 
-	mu          sync.Mutex
-	started     bool
+	started     atomic.Bool
 	stopContext context.Context
 	stopCancel  context.CancelFunc
-	assignments map[string]*assignment
-	mergeQueue  []int
-	mergeQueued map[int]struct{}
-	activeMerge int
-	mergeBusy   bool
-	postmortems map[string]time.Time
-	wg          sync.WaitGroup
-}
-
-type assignment struct {
-	ctx                context.Context
-	cancel             context.CancelFunc
-	captureTick        Ticker
-	pollTick           Ticker
-	pending            bool
-	profile            AgentProfile
-	task               Task
-	worker             Worker
-	clone              Clone
-	pane               Pane
-	startedAt          time.Time
-	lastOutput         string
-	lastActivity       time.Time
-	prNumber           int
-	lastMergeableState atomic.Value
-	lastCIState        string
-	lastReviewCount    atomic.Int64
-	escalated          bool
-	cleanupOnce        sync.Once
-}
-
-func (a *assignment) mergeableState() string {
-	value := a.lastMergeableState.Load()
-	if value == nil {
-		return ""
-	}
-	state, _ := value.(string)
-	return state
-}
-
-func (a *assignment) setMergeableState(state string) {
-	a.lastMergeableState.Store(state)
+	loopDone    chan struct{}
 }
 
 type realTicker struct {
@@ -161,33 +118,33 @@ func New(opts Options) (*Daemon, error) {
 		captureInterval:  opts.CaptureInterval,
 		pollInterval:     opts.PollInterval,
 		mergeGracePeriod: opts.MergeGracePeriod,
-		assignments:      make(map[string]*assignment),
-		mergeQueued:      make(map[int]struct{}),
-		postmortems:      make(map[string]time.Time),
 	}, nil
 }
 
 func (d *Daemon) Start(ctx context.Context) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-
-	if d.started {
+	if !d.started.CompareAndSwap(false, true) {
 		return ErrAlreadyStarted
 	}
 	if err := os.MkdirAll(filepath.Dir(d.pidPath), 0o755); err != nil {
+		d.started.Store(false)
 		return fmt.Errorf("create pid directory: %w", err)
 	}
 	if _, err := os.Stat(d.pidPath); err == nil {
+		d.started.Store(false)
 		return fmt.Errorf("pid file already exists: %w", ErrAlreadyStarted)
 	} else if !errors.Is(err, os.ErrNotExist) {
+		d.started.Store(false)
 		return fmt.Errorf("stat pid file: %w", err)
 	}
 	if err := os.WriteFile(d.pidPath, []byte(fmt.Sprintf("%d\n", os.Getpid())), 0o644); err != nil {
+		d.started.Store(false)
 		return fmt.Errorf("write pid file: %w", err)
 	}
 
 	d.stopContext, d.stopCancel = context.WithCancel(context.Background())
-	d.started = true
+	d.loopDone = make(chan struct{})
+	go d.runLoop(d.stopContext, d.loopDone)
+
 	d.emit(ctx, Event{
 		Time:    d.now(),
 		Type:    EventDaemonStarted,
@@ -198,26 +155,16 @@ func (d *Daemon) Start(ctx context.Context) error {
 }
 
 func (d *Daemon) Stop(ctx context.Context) error {
-	d.mu.Lock()
-	if !d.started {
-		d.mu.Unlock()
+	if !d.started.CompareAndSwap(true, false) {
 		return ErrNotStarted
 	}
-	assignments := make([]*assignment, 0, len(d.assignments))
-	for _, active := range d.assignments {
-		assignments = append(assignments, active)
-	}
-	stopCancel := d.stopCancel
-	d.started = false
-	d.mu.Unlock()
 
-	if stopCancel != nil {
-		stopCancel()
+	if d.stopCancel != nil {
+		d.stopCancel()
 	}
-	for _, active := range assignments {
-		active.cancel()
+	if d.loopDone != nil {
+		<-d.loopDone
 	}
-	d.wg.Wait()
 
 	if err := os.Remove(d.pidPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("remove pid file: %w", err)
@@ -246,44 +193,38 @@ func (d *Daemon) Assign(ctx context.Context, issue, prompt, agentProfile string)
 	}
 	profile = enforceLifecycleProfile(profile)
 
-	placeholder := &assignment{
-		pending: true,
-		task: Task{
-			Project: d.project,
-			Issue:   issue,
-			Branch:  issue,
-		},
-	}
-	d.mu.Lock()
-	if _, exists := d.assignments[issue]; exists {
-		d.mu.Unlock()
-		return fmt.Errorf("issue %s already assigned", issue)
-	}
-	d.assignments[issue] = placeholder
-	d.mu.Unlock()
-
-	releaseReservation := func() {
-		d.mu.Lock()
-		defer d.mu.Unlock()
-		if current, ok := d.assignments[issue]; ok && current == placeholder {
-			delete(d.assignments, issue)
-		}
-	}
-
 	if err := d.validateAssignment(ctx, issue, prompt); err != nil {
-		releaseReservation()
 		return err
+	}
+
+	now := d.now()
+	claimedTask := Task{
+		Project:      d.project,
+		Issue:        issue,
+		Status:       TaskStatusStarting,
+		Prompt:       prompt,
+		Branch:       issue,
+		AgentProfile: profile.Name,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+	previousTask, err := d.state.ClaimTask(ctx, claimedTask)
+	if err != nil {
+		return err
+	}
+	restoreReservation := func() {
+		_ = d.state.RestoreTask(context.WithoutCancel(ctx), d.project, issue, previousTask)
 	}
 
 	clone, err := d.pool.Acquire(ctx, d.project, issue)
 	if err != nil {
-		releaseReservation()
+		restoreReservation()
 		return fmt.Errorf("acquire clone: %w", err)
 	}
 
 	if err := d.prepareClone(ctx, clone.Path, issue); err != nil {
 		_ = d.pool.Release(ctx, d.project, clone)
-		releaseReservation()
+		restoreReservation()
 		return fmt.Errorf("prepare clone: %w", err)
 	}
 	clone.CurrentBranch = issue
@@ -298,83 +239,59 @@ func (d *Daemon) Assign(ctx context.Context, issue, prompt, agentProfile string)
 	})
 	if err != nil {
 		_ = d.cleanupCloneAndRelease(ctx, clone, issue)
-		releaseReservation()
+		restoreReservation()
 		return fmt.Errorf("spawn pane: %w", err)
 	}
 
 	if err := d.setPaneMetadata(ctx, pane.ID, assignmentMetadata(profile.Name, issue, issue, 0)); err != nil {
 		_ = d.rollbackAssignment(ctx, clone, pane, issue)
-		releaseReservation()
+		restoreReservation()
 		return fmt.Errorf("set pane metadata: %w", err)
 	}
 
 	if err := d.agentHandshake(ctx, pane.ID, profile); err != nil {
-		d.failPendingAssignment(ctx, issue, clone, pane, profile, err, releaseReservation)
+		d.failPendingAssignment(ctx, issue, clone, pane, profile, err, restoreReservation)
 		return fmt.Errorf("agent handshake: %w", err)
 	}
 
 	if err := d.amux.SendKeys(ctx, pane.ID, prompt, "Enter"); err != nil {
-		d.failPendingAssignment(ctx, issue, clone, pane, profile, err, releaseReservation)
+		d.failPendingAssignment(ctx, issue, clone, pane, profile, err, restoreReservation)
 		return fmt.Errorf("send prompt: %w", err)
 	}
 	if err := d.setIssueStatus(ctx, issue, IssueStateInProgress); err != nil {
 		_ = d.rollbackAssignment(ctx, clone, pane, issue)
-		releaseReservation()
+		restoreReservation()
 		return fmt.Errorf("set issue status: %w", err)
 	}
 
-	now := d.now()
-	task := Task{
-		Project:      d.project,
-		Issue:        issue,
-		Status:       TaskStatusActive,
-		PaneID:       pane.ID,
-		PaneName:     pane.Name,
-		CloneName:    clone.Name,
-		ClonePath:    clone.Path,
-		Branch:       issue,
-		AgentProfile: profile.Name,
-		UpdatedAt:    now,
-	}
+	task := claimedTask
+	task.Status = TaskStatusActive
+	task.PaneID = pane.ID
+	task.PaneName = pane.Name
+	task.CloneName = clone.Name
+	task.ClonePath = clone.Path
+	task.UpdatedAt = now
 	worker := Worker{
-		Project:      d.project,
-		PaneID:       pane.ID,
-		PaneName:     pane.Name,
-		Issue:        issue,
-		ClonePath:    clone.Path,
-		AgentProfile: profile.Name,
-		Health:       WorkerHealthHealthy,
-		UpdatedAt:    now,
+		Project:        d.project,
+		PaneID:         pane.ID,
+		PaneName:       pane.Name,
+		Issue:          issue,
+		ClonePath:      clone.Path,
+		AgentProfile:   profile.Name,
+		Health:         WorkerHealthHealthy,
+		LastActivityAt: now,
+		UpdatedAt:      now,
 	}
 	if err := d.state.PutTask(ctx, task); err != nil {
 		_ = d.rollbackAssignment(ctx, clone, pane, issue)
-		releaseReservation()
+		restoreReservation()
 		return fmt.Errorf("store task: %w", err)
 	}
 	if err := d.state.PutWorker(ctx, worker); err != nil {
 		_ = d.rollbackAssignment(ctx, clone, pane, issue)
-		releaseReservation()
+		restoreReservation()
 		return fmt.Errorf("store worker: %w", err)
 	}
-
-	monitorCtx, monitorCancel := context.WithCancel(d.stopContext)
-	active := &assignment{
-		ctx:          monitorCtx,
-		cancel:       monitorCancel,
-		captureTick:  d.newTicker(d.captureInterval),
-		pollTick:     d.newTicker(d.pollInterval),
-		profile:      profile,
-		task:         task,
-		worker:       worker,
-		clone:        clone,
-		pane:         pane,
-		startedAt:    now,
-		lastActivity: now,
-	}
-
-	d.mu.Lock()
-	d.assignments[issue] = active
-	d.mu.Unlock()
 
 	d.emit(ctx, Event{
 		Time:         now,
@@ -389,9 +306,6 @@ func (d *Daemon) Assign(ctx context.Context, issue, prompt, agentProfile string)
 		AgentProfile: profile.Name,
 		Message:      "task assigned",
 	})
-
-	d.wg.Add(1)
-	go d.monitorAssignment(active)
 	return nil
 }
 
@@ -449,7 +363,7 @@ func (d *Daemon) Cancel(ctx context.Context, issue string) error {
 		return err
 	}
 
-	active, err := d.assignment(issue)
+	active, err := d.state.ActiveAssignmentByIssue(ctx, d.project, issue)
 	if err != nil {
 		return err
 	}

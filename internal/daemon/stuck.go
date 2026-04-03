@@ -1,52 +1,56 @@
 package daemon
 
-import "strings"
+import (
+	"context"
+	"strings"
+)
 
-func (d *Daemon) nudgeOrEscalate(active *assignment, reason string) {
+func (d *Daemon) nudgeOrEscalate(ctx context.Context, active ActiveAssignment, profile AgentProfile, reason string) {
 	now := d.now()
-	active.worker.Health = WorkerHealthStuck
-	active.worker.UpdatedAt = now
+	previousHealth := active.Worker.Health
+	active.Worker.Health = WorkerHealthStuck
+	active.Worker.UpdatedAt = now
 
-	if active.worker.NudgeCount < active.profile.MaxNudgeRetries {
-		if err := d.amux.SendKeys(active.ctx, active.pane.ID, active.profile.NudgeCommand); err != nil {
+	if active.Worker.NudgeCount < profile.MaxNudgeRetries {
+		if err := d.amux.SendKeys(ctx, active.Task.PaneID, profile.NudgeCommand); err != nil {
 			return
 		}
-		active.worker.NudgeCount++
-		_ = d.state.PutWorker(active.ctx, active.worker)
-		d.emit(active.ctx, Event{
+		active.Worker.NudgeCount++
+		_ = d.state.PutWorker(ctx, active.Worker)
+		d.emit(ctx, Event{
 			Time:         now,
 			Type:         EventWorkerNudged,
 			Project:      d.project,
-			Issue:        active.task.Issue,
-			PaneID:       active.pane.ID,
-			PaneName:     active.pane.Name,
-			CloneName:    active.clone.Name,
-			ClonePath:    active.clone.Path,
-			Branch:       active.task.Branch,
-			AgentProfile: active.profile.Name,
-			Retry:        active.worker.NudgeCount,
+			Issue:        active.Task.Issue,
+			PaneID:       active.Task.PaneID,
+			PaneName:     active.Task.PaneName,
+			CloneName:    active.Task.CloneName,
+			ClonePath:    active.Task.ClonePath,
+			Branch:       active.Task.Branch,
+			AgentProfile: profile.Name,
+			Retry:        active.Worker.NudgeCount,
 			Message:      reason,
 		})
 		return
 	}
 
-	if active.escalated {
+	if previousHealth == WorkerHealthEscalated {
 		return
 	}
-	active.escalated = true
-	_ = d.state.PutWorker(active.ctx, active.worker)
-	d.emit(active.ctx, Event{
+	active.Worker.Health = WorkerHealthEscalated
+	_ = d.state.PutWorker(ctx, active.Worker)
+	d.emit(ctx, Event{
 		Time:         now,
 		Type:         EventWorkerEscalated,
 		Project:      d.project,
-		Issue:        active.task.Issue,
-		PaneID:       active.pane.ID,
-		PaneName:     active.pane.Name,
-		CloneName:    active.clone.Name,
-		ClonePath:    active.clone.Path,
-		Branch:       active.task.Branch,
-		AgentProfile: active.profile.Name,
-		Retry:        active.worker.NudgeCount,
+		Issue:        active.Task.Issue,
+		PaneID:       active.Task.PaneID,
+		PaneName:     active.Task.PaneName,
+		CloneName:    active.Task.CloneName,
+		ClonePath:    active.Task.ClonePath,
+		Branch:       active.Task.Branch,
+		AgentProfile: profile.Name,
+		Retry:        active.Worker.NudgeCount,
 		Message:      reason,
 	})
 }

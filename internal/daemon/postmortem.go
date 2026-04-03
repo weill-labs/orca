@@ -37,26 +37,31 @@ func ensureFlag(command, flag string) string {
 	return command + " " + flag
 }
 
-func (d *Daemon) ensurePostmortem(ctx context.Context, active *assignment) error {
-	command := postmortemCommandForProfile(active.profile)
+func (d *Daemon) ensurePostmortem(ctx context.Context, active ActiveAssignment) error {
+	profile, err := d.profileForTask(ctx, active.Task)
+	if err != nil {
+		return fmt.Errorf("load agent profile: %w", err)
+	}
+
+	command := postmortemCommandForProfile(profile)
 	if command == "" {
 		return nil
 	}
 
-	if ok, err := d.postmortemRecorded(active); err != nil {
+	if ok, err := postmortemRecorded(active); err != nil {
 		return fmt.Errorf("check postmortem: %w", err)
 	} else if ok {
 		return nil
 	}
 
-	if err := d.amux.SendKeys(ctx, active.pane.ID, command, "Enter"); err != nil {
+	if err := d.amux.SendKeys(ctx, active.Task.PaneID, command, "Enter"); err != nil {
 		return fmt.Errorf("request postmortem: %w", err)
 	}
-	if err := d.amux.WaitIdle(ctx, active.pane.ID, d.mergeGracePeriod); err != nil {
+	if err := d.amux.WaitIdle(ctx, active.Task.PaneID, d.mergeGracePeriod); err != nil {
 		return fmt.Errorf("wait for postmortem: %w", err)
 	}
 
-	if ok, err := d.postmortemRecorded(active); err != nil {
+	if ok, err := postmortemRecorded(active); err != nil {
 		return fmt.Errorf("verify postmortem: %w", err)
 	} else if ok {
 		return nil
@@ -72,26 +77,12 @@ func postmortemCommandForProfile(profile AgentProfile) string {
 	return postmortemCommand
 }
 
-func (d *Daemon) postmortemRecorded(active *assignment) (bool, error) {
-	d.mu.Lock()
-	recordedAt := d.postmortems[active.pane.ID]
-	d.mu.Unlock()
-	if !recordedAt.IsZero() && !recordedAt.Before(active.startedAt) {
-		return true, nil
-	}
-
-	recordedAt, ok, err := findPostmortem(active)
-	if err != nil || !ok {
-		return ok, err
-	}
-
-	d.mu.Lock()
-	d.postmortems[active.pane.ID] = recordedAt
-	d.mu.Unlock()
-	return true, nil
+func postmortemRecorded(active ActiveAssignment) (bool, error) {
+	_, ok, err := findPostmortem(active)
+	return ok, err
 }
 
-func findPostmortem(active *assignment) (time.Time, bool, error) {
+func findPostmortem(active ActiveAssignment) (time.Time, bool, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return time.Time{}, false, fmt.Errorf("resolve home directory: %w", err)
@@ -117,7 +108,7 @@ func findPostmortem(active *assignment) (time.Time, bool, error) {
 	return newest, true, nil
 }
 
-func findPostmortemInDir(dir string, active *assignment) (time.Time, bool, error) {
+func findPostmortemInDir(dir string, active ActiveAssignment) (time.Time, bool, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -137,7 +128,12 @@ func findPostmortemInDir(dir string, active *assignment) (time.Time, bool, error
 		if err != nil {
 			return time.Time{}, false, fmt.Errorf("stat postmortem %q: %w", path, err)
 		}
-		if info.ModTime().Before(active.startedAt) {
+
+		startedAt := active.Task.CreatedAt
+		if startedAt.IsZero() {
+			startedAt = active.Task.UpdatedAt
+		}
+		if !startedAt.IsZero() && info.ModTime().Before(startedAt) {
 			continue
 		}
 
@@ -145,7 +141,7 @@ func findPostmortemInDir(dir string, active *assignment) (time.Time, bool, error
 		if err != nil {
 			return time.Time{}, false, fmt.Errorf("read postmortem %q: %w", path, err)
 		}
-		if !matchesPostmortemSession(string(data), active.task.Issue, active.task.Branch) {
+		if !matchesPostmortemSession(string(data), active.Task.Issue, active.Task.Branch) {
 			continue
 		}
 		if info.ModTime().After(newest) {
@@ -172,57 +168,65 @@ func matchesPostmortemSession(content, issue, branch string) bool {
 	return true
 }
 
-func (d *Daemon) finishAssignment(ctx context.Context, active *assignment, status, eventType string, merged bool) error {
+func (d *Daemon) finishAssignment(ctx context.Context, active ActiveAssignment, status, eventType string, merged bool) error {
 	if err := d.ensurePostmortem(ctx, active); err != nil {
 		return err
 	}
 
 	var result error
-	active.cleanupOnce.Do(func() {
-		cleanupCtx := context.WithoutCancel(ctx)
-		active.cancel()
+	cleanupCtx := context.WithoutCancel(ctx)
 
-		if merged {
-			if err := d.amux.SendKeys(cleanupCtx, active.pane.ID, mergedWrapUpPrompt); err != nil {
-				result = errors.Join(result, err)
-			}
-			if err := d.amux.WaitIdle(cleanupCtx, active.pane.ID, d.mergeGracePeriod); err != nil {
-				result = errors.Join(result, d.amux.KillPane(cleanupCtx, active.pane.ID))
-			}
-		} else {
-			result = errors.Join(result, d.amux.KillPane(cleanupCtx, active.pane.ID))
+	if merged {
+		if err := d.amux.SendKeys(cleanupCtx, active.Task.PaneID, mergedWrapUpPrompt); err != nil {
+			result = errors.Join(result, err)
 		}
-
-		result = errors.Join(result, d.cleanupCloneAndRelease(cleanupCtx, active.clone, active.task.Branch))
-
-		active.task.Status = status
-		active.task.PRNumber = active.prNumber
-		active.task.UpdatedAt = d.now()
-		result = errors.Join(result, d.state.PutTask(cleanupCtx, active.task))
-		result = errors.Join(result, d.state.DeleteWorker(cleanupCtx, d.project, active.pane.ID))
-
-		d.mu.Lock()
-		delete(d.assignments, active.task.Issue)
-		d.mu.Unlock()
-
-		message := "task finished"
-		if status == TaskStatusCancelled {
-			message = "task cancelled"
+		if err := d.amux.WaitIdle(cleanupCtx, active.Task.PaneID, d.mergeGracePeriod); err != nil {
+			result = errors.Join(result, d.amux.KillPane(cleanupCtx, active.Task.PaneID))
 		}
-		d.emit(cleanupCtx, Event{
-			Time:         d.now(),
-			Type:         eventType,
-			Project:      d.project,
-			Issue:        active.task.Issue,
-			PaneID:       active.pane.ID,
-			PaneName:     active.pane.Name,
-			CloneName:    active.clone.Name,
-			ClonePath:    active.clone.Path,
-			Branch:       active.task.Branch,
-			AgentProfile: active.profile.Name,
-			PRNumber:     active.prNumber,
-			Message:      message,
-		})
+	} else {
+		result = errors.Join(result, d.amux.KillPane(cleanupCtx, active.Task.PaneID))
+	}
+
+	clone := Clone{
+		Name: active.Task.CloneName,
+		Path: active.Task.ClonePath,
+	}
+	if clone.Name == "" && clone.Path != "" {
+		clone.Name = filepath.Base(clone.Path)
+	}
+	result = errors.Join(result, d.cleanupCloneAndRelease(cleanupCtx, clone, active.Task.Branch))
+
+	active.Task.Status = status
+	active.Task.UpdatedAt = d.now()
+	result = errors.Join(result, d.state.PutTask(cleanupCtx, active.Task))
+	result = errors.Join(result, d.state.DeleteWorker(cleanupCtx, d.project, active.Task.PaneID))
+	if active.Task.PRNumber > 0 {
+		if err := d.state.DeleteMergeEntry(cleanupCtx, d.project, active.Task.PRNumber); err != nil && !errors.Is(err, ErrTaskNotFound) {
+			result = errors.Join(result, err)
+		}
+	}
+
+	message := "task finished"
+	if status == TaskStatusCancelled {
+		message = "task cancelled"
+	}
+	profile, err := d.profileForTask(cleanupCtx, active.Task)
+	if err != nil {
+		profile = AgentProfile{Name: active.Task.AgentProfile}
+	}
+	d.emit(cleanupCtx, Event{
+		Time:         d.now(),
+		Type:         eventType,
+		Project:      d.project,
+		Issue:        active.Task.Issue,
+		PaneID:       active.Task.PaneID,
+		PaneName:     active.Task.PaneName,
+		CloneName:    clone.Name,
+		ClonePath:    active.Task.ClonePath,
+		Branch:       active.Task.Branch,
+		AgentProfile: profile.Name,
+		PRNumber:     active.Task.PRNumber,
+		Message:      message,
 	})
 	return result
 }

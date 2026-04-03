@@ -14,45 +14,51 @@ const (
 	ciStateSkipping = "skipping"
 )
 
-func (d *Daemon) handlePRChecksPoll(active *assignment) {
-	ciState, err := d.lookupPRChecksState(active.ctx, active.prNumber)
+func (d *Daemon) handlePRChecksPoll(ctx context.Context, active ActiveAssignment, profile AgentProfile) {
+	ciState, err := d.lookupPRChecksState(ctx, active.Task.PRNumber)
 	if err != nil {
 		return
 	}
 
-	previous := active.lastCIState
+	previous := active.Worker.LastCIState
 	if ciState != ciStateFail {
-		active.lastCIState = ciState
+		if previous != ciState {
+			active.Worker.LastCIState = ciState
+			active.Worker.UpdatedAt = d.now()
+			_ = d.state.PutWorker(ctx, active.Worker)
+		}
 		return
 	}
 	if previous == ciStateFail {
 		return
 	}
-	if d.nudgeForCIFailure(active) {
-		active.lastCIState = ciStateFail
+	if d.nudgeForCIFailure(ctx, active, profile) {
+		active.Worker.LastCIState = ciStateFail
+		active.Worker.UpdatedAt = d.now()
+		_ = d.state.PutWorker(ctx, active.Worker)
 	}
 }
 
-func (d *Daemon) nudgeForCIFailure(active *assignment) bool {
-	if active.profile.NudgeCommand == "" {
+func (d *Daemon) nudgeForCIFailure(ctx context.Context, active ActiveAssignment, profile AgentProfile) bool {
+	if profile.NudgeCommand == "" {
 		return false
 	}
-	if err := d.amux.SendKeys(active.ctx, active.pane.ID, active.profile.NudgeCommand); err != nil {
+	if err := d.amux.SendKeys(ctx, active.Task.PaneID, profile.NudgeCommand); err != nil {
 		return false
 	}
 
-	d.emit(active.ctx, Event{
+	d.emit(ctx, Event{
 		Time:         d.now(),
 		Type:         EventWorkerNudgedCI,
 		Project:      d.project,
-		Issue:        active.task.Issue,
-		PaneID:       active.pane.ID,
-		PaneName:     active.pane.Name,
-		CloneName:    active.clone.Name,
-		ClonePath:    active.clone.Path,
-		Branch:       active.task.Branch,
-		AgentProfile: active.profile.Name,
-		PRNumber:     active.prNumber,
+		Issue:        active.Task.Issue,
+		PaneID:       active.Task.PaneID,
+		PaneName:     active.Task.PaneName,
+		CloneName:    active.Task.CloneName,
+		ClonePath:    active.Task.ClonePath,
+		Branch:       active.Task.Branch,
+		AgentProfile: profile.Name,
+		PRNumber:     active.Task.PRNumber,
 		Message:      "pull request checks failing",
 	})
 	return true

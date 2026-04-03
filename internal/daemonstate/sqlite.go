@@ -46,8 +46,24 @@ CREATE TABLE IF NOT EXISTS workers (
 	state TEXT NOT NULL,
 	issue TEXT NOT NULL DEFAULT '',
 	clone_path TEXT NOT NULL DEFAULT '',
+	last_review_count INTEGER NOT NULL DEFAULT 0,
+	last_ci_state TEXT NOT NULL DEFAULT '',
+	last_mergeable_state TEXT NOT NULL DEFAULT '',
+	nudge_count INTEGER NOT NULL DEFAULT 0,
+	last_capture TEXT NOT NULL DEFAULT '',
+	last_activity_at TEXT NOT NULL DEFAULT '',
 	updated_at TEXT NOT NULL,
 	PRIMARY KEY (project, pane_id)
+);
+
+CREATE TABLE IF NOT EXISTS merge_queue (
+	project TEXT NOT NULL,
+	pr_number INTEGER NOT NULL,
+	issue TEXT NOT NULL,
+	status TEXT NOT NULL,
+	created_at TEXT NOT NULL,
+	updated_at TEXT NOT NULL,
+	PRIMARY KEY (project, pr_number)
 );
 
 CREATE TABLE IF NOT EXISTS clones (
@@ -75,6 +91,7 @@ CREATE INDEX IF NOT EXISTS idx_workers_project_updated ON workers(project, updat
 CREATE INDEX IF NOT EXISTS idx_clones_project_updated ON clones(project, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_events_project_id ON events(project, id);
 CREATE INDEX IF NOT EXISTS idx_events_project_issue_id ON events(project, issue, id);
+CREATE INDEX IF NOT EXISTS idx_merge_queue_project_created ON merge_queue(project, created_at ASC, pr_number ASC);
 `
 
 type SQLiteStore struct {
@@ -124,6 +141,9 @@ func (s *SQLiteStore) Close() error {
 func (s *SQLiteStore) EnsureSchema(ctx context.Context) error {
 	if err := s.execWithRetry(ctx, schemaSQL); err != nil {
 		return fmt.Errorf("ensure sqlite schema: %w", err)
+	}
+	if err := s.ensureWorkersColumns(ctx); err != nil {
+		return err
 	}
 
 	return nil
@@ -210,7 +230,7 @@ func (s *SQLiteStore) TaskStatus(ctx context.Context, project, issue string) (Ta
 
 func (s *SQLiteStore) ListWorkers(ctx context.Context, project string) ([]Worker, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT pane_id, agent, state, issue, clone_path, updated_at
+		SELECT pane_id, agent, state, issue, clone_path, last_review_count, last_ci_state, last_mergeable_state, nudge_count, last_capture, last_activity_at, updated_at
 		FROM workers
 		WHERE project = ?
 		ORDER BY updated_at DESC, pane_id ASC
@@ -223,10 +243,25 @@ func (s *SQLiteStore) ListWorkers(ctx context.Context, project string) ([]Worker
 	workers := make([]Worker, 0)
 	for rows.Next() {
 		var worker Worker
+		var lastActivityAt string
 		var updatedAt string
-		if err := rows.Scan(&worker.PaneID, &worker.Agent, &worker.State, &worker.Issue, &worker.ClonePath, &updatedAt); err != nil {
+		if err := rows.Scan(
+			&worker.PaneID,
+			&worker.Agent,
+			&worker.State,
+			&worker.Issue,
+			&worker.ClonePath,
+			&worker.LastReviewCount,
+			&worker.LastCIState,
+			&worker.LastMergeableState,
+			&worker.NudgeCount,
+			&worker.LastCapture,
+			&lastActivityAt,
+			&updatedAt,
+		); err != nil {
 			return nil, fmt.Errorf("scan worker: %w", err)
 		}
+		worker.LastActivityAt = parseTime(lastActivityAt)
 		worker.UpdatedAt = parseTime(updatedAt)
 		workers = append(workers, worker)
 	}
@@ -393,15 +428,21 @@ func (s *SQLiteStore) UpsertWorker(ctx context.Context, project string, worker W
 	}
 
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO workers(project, pane_id, agent, state, issue, clone_path, updated_at)
-		VALUES(?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO workers(project, pane_id, agent, state, issue, clone_path, last_review_count, last_ci_state, last_mergeable_state, nudge_count, last_capture, last_activity_at, updated_at)
+		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(project, pane_id) DO UPDATE SET
 			agent = excluded.agent,
 			state = excluded.state,
 			issue = excluded.issue,
 			clone_path = excluded.clone_path,
+			last_review_count = excluded.last_review_count,
+			last_ci_state = excluded.last_ci_state,
+			last_mergeable_state = excluded.last_mergeable_state,
+			nudge_count = excluded.nudge_count,
+			last_capture = excluded.last_capture,
+			last_activity_at = excluded.last_activity_at,
 			updated_at = excluded.updated_at
-	`, project, worker.PaneID, worker.Agent, worker.State, worker.Issue, worker.ClonePath, formatTime(worker.UpdatedAt))
+	`, project, worker.PaneID, worker.Agent, worker.State, worker.Issue, worker.ClonePath, worker.LastReviewCount, worker.LastCIState, worker.LastMergeableState, worker.NudgeCount, worker.LastCapture, formatTime(worker.LastActivityAt), formatTime(worker.UpdatedAt))
 	if err != nil {
 		return fmt.Errorf("upsert worker: %w", err)
 	}
@@ -426,6 +467,276 @@ func (s *SQLiteStore) DeleteWorker(ctx context.Context, project, paneID string) 
 		return ErrNotFound
 	}
 
+	return nil
+}
+
+func (s *SQLiteStore) DeleteTask(ctx context.Context, project, issue string) error {
+	result, err := s.db.ExecContext(ctx, `
+		DELETE FROM tasks
+		WHERE project = ? AND issue = ?
+	`, project, issue)
+	if err != nil {
+		return fmt.Errorf("delete task: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("delete task rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		return ErrNotFound
+	}
+
+	return nil
+}
+
+func (s *SQLiteStore) ClaimTask(ctx context.Context, project string, task Task) (*Task, error) {
+	if task.CreatedAt.IsZero() {
+		task.CreatedAt = s.now()
+	}
+	if task.UpdatedAt.IsZero() {
+		task.UpdatedAt = task.CreatedAt
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin claim task tx: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	row := tx.QueryRowContext(ctx, `
+		SELECT issue, status, agent, prompt, worker_id, clone_path, pr_number, created_at, updated_at
+		FROM tasks
+		WHERE project = ? AND issue = ?
+	`, project, task.Issue)
+
+	existing, err := scanTask(row)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		_, err = tx.ExecContext(ctx, `
+			INSERT INTO tasks(project, issue, status, agent, prompt, worker_id, clone_path, pr_number, created_at, updated_at)
+			VALUES(?, ?, ?, ?, ?, '', '', NULL, ?, ?)
+		`, project, task.Issue, task.Status, task.Agent, task.Prompt, formatTime(task.CreatedAt), formatTime(task.UpdatedAt))
+		if err != nil {
+			return nil, fmt.Errorf("insert claimed task: %w", err)
+		}
+		if err := tx.Commit(); err != nil {
+			return nil, fmt.Errorf("commit claimed task insert: %w", err)
+		}
+		return nil, nil
+	case err != nil:
+		return nil, fmt.Errorf("load claimed task: %w", err)
+	}
+
+	if taskStatusBlocksClaim(existing.Status) {
+		return nil, fmt.Errorf("task %s already assigned", task.Issue)
+	}
+
+	_, err = tx.ExecContext(ctx, `
+		UPDATE tasks
+		SET status = ?, agent = ?, prompt = ?, worker_id = '', clone_path = '', pr_number = NULL, updated_at = ?
+		WHERE project = ? AND issue = ?
+	`, task.Status, task.Agent, task.Prompt, formatTime(task.UpdatedAt), project, task.Issue)
+	if err != nil {
+		return nil, fmt.Errorf("update claimed task: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit claimed task update: %w", err)
+	}
+
+	return &existing, nil
+}
+
+func (s *SQLiteStore) ActiveAssignments(ctx context.Context, project string) ([]Assignment, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT
+			t.issue, t.status, t.agent, t.prompt, t.worker_id, t.clone_path, t.pr_number, t.created_at, t.updated_at,
+			w.pane_id, w.agent, w.state, w.issue, w.clone_path, w.last_review_count, w.last_ci_state, w.last_mergeable_state, w.nudge_count, w.last_capture, w.last_activity_at, w.updated_at
+		FROM tasks t
+		INNER JOIN workers w
+			ON w.project = t.project
+			AND w.pane_id = t.worker_id
+		WHERE t.project = ? AND t.status = 'active'
+		ORDER BY t.updated_at DESC, t.issue ASC
+	`, project)
+	if err != nil {
+		return nil, fmt.Errorf("list active assignments: %w", err)
+	}
+	defer rows.Close()
+
+	assignments := make([]Assignment, 0)
+	for rows.Next() {
+		assignment, err := scanAssignment(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan active assignment: %w", err)
+		}
+		assignments = append(assignments, assignment)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate active assignments: %w", err)
+	}
+	return assignments, nil
+}
+
+func (s *SQLiteStore) ActiveAssignmentByIssue(ctx context.Context, project, issue string) (Assignment, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT
+			t.issue, t.status, t.agent, t.prompt, t.worker_id, t.clone_path, t.pr_number, t.created_at, t.updated_at,
+			w.pane_id, w.agent, w.state, w.issue, w.clone_path, w.last_review_count, w.last_ci_state, w.last_mergeable_state, w.nudge_count, w.last_capture, w.last_activity_at, w.updated_at
+		FROM tasks t
+		INNER JOIN workers w
+			ON w.project = t.project
+			AND w.pane_id = t.worker_id
+		WHERE t.project = ? AND t.issue = ? AND t.status = 'active'
+	`, project, issue)
+
+	assignment, err := scanAssignment(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Assignment{}, ErrNotFound
+	}
+	if err != nil {
+		return Assignment{}, fmt.Errorf("lookup active assignment by issue: %w", err)
+	}
+	return assignment, nil
+}
+
+func (s *SQLiteStore) ActiveAssignmentByPRNumber(ctx context.Context, project string, prNumber int) (Assignment, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT
+			t.issue, t.status, t.agent, t.prompt, t.worker_id, t.clone_path, t.pr_number, t.created_at, t.updated_at,
+			w.pane_id, w.agent, w.state, w.issue, w.clone_path, w.last_review_count, w.last_ci_state, w.last_mergeable_state, w.nudge_count, w.last_capture, w.last_activity_at, w.updated_at
+		FROM tasks t
+		INNER JOIN workers w
+			ON w.project = t.project
+			AND w.pane_id = t.worker_id
+		WHERE t.project = ? AND t.pr_number = ? AND t.status = 'active'
+	`, project, prNumber)
+
+	assignment, err := scanAssignment(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Assignment{}, ErrNotFound
+	}
+	if err != nil {
+		return Assignment{}, fmt.Errorf("lookup active assignment by pr number: %w", err)
+	}
+	return assignment, nil
+}
+
+func (s *SQLiteStore) EnqueueMergeEntry(ctx context.Context, entry MergeQueueEntry) (int, error) {
+	if entry.CreatedAt.IsZero() {
+		entry.CreatedAt = s.now()
+	}
+	if entry.UpdatedAt.IsZero() {
+		entry.UpdatedAt = entry.CreatedAt
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin enqueue merge tx: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO merge_queue(project, pr_number, issue, status, created_at, updated_at)
+		VALUES(?, ?, ?, ?, ?, ?)
+	`, entry.Project, entry.PRNumber, entry.Issue, entry.Status, formatTime(entry.CreatedAt), formatTime(entry.UpdatedAt))
+	if err != nil {
+		return 0, fmt.Errorf("enqueue merge entry: %w", err)
+	}
+
+	var position int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM merge_queue
+		WHERE project = ?
+	`, entry.Project).Scan(&position); err != nil {
+		return 0, fmt.Errorf("count merge queue entries: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit enqueue merge tx: %w", err)
+	}
+	return position, nil
+}
+
+func (s *SQLiteStore) NextMergeEntry(ctx context.Context, project string) (*MergeQueueEntry, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT project, issue, pr_number, status, created_at, updated_at
+		FROM merge_queue
+		WHERE project = ?
+		ORDER BY created_at ASC, pr_number ASC
+		LIMIT 1
+	`, project)
+
+	entry, err := scanMergeQueueEntry(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("next merge entry: %w", err)
+	}
+	return &entry, nil
+}
+
+func (s *SQLiteStore) MergeEntry(ctx context.Context, project string, prNumber int) (*MergeQueueEntry, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT project, issue, pr_number, status, created_at, updated_at
+		FROM merge_queue
+		WHERE project = ? AND pr_number = ?
+	`, project, prNumber)
+
+	entry, err := scanMergeQueueEntry(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("lookup merge entry: %w", err)
+	}
+	return &entry, nil
+}
+
+func (s *SQLiteStore) UpdateMergeEntry(ctx context.Context, entry MergeQueueEntry) error {
+	if entry.UpdatedAt.IsZero() {
+		entry.UpdatedAt = s.now()
+	}
+
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE merge_queue
+		SET issue = ?, status = ?, updated_at = ?
+		WHERE project = ? AND pr_number = ?
+	`, entry.Issue, entry.Status, formatTime(entry.UpdatedAt), entry.Project, entry.PRNumber)
+	if err != nil {
+		return fmt.Errorf("update merge entry: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("update merge entry rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *SQLiteStore) DeleteMergeEntry(ctx context.Context, project string, prNumber int) error {
+	result, err := s.db.ExecContext(ctx, `
+		DELETE FROM merge_queue
+		WHERE project = ? AND pr_number = ?
+	`, project, prNumber)
+	if err != nil {
+		return fmt.Errorf("delete merge entry: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("delete merge entry rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		return ErrNotFound
+	}
 	return nil
 }
 
@@ -686,6 +997,130 @@ func scanTask(scanner rowScanner) (Task, error) {
 	task.CreatedAt = parseTime(createdAt)
 	task.UpdatedAt = parseTime(updatedAt)
 	return task, nil
+}
+
+func scanAssignment(scanner rowScanner) (Assignment, error) {
+	var task Task
+	var prNumber sql.NullInt64
+	var taskCreatedAt string
+	var taskUpdatedAt string
+	var worker Worker
+	var lastActivityAt string
+	var workerUpdatedAt string
+	if err := scanner.Scan(
+		&task.Issue,
+		&task.Status,
+		&task.Agent,
+		&task.Prompt,
+		&task.WorkerID,
+		&task.ClonePath,
+		&prNumber,
+		&taskCreatedAt,
+		&taskUpdatedAt,
+		&worker.PaneID,
+		&worker.Agent,
+		&worker.State,
+		&worker.Issue,
+		&worker.ClonePath,
+		&worker.LastReviewCount,
+		&worker.LastCIState,
+		&worker.LastMergeableState,
+		&worker.NudgeCount,
+		&worker.LastCapture,
+		&lastActivityAt,
+		&workerUpdatedAt,
+	); err != nil {
+		return Assignment{}, err
+	}
+	if prNumber.Valid {
+		value := int(prNumber.Int64)
+		task.PRNumber = &value
+	}
+	task.CreatedAt = parseTime(taskCreatedAt)
+	task.UpdatedAt = parseTime(taskUpdatedAt)
+	worker.LastActivityAt = parseTime(lastActivityAt)
+	worker.UpdatedAt = parseTime(workerUpdatedAt)
+
+	return Assignment{
+		Task:   task,
+		Worker: worker,
+	}, nil
+}
+
+func scanMergeQueueEntry(scanner rowScanner) (MergeQueueEntry, error) {
+	var entry MergeQueueEntry
+	var createdAt string
+	var updatedAt string
+	if err := scanner.Scan(&entry.Project, &entry.Issue, &entry.PRNumber, &entry.Status, &createdAt, &updatedAt); err != nil {
+		return MergeQueueEntry{}, err
+	}
+	entry.CreatedAt = parseTime(createdAt)
+	entry.UpdatedAt = parseTime(updatedAt)
+	return entry, nil
+}
+
+func taskStatusBlocksClaim(status string) bool {
+	switch status {
+	case "", "done", "cancelled", "failed":
+		return false
+	default:
+		return true
+	}
+}
+
+func (s *SQLiteStore) ensureWorkersColumns(ctx context.Context) error {
+	type columnSpec struct {
+		name       string
+		definition string
+	}
+
+	specs := []columnSpec{
+		{name: "last_review_count", definition: "INTEGER NOT NULL DEFAULT 0"},
+		{name: "last_ci_state", definition: "TEXT NOT NULL DEFAULT ''"},
+		{name: "last_mergeable_state", definition: "TEXT NOT NULL DEFAULT ''"},
+		{name: "nudge_count", definition: "INTEGER NOT NULL DEFAULT 0"},
+		{name: "last_capture", definition: "TEXT NOT NULL DEFAULT ''"},
+		{name: "last_activity_at", definition: "TEXT NOT NULL DEFAULT ''"},
+	}
+
+	for _, spec := range specs {
+		if err := s.addColumnIfMissing(ctx, "workers", spec.name, spec.definition); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (s *SQLiteStore) addColumnIfMissing(ctx context.Context, table, column, definition string) error {
+	rows, err := s.db.QueryContext(ctx, fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		return fmt.Errorf("query table info for %s: %w", table, err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var cid int
+		var name string
+		var columnType string
+		var notNull int
+		var defaultValue sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &pk); err != nil {
+			return fmt.Errorf("scan table info for %s: %w", table, err)
+		}
+		if name == column {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate table info for %s: %w", table, err)
+	}
+
+	if err := s.execWithRetry(ctx, fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, definition)); err != nil {
+		return fmt.Errorf("add %s.%s column: %w", table, column, err)
+	}
+	return nil
 }
 
 func formatTime(timestamp time.Time) string {

@@ -19,15 +19,17 @@ type prReview struct {
 	} `json:"author"`
 }
 
-func (d *Daemon) handlePRReviewPoll(active *assignment) {
-	payload, ok, err := d.lookupPRReviews(active.ctx, active.prNumber)
+func (d *Daemon) handlePRReviewPoll(ctx context.Context, active ActiveAssignment, profile AgentProfile) {
+	payload, ok, err := d.lookupPRReviews(ctx, active.Task.PRNumber)
 	if err != nil || !ok {
 		return
 	}
 
-	previousCount := int(active.lastReviewCount.Load())
+	previousCount := active.Worker.LastReviewCount
 	if previousCount > len(payload.Reviews) {
-		active.lastReviewCount.Store(int64(len(payload.Reviews)))
+		active.Worker.LastReviewCount = len(payload.Reviews)
+		active.Worker.UpdatedAt = d.now()
+		_ = d.state.PutWorker(ctx, active.Worker)
 		return
 	}
 	if previousCount == len(payload.Reviews) {
@@ -37,28 +39,33 @@ func (d *Daemon) handlePRReviewPoll(active *assignment) {
 	newReviews := payload.Reviews[previousCount:]
 	blocking := blockingReviews(payload.ReviewDecision, newReviews)
 	if len(blocking) == 0 {
-		active.lastReviewCount.Store(int64(len(payload.Reviews)))
+		active.Worker.LastReviewCount = len(payload.Reviews)
+		active.Worker.UpdatedAt = d.now()
+		_ = d.state.PutWorker(ctx, active.Worker)
 		return
 	}
 
-	feedback := formatBlockingReviewFeedback(active.prNumber, blocking)
-	if err := d.amux.SendKeys(active.ctx, active.pane.ID, ensureTrailingNewline(feedback)); err != nil {
+	feedback := formatBlockingReviewFeedback(active.Task.PRNumber, blocking)
+	if err := d.amux.SendKeys(ctx, active.Task.PaneID, ensureTrailingNewline(feedback)); err != nil {
 		return
 	}
 
-	active.lastReviewCount.Store(int64(len(payload.Reviews)))
-	d.emit(active.ctx, Event{
+	active.Worker.LastReviewCount = len(payload.Reviews)
+	active.Worker.UpdatedAt = d.now()
+	_ = d.state.PutWorker(ctx, active.Worker)
+
+	d.emit(ctx, Event{
 		Time:         d.now(),
 		Type:         EventWorkerNudgedReview,
 		Project:      d.project,
-		Issue:        active.task.Issue,
-		PaneID:       active.pane.ID,
-		PaneName:     active.pane.Name,
-		CloneName:    active.clone.Name,
-		ClonePath:    active.clone.Path,
-		Branch:       active.task.Branch,
-		AgentProfile: active.profile.Name,
-		PRNumber:     active.prNumber,
+		Issue:        active.Task.Issue,
+		PaneID:       active.Task.PaneID,
+		PaneName:     active.Task.PaneName,
+		CloneName:    active.Task.CloneName,
+		ClonePath:    active.Task.ClonePath,
+		Branch:       active.Task.Branch,
+		AgentProfile: profile.Name,
+		PRNumber:     active.Task.PRNumber,
 		Message:      fmt.Sprintf("sent %d new blocking review(s) to worker", len(blocking)),
 	})
 }
