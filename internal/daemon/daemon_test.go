@@ -1183,7 +1183,7 @@ func TestPRMergeablePollingNudgesWorkerOnConflictTransitions(t *testing.T) {
 	prTicker.tick(deps.clock.Now())
 	waitFor(t, "initial conflict nudge", func() bool {
 		return deps.amux.countKey("pane-1", conflictNudge) == 1 &&
-			assignmentStringField(active, "lastMergeableState") == "CONFLICTING"
+			active.lastMergeableState == "CONFLICTING"
 	})
 
 	prTicker.tick(deps.clock.Now())
@@ -1193,14 +1193,14 @@ func TestPRMergeablePollingNudgesWorkerOnConflictTransitions(t *testing.T) {
 	if got, want := deps.amux.countKey("pane-1", conflictNudge), 1; got != want {
 		t.Fatalf("conflict nudge count after repeated conflicting poll = %d, want %d", got, want)
 	}
-	if got, want := deps.events.countType("worker.nudged_conflict"), 1; got != want {
+	if got, want := deps.events.countType(EventWorkerNudgedConflict), 1; got != want {
 		t.Fatalf("conflict nudge event count after repeated conflicting poll = %d, want %d", got, want)
 	}
 
 	prTicker.tick(deps.clock.Now())
 	waitFor(t, "mergeable state recovery", func() bool {
 		return deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "mergeable"}) == 3 &&
-			assignmentStringField(active, "lastMergeableState") == "MERGEABLE"
+			active.lastMergeableState == "MERGEABLE"
 	})
 	if got, want := deps.amux.countKey("pane-1", conflictNudge), 1; got != want {
 		t.Fatalf("conflict nudge count after recovery = %d, want %d", got, want)
@@ -1209,13 +1209,13 @@ func TestPRMergeablePollingNudgesWorkerOnConflictTransitions(t *testing.T) {
 	prTicker.tick(deps.clock.Now())
 	waitFor(t, "conflict nudge after recovery", func() bool {
 		return deps.amux.countKey("pane-1", conflictNudge) == 2 &&
-			assignmentStringField(active, "lastMergeableState") == "CONFLICTING"
+			active.lastMergeableState == "CONFLICTING"
 	})
 
 	if got, want := deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "mergeable"}), 4; got != want {
 		t.Fatalf("mergeable poll count = %d, want %d", got, want)
 	}
-	if got, want := deps.events.countType("worker.nudged_conflict"), 2; got != want {
+	if got, want := deps.events.countType(EventWorkerNudgedConflict), 2; got != want {
 		t.Fatalf("conflict nudge event count = %d, want %d", got, want)
 	}
 
@@ -1224,14 +1224,6 @@ func TestPRMergeablePollingNudgesWorkerOnConflictTransitions(t *testing.T) {
 		conflictNudge,
 		conflictNudge,
 	})
-}
-
-func assignmentStringField(active *assignment, name string) string {
-	field := reflect.ValueOf(active).Elem().FieldByName(name)
-	if !field.IsValid() || field.Kind() != reflect.String {
-		return ""
-	}
-	return field.String()
 }
 
 func TestPRReviewPollingNudgesWorkerOncePerNewBlockingReviewBatch(t *testing.T) {
