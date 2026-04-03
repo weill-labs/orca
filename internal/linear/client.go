@@ -17,6 +17,25 @@ const defaultEndpoint = "https://api.linear.app/graphql"
 
 var ErrMissingAPIKey = errors.New("LINEAR_API_KEY not set")
 
+const (
+	issueLookupQuery = `query($id: String!) {
+		issue(id: $id) {
+			team { key }
+			state { id name }
+		}
+	}`
+	workflowStatesQuery = `query($teamKey: String!) {
+		workflowStates(filter: { team: { key: { eq: $teamKey } } }) {
+			nodes { id name }
+		}
+	}`
+	issueUpdateMutation = `mutation($id: String!, $stateId: String!) {
+		issueUpdate(id: $id, input: { stateId: $stateId }) {
+			success
+		}
+	}`
+)
+
 type Options struct {
 	APIKey     string
 	Endpoint   string
@@ -140,12 +159,7 @@ func (c *Client) lookupIssue(ctx context.Context, issue string) (issueMetadata, 
 		Issue issueMetadata `json:"issue"`
 	}
 	err := c.graphQL(ctx, graphQLRequest{
-		Query: `query($id: String!) {
-			issue(id: $id) {
-				team { key }
-				state { id name }
-			}
-		}`,
+		Query:     issueLookupQuery,
 		Variables: map[string]string{"id": issue},
 	}, &response)
 	if err != nil {
@@ -170,11 +184,7 @@ func (c *Client) lookupStateID(ctx context.Context, teamKey, targetState string)
 		} `json:"workflowStates"`
 	}
 	err := c.graphQL(ctx, graphQLRequest{
-		Query: `query($teamKey: String!) {
-			workflowStates(filter: { team: { key: { eq: $teamKey } } }) {
-				nodes { id name }
-			}
-		}`,
+		Query:     workflowStatesQuery,
 		Variables: map[string]string{"teamKey": teamKey},
 	}, &response)
 	if err != nil {
@@ -196,11 +206,7 @@ func (c *Client) updateIssueState(ctx context.Context, issue, stateID string) er
 		} `json:"issueUpdate"`
 	}
 	err := c.graphQL(ctx, graphQLRequest{
-		Query: `mutation($id: String!, $stateId: String!) {
-			issueUpdate(id: $id, input: { stateId: $stateId }) {
-				success
-			}
-		}`,
+		Query: issueUpdateMutation,
 		Variables: map[string]string{
 			"id":      issue,
 			"stateId": stateID,
