@@ -11,6 +11,11 @@ import (
 	"time"
 )
 
+const (
+	mergedWrapUpPrompt = "PR merged, wrap up.\n"
+	postmortemCommand  = "$postmortem"
+)
+
 func enforceLifecycleProfile(profile AgentProfile) AgentProfile {
 	if !strings.EqualFold(profile.Name, "codex") {
 		return profile
@@ -165,4 +170,59 @@ func matchesPostmortemSession(content, issue, branch string) bool {
 		return false
 	}
 	return true
+}
+
+func (d *Daemon) finishAssignment(ctx context.Context, active *assignment, status, eventType string, merged bool) error {
+	if err := d.ensurePostmortem(ctx, active); err != nil {
+		return err
+	}
+
+	var result error
+	active.cleanupOnce.Do(func() {
+		cleanupCtx := context.WithoutCancel(ctx)
+		active.cancel()
+
+		if merged {
+			if err := d.amux.SendKeys(cleanupCtx, active.pane.ID, mergedWrapUpPrompt); err != nil {
+				result = errors.Join(result, err)
+			}
+			if err := d.amux.WaitIdle(cleanupCtx, active.pane.ID, d.mergeGracePeriod); err != nil {
+				result = errors.Join(result, d.amux.KillPane(cleanupCtx, active.pane.ID))
+			}
+		} else {
+			result = errors.Join(result, d.amux.KillPane(cleanupCtx, active.pane.ID))
+		}
+
+		result = errors.Join(result, d.cleanupCloneAndRelease(cleanupCtx, active.clone, active.task.Branch))
+
+		active.task.Status = status
+		active.task.PRNumber = active.prNumber
+		active.task.UpdatedAt = d.now()
+		result = errors.Join(result, d.state.PutTask(cleanupCtx, active.task))
+		result = errors.Join(result, d.state.DeleteWorker(cleanupCtx, d.project, active.pane.ID))
+
+		d.mu.Lock()
+		delete(d.assignments, active.task.Issue)
+		d.mu.Unlock()
+
+		message := "task finished"
+		if status == TaskStatusCancelled {
+			message = "task cancelled"
+		}
+		d.emit(cleanupCtx, Event{
+			Time:         d.now(),
+			Type:         eventType,
+			Project:      d.project,
+			Issue:        active.task.Issue,
+			PaneID:       active.pane.ID,
+			PaneName:     active.pane.Name,
+			CloneName:    active.clone.Name,
+			ClonePath:    active.clone.Path,
+			Branch:       active.task.Branch,
+			AgentProfile: active.profile.Name,
+			PRNumber:     active.prNumber,
+			Message:      message,
+		})
+	})
+	return result
 }
