@@ -152,7 +152,7 @@ func TestAssignConfirmsCodexTrustPromptBeforeSendingPrompt(t *testing.T) {
 	})
 
 	deps.amux.requireSentKeys(t, "pane-1", []string{"\n", "Implement handshake\n"})
-	if got, want := deps.amux.captureCount("pane-1"), 1; got != want {
+	if got, want := deps.amux.captureCount("pane-1"), 2; got != want {
 		t.Fatalf("capture count = %d, want %d", got, want)
 	}
 	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
@@ -190,6 +190,44 @@ func TestAssignDoesNotBlindlyConfirmWhenTrustPromptNotPresent(t *testing.T) {
 
 	deps.amux.requireSentKeys(t, "pane-1", []string{"Implement handshake\n"})
 	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
+		{PaneID: "pane-1", Timeout: 30 * time.Second},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("waitIdle calls = %#v, want %#v", got, want)
+	}
+}
+
+func TestAssignResumesCodexBeforeSendingPrompt(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	deps.amux.captureSequence("pane-1", []string{"Resume your previous session"})
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-720", "Implement resume flow", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	waitFor(t, "task registration", func() bool {
+		task, ok := deps.state.task("LAB-720")
+		return ok && task.Status == TaskStatusActive
+	})
+
+	deps.amux.requireSentKeys(t, "pane-1", []string{
+		"codex --yolo resume\n",
+		".",
+		"Implement resume flow\n",
+	})
+	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
+		{PaneID: "pane-1", Timeout: 30 * time.Second},
 		{PaneID: "pane-1", Timeout: 30 * time.Second},
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("waitIdle calls = %#v, want %#v", got, want)
@@ -1178,6 +1216,7 @@ func newTestDeps(t *testing.T) *testDeps {
 				"codex": {
 					Name:            "codex",
 					StartCommand:    "codex --yolo",
+					ResumeSequence:  []string{"codex --yolo resume", "Enter", "."},
 					StuckTimeout:    5 * time.Minute,
 					NudgeCommand:    "\n",
 					MaxNudgeRetries: 3,
