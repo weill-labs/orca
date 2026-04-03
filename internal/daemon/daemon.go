@@ -45,21 +45,35 @@ type Daemon struct {
 }
 
 type assignment struct {
-	ctx          context.Context
-	cancel       context.CancelFunc
-	captureTick  Ticker
-	pollTick     Ticker
-	pending      bool
-	profile      AgentProfile
-	task         Task
-	worker       Worker
-	clone        Clone
-	pane         Pane
-	lastOutput   string
-	lastActivity time.Time
-	prNumber     int
-	escalated    bool
-	cleanupOnce  sync.Once
+	ctx             context.Context
+	cancel          context.CancelFunc
+	captureTick     Ticker
+	pollTick        Ticker
+	pending         bool
+	profile         AgentProfile
+	task            Task
+	worker          Worker
+	clone           Clone
+	pane            Pane
+	lastOutput      string
+	lastActivity    time.Time
+	prNumber        int
+	LastReviewCount int
+	escalated       bool
+	cleanupOnce     sync.Once
+}
+
+type prReviewPayload struct {
+	ReviewDecision string     `json:"reviewDecision"`
+	Reviews        []prReview `json:"reviews"`
+}
+
+type prReview struct {
+	State  string `json:"state"`
+	Body   string `json:"body"`
+	Author struct {
+		Login string `json:"login"`
+	} `json:"author"`
 }
 
 type realTicker struct {
@@ -472,6 +486,7 @@ func (d *Daemon) handlePRPoll(active *assignment) {
 
 	merged, err := d.isPRMerged(active.ctx, active.prNumber)
 	if err != nil || !merged {
+		d.handlePRReviewPoll(active)
 		return
 	}
 
@@ -490,6 +505,50 @@ func (d *Daemon) handlePRPoll(active *assignment) {
 		Message:      "pull request merged",
 	})
 	_ = d.finishAssignment(active.ctx, active, TaskStatusDone, EventTaskCompleted, true)
+}
+
+func (d *Daemon) handlePRReviewPoll(active *assignment) {
+	payload, err := d.lookupPRReviews(active.ctx, active.prNumber)
+	if err != nil {
+		return
+	}
+
+	previousCount := active.LastReviewCount
+	if previousCount > len(payload.Reviews) {
+		active.LastReviewCount = len(payload.Reviews)
+		return
+	}
+	if previousCount == len(payload.Reviews) {
+		return
+	}
+
+	newReviews := payload.Reviews[previousCount:]
+	blocking := blockingReviews(payload.ReviewDecision, newReviews)
+	if len(blocking) == 0 {
+		active.LastReviewCount = len(payload.Reviews)
+		return
+	}
+
+	feedback := formatBlockingReviewFeedback(active.prNumber, blocking)
+	if err := d.amux.SendKeys(active.ctx, active.pane.ID, ensureTrailingNewline(feedback)); err != nil {
+		return
+	}
+
+	active.LastReviewCount = len(payload.Reviews)
+	d.emit(active.ctx, Event{
+		Time:         d.now(),
+		Type:         EventWorkerNudgedReview,
+		Project:      d.project,
+		Issue:        active.task.Issue,
+		PaneID:       active.pane.ID,
+		PaneName:     active.pane.Name,
+		CloneName:    active.clone.Name,
+		ClonePath:    active.clone.Path,
+		Branch:       active.task.Branch,
+		AgentProfile: active.profile.Name,
+		PRNumber:     active.prNumber,
+		Message:      fmt.Sprintf("sent %d new blocking review(s) to worker", len(blocking)),
+	})
 }
 
 func (d *Daemon) nudgeOrEscalate(active *assignment, reason string) {
@@ -671,6 +730,22 @@ func (d *Daemon) isPRMerged(ctx context.Context, prNumber int) (bool, error) {
 	return payload.MergedAt != nil && *payload.MergedAt != "", nil
 }
 
+func (d *Daemon) lookupPRReviews(ctx context.Context, prNumber int) (prReviewPayload, error) {
+	output, err := d.commands.Run(ctx, d.project, "gh", "pr", "view", fmt.Sprintf("%d", prNumber), "--json", "reviews,reviewDecision")
+	if err != nil {
+		return prReviewPayload{}, err
+	}
+	if len(output) == 0 {
+		return prReviewPayload{}, nil
+	}
+
+	var payload prReviewPayload
+	if err := json.Unmarshal(output, &payload); err != nil {
+		return prReviewPayload{}, err
+	}
+	return payload, nil
+}
+
 func (d *Daemon) assignment(issue string) (*assignment, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -719,4 +794,41 @@ func ensureTrailingNewline(input string) string {
 		return input
 	}
 	return input + "\n"
+}
+
+func blockingReviews(reviewDecision string, reviews []prReview) []prReview {
+	if reviewDecision != "CHANGES_REQUESTED" {
+		return nil
+	}
+
+	blocking := make([]prReview, 0, len(reviews))
+	for _, review := range reviews {
+		if review.State == "CHANGES_REQUESTED" {
+			blocking = append(blocking, review)
+		}
+	}
+	return blocking
+}
+
+func formatBlockingReviewFeedback(prNumber int, reviews []prReview) string {
+	var builder strings.Builder
+	fmt.Fprintf(&builder, "New blocking PR review feedback on #%d:\n", prNumber)
+	for _, review := range reviews {
+		author := strings.TrimSpace(review.Author.Login)
+		if author == "" {
+			author = "reviewer"
+		}
+		body := normalizeReviewBody(review.Body)
+		fmt.Fprintf(&builder, "- %s: %s\n", author, body)
+	}
+	builder.WriteString("\nAddress the feedback in the PR review and push an update.\n")
+	return builder.String()
+}
+
+func normalizeReviewBody(body string) string {
+	trimmed := strings.TrimSpace(body)
+	if trimmed == "" {
+		return "requested changes without a review body."
+	}
+	return strings.Join(strings.Fields(trimmed), " ")
 }
