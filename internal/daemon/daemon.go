@@ -486,20 +486,7 @@ func (d *Daemon) Enqueue(ctx context.Context, prNumber int) (MergeQueueActionRes
 	}
 	d.mu.Unlock()
 
-	d.emit(ctx, Event{
-		Time:         now,
-		Type:         EventPREnqueued,
-		Project:      d.project,
-		Issue:        active.task.Issue,
-		PaneID:       active.pane.ID,
-		PaneName:     active.pane.Name,
-		CloneName:    active.clone.Name,
-		ClonePath:    active.clone.Path,
-		Branch:       active.task.Branch,
-		AgentProfile: active.profile.Name,
-		PRNumber:     prNumber,
-		Message:      "pull request queued for landing",
-	})
+	d.emit(ctx, d.mergeQueueEvent(active, EventPREnqueued, prNumber, "pull request queued for landing", now))
 
 	if shouldStart {
 		d.wg.Add(1)
@@ -575,30 +562,11 @@ func (d *Daemon) processQueuedPR(prNumber int, active *assignment) {
 		if ctx.Err() != nil {
 			return
 		}
-		d.emit(ctx, Event{
-			Time:     d.now(),
-			Type:     EventPRLandingFailed,
-			Project:  d.project,
-			PRNumber: prNumber,
-			Message:  fmt.Sprintf("PR #%d is no longer tracked by an active assignment", prNumber),
-		})
+		d.emit(ctx, d.mergeQueueEvent(nil, EventPRLandingFailed, prNumber, fmt.Sprintf("PR #%d is no longer tracked by an active assignment", prNumber), d.now()))
 		return
 	}
 
-	d.emit(ctx, Event{
-		Time:         d.now(),
-		Type:         EventPRLandingStarted,
-		Project:      d.project,
-		Issue:        active.task.Issue,
-		PaneID:       active.pane.ID,
-		PaneName:     active.pane.Name,
-		CloneName:    active.clone.Name,
-		ClonePath:    active.clone.Path,
-		Branch:       active.task.Branch,
-		AgentProfile: active.profile.Name,
-		PRNumber:     prNumber,
-		Message:      "processing queued PR landing",
-	})
+	d.emit(ctx, d.mergeQueueEvent(active, EventPRLandingStarted, prNumber, "processing queued PR landing", d.now()))
 
 	if err := d.rebaseQueuedPR(ctx, prNumber); err != nil {
 		d.handleQueuedPRFailure(ctx, active, prNumber, mergeQueueRebaseConflictPrompt(prNumber), err)
@@ -619,20 +587,7 @@ func (d *Daemon) handleQueuedPRFailure(ctx context.Context, active *assignment, 
 	}
 
 	_ = d.amux.SendKeys(ctx, active.pane.ID, ensureTrailingNewline(prompt))
-	d.emit(ctx, Event{
-		Time:         d.now(),
-		Type:         EventPRLandingFailed,
-		Project:      d.project,
-		Issue:        active.task.Issue,
-		PaneID:       active.pane.ID,
-		PaneName:     active.pane.Name,
-		CloneName:    active.clone.Name,
-		ClonePath:    active.clone.Path,
-		Branch:       active.task.Branch,
-		AgentProfile: active.profile.Name,
-		PRNumber:     prNumber,
-		Message:      err.Error(),
-	})
+	d.emit(ctx, d.mergeQueueEvent(active, EventPRLandingFailed, prNumber, err.Error(), d.now()))
 }
 
 func (d *Daemon) mergeQueueContext() context.Context {
@@ -1065,6 +1020,28 @@ func (d *Daemon) assignmentByPRNumberLocked(prNumber int) *assignment {
 		}
 	}
 	return nil
+}
+
+func (d *Daemon) mergeQueueEvent(active *assignment, eventType string, prNumber int, message string, at time.Time) Event {
+	event := Event{
+		Time:     at,
+		Type:     eventType,
+		Project:  d.project,
+		PRNumber: prNumber,
+		Message:  message,
+	}
+	if active == nil {
+		return event
+	}
+
+	event.Issue = active.task.Issue
+	event.PaneID = active.pane.ID
+	event.PaneName = active.pane.Name
+	event.CloneName = active.clone.Name
+	event.ClonePath = active.clone.Path
+	event.Branch = active.task.Branch
+	event.AgentProfile = active.profile.Name
+	return event
 }
 
 func (d *Daemon) requireStarted() error {
