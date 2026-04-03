@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -26,6 +27,8 @@ const (
 	ciStateCancel                = "cancel"
 	ciStateSkipping              = "skipping"
 )
+
+var autonomousBacklogPromptPattern = regexp.MustCompile(`(?i)pick up.*(work|issue|task|ticket)|from.*(backlog|queue|linear)|new work|next (issue|task|ticket)|find.*(issue|task|work).*backlog`)
 
 type Daemon struct {
 	project          string
@@ -267,25 +270,9 @@ func (d *Daemon) Assign(ctx context.Context, issue, prompt, agentProfile string)
 		}
 	}
 
-	existingTask, err := d.state.TaskByIssue(ctx, d.project, issue)
-	if err == nil {
-		if taskBlocksAssignment(existingTask.Status) {
-			releaseReservation()
-			return fmt.Errorf("issue %s already assigned", issue)
-		}
-	} else if !errors.Is(err, ErrTaskNotFound) {
+	if err := d.validateAssignment(ctx, issue, prompt); err != nil {
 		releaseReservation()
-		return fmt.Errorf("load task %s: %w", issue, err)
-	}
-
-	prNumber, err := d.lookupOpenPRNumber(ctx, issue)
-	if err != nil {
-		releaseReservation()
-		return fmt.Errorf("check open PRs for %s: %w", issue, err)
-	}
-	if prNumber > 0 {
-		releaseReservation()
-		return fmt.Errorf("issue %s already has open PR #%d", issue, prNumber)
+		return err
 	}
 
 	clone, err := d.pool.Acquire(ctx, d.project, issue)
@@ -397,6 +384,38 @@ func (d *Daemon) Assign(ctx context.Context, issue, prompt, agentProfile string)
 
 	d.wg.Add(1)
 	go d.monitorAssignment(active)
+	return nil
+}
+
+func (d *Daemon) validateAssignment(ctx context.Context, issue, prompt string) error {
+	if err := validateAssignmentPrompt(prompt); err != nil {
+		return err
+	}
+
+	existingTask, err := d.state.TaskByIssue(ctx, d.project, issue)
+	if err == nil {
+		if taskBlocksAssignment(existingTask.Status) {
+			return fmt.Errorf("issue %s already assigned", issue)
+		}
+	} else if !errors.Is(err, ErrTaskNotFound) {
+		return fmt.Errorf("load task %s: %w", issue, err)
+	}
+
+	prNumber, err := d.lookupOpenPRNumber(ctx, issue)
+	if err != nil {
+		return fmt.Errorf("check open PRs for %s: %w", issue, err)
+	}
+	if prNumber > 0 {
+		return fmt.Errorf("issue %s already has open PR #%d", issue, prNumber)
+	}
+
+	return nil
+}
+
+func validateAssignmentPrompt(prompt string) error {
+	if autonomousBacklogPromptPattern.MatchString(prompt) {
+		return errors.New("assignment prompt cannot ask the worker to pick backlog work autonomously; assign a specific issue instead")
+	}
 	return nil
 }
 
