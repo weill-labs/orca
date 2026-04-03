@@ -129,12 +129,14 @@ func (m *Manager) Discover(ctx context.Context) ([]Clone, error) {
 	return clones, nil
 }
 
+// HealthCheck ensures a clone is on the configured base branch, clean apart
+// from the local pool marker, and can still reach its remote. Unhealthy clones
+// are repaired before use.
 func (m *Manager) HealthCheck(ctx context.Context, path string) error {
-	clonePath, err := filepath.Abs(path)
+	clonePath, err := resolveClonePath(path)
 	if err != nil {
-		return fmt.Errorf("resolve clone path: %w", err)
+		return err
 	}
-	clonePath = filepath.Clean(clonePath)
 
 	health, err := inspectCloneHealth(ctx, clonePath)
 	if err != nil {
@@ -199,11 +201,10 @@ func (m *Manager) Allocate(ctx context.Context, taskID, issueBranch string) (Clo
 }
 
 func (m *Manager) Release(ctx context.Context, path, taskBranch string) error {
-	clonePath, err := filepath.Abs(path)
+	clonePath, err := resolveClonePath(path)
 	if err != nil {
-		return fmt.Errorf("resolve clone path: %w", err)
+		return err
 	}
-	clonePath = filepath.Clean(clonePath)
 
 	if err := m.cleanupClone(ctx, clonePath, taskBranch); err != nil {
 		return fmt.Errorf("cleanup clone %q: %w", clonePath, err)
@@ -256,6 +257,15 @@ func (m *Manager) eligibleClonePaths() ([]string, error) {
 	}
 
 	return paths, nil
+}
+
+func resolveClonePath(path string) (string, error) {
+	clonePath, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve clone path: %w", err)
+	}
+
+	return filepath.Clean(clonePath), nil
 }
 
 func (m *Manager) expandPattern(pattern string) (string, error) {
