@@ -317,6 +317,31 @@ func TestManagerAllocate(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "returns checker error before allocation",
+			options: func(clones []string) []pool.Option {
+				return []pool.Option{
+					pool.WithCWDUsageChecker(fakeCWDUsageChecker{
+						err: errors.New("list panes failed"),
+					}),
+				}
+			},
+			run: func(t *testing.T, manager *pool.Manager, store *state.SQLiteStore, project string, clones []string) {
+				t.Helper()
+
+				_, err := manager.Allocate(context.Background(), "LAB-687", "LAB-687")
+				if err == nil || !strings.Contains(err.Error(), "check active pane cwd usage: list panes failed") {
+					t.Fatalf("Allocate() error = %v, want checker failure", err)
+				}
+
+				for _, clonePath := range clones {
+					record := lookupClone(t, store, project, clonePath)
+					if got, want := record.Status, state.CloneStatusFree; got != want {
+						t.Fatalf("record.Status = %q, want %q", got, want)
+					}
+				}
+			},
+		},
 	}
 
 	for _, tc := range cases {

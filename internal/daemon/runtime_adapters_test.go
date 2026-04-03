@@ -196,6 +196,55 @@ func TestNewLinearIssueTrackerFromEnv(t *testing.T) {
 	})
 }
 
+func TestAmuxCWDUsageChecker(t *testing.T) {
+	t.Parallel()
+
+	t.Run("returns active cwd values and skips blanks", func(t *testing.T) {
+		t.Parallel()
+
+		checker := amuxCWDUsageChecker{
+			amux: staticPaneLister{panes: []Pane{
+				{ID: "1", CWD: "/tmp/orca01"},
+				{ID: "2", CWD: "   "},
+				{ID: "3", CWD: "/tmp/orca03"},
+			}},
+		}
+
+		got, err := checker.ActiveCWDs(context.Background())
+		if err != nil {
+			t.Fatalf("ActiveCWDs() error = %v", err)
+		}
+		want := []string{"/tmp/orca01", "/tmp/orca03"}
+		if strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Fatalf("ActiveCWDs() = %#v, want %#v", got, want)
+		}
+	})
+
+	t.Run("returns amux error", func(t *testing.T) {
+		t.Parallel()
+
+		checker := amuxCWDUsageChecker{
+			amux: staticPaneLister{err: errors.New("list failed")},
+		}
+
+		_, err := checker.ActiveCWDs(context.Background())
+		if err == nil || !strings.Contains(err.Error(), "list failed") {
+			t.Fatalf("ActiveCWDs() error = %v, want list failed", err)
+		}
+	})
+}
+
+type staticPaneLister struct {
+	panes []Pane
+	err   error
+}
+
+func (s staticPaneLister) ListPanes(context.Context) ([]Pane, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	return append([]Pane(nil), s.panes...), nil
+}
 func openDaemonStateStore(t *testing.T) *state.SQLiteStore {
 	t.Helper()
 

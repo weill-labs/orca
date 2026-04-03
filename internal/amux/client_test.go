@@ -302,6 +302,175 @@ func TestCLIClientListPanes(t *testing.T) {
 	}
 }
 
+func TestCLIClientListPanesErrorsAndFallbacks(t *testing.T) {
+	t.Parallel()
+
+	validHeader := fmt.Sprintf("%-6s %-20s %-15s %-30s %-9s %-10s %-12s %s", "PANE", "NAME", "HOST", "BRANCH", "IDLE", "WINDOW", "TASK", "META")
+	validRow := fmt.Sprintf("%-6s %-20s %-15s %-30s %-9s %-10s %-12s %s", "1", "worker-LAB-711", "local", "LAB-711", "--", "main", "LAB-711", "agent=codex")
+
+	tests := []struct {
+		name      string
+		runner    *fakeRunner
+		wantPanes []Pane
+		wantErr   string
+	}{
+		{
+			name: "returns list runner error",
+			runner: &fakeRunner{
+				err: errors.New("exit status 1"),
+			},
+			wantErr: "exit status 1",
+		},
+		{
+			name: "returns parse error for malformed list header",
+			runner: &fakeRunner{
+				output: []byte("PANE BROKEN\n1 worker\n"),
+			},
+			wantErr: "parse pane list header",
+		},
+		{
+			name: "returns capture error with pane context",
+			runner: &fakeRunner{
+				queue: []runnerResult{
+					{output: []byte(validHeader + "\n" + validRow + "\n")},
+					{output: []byte(`{"error":{"message":"pane missing"}}`)},
+				},
+			},
+			wantErr: "capture pane 1: capture failed: pane missing",
+		},
+		{
+			name: "preserves list name when capture omits it",
+			runner: &fakeRunner{
+				queue: []runnerResult{
+					{output: []byte(validHeader + "\n" + validRow + "\n")},
+					{output: []byte(`{"id":1,"cwd":"/tmp/orca01"}`)},
+				},
+			},
+			wantPanes: []Pane{
+				{ID: "1", Name: "worker-LAB-711", CWD: "/tmp/orca01"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			client := newTestClient(Config{Session: "orca-dev"}, tt.runner)
+			gotPanes, err := client.ListPanes(context.Background())
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("ListPanes() error = %v, want substring %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ListPanes() error = %v", err)
+			}
+			if !reflect.DeepEqual(gotPanes, tt.wantPanes) {
+				t.Fatalf("ListPanes() = %#v, want %#v", gotPanes, tt.wantPanes)
+			}
+		})
+	}
+}
+
+func TestParsePaneList(t *testing.T) {
+	t.Parallel()
+
+	header := fmt.Sprintf("%-6s %-20s %-15s %-30s %-9s %-10s %-12s %s", "PANE", "NAME", "HOST", "BRANCH", "IDLE", "WINDOW", "TASK", "META")
+
+	tests := []struct {
+		name     string
+		output   string
+		want     []Pane
+		wantErr  string
+	}{
+		{
+			name:   "returns nil for no panes banner",
+			output: "No panes.\n",
+		},
+		{
+			name:   "returns nil for empty output",
+			output: "",
+		},
+		{
+			name:    "rejects malformed header",
+			output:  "PANE ONLY\n",
+			wantErr: "parse pane list header",
+		},
+		{
+			name: "parses rows and strips active marker",
+			output: strings.Join([]string{
+				header,
+				fmt.Sprintf("%-6s %-20s %-15s %-30s %-9s %-10s %-12s %s", "*7", "worker-LAB-711", "local", "LAB-711", "--", "main", "LAB-711", "agent=codex"),
+				fmt.Sprintf("%-6s %-20s %-15s %-30s %-9s %-10s %-12s %s", "8", "worker-LAB-712", "local", "LAB-712", "--", "main", "LAB-712", "agent=codex"),
+				"",
+			}, "\n"),
+			want: []Pane{
+				{ID: "7", Name: "worker-LAB-711"},
+				{ID: "8", Name: "worker-LAB-712"},
+			},
+		},
+		{
+			name: "rejects row without pane id",
+			output: strings.Join([]string{
+				header,
+				fmt.Sprintf("%-6s %-20s %-15s %-30s %-9s %-10s %-12s %s", "", "worker-LAB-711", "local", "LAB-711", "--", "main", "LAB-711", "agent=codex"),
+				"",
+			}, "\n"),
+			wantErr: "parse pane id from list row",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := parsePaneList(tt.output)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("parsePaneList() error = %v, want substring %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parsePaneList() error = %v", err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("parsePaneList() = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestColumnSlice(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		line  string
+		start int
+		end   int
+		want  string
+	}{
+		{name: "returns empty when start past end of line", line: "orca", start: 10, end: 12, want: ""},
+		{name: "caps end at line length", line: "orca", start: 1, end: 10, want: "rca"},
+		{name: "returns empty when end before start", line: "orca", start: 3, end: 1, want: ""},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := columnSlice(tt.line, tt.start, tt.end); got != tt.want {
+				t.Fatalf("columnSlice(%q, %d, %d) = %q, want %q", tt.line, tt.start, tt.end, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestCLIClientCapture(t *testing.T) {
 	t.Parallel()
 
@@ -601,6 +770,9 @@ func TestMockClientRecordsCalls(t *testing.T) {
 		SpawnFunc: func(_ context.Context, req SpawnRequest) (Pane, error) {
 			return Pane{ID: "20", Name: paneName(req.CWD)}, nil
 		},
+		ListPanesFunc: func(_ context.Context) ([]Pane, error) {
+			return []Pane{{ID: "20", Name: "worker-20", CWD: "/tmp/worker-20"}}, nil
+		},
 		CaptureFunc: func(_ context.Context, paneID string) (string, error) {
 			return "captured output", nil
 		},
@@ -616,6 +788,13 @@ func TestMockClientRecordsCalls(t *testing.T) {
 
 	if err := mock.SendKeys(context.Background(), "20", "make test"); err != nil {
 		t.Fatalf("SendKeys() error = %v", err)
+	}
+	gotPanes, err := mock.ListPanes(context.Background())
+	if err != nil {
+		t.Fatalf("ListPanes() error = %v", err)
+	}
+	if !reflect.DeepEqual(gotPanes, []Pane{{ID: "20", Name: "worker-20", CWD: "/tmp/worker-20"}}) {
+		t.Fatalf("ListPanes() = %#v", gotPanes)
 	}
 	gotCapture, err := mock.Capture(context.Background(), "20")
 	if err != nil {
@@ -636,6 +815,9 @@ func TestMockClientRecordsCalls(t *testing.T) {
 
 	if !reflect.DeepEqual(mock.SpawnCalls, []SpawnRequest{{CWD: "/tmp/worker-20"}}) {
 		t.Fatalf("SpawnCalls = %#v", mock.SpawnCalls)
+	}
+	if got, want := mock.ListPanesCalls, 1; got != want {
+		t.Fatalf("ListPanesCalls = %d, want %d", got, want)
 	}
 	if !reflect.DeepEqual(mock.SendKeysCalls, []SendKeysCall{{PaneID: "20", Text: "make test"}}) {
 		t.Fatalf("SendKeysCalls = %#v", mock.SendKeysCalls)
