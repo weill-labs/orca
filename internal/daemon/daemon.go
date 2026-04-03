@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -32,6 +31,7 @@ type Daemon struct {
 	pool             Pool
 	amux             AmuxClient
 	commands         CommandRunner
+	github           gitHubClient
 	events           EventSink
 	now              func() time.Time
 	newTicker        func(time.Duration) Ticker
@@ -139,15 +139,25 @@ func New(opts Options) (*Daemon, error) {
 	}
 
 	return &Daemon{
-		project:          opts.Project,
-		session:          opts.Session,
-		leadPane:         opts.LeadPane,
-		pidPath:          opts.PIDPath,
-		config:           opts.Config,
-		state:            opts.State,
-		pool:             opts.Pool,
-		amux:             opts.Amux,
-		commands:         opts.Commands,
+		project:  opts.Project,
+		session:  opts.Session,
+		leadPane: opts.LeadPane,
+		pidPath:  opts.PIDPath,
+		config:   opts.Config,
+		state:    opts.State,
+		pool:     opts.Pool,
+		amux:     opts.Amux,
+		commands: opts.Commands,
+		github: newGitHubCLIClient(gitHubCLIClientConfig{
+			project:        opts.Project,
+			commands:       opts.Commands,
+			now:            time.Now,
+			sleep:          sleepContext,
+			minInterval:    defaultGitHubAPIMinInterval,
+			initialBackoff: defaultGitHubAPIInitialBackoff,
+			maxBackoff:     defaultGitHubAPIMaxBackoff,
+			maxAttempts:    defaultGitHubAPIMaxAttempts,
+		}),
 		events:           opts.Events,
 		now:              opts.Now,
 		newTicker:        opts.NewTicker,
@@ -900,35 +910,11 @@ func (d *Daemon) mergeQueuedPR(ctx context.Context, prNumber int) error {
 }
 
 func (d *Daemon) lookupPRNumber(ctx context.Context, branch string) (int, error) {
-	output, err := d.commands.Run(ctx, d.project, "gh", "pr", "list", "--head", branch, "--json", "number")
-	if err != nil {
-		return 0, err
-	}
-	return parsePRNumberList(output)
+	return d.github.lookupPRNumber(ctx, branch)
 }
 
 func (d *Daemon) lookupOpenPRNumber(ctx context.Context, branch string) (int, error) {
-	output, err := d.commands.Run(ctx, d.project, "gh", "pr", "list", "--head", branch, "--state", "open", "--json", "number")
-	if err != nil {
-		return 0, err
-	}
-	return parsePRNumberList(output)
-}
-
-func parsePRNumberList(output []byte) (int, error) {
-	var prs []struct {
-		Number int `json:"number"`
-	}
-	if len(output) == 0 {
-		return 0, nil
-	}
-	if err := json.Unmarshal(output, &prs); err != nil {
-		return 0, err
-	}
-	if len(prs) == 0 {
-		return 0, nil
-	}
-	return prs[0].Number, nil
+	return d.github.lookupOpenPRNumber(ctx, branch)
 }
 
 func taskBlocksAssignment(status string) bool {
@@ -954,36 +940,11 @@ func assignmentMetadata(agentProfile, branch, issue string, prNumber int) map[st
 }
 
 func (d *Daemon) isPRMerged(ctx context.Context, prNumber int) (bool, error) {
-	output, err := d.commands.Run(ctx, d.project, "gh", "pr", "view", fmt.Sprintf("%d", prNumber), "--json", "mergedAt")
-	if err != nil {
-		return false, err
-	}
-	if len(output) == 0 {
-		return false, nil
-	}
-	var payload struct {
-		MergedAt *string `json:"mergedAt"`
-	}
-	if err := json.Unmarshal(output, &payload); err != nil {
-		return false, err
-	}
-	return payload.MergedAt != nil && *payload.MergedAt != "", nil
+	return d.github.isPRMerged(ctx, prNumber)
 }
 
 func (d *Daemon) lookupPRReviews(ctx context.Context, prNumber int) (prReviewPayload, bool, error) {
-	output, err := d.commands.Run(ctx, d.project, "gh", "pr", "view", fmt.Sprintf("%d", prNumber), "--json", "reviews,reviewDecision")
-	if err != nil {
-		return prReviewPayload{}, false, err
-	}
-	if len(output) == 0 {
-		return prReviewPayload{}, false, nil
-	}
-
-	var payload prReviewPayload
-	if err := json.Unmarshal(output, &payload); err != nil {
-		return prReviewPayload{}, false, err
-	}
-	return payload, true, nil
+	return d.github.lookupPRReviews(ctx, prNumber)
 }
 
 func (d *Daemon) assignment(issue string) (*assignment, error) {

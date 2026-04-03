@@ -1091,6 +1091,13 @@ func (d *testDeps) newDaemon(t *testing.T) *Daemon {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
+	daemon.github = newGitHubCLIClient(gitHubCLIClientConfig{
+		project:     "/tmp/project",
+		commands:    d.commands,
+		now:         d.clock.Now,
+		sleep:       func(context.Context, time.Duration) error { return nil },
+		maxAttempts: 1,
+	})
 	return daemon
 }
 
