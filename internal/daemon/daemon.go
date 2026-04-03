@@ -26,6 +26,7 @@ const (
 	ciStateCancel                = "cancel"
 	ciStateSkipping              = "skipping"
 	postmortemCommand            = "$postmortem"
+	conflictNudgePrompt          = "PR has merge conflicts, rebase onto origin/main and push.\n"
 )
 
 var autonomousBacklogPromptPattern = regexp.MustCompile(`(?i)pick up.*(work|issue|task|ticket)|from.*(backlog|queue|linear)|new work|next (issue|task|ticket)|find.*(issue|task|work).*backlog`)
@@ -77,6 +78,7 @@ type assignment struct {
 	lastOutput      string
 	lastActivity    time.Time
 	prNumber        int
+	lastMergeableState string
 	lastCIState     string
 	lastReviewCount atomic.Int64
 	escalated       bool
@@ -744,8 +746,22 @@ func (d *Daemon) handlePRPoll(active *assignment) {
 	d.handlePRChecksPoll(active)
 
 	merged, err := d.isPRMerged(active.ctx, active.prNumber)
-	if err != nil || !merged {
-		d.handlePRReviewPoll(active)
+	if err == nil && merged {
+		d.emit(active.ctx, Event{
+			Time:         d.now(),
+			Type:         EventPRMerged,
+			Project:      d.project,
+			Issue:        active.task.Issue,
+			PaneID:       active.pane.ID,
+			PaneName:     active.pane.Name,
+			CloneName:    active.clone.Name,
+			ClonePath:    active.clone.Path,
+			Branch:       active.task.Branch,
+			AgentProfile: active.profile.Name,
+			PRNumber:     active.prNumber,
+			Message:      "pull request merged",
+		})
+		_ = d.finishAssignment(active.ctx, active, TaskStatusDone, EventTaskCompleted, true)
 		return
 	}
 	message := "pull request merged"
@@ -783,6 +799,8 @@ func (d *Daemon) handlePRPoll(active *assignment) {
 			Message:      err.Error(),
 		})
 	}
+	d.handlePRMergeablePoll(active)
+	d.handlePRReviewPoll(active)
 }
 
 func (d *Daemon) handlePRReviewPoll(active *assignment) {
@@ -846,6 +864,40 @@ func (d *Daemon) handlePRChecksPoll(active *assignment) {
 	if d.nudgeForCIFailure(active) {
 		active.lastCIState = ciStateFail
 	}
+}
+
+func (d *Daemon) handlePRMergeablePoll(active *assignment) {
+	state, ok, err := d.lookupPRMergeableState(active.ctx, active.prNumber)
+	if err != nil || !ok {
+		return
+	}
+
+	previousState := active.lastMergeableState
+	if previousState == "CONFLICTING" || state != "CONFLICTING" {
+		active.lastMergeableState = state
+		return
+	}
+
+	if err := d.amux.SendKeys(active.ctx, active.pane.ID, conflictNudgePrompt); err != nil {
+		return
+	}
+
+	active.lastMergeableState = state
+
+	d.emit(active.ctx, Event{
+		Time:         d.now(),
+		Type:         EventWorkerNudgedConflict,
+		Project:      d.project,
+		Issue:        active.task.Issue,
+		PaneID:       active.pane.ID,
+		PaneName:     active.pane.Name,
+		CloneName:    active.clone.Name,
+		ClonePath:    active.clone.Path,
+		Branch:       active.task.Branch,
+		AgentProfile: active.profile.Name,
+		PRNumber:     active.prNumber,
+		Message:      strings.TrimSpace(conflictNudgePrompt),
+	})
 }
 
 func (d *Daemon) nudgeOrEscalate(active *assignment, reason string) {
@@ -1081,6 +1133,27 @@ func (d *Daemon) lookupPRChecksState(ctx context.Context, prNumber int) (string,
 
 func (d *Daemon) isPRMerged(ctx context.Context, prNumber int) (bool, error) {
 	return d.github.isPRMerged(ctx, prNumber)
+}
+
+func (d *Daemon) lookupPRMergeableState(ctx context.Context, prNumber int) (string, bool, error) {
+	output, err := d.commands.Run(ctx, d.project, "gh", "pr", "view", fmt.Sprintf("%d", prNumber), "--json", "mergeable")
+	if err != nil {
+		return "", false, err
+	}
+	if len(output) == 0 {
+		return "", false, nil
+	}
+
+	var payload struct {
+		Mergeable string `json:"mergeable"`
+	}
+	if err := json.Unmarshal(output, &payload); err != nil {
+		return "", false, err
+	}
+	if payload.Mergeable == "" {
+		return "", false, nil
+	}
+	return payload.Mergeable, true, nil
 }
 
 func (d *Daemon) lookupPRReviews(ctx context.Context, prNumber int) (prReviewPayload, bool, error) {
