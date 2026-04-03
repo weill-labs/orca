@@ -654,6 +654,7 @@ func TestPRMergePollingSendsWrapUpAndCleansClone(t *testing.T) {
 	deps.amux.rejectCanceledContext = true
 	deps.pool.rejectCanceledContext = true
 	deps.state.rejectCanceledContext = true
+	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--state", "open", "--json", "number"}, `[]`, nil)
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":"2026-04-02T12:00:00Z"}`, nil)
 
@@ -742,6 +743,7 @@ func TestPRReviewPollingNudgesWorkerOncePerNewBlockingReviewBatch(t *testing.T) 
 	captureTicker := newFakeTicker()
 	prTicker := newFakeTicker()
 	deps.tickers.enqueue(captureTicker, prTicker)
+	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--state", "open", "--json", "number"}, `[]`, nil)
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision"}, `{"reviewDecision":"CHANGES_REQUESTED","reviews":[{"author":{"login":"alice"},"state":"CHANGES_REQUESTED","body":"Please add tests."}]}`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision"}, `{"reviewDecision":"CHANGES_REQUESTED","reviews":[{"author":{"login":"alice"},"state":"CHANGES_REQUESTED","body":"Please add tests."}]}`, nil)
@@ -806,6 +808,7 @@ func TestPRReviewPollingAdvancesCountWithoutNudgingForNonBlockingReviews(t *test
 	captureTicker := newFakeTicker()
 	prTicker := newFakeTicker()
 	deps.tickers.enqueue(captureTicker, prTicker)
+	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--state", "open", "--json", "number"}, `[]`, nil)
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision"}, `{"reviewDecision":"CHANGES_REQUESTED","reviews":[{"author":{"login":"alice"},"state":"CHANGES_REQUESTED","body":"Please add tests."}]}`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision"}, `{"reviewDecision":"CHANGES_REQUESTED","reviews":[{"author":{"login":"alice"},"state":"CHANGES_REQUESTED","body":"Please add tests."},{"author":{"login":"bob"},"state":"APPROVED","body":"Looks good after that."}]}`, nil)
@@ -859,6 +862,7 @@ func TestPRReviewPollingIgnoresEmptyReviewPayload(t *testing.T) {
 	captureTicker := newFakeTicker()
 	prTicker := newFakeTicker()
 	deps.tickers.enqueue(captureTicker, prTicker)
+	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--state", "open", "--json", "number"}, `[]`, nil)
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision"}, `{"reviewDecision":"CHANGES_REQUESTED","reviews":[{"author":{"login":"alice"},"state":"CHANGES_REQUESTED","body":"Please add tests."}]}`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision"}, ``, nil)
