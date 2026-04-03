@@ -555,8 +555,7 @@ SET
 	worker_pane_id = ?,
 	clone_path = ?,
 	event_type = ?,
-	message = ?,
-	created_at = ?
+	message = ?
 WHERE project = ? AND id = ?;
 `,
 		nullableString(event.TaskIssueID),
@@ -564,7 +563,6 @@ WHERE project = ? AND id = ?;
 		nullableString(event.ClonePath),
 		event.EventType,
 		event.Message,
-		formatTime(defaultTime(event.CreatedAt)),
 		s.project,
 		event.ID,
 	)

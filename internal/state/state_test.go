@@ -397,6 +397,45 @@ func TestEventCRUD(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "update preserves original created at timestamp",
+			run: func(t *testing.T, primary *Store, _ *Store) {
+				t.Helper()
+
+				ctx := context.Background()
+				originalCreatedAt := time.Date(2026, 4, 2, 13, 30, 0, 0, time.UTC)
+
+				event := Event{
+					TaskIssueID:  "LAB-686",
+					WorkerPaneID: "pane-5",
+					ClonePath:    "/tmp/amux08",
+					EventType:    "task.assigned",
+					Message:      "assigned LAB-686 to pane-5",
+					CreatedAt:    originalCreatedAt,
+				}
+				id, err := primary.CreateEvent(ctx, event)
+				if err != nil {
+					t.Fatalf("CreateEvent() error = %v", err)
+				}
+
+				event.ID = id
+				event.Message = "assigned LAB-686 to pane-7"
+				event.CreatedAt = time.Time{}
+
+				if err := primary.UpdateEvent(ctx, event); err != nil {
+					t.Fatalf("UpdateEvent() error = %v", err)
+				}
+
+				got, err := primary.GetEvent(ctx, id)
+				if err != nil {
+					t.Fatalf("GetEvent() error = %v", err)
+				}
+
+				if !got.CreatedAt.Equal(originalCreatedAt) {
+					t.Fatalf("GetEvent().CreatedAt = %v, want %v", got.CreatedAt, originalCreatedAt)
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {
