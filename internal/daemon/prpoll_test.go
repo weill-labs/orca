@@ -225,15 +225,13 @@ func TestPRMergeablePollingNudgesWorkerOnConflictTransitions(t *testing.T) {
 	if err := d.Assign(ctx, "LAB-689", "Implement daemon core", "codex"); err != nil {
 		t.Fatalf("Assign() error = %v", err)
 	}
-	active, err := d.assignment("LAB-689")
-	if err != nil {
-		t.Fatalf("assignment() error = %v", err)
-	}
 
 	prTicker.tick(deps.clock.Now())
 	waitFor(t, "initial conflict nudge", func() bool {
-		return deps.amux.countKey("pane-1", conflictNudgePrompt) == 1 &&
-			active.mergeableState() == "CONFLICTING"
+		worker, ok := deps.state.worker("pane-1")
+		return ok &&
+			deps.amux.countKey("pane-1", conflictNudgePrompt) == 1 &&
+			worker.LastMergeableState == "CONFLICTING"
 	})
 
 	prTicker.tick(deps.clock.Now())
@@ -249,8 +247,10 @@ func TestPRMergeablePollingNudgesWorkerOnConflictTransitions(t *testing.T) {
 
 	prTicker.tick(deps.clock.Now())
 	waitFor(t, "mergeable state recovery", func() bool {
-		return deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "mergeable"}) == 3 &&
-			active.mergeableState() == "MERGEABLE"
+		worker, ok := deps.state.worker("pane-1")
+		return ok &&
+			deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "mergeable"}) == 3 &&
+			worker.LastMergeableState == "MERGEABLE"
 	})
 	if got, want := deps.amux.countKey("pane-1", conflictNudgePrompt), 1; got != want {
 		t.Fatalf("conflict nudge count after recovery = %d, want %d", got, want)
@@ -258,8 +258,10 @@ func TestPRMergeablePollingNudgesWorkerOnConflictTransitions(t *testing.T) {
 
 	prTicker.tick(deps.clock.Now())
 	waitFor(t, "conflict nudge after recovery", func() bool {
-		return deps.amux.countKey("pane-1", conflictNudgePrompt) == 2 &&
-			active.mergeableState() == "CONFLICTING"
+		worker, ok := deps.state.worker("pane-1")
+		return ok &&
+			deps.amux.countKey("pane-1", conflictNudgePrompt) == 2 &&
+			worker.LastMergeableState == "CONFLICTING"
 	})
 
 	if got, want := deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "mergeable"}), 4; got != want {
@@ -284,7 +286,11 @@ func TestEnqueueSerializesQueuedPRLandingsFIFO(t *testing.T) {
 		deps.pool.clone,
 		{Name: "clone-02", Path: filepath.Join(t.TempDir(), "clone-02")},
 	}
-	deps.tickers.enqueue(newFakeTicker(), newFakeTicker(), newFakeTicker(), newFakeTicker())
+	firstCaptureTicker := newFakeTicker()
+	pollTicker := newFakeTicker()
+	secondCaptureTicker := newFakeTicker()
+	secondPollTicker := newFakeTicker()
+	deps.tickers.enqueue(firstCaptureTicker, pollTicker, secondCaptureTicker, secondPollTicker)
 	d := deps.newDaemon(t)
 	ctx := context.Background()
 
@@ -302,63 +308,70 @@ func TestEnqueueSerializesQueuedPRLandingsFIFO(t *testing.T) {
 		t.Fatalf("Assign(LAB-690) error = %v", err)
 	}
 
-	first, err := d.assignment("LAB-689")
-	if err != nil {
-		t.Fatalf("assignment(LAB-689) error = %v", err)
+	firstTask, ok := deps.state.task("LAB-689")
+	if !ok {
+		t.Fatal("LAB-689 task missing from state")
 	}
-	second, err := d.assignment("LAB-690")
-	if err != nil {
-		t.Fatalf("assignment(LAB-690) error = %v", err)
-	}
+	firstTask.PRNumber = 42
+	deps.state.putTaskForTest(firstTask)
 
-	first.prNumber = 42
-	first.task.PRNumber = 42
-	second.prNumber = 43
-	second.task.PRNumber = 43
+	secondTask, ok := deps.state.task("LAB-690")
+	if !ok {
+		t.Fatal("LAB-690 task missing from state")
+	}
+	secondTask.PRNumber = 43
+	deps.state.putTaskForTest(secondTask)
 
 	deps.commands.queue("gh", []string{"pr", "update-branch", "42", "--rebase"}, ``, nil)
-	firstChecks := deps.commands.block("gh", []string{"pr", "checks", "42", "--required", "--watch", "--fail-fast", "--interval", "10"})
-	deps.commands.queue("gh", []string{"pr", "checks", "42", "--required", "--watch", "--fail-fast", "--interval", "10"}, ``, nil)
+	deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[{"bucket":"pass"}]`, nil)
 	deps.commands.queue("gh", []string{"pr", "merge", "42", "--squash"}, ``, nil)
 	deps.commands.queue("gh", []string{"pr", "update-branch", "43", "--rebase"}, ``, nil)
-	deps.commands.queue("gh", []string{"pr", "checks", "43", "--required", "--watch", "--fail-fast", "--interval", "10"}, ``, nil)
+	deps.commands.queue("gh", []string{"pr", "checks", "43", "--json", "bucket"}, `[{"bucket":"pass"}]`, nil)
 	deps.commands.queue("gh", []string{"pr", "merge", "43", "--squash"}, ``, nil)
 
 	if _, err := d.Enqueue(ctx, 42); err != nil {
 		t.Fatalf("Enqueue(42) error = %v", err)
 	}
 
-	select {
-	case <-firstChecks.started:
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for first queued PR checks to start")
-	}
-
 	if _, err := d.Enqueue(ctx, 43); err != nil {
 		t.Fatalf("Enqueue(43) error = %v", err)
 	}
+
+	pollTicker.tick(deps.clock.Now())
+	waitFor(t, "first queued PR rebase", func() bool {
+		return deps.commands.countCalls("gh", []string{"pr", "update-branch", "42", "--rebase"}) == 1
+	})
 
 	if got := deps.commands.countCalls("gh", []string{"pr", "update-branch", "43", "--rebase"}); got != 0 {
 		t.Fatalf("second queued PR started before first completed, update-branch calls = %d", got)
 	}
 
-	close(firstChecks.release)
+	pollTicker.tick(deps.clock.Now())
+	waitFor(t, "first queued PR merge", func() bool {
+		return deps.commands.countCalls("gh", []string{"pr", "merge", "42", "--squash"}) == 1
+	})
 
+	pollTicker.tick(deps.clock.Now())
+	waitFor(t, "second queued PR rebase", func() bool {
+		return deps.commands.countCalls("gh", []string{"pr", "update-branch", "43", "--rebase"}) == 1
+	})
+
+	pollTicker.tick(deps.clock.Now())
 	waitFor(t, "second queued PR merge", func() bool {
 		return deps.commands.countCalls("gh", []string{"pr", "merge", "43", "--squash"}) == 1
 	})
 
-	if got, want := deps.commands.callsByName("gh"), []commandCall{
-		{Dir: "/tmp/project", Name: "gh", Args: []string{"pr", "list", "--head", "LAB-689", "--state", "open", "--json", "number"}},
-		{Dir: "/tmp/project", Name: "gh", Args: []string{"pr", "list", "--head", "LAB-690", "--state", "open", "--json", "number"}},
-		{Dir: "/tmp/project", Name: "gh", Args: []string{"pr", "update-branch", "42", "--rebase"}},
-		{Dir: "/tmp/project", Name: "gh", Args: []string{"pr", "checks", "42", "--required", "--watch", "--fail-fast", "--interval", "10"}},
-		{Dir: "/tmp/project", Name: "gh", Args: []string{"pr", "merge", "42", "--squash"}},
-		{Dir: "/tmp/project", Name: "gh", Args: []string{"pr", "update-branch", "43", "--rebase"}},
-		{Dir: "/tmp/project", Name: "gh", Args: []string{"pr", "checks", "43", "--required", "--watch", "--fail-fast", "--interval", "10"}},
-		{Dir: "/tmp/project", Name: "gh", Args: []string{"pr", "merge", "43", "--squash"}},
-	}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("gh calls = %#v, want %#v", got, want)
+	if got, want := deps.commands.countCalls("gh", []string{"pr", "update-branch", "42", "--rebase"}), 1; got != want {
+		t.Fatalf("rebase count for PR 42 = %d, want %d", got, want)
+	}
+	if got, want := deps.commands.countCalls("gh", []string{"pr", "merge", "42", "--squash"}), 1; got != want {
+		t.Fatalf("merge count for PR 42 = %d, want %d", got, want)
+	}
+	if got, want := deps.commands.countCalls("gh", []string{"pr", "update-branch", "43", "--rebase"}), 1; got != want {
+		t.Fatalf("rebase count for PR 43 = %d, want %d", got, want)
+	}
+	if got, want := deps.commands.countCalls("gh", []string{"pr", "merge", "43", "--squash"}), 1; got != want {
+		t.Fatalf("merge count for PR 43 = %d, want %d", got, want)
 	}
 }
 
@@ -366,7 +379,9 @@ func TestEnqueueNotifiesWorkerWhenRebaseFailsAndAllowsRequeue(t *testing.T) {
 	t.Parallel()
 
 	deps := newTestDeps(t)
-	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	captureTicker := newFakeTicker()
+	pollTicker := newFakeTicker()
+	deps.tickers.enqueue(captureTicker, pollTicker)
 	d := deps.newDaemon(t)
 	ctx := context.Background()
 	if err := d.Start(ctx); err != nil {
@@ -380,12 +395,12 @@ func TestEnqueueNotifiesWorkerWhenRebaseFailsAndAllowsRequeue(t *testing.T) {
 		t.Fatalf("Assign() error = %v", err)
 	}
 
-	active, err := d.assignment("LAB-689")
-	if err != nil {
-		t.Fatalf("assignment() error = %v", err)
+	task, ok := deps.state.task("LAB-689")
+	if !ok {
+		t.Fatal("LAB-689 task missing from state")
 	}
-	active.prNumber = 42
-	active.task.PRNumber = 42
+	task.PRNumber = 42
+	deps.state.putTaskForTest(task)
 
 	deps.commands.queue("gh", []string{"pr", "update-branch", "42", "--rebase"}, ``, errors.New("rebase conflict"))
 
@@ -393,6 +408,7 @@ func TestEnqueueNotifiesWorkerWhenRebaseFailsAndAllowsRequeue(t *testing.T) {
 		t.Fatalf("Enqueue(42) error = %v", err)
 	}
 
+	pollTicker.tick(deps.clock.Now())
 	conflictNotice := "Merge queue could not rebase PR #42 onto main. Resolve the conflicts, push an update, and re-run `orca enqueue 42` when ready.\n"
 	waitFor(t, "merge queue conflict notice", func() bool {
 		return deps.amux.countKey("pane-1", conflictNotice) == 1
@@ -403,14 +419,78 @@ func TestEnqueueNotifiesWorkerWhenRebaseFailsAndAllowsRequeue(t *testing.T) {
 	}
 
 	deps.commands.queue("gh", []string{"pr", "update-branch", "42", "--rebase"}, ``, nil)
-	deps.commands.queue("gh", []string{"pr", "checks", "42", "--required", "--watch", "--fail-fast", "--interval", "10"}, ``, nil)
+	deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[{"bucket":"pass"}]`, nil)
 	deps.commands.queue("gh", []string{"pr", "merge", "42", "--squash"}, ``, nil)
 
 	if _, err := d.Enqueue(ctx, 42); err != nil {
 		t.Fatalf("Enqueue(42) after conflict error = %v", err)
 	}
 
+	pollTicker.tick(deps.clock.Now())
+	waitFor(t, "merge queue re-enqueue rebase", func() bool {
+		return deps.commands.countCalls("gh", []string{"pr", "update-branch", "42", "--rebase"}) == 2
+	})
+
+	pollTicker.tick(deps.clock.Now())
 	waitFor(t, "merge queue re-enqueue merge", func() bool {
+		return deps.commands.countCalls("gh", []string{"pr", "merge", "42", "--squash"}) == 1
+	})
+}
+
+func TestEnqueueSurvivesRestartUsingPersistedQueueState(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	firstCaptureTicker := newFakeTicker()
+	firstPollTicker := newFakeTicker()
+	secondCaptureTicker := newFakeTicker()
+	secondPollTicker := newFakeTicker()
+	deps.tickers.enqueue(firstCaptureTicker, firstPollTicker, secondCaptureTicker, secondPollTicker)
+	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--state", "open", "--json", "number"}, `[]`, nil)
+	deps.commands.queue("gh", []string{"pr", "update-branch", "42", "--rebase"}, ``, nil)
+	deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[{"bucket":"pass"}]`, nil)
+	deps.commands.queue("gh", []string{"pr", "merge", "42", "--squash"}, ``, nil)
+
+	first := deps.newDaemon(t)
+	ctx := context.Background()
+	if err := first.Start(ctx); err != nil {
+		t.Fatalf("first Start() error = %v", err)
+	}
+
+	if err := first.Assign(ctx, "LAB-689", "Implement daemon core", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	task, ok := deps.state.task("LAB-689")
+	if !ok {
+		t.Fatal("task not stored in fake state")
+	}
+	task.PRNumber = 42
+	deps.state.putTaskForTest(task)
+
+	if _, err := first.Enqueue(ctx, 42); err != nil {
+		t.Fatalf("Enqueue(42) error = %v", err)
+	}
+
+	if err := first.Stop(context.Background()); err != nil {
+		t.Fatalf("first Stop() error = %v", err)
+	}
+
+	second := deps.newDaemon(t)
+	if err := second.Start(ctx); err != nil {
+		t.Fatalf("second Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = second.Stop(context.Background())
+	})
+
+	secondPollTicker.tick(deps.clock.Now())
+	waitFor(t, "persisted queued rebase", func() bool {
+		return deps.commands.countCalls("gh", []string{"pr", "update-branch", "42", "--rebase"}) == 1
+	})
+
+	secondPollTicker.tick(deps.clock.Now())
+	waitFor(t, "persisted queued merge", func() bool {
 		return deps.commands.countCalls("gh", []string{"pr", "merge", "42", "--squash"}) == 1
 	})
 }

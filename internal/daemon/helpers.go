@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -71,43 +72,18 @@ func (d *Daemon) setIssueStatus(ctx context.Context, issue, state string) error 
 	return d.issueTracker.SetIssueStatus(ctx, issue, state)
 }
 
-func (d *Daemon) assignment(issue string) (*assignment, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	active, ok := d.assignments[issue]
-	if !ok {
-		return nil, ErrTaskNotFound
+func (d *Daemon) profileForTask(ctx context.Context, task Task) (AgentProfile, error) {
+	profile, err := d.config.AgentProfile(ctx, task.AgentProfile)
+	if err != nil {
+		return AgentProfile{}, err
 	}
-	if active.pending {
-		return nil, fmt.Errorf("issue %s assignment is still starting", issue)
+	if profile.Name == "" {
+		profile.Name = task.AgentProfile
 	}
-	return active, nil
+	return profile, nil
 }
 
-func (d *Daemon) assignmentByPRNumber(prNumber int) (*assignment, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-
-	active := d.assignmentByPRNumberLocked(prNumber)
-	if active == nil {
-		return nil, fmt.Errorf("PR #%d is not associated with an active assignment", prNumber)
-	}
-	return active, nil
-}
-
-func (d *Daemon) assignmentByPRNumberLocked(prNumber int) *assignment {
-	for _, active := range d.assignments {
-		if active.pending {
-			continue
-		}
-		if active.prNumber == prNumber {
-			return active
-		}
-	}
-	return nil
-}
-
-func (d *Daemon) mergeQueueEvent(active *assignment, eventType string, prNumber int, message string, at time.Time) Event {
+func (d *Daemon) mergeQueueEvent(active *ActiveAssignment, eventType string, prNumber int, message string, at time.Time) Event {
 	event := Event{
 		Time:     at,
 		Type:     eventType,
@@ -119,20 +95,27 @@ func (d *Daemon) mergeQueueEvent(active *assignment, eventType string, prNumber 
 		return event
 	}
 
-	event.Issue = active.task.Issue
-	event.PaneID = active.pane.ID
-	event.PaneName = active.pane.Name
-	event.CloneName = active.clone.Name
-	event.ClonePath = active.clone.Path
-	event.Branch = active.task.Branch
-	event.AgentProfile = active.profile.Name
+	event.Issue = active.Task.Issue
+	event.PaneID = active.Task.PaneID
+	event.PaneName = active.Task.PaneName
+	if event.PaneName == "" {
+		event.PaneName = active.Worker.PaneName
+	}
+	if event.PaneName == "" {
+		event.PaneName = active.Task.PaneID
+	}
+	event.CloneName = active.Task.CloneName
+	if event.CloneName == "" && active.Task.ClonePath != "" {
+		event.CloneName = filepath.Base(active.Task.ClonePath)
+	}
+	event.ClonePath = active.Task.ClonePath
+	event.Branch = active.Task.Branch
+	event.AgentProfile = active.Task.AgentProfile
 	return event
 }
 
 func (d *Daemon) requireStarted() error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if !d.started {
+	if !d.started.Load() {
 		return ErrNotStarted
 	}
 	return nil

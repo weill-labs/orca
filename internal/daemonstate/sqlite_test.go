@@ -344,6 +344,115 @@ func TestSQLiteExecWithRetryReturnsLastBusyErrorAfterMaxAttempts(t *testing.T) {
 	}
 }
 
+func TestSQLiteStorePersistsWorkerMonitorStateAndMergeQueue(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	project := "/repo"
+	now := time.Date(2026, 4, 3, 9, 30, 0, 0, time.UTC)
+
+	if err := store.UpsertWorker(context.Background(), project, Worker{
+		PaneID:             "pane-1",
+		Agent:              "codex",
+		State:              "escalated",
+		Issue:              "LAB-735",
+		ClonePath:          "/clones/orca01",
+		LastReviewCount:    2,
+		LastCIState:        "fail",
+		LastMergeableState: "blocked",
+		NudgeCount:         3,
+		LastCapture:        "permission prompt",
+		LastActivityAt:     now,
+		UpdatedAt:          now,
+	}); err != nil {
+		t.Fatalf("UpsertWorker() error = %v", err)
+	}
+
+	workers, err := store.ListWorkers(context.Background(), project)
+	if err != nil {
+		t.Fatalf("ListWorkers() error = %v", err)
+	}
+	if got, want := len(workers), 1; got != want {
+		t.Fatalf("len(workers) = %d, want %d", got, want)
+	}
+	worker := workers[0]
+	if got, want := worker.LastReviewCount, 2; got != want {
+		t.Fatalf("worker.LastReviewCount = %d, want %d", got, want)
+	}
+	if got, want := worker.LastCIState, "fail"; got != want {
+		t.Fatalf("worker.LastCIState = %q, want %q", got, want)
+	}
+	if got, want := worker.LastMergeableState, "blocked"; got != want {
+		t.Fatalf("worker.LastMergeableState = %q, want %q", got, want)
+	}
+	if got, want := worker.NudgeCount, 3; got != want {
+		t.Fatalf("worker.NudgeCount = %d, want %d", got, want)
+	}
+	if got, want := worker.LastCapture, "permission prompt"; got != want {
+		t.Fatalf("worker.LastCapture = %q, want %q", got, want)
+	}
+	if got, want := worker.LastActivityAt, now; !got.Equal(want) {
+		t.Fatalf("worker.LastActivityAt = %v, want %v", got, want)
+	}
+
+	position, err := store.EnqueueMergeEntry(context.Background(), MergeQueueEntry{
+		Project:   project,
+		Issue:     "LAB-735",
+		PRNumber:  42,
+		Status:    "queued",
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("EnqueueMergeEntry() error = %v", err)
+	}
+	if got, want := position, 1; got != want {
+		t.Fatalf("position = %d, want %d", got, want)
+	}
+
+	entry, err := store.NextMergeEntry(context.Background(), project)
+	if err != nil {
+		t.Fatalf("NextMergeEntry() error = %v", err)
+	}
+	if entry == nil {
+		t.Fatal("NextMergeEntry() = nil, want entry")
+	}
+	if got, want := entry.PRNumber, 42; got != want {
+		t.Fatalf("entry.PRNumber = %d, want %d", got, want)
+	}
+	if got, want := entry.Status, "queued"; got != want {
+		t.Fatalf("entry.Status = %q, want %q", got, want)
+	}
+
+	entry.Status = "awaiting_checks"
+	entry.UpdatedAt = now.Add(time.Minute)
+	if err := store.UpdateMergeEntry(context.Background(), *entry); err != nil {
+		t.Fatalf("UpdateMergeEntry() error = %v", err)
+	}
+
+	updatedEntry, err := store.NextMergeEntry(context.Background(), project)
+	if err != nil {
+		t.Fatalf("NextMergeEntry() after update error = %v", err)
+	}
+	if updatedEntry == nil {
+		t.Fatal("NextMergeEntry() after update = nil, want entry")
+	}
+	if got, want := updatedEntry.Status, "awaiting_checks"; got != want {
+		t.Fatalf("updatedEntry.Status = %q, want %q", got, want)
+	}
+
+	if err := store.DeleteMergeEntry(context.Background(), project, 42); err != nil {
+		t.Fatalf("DeleteMergeEntry() error = %v", err)
+	}
+	emptyEntry, err := store.NextMergeEntry(context.Background(), project)
+	if err != nil {
+		t.Fatalf("NextMergeEntry() after delete error = %v", err)
+	}
+	if emptyEntry != nil {
+		t.Fatalf("NextMergeEntry() after delete = %#v, want nil", emptyEntry)
+	}
+}
+
 func newTestStore(t *testing.T) *SQLiteStore {
 	t.Helper()
 

@@ -10,6 +10,7 @@ import (
 )
 
 const (
+	TaskStatusStarting  = "starting"
 	TaskStatusActive    = "active"
 	TaskStatusCancelled = "cancelled"
 	TaskStatusDone      = "done"
@@ -18,8 +19,12 @@ const (
 	IssueStateInProgress = "In Progress"
 	IssueStateDone       = "Done"
 
-	WorkerHealthHealthy = "healthy"
-	WorkerHealthStuck   = "stuck"
+	WorkerHealthHealthy   = "healthy"
+	WorkerHealthStuck     = "stuck"
+	WorkerHealthEscalated = "escalated"
+
+	MergeQueueStatusQueued         = "queued"
+	MergeQueueStatusAwaitingChecks = "awaiting_checks"
 
 	EventDaemonStarted        = "daemon.started"
 	EventDaemonStopped        = "daemon.stopped"
@@ -72,10 +77,21 @@ type ConfigProvider interface {
 }
 
 type StateStore interface {
+	ClaimTask(ctx context.Context, task Task) (*Task, error)
+	RestoreTask(ctx context.Context, project, issue string, previous *Task) error
 	PutTask(ctx context.Context, task Task) error
+	DeleteTask(ctx context.Context, project, issue string) error
 	TaskByIssue(ctx context.Context, project, issue string) (Task, error)
 	PutWorker(ctx context.Context, worker Worker) error
 	DeleteWorker(ctx context.Context, project, paneID string) error
+	ActiveAssignments(ctx context.Context, project string) ([]ActiveAssignment, error)
+	ActiveAssignmentByIssue(ctx context.Context, project, issue string) (ActiveAssignment, error)
+	ActiveAssignmentByPRNumber(ctx context.Context, project string, prNumber int) (ActiveAssignment, error)
+	EnqueueMerge(ctx context.Context, entry MergeQueueEntry) (int, error)
+	MergeEntry(ctx context.Context, project string, prNumber int) (*MergeQueueEntry, error)
+	NextMergeEntry(ctx context.Context, project string) (*MergeQueueEntry, error)
+	UpdateMergeEntry(ctx context.Context, entry MergeQueueEntry) error
+	DeleteMergeEntry(ctx context.Context, project string, prNumber int) error
 	RecordEvent(ctx context.Context, event Event) error
 }
 
@@ -130,6 +146,7 @@ type Task struct {
 	Project      string    `json:"project,omitempty"`
 	Issue        string    `json:"issue,omitempty"`
 	Status       string    `json:"status,omitempty"`
+	Prompt       string    `json:"prompt,omitempty"`
 	PaneID       string    `json:"pane_id,omitempty"`
 	PaneName     string    `json:"pane_name,omitempty"`
 	CloneName    string    `json:"clone_name,omitempty"`
@@ -137,19 +154,39 @@ type Task struct {
 	Branch       string    `json:"branch,omitempty"`
 	AgentProfile string    `json:"agent_profile,omitempty"`
 	PRNumber     int       `json:"pr_number,omitempty"`
+	CreatedAt    time.Time `json:"created_at,omitempty"`
 	UpdatedAt    time.Time `json:"updated_at,omitempty"`
 }
 
 type Worker struct {
-	Project      string    `json:"project,omitempty"`
-	PaneID       string    `json:"pane_id,omitempty"`
-	PaneName     string    `json:"pane_name,omitempty"`
-	Issue        string    `json:"issue,omitempty"`
-	ClonePath    string    `json:"clone_path,omitempty"`
-	AgentProfile string    `json:"agent_profile,omitempty"`
-	Health       string    `json:"health,omitempty"`
-	NudgeCount   int       `json:"nudge_count,omitempty"`
-	UpdatedAt    time.Time `json:"updated_at,omitempty"`
+	Project            string    `json:"project,omitempty"`
+	PaneID             string    `json:"pane_id,omitempty"`
+	PaneName           string    `json:"pane_name,omitempty"`
+	Issue              string    `json:"issue,omitempty"`
+	ClonePath          string    `json:"clone_path,omitempty"`
+	AgentProfile       string    `json:"agent_profile,omitempty"`
+	Health             string    `json:"health,omitempty"`
+	LastReviewCount    int       `json:"last_review_count,omitempty"`
+	LastCIState        string    `json:"last_ci_state,omitempty"`
+	LastMergeableState string    `json:"last_mergeable_state,omitempty"`
+	NudgeCount         int       `json:"nudge_count,omitempty"`
+	LastCapture        string    `json:"last_capture,omitempty"`
+	LastActivityAt     time.Time `json:"last_activity_at,omitempty"`
+	UpdatedAt          time.Time `json:"updated_at,omitempty"`
+}
+
+type ActiveAssignment struct {
+	Task   Task   `json:"task"`
+	Worker Worker `json:"worker"`
+}
+
+type MergeQueueEntry struct {
+	Project   string    `json:"project,omitempty"`
+	Issue     string    `json:"issue,omitempty"`
+	PRNumber  int       `json:"pr_number,omitempty"`
+	Status    string    `json:"status,omitempty"`
+	CreatedAt time.Time `json:"created_at,omitempty"`
+	UpdatedAt time.Time `json:"updated_at,omitempty"`
 }
 
 type Event struct {

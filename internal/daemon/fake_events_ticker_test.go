@@ -76,7 +76,7 @@ func (f *fakeTickerFactory) NewTicker(_ time.Duration) Ticker {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if len(f.tickers) == 0 {
-		panic("no fake ticker queued")
+		return newFakeTicker()
 	}
 	ticker := f.tickers[0]
 	f.tickers = f.tickers[1:]
