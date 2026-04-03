@@ -29,6 +29,9 @@ const (
 	EventWorkerEscalated    = "worker.escalated"
 	EventWorkerRecovered    = "worker.recovered"
 	EventPRDetected         = "pr.detected"
+	EventPREnqueued         = "pr.enqueued"
+	EventPRLandingStarted   = "pr.landing_started"
+	EventPRLandingFailed    = "pr.landing_failed"
 	EventPRMerged           = "pr.merged"
 )
 

@@ -18,7 +18,7 @@ User
             └─ clone pool  (filesystem)
 ```
 
-The lead agent calls `orca assign` with an issue and prompt. Orca allocates a git clone, spawns an amux pane, starts the coding agent, sends the prompt, and monitors progress. When the agent's PR merges, orca cleans up the clone and returns it to the pool.
+The lead agent calls `orca assign` with an issue and prompt. Orca allocates a git clone, spawns an amux pane, starts the coding agent, sends the prompt, and monitors progress. When a PR is ready to land, the lead agent can queue it with `orca enqueue PR_NUMBER` so Orca rebases, waits for required checks, and squash-merges one PR at a time. When the PR merges, Orca cleans up the clone and returns it to the pool.
 
 ## Install
 
@@ -62,6 +62,9 @@ orca status
 orca workers
 orca pool
 orca events        # NDJSON event stream
+
+# 5b. Queue a ready PR for serialized landing
+orca enqueue 123
 
 # 6. Cancel or stop
 orca cancel LAB-123

@@ -151,6 +151,22 @@ func TestAppRunDispatchesCommands(t *testing.T) {
 			},
 		},
 		{
+			name: "enqueue",
+			args: []string{"enqueue", "42"},
+			assert: func(t *testing.T, d *fakeDaemon, _ *fakeState, stdout, _ string) {
+				t.Helper()
+				if d.enqueueRequest == nil {
+					t.Fatal("expected enqueue to be called")
+				}
+				if d.enqueueRequest.PRNumber != 42 {
+					t.Fatalf("expected PR 42, got %d", d.enqueueRequest.PRNumber)
+				}
+				if !strings.Contains(stdout, "#42") {
+					t.Fatalf("expected PR number in output, got %q", stdout)
+				}
+			},
+		},
+		{
 			name: "cancel",
 			args: []string{"cancel", "LAB-690"},
 			assert: func(t *testing.T, d *fakeDaemon, _ *fakeState, stdout, _ string) {
@@ -238,10 +254,11 @@ func TestAppRunDispatchesCommands(t *testing.T) {
 			t.Parallel()
 
 			d := &fakeDaemon{
-				startResult:  daemon.StartResult{Project: "/tmp/orca", Session: "alpha", PID: 321, StartedAt: now},
-				stopResult:   daemon.StopResult{Project: "/repo", PID: 321, StoppedAt: now},
-				assignResult: daemon.TaskActionResult{Project: "/repo", Issue: "LAB-690", Status: "queued", Agent: "codex", UpdatedAt: now},
-				cancelResult: daemon.TaskActionResult{Project: "/repo", Issue: "LAB-690", Status: "cancelled", UpdatedAt: now},
+				startResult:   daemon.StartResult{Project: "/tmp/orca", Session: "alpha", PID: 321, StartedAt: now},
+				stopResult:    daemon.StopResult{Project: "/repo", PID: 321, StoppedAt: now},
+				assignResult:  daemon.TaskActionResult{Project: "/repo", Issue: "LAB-690", Status: "queued", Agent: "codex", UpdatedAt: now},
+				enqueueResult: daemon.MergeQueueActionResult{Project: "/repo", PRNumber: 42, Status: "queued", Position: 1, UpdatedAt: now},
+				cancelResult:  daemon.TaskActionResult{Project: "/repo", Issue: "LAB-690", Status: "cancelled", UpdatedAt: now},
 			}
 			s := &fakeState{}
 			if tt.prepareDaemon != nil {
@@ -286,6 +303,7 @@ func TestAppRunParseErrors(t *testing.T) {
 		{name: "status too many args", args: []string{"status", "LAB-690", "extra"}, wantErr: "status accepts at most one issue"},
 		{name: "assign missing issue", args: []string{"assign", "--prompt", "x"}, wantErr: "assign requires ISSUE"},
 		{name: "assign missing prompt", args: []string{"assign", "LAB-690"}, wantErr: "assign requires --prompt"},
+		{name: "enqueue missing pr number", args: []string{"enqueue"}, wantErr: "enqueue requires PR_NUMBER"},
 		{name: "cancel missing issue", args: []string{"cancel"}, wantErr: "cancel requires ISSUE"},
 		{name: "workers extra arg", args: []string{"workers", "extra"}, wantErr: "workers does not accept positional arguments"},
 	}
@@ -320,15 +338,17 @@ func TestAppRunParseErrors(t *testing.T) {
 }
 
 type fakeDaemon struct {
-	startRequest  *daemon.StartRequest
-	stopRequest   *daemon.StopRequest
-	assignRequest *daemon.AssignRequest
-	cancelRequest *daemon.CancelRequest
+	startRequest   *daemon.StartRequest
+	stopRequest    *daemon.StopRequest
+	assignRequest  *daemon.AssignRequest
+	enqueueRequest *daemon.EnqueueRequest
+	cancelRequest  *daemon.CancelRequest
 
-	startResult  daemon.StartResult
-	stopResult   daemon.StopResult
-	assignResult daemon.TaskActionResult
-	cancelResult daemon.TaskActionResult
+	startResult   daemon.StartResult
+	stopResult    daemon.StopResult
+	assignResult  daemon.TaskActionResult
+	enqueueResult daemon.MergeQueueActionResult
+	cancelResult  daemon.TaskActionResult
 
 	err error
 }
@@ -355,6 +375,14 @@ func (f *fakeDaemon) Assign(_ context.Context, req daemon.AssignRequest) (daemon
 	}
 	f.assignRequest = &req
 	return f.assignResult, nil
+}
+
+func (f *fakeDaemon) Enqueue(_ context.Context, req daemon.EnqueueRequest) (daemon.MergeQueueActionResult, error) {
+	if f.err != nil {
+		return daemon.MergeQueueActionResult{}, f.err
+	}
+	f.enqueueRequest = &req
+	return f.enqueueResult, nil
 }
 
 func (f *fakeDaemon) Cancel(_ context.Context, req daemon.CancelRequest) (daemon.TaskActionResult, error) {

@@ -246,6 +246,18 @@ func dispatchRPCRequest(ctx context.Context, request rpcRequest, instance *Daemo
 			Agent:     taskStatus.Task.Agent,
 			UpdatedAt: taskStatus.Task.UpdatedAt,
 		})
+	case "enqueue":
+		var params enqueueRPCParams
+		if err := decodeRPCParams(request.Params, &params); err != nil {
+			return rpcFailure(request.ID, -32602, fmt.Errorf("decode enqueue params: %w", err))
+		}
+
+		result, err := instance.Enqueue(ctx, params.PRNumber)
+		if err != nil {
+			return rpcFailure(request.ID, -32000, err)
+		}
+
+		return rpcSuccess(request.ID, result)
 	case "status":
 		var params statusRPCParams
 		if err := decodeRPCParams(request.Params, &params); err != nil {

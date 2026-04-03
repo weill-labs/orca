@@ -829,6 +829,167 @@ func TestPRReviewPollingIgnoresEmptyReviewPayload(t *testing.T) {
 	}
 }
 
+func TestEnqueueSerializesQueuedPRLandingsFIFO(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.pool.clones = []Clone{
+		deps.pool.clone,
+		{Name: "clone-02", Path: filepath.Join(t.TempDir(), "clone-02")},
+	}
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker(), newFakeTicker(), newFakeTicker())
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-689", "Implement daemon core", "codex"); err != nil {
+		t.Fatalf("Assign(LAB-689) error = %v", err)
+	}
+	if err := d.Assign(ctx, "LAB-690", "Implement merge queue", "codex"); err != nil {
+		t.Fatalf("Assign(LAB-690) error = %v", err)
+	}
+
+	first, err := d.assignment("LAB-689")
+	if err != nil {
+		t.Fatalf("assignment(LAB-689) error = %v", err)
+	}
+	second, err := d.assignment("LAB-690")
+	if err != nil {
+		t.Fatalf("assignment(LAB-690) error = %v", err)
+	}
+
+	first.prNumber = 42
+	first.task.PRNumber = 42
+	second.prNumber = 43
+	second.task.PRNumber = 43
+
+	deps.commands.queue("gh", []string{"pr", "update-branch", "42", "--rebase"}, ``, nil)
+	firstChecks := deps.commands.block("gh", []string{"pr", "checks", "42", "--required", "--watch", "--fail-fast", "--interval", "10"})
+	deps.commands.queue("gh", []string{"pr", "checks", "42", "--required", "--watch", "--fail-fast", "--interval", "10"}, ``, nil)
+	deps.commands.queue("gh", []string{"pr", "merge", "42", "--squash"}, ``, nil)
+	deps.commands.queue("gh", []string{"pr", "update-branch", "43", "--rebase"}, ``, nil)
+	deps.commands.queue("gh", []string{"pr", "checks", "43", "--required", "--watch", "--fail-fast", "--interval", "10"}, ``, nil)
+	deps.commands.queue("gh", []string{"pr", "merge", "43", "--squash"}, ``, nil)
+
+	if _, err := d.Enqueue(ctx, 42); err != nil {
+		t.Fatalf("Enqueue(42) error = %v", err)
+	}
+
+	select {
+	case <-firstChecks.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for first queued PR checks to start")
+	}
+
+	if _, err := d.Enqueue(ctx, 43); err != nil {
+		t.Fatalf("Enqueue(43) error = %v", err)
+	}
+
+	if got := deps.commands.countCalls("gh", []string{"pr", "update-branch", "43", "--rebase"}); got != 0 {
+		t.Fatalf("second queued PR started before first completed, update-branch calls = %d", got)
+	}
+
+	close(firstChecks.release)
+
+	waitFor(t, "second queued PR merge", func() bool {
+		return deps.commands.countCalls("gh", []string{"pr", "merge", "43", "--squash"}) == 1
+	})
+
+	if got, want := deps.commands.callsByName("gh"), []commandCall{
+		{Dir: "/tmp/project", Name: "gh", Args: []string{"pr", "list", "--head", "LAB-689", "--state", "open", "--json", "number"}},
+		{Dir: "/tmp/project", Name: "gh", Args: []string{"pr", "list", "--head", "LAB-690", "--state", "open", "--json", "number"}},
+		{Dir: "/tmp/project", Name: "gh", Args: []string{"pr", "update-branch", "42", "--rebase"}},
+		{Dir: "/tmp/project", Name: "gh", Args: []string{"pr", "checks", "42", "--required", "--watch", "--fail-fast", "--interval", "10"}},
+		{Dir: "/tmp/project", Name: "gh", Args: []string{"pr", "merge", "42", "--squash"}},
+		{Dir: "/tmp/project", Name: "gh", Args: []string{"pr", "update-branch", "43", "--rebase"}},
+		{Dir: "/tmp/project", Name: "gh", Args: []string{"pr", "checks", "43", "--required", "--watch", "--fail-fast", "--interval", "10"}},
+		{Dir: "/tmp/project", Name: "gh", Args: []string{"pr", "merge", "43", "--squash"}},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("gh calls = %#v, want %#v", got, want)
+	}
+}
+
+func TestEnqueueNotifiesWorkerWhenRebaseFailsAndAllowsRequeue(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-689", "Implement daemon core", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	active, err := d.assignment("LAB-689")
+	if err != nil {
+		t.Fatalf("assignment() error = %v", err)
+	}
+	active.prNumber = 42
+	active.task.PRNumber = 42
+
+	deps.commands.queue("gh", []string{"pr", "update-branch", "42", "--rebase"}, ``, errors.New("rebase conflict"))
+
+	if _, err := d.Enqueue(ctx, 42); err != nil {
+		t.Fatalf("Enqueue(42) error = %v", err)
+	}
+
+	conflictNotice := "Merge queue could not rebase PR #42 onto main. Resolve the conflicts, push an update, and re-run `orca enqueue 42` when ready.\n"
+	waitFor(t, "merge queue conflict notice", func() bool {
+		return deps.amux.countKey("pane-1", conflictNotice) == 1
+	})
+
+	if got := deps.commands.countCalls("gh", []string{"pr", "merge", "42", "--squash"}); got != 0 {
+		t.Fatalf("unexpected merge attempt after rebase failure: %d", got)
+	}
+
+	deps.commands.queue("gh", []string{"pr", "update-branch", "42", "--rebase"}, ``, nil)
+	deps.commands.queue("gh", []string{"pr", "checks", "42", "--required", "--watch", "--fail-fast", "--interval", "10"}, ``, nil)
+	deps.commands.queue("gh", []string{"pr", "merge", "42", "--squash"}, ``, nil)
+
+	if _, err := d.Enqueue(ctx, 42); err != nil {
+		t.Fatalf("Enqueue(42) after conflict error = %v", err)
+	}
+
+	waitFor(t, "merge queue re-enqueue merge", func() bool {
+		return deps.commands.countCalls("gh", []string{"pr", "merge", "42", "--squash"}) == 1
+	})
+}
+
+func TestEnqueueRejectsPRsThatAreNotTrackedByActiveAssignments(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if _, err := d.Enqueue(ctx, 42); err == nil {
+		t.Fatal("Enqueue(42) succeeded, want error")
+	} else if !strings.Contains(err.Error(), "active assignment") {
+		t.Fatalf("Enqueue(42) error = %v, want active assignment error", err)
+	}
+}
+
 func TestNDJSONEmitterWritesLineDelimitedJSON(t *testing.T) {
 	t.Parallel()
 
@@ -1068,7 +1229,8 @@ type fakePool struct {
 	acquireRelease        chan struct{}
 	acquireCalls          int
 	clone                 Clone
-	acquired              bool
+	clones                []Clone
+	acquired              map[string]bool
 	released              []Clone
 }
 
@@ -1093,11 +1255,17 @@ func (p *fakePool) Acquire(ctx context.Context, project, issue string) (Clone, e
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.acquired {
-		return Clone{}, errors.New("clone already acquired")
+	for _, clone := range p.availableClones() {
+		if p.acquired == nil {
+			p.acquired = make(map[string]bool)
+		}
+		if p.acquired[clone.Path] {
+			continue
+		}
+		p.acquired[clone.Path] = true
+		return clone, nil
 	}
-	p.acquired = true
-	return p.clone, nil
+	return Clone{}, errors.New("clone already acquired")
 }
 
 func (p *fakePool) Release(ctx context.Context, project string, clone Clone) error {
@@ -1106,9 +1274,18 @@ func (p *fakePool) Release(ctx context.Context, project string, clone Clone) err
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.acquired = false
+	if p.acquired != nil {
+		delete(p.acquired, clone.Path)
+	}
 	p.released = append(p.released, clone)
 	return nil
+}
+
+func (p *fakePool) availableClones() []Clone {
+	if len(p.clones) > 0 {
+		return p.clones
+	}
+	return []Clone{p.clone}
 }
 
 func (p *fakePool) acquireCallCount() int {
@@ -1301,9 +1478,10 @@ func normalizeSentKeys(keys ...string) []string {
 }
 
 type fakeCommands struct {
-	mu     sync.Mutex
-	calls  []commandCall
-	queued map[string][]commandResult
+	mu      sync.Mutex
+	calls   []commandCall
+	queued  map[string][]commandResult
+	blocked map[string]commandBlock
 }
 
 type commandCall struct {
@@ -1317,15 +1495,20 @@ type commandResult struct {
 	err    error
 }
 
+type commandBlock struct {
+	started chan struct{}
+	release chan struct{}
+}
+
 func newFakeCommands() *fakeCommands {
 	return &fakeCommands{
-		queued: make(map[string][]commandResult),
+		queued:  make(map[string][]commandResult),
+		blocked: make(map[string]commandBlock),
 	}
 }
 
 func (c *fakeCommands) Run(_ context.Context, dir, name string, args ...string) ([]byte, error) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 
 	call := commandCall{
 		Dir:  dir,
@@ -1335,12 +1518,34 @@ func (c *fakeCommands) Run(_ context.Context, dir, name string, args ...string) 
 	c.calls = append(c.calls, call)
 
 	key := c.key(name, args)
+	block, blocked := c.blocked[key]
+	if blocked {
+		delete(c.blocked, key)
+	}
 	queue := c.queued[key]
+	var result commandResult
 	if len(queue) == 0 {
+		c.mu.Unlock()
+		if blocked {
+			select {
+			case block.started <- struct{}{}:
+			default:
+			}
+			<-block.release
+		}
 		return nil, nil
 	}
-	result := queue[0]
+	result = queue[0]
 	c.queued[key] = queue[1:]
+	c.mu.Unlock()
+
+	if blocked {
+		select {
+		case block.started <- struct{}{}:
+		default:
+		}
+		<-block.release
+	}
 	return []byte(result.output), result.err
 }
 
@@ -1349,6 +1554,18 @@ func (c *fakeCommands) queue(name string, args []string, output string, err erro
 	defer c.mu.Unlock()
 	key := c.key(name, args)
 	c.queued[key] = append(c.queued[key], commandResult{output: output, err: err})
+}
+
+func (c *fakeCommands) block(name string, args []string) commandBlock {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	key := c.key(name, args)
+	block := commandBlock{
+		started: make(chan struct{}, 1),
+		release: make(chan struct{}),
+	}
+	c.blocked[key] = block
+	return block
 }
 
 func (c *fakeCommands) callsByName(name string) []commandCall {
