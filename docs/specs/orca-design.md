@@ -142,7 +142,7 @@ Profiles encode agent-specific behavior without orca containing any AI:
 
 ```toml
 [agents.codex]
-start_command = "codex --yolo"
+start_command = "codex"                    # profile normalizes to codex --yolo
 idle_signal = "screen_quiet"
 idle_timeout = "30s"
 stuck_text_patterns = ["permission prompt"]  # matched against screen output
@@ -179,6 +179,10 @@ Either mechanism triggers the nudge sequence. Orca uses these profiles to:
 1. Start agents in panes with the correct command.
 2. Detect stuck states via text pattern matching or idle timeout.
 3. Auto-nudge up to `max_nudge_retries` times before escalating.
+
+Codex-specific startup quirks stay in the profile adapter: Orca ensures the
+start command includes `--yolo`, and if startup output offers resume it sends
+`codex --yolo resume`, `Enter`, then `.` before delivering the task prompt.
 
 ### Notifications
 
@@ -231,7 +235,7 @@ Claude: orca assign LAB-123 --prompt "Implement the auth feature..."
   2. Pick a free clone from the pool
   3. In clone: git checkout main && git pull && git checkout -B LAB-123
   4. Spawn amux pane with cwd = clone path
-  5. Start agent per profile (e.g., codex --yolo)
+  5. Start agent per profile (e.g., codex -> codex --yolo)
   6. Send prompt (provided by Claude) to the pane
   7. Set pane metadata: task, issue, branch
   8. Monitor: health checks, stuck detection, auto-nudge per profile
@@ -343,7 +347,7 @@ pattern = "~/sync/github/amux/amux*"
 clone_origin = "git@github.com:weill-labs/amux.git"
 
 [agents.codex]
-start_command = "codex --yolo"
+start_command = "codex"
 idle_timeout = "30s"
 stuck_timeout = "5m"
 stuck_text_patterns = ["permission prompt"]
