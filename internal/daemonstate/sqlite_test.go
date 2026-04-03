@@ -2,13 +2,20 @@ package state
 
 import (
 	"context"
+	"database/sql"
+	"database/sql/driver"
 	"errors"
+	"fmt"
 	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	legacy "github.com/weill-labs/orca/internal/state"
 )
+
+var execRetryStubDriverSeq atomic.Uint64
 
 func TestSQLiteStoreLifecycleAndQueries(t *testing.T) {
 	t.Parallel()
@@ -252,6 +259,91 @@ func TestSQLiteStoreNotFoundAndHelpers(t *testing.T) {
 	}
 }
 
+func TestSQLiteExecWithRetryRetriesBusyError(t *testing.T) {
+	t.Parallel()
+
+	var calls atomic.Int32
+	store := &SQLiteStore{
+		db: openExecRetryStubDB(t, func(context.Context, string, []driver.NamedValue) error {
+			if calls.Add(1) == 1 {
+				return errors.New("SQLITE_BUSY")
+			}
+			return nil
+		}),
+	}
+
+	if err := store.execWithRetry(context.Background(), "SELECT 1"); err != nil {
+		t.Fatalf("execWithRetry() error = %v", err)
+	}
+	if got, want := calls.Load(), int32(2); got != want {
+		t.Fatalf("execWithRetry() call count = %d, want %d", got, want)
+	}
+}
+
+func TestSQLiteExecWithRetryReturnsContextErrorWhenWaitIsCancelled(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var calls atomic.Int32
+	store := &SQLiteStore{
+		db: openExecRetryStubDB(t, func(context.Context, string, []driver.NamedValue) error {
+			calls.Add(1)
+			cancel()
+			return errors.New("database is locked")
+		}),
+	}
+
+	err := store.execWithRetry(ctx, "SELECT 1")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("execWithRetry() error = %v, want %v", err, context.Canceled)
+	}
+	if got, want := calls.Load(), int32(1); got != want {
+		t.Fatalf("execWithRetry() call count = %d, want %d", got, want)
+	}
+}
+
+func TestSQLiteExecWithRetryReturnsNonBusyErrorImmediately(t *testing.T) {
+	t.Parallel()
+
+	wantErr := errors.New("boom")
+	var calls atomic.Int32
+	store := &SQLiteStore{
+		db: openExecRetryStubDB(t, func(context.Context, string, []driver.NamedValue) error {
+			calls.Add(1)
+			return wantErr
+		}),
+	}
+
+	err := store.execWithRetry(context.Background(), "SELECT 1")
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("execWithRetry() error = %v, want %v", err, wantErr)
+	}
+	if got, want := calls.Load(), int32(1); got != want {
+		t.Fatalf("execWithRetry() call count = %d, want %d", got, want)
+	}
+}
+
+func TestSQLiteExecWithRetryReturnsLastBusyErrorAfterMaxAttempts(t *testing.T) {
+	t.Parallel()
+
+	wantErr := errors.New("SQLITE_BUSY")
+	var calls atomic.Int32
+	store := &SQLiteStore{
+		db: openExecRetryStubDB(t, func(context.Context, string, []driver.NamedValue) error {
+			calls.Add(1)
+			return wantErr
+		}),
+	}
+
+	err := store.execWithRetry(context.Background(), "SELECT 1")
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("execWithRetry() error = %v, want %v", err, wantErr)
+	}
+	if got, want := calls.Load(), int32(20); got != want {
+		t.Fatalf("execWithRetry() call count = %d, want %d", got, want)
+	}
+}
+
 func newTestStore(t *testing.T) *SQLiteStore {
 	t.Helper()
 
@@ -265,4 +357,55 @@ func newTestStore(t *testing.T) *SQLiteStore {
 		}
 	})
 	return store
+}
+
+func openExecRetryStubDB(t *testing.T, execFn func(context.Context, string, []driver.NamedValue) error) *sql.DB {
+	t.Helper()
+
+	driverName := strings.NewReplacer("/", "_", " ", "_").Replace(
+		fmt.Sprintf("exec-retry-%s-%d", t.Name(), execRetryStubDriverSeq.Add(1)),
+	)
+	sql.Register(driverName, execRetryStubDriver{execFn: execFn})
+
+	db, err := sql.Open(driverName, "")
+	if err != nil {
+		t.Fatalf("sql.Open(%q) error = %v", driverName, err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	})
+	return db
+}
+
+type execRetryStubDriver struct {
+	execFn func(context.Context, string, []driver.NamedValue) error
+}
+
+func (d execRetryStubDriver) Open(string) (driver.Conn, error) {
+	return execRetryStubConn{execFn: d.execFn}, nil
+}
+
+type execRetryStubConn struct {
+	execFn func(context.Context, string, []driver.NamedValue) error
+}
+
+func (c execRetryStubConn) Prepare(string) (driver.Stmt, error) {
+	return nil, errors.New("Prepare not implemented")
+}
+
+func (c execRetryStubConn) Close() error {
+	return nil
+}
+
+func (c execRetryStubConn) Begin() (driver.Tx, error) {
+	return nil, errors.New("Begin not implemented")
+}
+
+func (c execRetryStubConn) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
+	if err := c.execFn(ctx, query, args); err != nil {
+		return nil, err
+	}
+	return driver.RowsAffected(1), nil
 }
