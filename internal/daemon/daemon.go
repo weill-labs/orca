@@ -255,6 +255,29 @@ func (d *Daemon) Assign(ctx context.Context, issue, prompt, agentProfile string)
 		}
 	}
 
+	existingTask, err := d.state.TaskByIssue(ctx, d.project, issue)
+	if err == nil {
+		switch existingTask.Status {
+		case "", TaskStatusDone, TaskStatusCancelled, TaskStatusFailed:
+		default:
+			releaseReservation()
+			return fmt.Errorf("issue %s already assigned", issue)
+		}
+	} else if !errors.Is(err, ErrTaskNotFound) {
+		releaseReservation()
+		return fmt.Errorf("load task %s: %w", issue, err)
+	}
+
+	prNumber, err := d.lookupOpenPRNumber(ctx, issue)
+	if err != nil {
+		releaseReservation()
+		return fmt.Errorf("check open PRs for %s: %w", issue, err)
+	}
+	if prNumber > 0 {
+		releaseReservation()
+		return fmt.Errorf("issue %s already has open PR #%d", issue, prNumber)
+	}
+
 	clone, err := d.pool.Acquire(ctx, d.project, issue)
 	if err != nil {
 		releaseReservation()
@@ -508,6 +531,13 @@ func (d *Daemon) handlePRPoll(active *assignment) {
 			active.task.PRNumber = prNumber
 			active.task.UpdatedAt = d.now()
 			_ = d.state.PutTask(active.ctx, active.task)
+			_ = d.amux.SetMetadata(active.ctx, active.pane.ID, map[string]string{
+				"agent_profile": active.profile.Name,
+				"branch":        active.task.Branch,
+				"issue":         active.task.Issue,
+				"pr":            fmt.Sprintf("%d", prNumber),
+				"task":          active.task.Issue,
+			})
 			d.emit(active.ctx, Event{
 				Time:         d.now(),
 				Type:         EventPRDetected,
@@ -743,6 +773,18 @@ func (d *Daemon) lookupPRNumber(ctx context.Context, branch string) (int, error)
 	if err != nil {
 		return 0, err
 	}
+	return parsePRNumberList(output)
+}
+
+func (d *Daemon) lookupOpenPRNumber(ctx context.Context, branch string) (int, error) {
+	output, err := d.commands.Run(ctx, d.project, "gh", "pr", "list", "--head", branch, "--state", "open", "--json", "number")
+	if err != nil {
+		return 0, err
+	}
+	return parsePRNumberList(output)
+}
+
+func parsePRNumberList(output []byte) (int, error) {
 	var prs []struct {
 		Number int `json:"number"`
 	}
