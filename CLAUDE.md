@@ -9,6 +9,7 @@ See [docs/specs/orca-design.md](docs/specs/orca-design.md) for the full design d
 ## Architecture
 
 - **Daemon**: long-lived background process per project, SQLite state at `~/.config/orca/state.db`
+- **Stateless binary**: the daemon holds zero state in memory. All state lives in SQLite. The daemon is a pure poll loop that reads active tasks from the DB, runs monitoring checks, and writes results back. This means `orca stop && orca start` is seamless — the new daemon picks up exactly where the old one left off. Never store per-task state in Go structs, maps, or goroutines.
 - **Clone pool**: convention-based discovery of independent git clones (not worktrees)
 - **Agent profiles**: pluggable configs for codex, claude, aider encoding agent-specific quirks
 - **amux consumer**: orca calls amux CLI commands and subscribes to amux events — amux knows nothing about orca
