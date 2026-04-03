@@ -2106,8 +2106,11 @@ func (a *fakeAmux) requireSentKeys(t *testing.T, paneID string, want []string) {
 	t.Helper()
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	got := normalizeSentKeys(a.sentKeys[paneID]...)
+	got := append([]string(nil), a.sentKeys[paneID]...)
 	want = normalizeSentKeys(want...)
+	if len(got) == 0 && len(want) == 0 {
+		return
+	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("sentKeys[%q] = %#v, want %#v", paneID, got, want)
 	}
@@ -2115,24 +2118,17 @@ func (a *fakeAmux) requireSentKeys(t *testing.T, paneID string, want []string) {
 
 func normalizeSentKeys(keys ...string) []string {
 	normalized := make([]string, 0, len(keys))
-	var builder strings.Builder
-	flush := func() {
-		if builder.Len() == 0 {
-			return
-		}
-		normalized = append(normalized, builder.String())
-		builder.Reset()
-	}
-
 	for _, key := range keys {
 		if key == "Enter" {
-			builder.WriteString("\n")
-			flush()
+			if len(normalized) == 0 {
+				normalized = append(normalized, "\n")
+				continue
+			}
+			normalized[len(normalized)-1] += "\n"
 			continue
 		}
-		builder.WriteString(key)
+		normalized = append(normalized, key)
 	}
-	flush()
 	return normalized
 }
 
