@@ -363,6 +363,42 @@ func TestAssignRejectsIssueAlreadyActiveInStateBeforeCloneAcquire(t *testing.T) 
 	if !strings.Contains(err.Error(), "already assigned") {
 		t.Fatalf("Assign() error = %v, want duplicate assignment error", err)
 	}
+	if got, want := deps.commands.countCalls("gh", []string{"pr", "list", "--head", "LAB-689", "--state", "open", "--json", "number"}), 0; got != want {
+		t.Fatalf("gh pr list calls = %d, want %d", got, want)
+	}
+	if got, want := deps.pool.acquireCallCount(), 0; got != want {
+		t.Fatalf("pool acquire calls = %d, want %d", got, want)
+	}
+	if got, want := len(deps.amux.spawnRequests), 0; got != want {
+		t.Fatalf("spawn requests = %d, want %d", got, want)
+	}
+}
+
+func TestAssignRejectsAutonomousBacklogPickingPromptBeforePRLookupOrCloneAcquire(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	err := d.Assign(ctx, "LAB-689", "Pick up the next issue from the backlog and start working.", "codex")
+	if err == nil {
+		t.Fatal("Assign() succeeded, want prompt validation error")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "backlog") {
+		t.Fatalf("Assign() error = %v, want backlog-picking context", err)
+	}
+	if got, want := deps.commands.countCalls("gh", []string{"pr", "list", "--head", "LAB-689", "--state", "open", "--json", "number"}), 0; got != want {
+		t.Fatalf("gh pr list calls = %d, want %d", got, want)
+	}
 	if got, want := deps.pool.acquireCallCount(), 0; got != want {
 		t.Fatalf("pool acquire calls = %d, want %d", got, want)
 	}
@@ -394,6 +430,9 @@ func TestAssignRejectsOpenPRBeforeCloneAcquire(t *testing.T) {
 	if !strings.Contains(err.Error(), "open PR #42") {
 		t.Fatalf("Assign() error = %v, want open PR context", err)
 	}
+	if got, want := deps.commands.countCalls("gh", []string{"pr", "list", "--head", "LAB-689", "--state", "open", "--json", "number"}), 1; got != want {
+		t.Fatalf("gh pr list calls = %d, want %d", got, want)
+	}
 	if got, want := deps.pool.acquireCallCount(), 0; got != want {
 		t.Fatalf("pool acquire calls = %d, want %d", got, want)
 	}
@@ -402,6 +441,38 @@ func TestAssignRejectsOpenPRBeforeCloneAcquire(t *testing.T) {
 	}
 }
 
+func TestAssignAllowsReassigningInactiveStoredIssueWhenNoOpenPRExists(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	deps.state.tasks["LAB-689"] = Task{
+		Project: "/tmp/project",
+		Issue:   "LAB-689",
+		Status:  TaskStatusCancelled,
+	}
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-689", "Implement daemon core", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	waitFor(t, "task registration", func() bool {
+		task, ok := deps.state.task("LAB-689")
+		return ok && task.Status == TaskStatusActive
+	})
+	if got, want := deps.commands.countCalls("gh", []string{"pr", "list", "--head", "LAB-689", "--state", "open", "--json", "number"}), 1; got != want {
+		t.Fatalf("gh pr list calls = %d, want %d", got, want)
+	}
+}
 func TestCancelKillsAgentCleansCloneAndFreesResources(t *testing.T) {
 	t.Parallel()
 
