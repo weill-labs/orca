@@ -20,6 +20,11 @@ const (
 	defaultMergeGracePeriod      = 10 * time.Minute
 	mergeQueueChecksIntervalSecs = "10"
 	mergedWrapUpPrompt           = "PR merged, wrap up.\n"
+	ciStateFail             = "fail"
+	ciStatePending          = "pending"
+	ciStatePass             = "pass"
+	ciStateCancel           = "cancel"
+	ciStateSkipping         = "skipping"
 )
 
 type Daemon struct {
@@ -65,6 +70,7 @@ type assignment struct {
 	lastOutput      string
 	lastActivity    time.Time
 	prNumber        int
+	lastCIState     string
 	lastReviewCount atomic.Int64
 	escalated       bool
 	cleanupOnce     sync.Once
@@ -675,6 +681,8 @@ func (d *Daemon) handlePRPoll(active *assignment) {
 		return
 	}
 
+	d.handlePRChecksPoll(active)
+
 	merged, err := d.isPRMerged(active.ctx, active.prNumber)
 	if err != nil || !merged {
 		d.handlePRReviewPoll(active)
@@ -742,6 +750,25 @@ func (d *Daemon) handlePRReviewPoll(active *assignment) {
 	})
 }
 
+func (d *Daemon) handlePRChecksPoll(active *assignment) {
+	ciState, err := d.lookupPRChecksState(active.ctx, active.prNumber)
+	if err != nil {
+		return
+	}
+
+	previous := active.lastCIState
+	if ciState != ciStateFail {
+		active.lastCIState = ciState
+		return
+	}
+	if previous == ciStateFail {
+		return
+	}
+	if d.nudgeForCIFailure(active) {
+		active.lastCIState = ciStateFail
+	}
+}
+
 func (d *Daemon) nudgeOrEscalate(active *assignment, reason string) {
 	now := d.now()
 	active.worker.Health = WorkerHealthStuck
@@ -788,6 +815,30 @@ func (d *Daemon) nudgeOrEscalate(active *assignment, reason string) {
 		AgentProfile: active.profile.Name,
 		Retry:        active.worker.NudgeCount,
 		Message:      reason,
+	})
+}
+
+func (d *Daemon) nudgeForCIFailure(active *assignment) {
+	if active.profile.NudgeCommand == "" {
+		return
+	}
+	if err := d.amux.SendKeys(active.ctx, active.pane.ID, active.profile.NudgeCommand); err != nil {
+		return
+	}
+
+	d.emit(active.ctx, Event{
+		Time:         d.now(),
+		Type:         EventWorkerNudgedCI,
+		Project:      d.project,
+		Issue:        active.task.Issue,
+		PaneID:       active.pane.ID,
+		PaneName:     active.pane.Name,
+		CloneName:    active.clone.Name,
+		ClonePath:    active.clone.Path,
+		Branch:       active.task.Branch,
+		AgentProfile: active.profile.Name,
+		PRNumber:     active.prNumber,
+		Message:      "pull request checks failing",
 	})
 }
 
@@ -953,6 +1004,34 @@ func assignmentMetadata(agentProfile, branch, issue string, prNumber int) map[st
 	return metadata
 }
 
+func (d *Daemon) lookupPRChecksState(ctx context.Context, prNumber int) (string, error) {
+	output, err := d.commands.Run(ctx, d.project, "gh", "pr", "checks", fmt.Sprintf("%d", prNumber), "--json", "bucket")
+	if err != nil {
+		return "", err
+	}
+	if len(output) == 0 {
+		return "", nil
+	}
+
+	var checks []struct {
+		Bucket string `json:"bucket"`
+	}
+	if err := json.Unmarshal(output, &checks); err != nil {
+		return "", err
+	}
+
+	bestState := ""
+	bestRank := 0
+	for _, check := range checks {
+		rank := ciStateRank(check.Bucket)
+		if rank > bestRank {
+			bestState = check.Bucket
+			bestRank = rank
+		}
+	}
+	return bestState, nil
+}
+
 func (d *Daemon) isPRMerged(ctx context.Context, prNumber int) (bool, error) {
 	output, err := d.commands.Run(ctx, d.project, "gh", "pr", "view", fmt.Sprintf("%d", prNumber), "--json", "mergedAt")
 	if err != nil {
@@ -1061,6 +1140,23 @@ func (d *Daemon) matchesStuckPattern(profile AgentProfile, output string) bool {
 		}
 	}
 	return false
+}
+
+func ciStateRank(state string) int {
+	switch state {
+	case ciStateFail:
+		return 5
+	case ciStatePending:
+		return 4
+	case ciStatePass:
+		return 3
+	case ciStateCancel:
+		return 2
+	case ciStateSkipping:
+		return 1
+	default:
+		return 0
+	}
 }
 
 func (d *Daemon) emit(ctx context.Context, event Event) {
