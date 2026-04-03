@@ -30,6 +30,7 @@ const (
 	EventTaskCompletionFailed = "task.completion_failed"
 	EventWorkerNudged         = "worker.nudged"
 	EventWorkerNudgedCI       = "worker.nudged_ci"
+	EventWorkerNudgedConflict = "worker.nudged_conflict"
 	EventWorkerNudgedReview   = "worker.nudged_review"
 	EventWorkerEscalated      = "worker.escalated"
 	EventWorkerRecovered      = "worker.recovered"

@@ -27,6 +27,7 @@ const (
 	ciStateCancel                = "cancel"
 	ciStateSkipping              = "skipping"
 	postmortemCommand            = "$postmortem"
+	conflictNudgePrompt          = "PR has merge conflicts, rebase onto origin/main and push.\n"
 )
 
 var autonomousBacklogPromptPattern = regexp.MustCompile(`(?i)pick up.*(work|issue|task|ticket)|from.*(backlog|queue|linear)|new work|next (issue|task|ticket)|find.*(issue|task|work).*backlog`)
@@ -64,24 +65,38 @@ type Daemon struct {
 }
 
 type assignment struct {
-	ctx             context.Context
-	cancel          context.CancelFunc
-	captureTick     Ticker
-	pollTick        Ticker
-	pending         bool
-	profile         AgentProfile
-	task            Task
-	worker          Worker
-	clone           Clone
-	pane            Pane
-	startedAt       time.Time
-	lastOutput      string
-	lastActivity    time.Time
-	prNumber        int
-	lastCIState     string
-	lastReviewCount atomic.Int64
-	escalated       bool
-	cleanupOnce     sync.Once
+	ctx                context.Context
+	cancel             context.CancelFunc
+	captureTick        Ticker
+	pollTick           Ticker
+	pending            bool
+	profile            AgentProfile
+	task               Task
+	worker             Worker
+	clone              Clone
+	pane               Pane
+	startedAt          time.Time
+	lastOutput         string
+	lastActivity       time.Time
+	prNumber           int
+	lastMergeableState atomic.Value
+	lastCIState        string
+	lastReviewCount    atomic.Int64
+	escalated          bool
+	cleanupOnce        sync.Once
+}
+
+func (a *assignment) mergeableState() string {
+	value := a.lastMergeableState.Load()
+	if value == nil {
+		return ""
+	}
+	state, _ := value.(string)
+	return state
+}
+
+func (a *assignment) setMergeableState(state string) {
+	a.lastMergeableState.Store(state)
 }
 
 type prReviewPayload struct {
@@ -746,9 +761,11 @@ func (d *Daemon) handlePRPoll(active *assignment) {
 
 	merged, err := d.isPRMerged(active.ctx, active.prNumber)
 	if err != nil || !merged {
+		d.handlePRMergeablePoll(active)
 		d.handlePRReviewPoll(active)
 		return
 	}
+
 	message := "pull request merged"
 	if err := d.setIssueStatus(active.ctx, active.task.Issue, IssueStateDone); err != nil {
 		message = fmt.Sprintf("pull request merged (failed to update Linear issue status: %v)", err)
@@ -847,6 +864,40 @@ func (d *Daemon) handlePRChecksPoll(active *assignment) {
 	if d.nudgeForCIFailure(active) {
 		active.lastCIState = ciStateFail
 	}
+}
+
+func (d *Daemon) handlePRMergeablePoll(active *assignment) {
+	state, ok, err := d.lookupPRMergeableState(active.ctx, active.prNumber)
+	if err != nil || !ok {
+		return
+	}
+
+	previousState := active.mergeableState()
+	if previousState == "CONFLICTING" || state != "CONFLICTING" {
+		active.setMergeableState(state)
+		return
+	}
+
+	if err := d.amux.SendKeys(active.ctx, active.pane.ID, conflictNudgePrompt); err != nil {
+		return
+	}
+
+	active.setMergeableState(state)
+
+	d.emit(active.ctx, Event{
+		Time:         d.now(),
+		Type:         EventWorkerNudgedConflict,
+		Project:      d.project,
+		Issue:        active.task.Issue,
+		PaneID:       active.pane.ID,
+		PaneName:     active.pane.Name,
+		CloneName:    active.clone.Name,
+		ClonePath:    active.clone.Path,
+		Branch:       active.task.Branch,
+		AgentProfile: active.profile.Name,
+		PRNumber:     active.prNumber,
+		Message:      strings.TrimSpace(conflictNudgePrompt),
+	})
 }
 
 func (d *Daemon) nudgeOrEscalate(active *assignment, reason string) {
@@ -1082,6 +1133,27 @@ func (d *Daemon) lookupPRChecksState(ctx context.Context, prNumber int) (string,
 
 func (d *Daemon) isPRMerged(ctx context.Context, prNumber int) (bool, error) {
 	return d.github.isPRMerged(ctx, prNumber)
+}
+
+func (d *Daemon) lookupPRMergeableState(ctx context.Context, prNumber int) (string, bool, error) {
+	output, err := d.commands.Run(ctx, d.project, "gh", "pr", "view", fmt.Sprintf("%d", prNumber), "--json", "mergeable")
+	if err != nil {
+		return "", false, err
+	}
+	if len(output) == 0 {
+		return "", false, nil
+	}
+
+	var payload struct {
+		Mergeable string `json:"mergeable"`
+	}
+	if err := json.Unmarshal(output, &payload); err != nil {
+		return "", false, err
+	}
+	if payload.Mergeable == "" {
+		return "", false, nil
+	}
+	return payload.Mergeable, true, nil
 }
 
 func (d *Daemon) lookupPRReviews(ctx context.Context, prNumber int) (prReviewPayload, bool, error) {
