@@ -1140,6 +1140,100 @@ func TestPRDetectionSyncsPaneMetadata(t *testing.T) {
 	})
 }
 
+func TestPRMergeablePollingNudgesWorkerOnConflictTransitions(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	captureTicker := newFakeTicker()
+	prTicker := newFakeTicker()
+	deps.tickers.enqueue(captureTicker, prTicker)
+	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergeable"}, `{"mergeable":"CONFLICTING"}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergeable"}, `{"mergeable":"CONFLICTING"}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergeable"}, `{"mergeable":"MERGEABLE"}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergeable"}, `{"mergeable":"CONFLICTING"}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision"}, ``, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision"}, ``, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision"}, ``, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision"}, ``, nil)
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-689", "Implement daemon core", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+	active, err := d.assignment("LAB-689")
+	if err != nil {
+		t.Fatalf("assignment() error = %v", err)
+	}
+
+	conflictNudge := "PR has merge conflicts, rebase onto origin/main and push.\n"
+
+	prTicker.tick(deps.clock.Now())
+	waitFor(t, "initial conflict nudge", func() bool {
+		return deps.amux.countKey("pane-1", conflictNudge) == 1 &&
+			assignmentStringField(active, "lastMergeableState") == "CONFLICTING"
+	})
+
+	prTicker.tick(deps.clock.Now())
+	waitFor(t, "conflicting state re-polled", func() bool {
+		return deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "mergeable"}) == 2
+	})
+	if got, want := deps.amux.countKey("pane-1", conflictNudge), 1; got != want {
+		t.Fatalf("conflict nudge count after repeated conflicting poll = %d, want %d", got, want)
+	}
+	if got, want := deps.events.countType("worker.nudged_conflict"), 1; got != want {
+		t.Fatalf("conflict nudge event count after repeated conflicting poll = %d, want %d", got, want)
+	}
+
+	prTicker.tick(deps.clock.Now())
+	waitFor(t, "mergeable state recovery", func() bool {
+		return deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "mergeable"}) == 3 &&
+			assignmentStringField(active, "lastMergeableState") == "MERGEABLE"
+	})
+	if got, want := deps.amux.countKey("pane-1", conflictNudge), 1; got != want {
+		t.Fatalf("conflict nudge count after recovery = %d, want %d", got, want)
+	}
+
+	prTicker.tick(deps.clock.Now())
+	waitFor(t, "conflict nudge after recovery", func() bool {
+		return deps.amux.countKey("pane-1", conflictNudge) == 2 &&
+			assignmentStringField(active, "lastMergeableState") == "CONFLICTING"
+	})
+
+	if got, want := deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "mergeable"}), 4; got != want {
+		t.Fatalf("mergeable poll count = %d, want %d", got, want)
+	}
+	if got, want := deps.events.countType("worker.nudged_conflict"), 2; got != want {
+		t.Fatalf("conflict nudge event count = %d, want %d", got, want)
+	}
+
+	deps.amux.requireSentKeys(t, "pane-1", []string{
+		"Implement daemon core\n",
+		conflictNudge,
+		conflictNudge,
+	})
+}
+
+func assignmentStringField(active *assignment, name string) string {
+	field := reflect.ValueOf(active).Elem().FieldByName(name)
+	if !field.IsValid() || field.Kind() != reflect.String {
+		return ""
+	}
+	return field.String()
+}
+
 func TestPRReviewPollingNudgesWorkerOncePerNewBlockingReviewBatch(t *testing.T) {
 	t.Parallel()
 
