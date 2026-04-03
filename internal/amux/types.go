@@ -3,6 +3,7 @@ package amux
 type Pane struct {
 	ID   string `json:"id,omitempty"`
 	Name string `json:"name,omitempty"`
+	CWD  string `json:"cwd,omitempty"`
 }
 
 type SpawnRequest struct {

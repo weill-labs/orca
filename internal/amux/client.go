@@ -17,6 +17,7 @@ var spawnPanePattern = regexp.MustCompile(`\bpane\s+(\S+)`)
 // Client wraps the amux CLI for daemon code and tests.
 type Client interface {
 	Spawn(ctx context.Context, req SpawnRequest) (Pane, error)
+	ListPanes(ctx context.Context) ([]Pane, error)
 	SendKeys(ctx context.Context, paneID string, keys ...string) error
 	Capture(ctx context.Context, paneID string) (string, error)
 	SetMetadata(ctx context.Context, paneID string, metadata map[string]string) error
@@ -53,6 +54,8 @@ type captureCommandError struct {
 }
 
 type capturePane struct {
+	Name    string               `json:"name,omitempty"`
+	CWD     string               `json:"cwd,omitempty"`
 	Content []string             `json:"content"`
 	Error   *captureCommandError `json:"error,omitempty"`
 }
@@ -120,6 +123,33 @@ func (c *CLIClient) Spawn(ctx context.Context, req SpawnRequest) (Pane, error) {
 	}, nil
 }
 
+// ListPanes returns all panes in the session, enriching each pane with its
+// exact cwd from per-pane JSON capture.
+func (c *CLIClient) ListPanes(ctx context.Context) ([]Pane, error) {
+	output, err := c.run(ctx, c.session, "list", "--no-cwd")
+	if err != nil {
+		return nil, err
+	}
+
+	panes, err := parsePaneList(string(output))
+	if err != nil {
+		return nil, err
+	}
+
+	for i := range panes {
+		capture, err := c.capturePane(ctx, panes[i].ID)
+		if err != nil {
+			return nil, fmt.Errorf("capture pane %s: %w", panes[i].ID, err)
+		}
+		if capture.Name != "" {
+			panes[i].Name = capture.Name
+		}
+		panes[i].CWD = capture.CWD
+	}
+
+	return panes, nil
+}
+
 // SendKeys forwards text to a pane with amux send-keys.
 // Extra keys arguments (e.g. "Enter") are passed as separate args.
 func (c *CLIClient) SendKeys(ctx context.Context, paneID string, keys ...string) error {
@@ -130,25 +160,10 @@ func (c *CLIClient) SendKeys(ctx context.Context, paneID string, keys ...string)
 
 // Capture returns the visible screen output for one pane.
 func (c *CLIClient) Capture(ctx context.Context, paneID string) (string, error) {
-	output, err := c.run(ctx, c.session, "capture", "--format", "json", paneID)
+	pane, err := c.capturePane(ctx, paneID)
 	if err != nil {
 		return "", err
 	}
-
-	var pane capturePane
-	if err := json.Unmarshal(output, &pane); err != nil {
-		return "", fmt.Errorf("parse capture json: %w", err)
-	}
-	if pane.Error != nil {
-		if pane.Error.Message != "" {
-			return "", fmt.Errorf("capture failed: %s", pane.Error.Message)
-		}
-		if pane.Error.Code != "" {
-			return "", fmt.Errorf("capture failed: %s", pane.Error.Code)
-		}
-		return "", fmt.Errorf("capture failed")
-	}
-
 	return strings.Join(pane.Content, "\n"), nil
 }
 
@@ -184,6 +199,29 @@ func (c *CLIClient) KillPane(ctx context.Context, paneID string) error {
 func (c *CLIClient) WaitIdle(ctx context.Context, paneID string, timeout time.Duration) error {
 	_, err := c.run(ctx, c.session, "wait", "idle", paneID, "--timeout", timeout.String())
 	return err
+}
+
+func (c *CLIClient) capturePane(ctx context.Context, paneID string) (capturePane, error) {
+	output, err := c.run(ctx, c.session, "capture", "--format", "json", paneID)
+	if err != nil {
+		return capturePane{}, err
+	}
+
+	var pane capturePane
+	if err := json.Unmarshal(output, &pane); err != nil {
+		return capturePane{}, fmt.Errorf("parse capture json: %w", err)
+	}
+	if pane.Error != nil {
+		if pane.Error.Message != "" {
+			return capturePane{}, fmt.Errorf("capture failed: %s", pane.Error.Message)
+		}
+		if pane.Error.Code != "" {
+			return capturePane{}, fmt.Errorf("capture failed: %s", pane.Error.Code)
+		}
+		return capturePane{}, fmt.Errorf("capture failed")
+	}
+
+	return pane, nil
 }
 
 func (c *CLIClient) run(ctx context.Context, session, subcommand string, extraArgs ...string) ([]byte, error) {
@@ -245,4 +283,57 @@ func commandError(binary string, args []string, output []byte, err error) error 
 		return fmt.Errorf("%s: %w: %s", commandString(binary, args), err, msg)
 	}
 	return fmt.Errorf("%s: %w", commandString(binary, args), err)
+}
+
+func parsePaneList(output string) ([]Pane, error) {
+	trimmed := strings.TrimRight(output, "\n")
+	if trimmed == "" || trimmed == "No panes." {
+		return nil, nil
+	}
+
+	lines := strings.Split(trimmed, "\n")
+	if len(lines) == 0 {
+		return nil, nil
+	}
+
+	header := lines[0]
+	nameColumn := strings.Index(header, "NAME")
+	hostColumn := strings.Index(header, "HOST")
+	if nameColumn <= 0 || hostColumn <= nameColumn {
+		return nil, fmt.Errorf("parse pane list header: %q", strings.TrimSpace(header))
+	}
+
+	panes := make([]Pane, 0, len(lines)-1)
+	for _, line := range lines[1:] {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+
+		paneID := strings.TrimSpace(columnSlice(line, 0, nameColumn))
+		paneID = strings.TrimPrefix(paneID, "*")
+		paneID = strings.TrimSpace(paneID)
+		if paneID == "" {
+			return nil, fmt.Errorf("parse pane id from list row: %q", strings.TrimSpace(line))
+		}
+
+		panes = append(panes, Pane{
+			ID:   paneID,
+			Name: strings.TrimSpace(columnSlice(line, nameColumn, hostColumn)),
+		})
+	}
+
+	return panes, nil
+}
+
+func columnSlice(line string, start, end int) string {
+	if start >= len(line) {
+		return ""
+	}
+	if end > len(line) {
+		end = len(line)
+	}
+	if end < start {
+		return ""
+	}
+	return line[start:end]
 }

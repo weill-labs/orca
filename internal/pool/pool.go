@@ -50,15 +50,20 @@ type Runner interface {
 	Run(ctx context.Context, dir, name string, args ...string) error
 }
 
+type CWDUsageChecker interface {
+	ActiveCWDs(ctx context.Context) ([]string, error)
+}
+
 type Option func(*Manager)
 
 type Manager struct {
-	project    string
-	pattern    string
-	baseBranch string
-	store      Store
-	runner     Runner
-	homeDir    string
+	project         string
+	pattern         string
+	baseBranch      string
+	store           Store
+	runner          Runner
+	homeDir         string
+	cwdUsageChecker CWDUsageChecker
 }
 
 func New(project string, cfg Config, store Store, opts ...Option) (*Manager, error) {
@@ -114,6 +119,12 @@ func WithHomeDir(homeDir string) Option {
 	}
 }
 
+func WithCWDUsageChecker(checker CWDUsageChecker) Option {
+	return func(manager *Manager) {
+		manager.cwdUsageChecker = checker
+	}
+}
+
 func (m *Manager) Discover(ctx context.Context) ([]Clone, error) {
 	paths, err := m.eligibleClonePaths()
 	if err != nil {
@@ -164,9 +175,16 @@ func (m *Manager) Allocate(ctx context.Context, taskID, issueBranch string) (Clo
 	if err != nil {
 		return Clone{}, err
 	}
+	activeCWDs, err := m.activeCWDSet(ctx)
+	if err != nil {
+		return Clone{}, fmt.Errorf("check active pane cwd usage: %w", err)
+	}
 
 	for _, clone := range clones {
 		if clone.Status != StatusFree {
+			continue
+		}
+		if _, ok := activeCWDs[clone.Path]; ok {
 			continue
 		}
 
@@ -202,6 +220,32 @@ func (m *Manager) Allocate(ctx context.Context, taskID, issueBranch string) (Clo
 	}
 
 	return Clone{}, ErrNoFreeClones
+}
+
+func (m *Manager) activeCWDSet(ctx context.Context) (map[string]struct{}, error) {
+	if m.cwdUsageChecker == nil {
+		return nil, nil
+	}
+
+	paths, err := m.cwdUsageChecker.ActiveCWDs(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	set := make(map[string]struct{}, len(paths))
+	for _, path := range paths {
+		if strings.TrimSpace(path) == "" {
+			continue
+		}
+
+		resolvedPath, err := resolveClonePath(path)
+		if err != nil {
+			return nil, err
+		}
+		set[resolvedPath] = struct{}{}
+	}
+
+	return set, nil
 }
 
 func (m *Manager) Release(ctx context.Context, path, taskBranch string) error {

@@ -85,6 +85,7 @@ type Pool interface {
 
 type AmuxClient interface {
 	Spawn(ctx context.Context, req SpawnRequest) (Pane, error)
+	ListPanes(ctx context.Context) ([]Pane, error)
 	SetMetadata(ctx context.Context, paneID string, metadata map[string]string) error
 	SendKeys(ctx context.Context, paneID string, keys ...string) error
 	Capture(ctx context.Context, paneID string) (string, error)
