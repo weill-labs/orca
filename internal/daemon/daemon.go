@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -27,6 +28,7 @@ type Daemon struct {
 	session           string
 	leadPane          string
 	pidPath           string
+	postmortemDir     string
 	config            ConfigProvider
 	state             StateStore
 	pool              Pool
@@ -40,9 +42,10 @@ type Daemon struct {
 	captureInterval   time.Duration
 	pollInterval      time.Duration
 	mergeGracePeriod  time.Duration
-	postmortemDir     string
 	postmortemWindow  time.Duration
 	postmortemTimeout time.Duration
+	sleep             func(context.Context, time.Duration) error
+	signalProcess     func(int, syscall.Signal) error
 
 	started     atomic.Bool
 	stopContext context.Context
@@ -100,6 +103,12 @@ func New(opts Options) (*Daemon, error) {
 	if opts.PostmortemTimeout <= 0 {
 		opts.PostmortemTimeout = defaultPostmortemTimeout
 	}
+	if opts.Sleep == nil {
+		opts.Sleep = sleepContext
+	}
+	if opts.SignalProcess == nil {
+		opts.SignalProcess = syscall.Kill
+	}
 	if opts.PIDPath == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
@@ -123,6 +132,7 @@ func New(opts Options) (*Daemon, error) {
 		session:           opts.Session,
 		leadPane:          opts.LeadPane,
 		pidPath:           opts.PIDPath,
+		postmortemDir:     opts.PostmortemDir,
 		config:            opts.Config,
 		state:             opts.State,
 		pool:              opts.Pool,
@@ -136,9 +146,10 @@ func New(opts Options) (*Daemon, error) {
 		captureInterval:   opts.CaptureInterval,
 		pollInterval:      opts.PollInterval,
 		mergeGracePeriod:  opts.MergeGracePeriod,
-		postmortemDir:     opts.PostmortemDir,
 		postmortemWindow:  opts.PostmortemWindow,
 		postmortemTimeout: opts.PostmortemTimeout,
+		sleep:             opts.Sleep,
+		signalProcess:     opts.SignalProcess,
 	}, nil
 }
 

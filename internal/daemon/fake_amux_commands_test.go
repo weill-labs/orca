@@ -28,6 +28,9 @@ type fakeAmux struct {
 	captures              map[string][]string
 	paneExistsCalls       []string
 	captureCalls          map[string]int
+	historyCaptures       map[string][]PaneCapture
+	historyCaptureCalls   map[string]int
+	historyCaptureErrors  map[string][]error
 	killCalls             []string
 	waitIdleCalls         []waitIdleCall
 }
@@ -154,6 +157,39 @@ func (a *fakeAmux) Capture(ctx context.Context, paneID string) (string, error) {
 	return value, nil
 }
 
+func (a *fakeAmux) CaptureHistory(ctx context.Context, paneID string) (PaneCapture, error) {
+	if a.rejectCanceledContext && ctx.Err() != nil {
+		return PaneCapture{}, ctx.Err()
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.historyCaptureCalls == nil {
+		a.historyCaptureCalls = make(map[string]int)
+	}
+	a.historyCaptureCalls[paneID]++
+	if errors := a.historyCaptureErrors[paneID]; len(errors) > 0 {
+		err := errors[0]
+		if len(errors) == 1 {
+			delete(a.historyCaptureErrors, paneID)
+		} else {
+			a.historyCaptureErrors[paneID] = errors[1:]
+		}
+		if err != nil {
+			return PaneCapture{}, err
+		}
+	}
+	sequence := a.historyCaptures[paneID]
+	if len(sequence) == 0 {
+		return PaneCapture{}, nil
+	}
+	if len(sequence) == 1 {
+		return clonePaneCapture(sequence[0]), nil
+	}
+	value := clonePaneCapture(sequence[0])
+	a.historyCaptures[paneID] = append([]PaneCapture(nil), sequence[1:]...)
+	return value, nil
+}
+
 func (a *fakeAmux) KillPane(ctx context.Context, paneID string) error {
 	if a.rejectCanceledContext && ctx.Err() != nil {
 		return ctx.Err()
@@ -185,6 +221,29 @@ func (a *fakeAmux) captureSequence(paneID string, sequence []string) {
 	a.captures[paneID] = copied
 }
 
+func (a *fakeAmux) captureHistorySequence(paneID string, sequence []PaneCapture) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	copied := make([]PaneCapture, len(sequence))
+	for i, capture := range sequence {
+		copied[i] = clonePaneCapture(capture)
+	}
+	if a.historyCaptures == nil {
+		a.historyCaptures = make(map[string][]PaneCapture)
+	}
+	a.historyCaptures[paneID] = copied
+}
+
+func (a *fakeAmux) captureHistoryErrors(paneID string, errs []error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	copied := append([]error(nil), errs...)
+	if a.historyCaptureErrors == nil {
+		a.historyCaptureErrors = make(map[string][]error)
+	}
+	a.historyCaptureErrors[paneID] = copied
+}
+
 func (a *fakeAmux) countKey(paneID, key string) int {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -201,6 +260,12 @@ func (a *fakeAmux) captureCount(paneID string) int {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.captureCalls[paneID]
+}
+
+func (a *fakeAmux) captureHistoryCount(paneID string) int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.historyCaptureCalls[paneID]
 }
 
 func (a *fakeAmux) requireMetadata(t *testing.T, paneID string, want map[string]string) {
@@ -240,6 +305,15 @@ func normalizeSentKeys(keys ...string) []string {
 		normalized = append(normalized, key)
 	}
 	return normalized
+}
+
+func clonePaneCapture(capture PaneCapture) PaneCapture {
+	return PaneCapture{
+		Content:        append([]string(nil), capture.Content...),
+		CWD:            capture.CWD,
+		CurrentCommand: capture.CurrentCommand,
+		ChildPIDs:      append([]int(nil), capture.ChildPIDs...),
+	}
 }
 
 type fakeCommands struct {

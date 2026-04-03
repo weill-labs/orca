@@ -1,5 +1,7 @@
 package amux
 
+import "strings"
+
 type Pane struct {
 	ID   string `json:"id,omitempty"`
 	Name string `json:"name,omitempty"`
@@ -12,4 +14,15 @@ type SpawnRequest struct {
 	Name    string `json:"name,omitempty"`
 	CWD     string `json:"cwd,omitempty"`
 	Command string `json:"command,omitempty"`
+}
+
+type PaneCapture struct {
+	Content        []string `json:"content,omitempty"`
+	CWD            string   `json:"cwd,omitempty"`
+	CurrentCommand string   `json:"current_command,omitempty"`
+	ChildPIDs      []int    `json:"child_pids,omitempty"`
+}
+
+func (c PaneCapture) Output() string {
+	return strings.Join(c.Content, "\n")
 }

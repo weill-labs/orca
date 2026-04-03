@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -23,9 +24,18 @@ type testDeps struct {
 	tickers       *fakeTickerFactory
 	pidPath       string
 	postmortemDir string
+
+	mu      sync.Mutex
+	signals []signalCall
+	sleeps  []time.Duration
 }
 
 func noSleep(context.Context, time.Duration) error { return nil }
+
+type signalCall struct {
+	PID    int
+	Signal syscall.Signal
+}
 
 func newTestDeps(t *testing.T) *testDeps {
 	t.Helper()
@@ -83,6 +93,8 @@ func (d *testDeps) newDaemon(t *testing.T) *Daemon {
 		PollInterval:     30 * time.Second,
 		MergeGracePeriod: 2 * time.Minute,
 		PostmortemDir:    d.postmortemDir,
+		Sleep:            d.recordSleep,
+		SignalProcess:    d.recordSignal,
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -95,6 +107,32 @@ func (d *testDeps) newDaemon(t *testing.T) *Daemon {
 		maxAttempts: 1,
 	})
 	return daemon
+}
+
+func (d *testDeps) recordSignal(pid int, signal syscall.Signal) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.signals = append(d.signals, signalCall{PID: pid, Signal: signal})
+	return nil
+}
+
+func (d *testDeps) recordSleep(_ context.Context, delay time.Duration) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.sleeps = append(d.sleeps, delay)
+	return nil
+}
+
+func (d *testDeps) signalCalls() []signalCall {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]signalCall(nil), d.signals...)
+}
+
+func (d *testDeps) sleepCalls() []time.Duration {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]time.Duration(nil), d.sleeps...)
 }
 
 func waitFor(t *testing.T, name string, condition func() bool) {

@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"syscall"
 	"time"
 
 	"github.com/weill-labs/orca/internal/amux"
@@ -75,6 +76,8 @@ type Options struct {
 	PostmortemDir     string
 	PostmortemWindow  time.Duration
 	PostmortemTimeout time.Duration
+	Sleep             func(context.Context, time.Duration) error
+	SignalProcess     func(int, syscall.Signal) error
 }
 
 type ConfigProvider interface {
@@ -112,6 +115,7 @@ type AmuxClient interface {
 	SetMetadata(ctx context.Context, paneID string, metadata map[string]string) error
 	SendKeys(ctx context.Context, paneID string, keys ...string) error
 	Capture(ctx context.Context, paneID string) (string, error)
+	CaptureHistory(ctx context.Context, paneID string) (PaneCapture, error)
 	KillPane(ctx context.Context, paneID string) error
 	WaitIdle(ctx context.Context, paneID string, timeout time.Duration) error
 }
@@ -140,12 +144,14 @@ type AgentProfile struct {
 	PostmortemEnabled bool
 	StuckTextPatterns []string
 	StuckTimeout      time.Duration
+	GoBased           bool
 	NudgeCommand      string
 	MaxNudgeRetries   int
 }
 
 type Clone = pool.Clone
 type Pane = amux.Pane
+type PaneCapture = amux.PaneCapture
 type SpawnRequest = amux.SpawnRequest
 
 type Task struct {

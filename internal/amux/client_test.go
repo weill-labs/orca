@@ -458,10 +458,10 @@ func TestParsePaneList(t *testing.T) {
 	header := fmt.Sprintf("%-6s %-20s %-15s %-30s %-9s %-10s %-12s %s", "PANE", "NAME", "HOST", "BRANCH", "IDLE", "WINDOW", "TASK", "META")
 
 	tests := []struct {
-		name     string
-		output   string
-		want     []Pane
-		wantErr  string
+		name    string
+		output  string
+		want    []Pane
+		wantErr string
 	}{
 		{
 			name:   "returns nil for no panes banner",
@@ -661,6 +661,83 @@ func TestCLIClientCapture(t *testing.T) {
 
 			if gotOutput != tt.wantOutput {
 				t.Fatalf("Capture() output = %q, want %q", gotOutput, tt.wantOutput)
+			}
+		})
+	}
+}
+
+func TestCLIClientCaptureHistory(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeRunner{
+		output: []byte(`{"id":9,"name":"worker-1","content":["line one","line two"],"cwd":"/tmp/clone-01","current_command":"codex","child_pids":[4242]}`),
+	}
+	client := newTestClient(Config{Session: "orca-dev"}, runner)
+
+	got, err := client.CaptureHistory(context.Background(), "pane-9")
+	if err != nil {
+		t.Fatalf("CaptureHistory() error = %v", err)
+	}
+
+	wantCmd := recordedCommand{
+		name: "amux",
+		args: []string{
+			"-s", "orca-dev",
+			"capture",
+			"--history",
+			"--format", "json",
+			"pane-9",
+		},
+	}
+	if !reflect.DeepEqual(runner.calls, []recordedCommand{wantCmd}) {
+		t.Fatalf("CaptureHistory() commands = %#v, want %#v", runner.calls, []recordedCommand{wantCmd})
+	}
+
+	if got.Output() != "line one\nline two" {
+		t.Fatalf("CaptureHistory() output = %q, want %q", got.Output(), "line one\nline two")
+	}
+	if got.CWD != "/tmp/clone-01" {
+		t.Fatalf("CaptureHistory() cwd = %q, want %q", got.CWD, "/tmp/clone-01")
+	}
+	if got.CurrentCommand != "codex" {
+		t.Fatalf("CaptureHistory() current command = %q, want %q", got.CurrentCommand, "codex")
+	}
+	if !reflect.DeepEqual(got.ChildPIDs, []int{4242}) {
+		t.Fatalf("CaptureHistory() child pids = %#v, want %#v", got.ChildPIDs, []int{4242})
+	}
+}
+
+func TestCLIClientCaptureHistorySurfacesEmbeddedErrorVariants(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		output  string
+		wantErr string
+	}{
+		{
+			name:    "uses error code when message missing",
+			output:  `{"error":{"code":"not_found"}}`,
+			wantErr: "capture failed: not_found",
+		},
+		{
+			name:    "falls back to generic capture failed",
+			output:  `{"error":{}}`,
+			wantErr: "capture failed",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			runner := &fakeRunner{output: []byte(tt.output)}
+			client := newTestClient(Config{Session: "orca-dev"}, runner)
+
+			_, err := client.CaptureHistory(context.Background(), "pane-9")
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("CaptureHistory() error = %v, want substring %q", err, tt.wantErr)
 			}
 		})
 	}
