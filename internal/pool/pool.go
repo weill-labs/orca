@@ -15,6 +15,9 @@ import (
 
 const markerFile = ".orca-pool"
 
+// MarkerFile names the file that marks a clone as eligible for the pool.
+const MarkerFile = markerFile
+
 var ErrNoFreeClones = errors.New("pool: no free clones available")
 
 type Status string
@@ -179,8 +182,9 @@ func (m *Manager) Allocate(ctx context.Context, taskID, issueBranch string) (Clo
 			freeErr := m.store.MarkCloneFree(ctx, m.project, clone.Path)
 			if freeErr != nil {
 				err = errors.Join(err, freeErr)
+				return Clone{}, fmt.Errorf("health check clone %q: %w", clone.Path, err)
 			}
-			return Clone{}, fmt.Errorf("health check clone %q: %w", clone.Path, err)
+			continue
 		}
 
 		if err := m.prepareClone(ctx, clone.Path, issueBranch); err != nil {
