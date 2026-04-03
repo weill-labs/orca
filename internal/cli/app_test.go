@@ -338,11 +338,11 @@ func TestAppRunParseErrors(t *testing.T) {
 }
 
 type fakeDaemon struct {
-	startRequest  *daemon.StartRequest
-	stopRequest   *daemon.StopRequest
-	assignRequest *daemon.AssignRequest
+	startRequest   *daemon.StartRequest
+	stopRequest    *daemon.StopRequest
+	assignRequest  *daemon.AssignRequest
 	enqueueRequest *daemon.EnqueueRequest
-	cancelRequest *daemon.CancelRequest
+	cancelRequest  *daemon.CancelRequest
 
 	startResult   daemon.StartResult
 	stopResult    daemon.StopResult

@@ -24,6 +24,7 @@ type Controller interface {
 	Start(ctx context.Context, req StartRequest) (StartResult, error)
 	Stop(ctx context.Context, req StopRequest) (StopResult, error)
 	Assign(ctx context.Context, req AssignRequest) (TaskActionResult, error)
+	Enqueue(ctx context.Context, req EnqueueRequest) (MergeQueueActionResult, error)
 	Cancel(ctx context.Context, req CancelRequest) (TaskActionResult, error)
 }
 
@@ -77,11 +78,24 @@ type CancelRequest struct {
 	Issue   string
 }
 
+type EnqueueRequest struct {
+	Project  string
+	PRNumber int
+}
+
 type TaskActionResult struct {
 	Project   string    `json:"project"`
 	Issue     string    `json:"issue"`
 	Status    string    `json:"status"`
 	Agent     string    `json:"agent,omitempty"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+type MergeQueueActionResult struct {
+	Project   string    `json:"project"`
+	PRNumber  int       `json:"pr_number"`
+	Status    string    `json:"status"`
+	Position  int       `json:"position"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
@@ -298,6 +312,28 @@ func (c *LocalController) Assign(ctx context.Context, req AssignRequest) (TaskAc
 	}, &result)
 	if err != nil {
 		return TaskActionResult{}, err
+	}
+	return result, nil
+}
+
+func (c *LocalController) Enqueue(ctx context.Context, req EnqueueRequest) (MergeQueueActionResult, error) {
+	projectPath, err := project.CanonicalPath(req.Project)
+	if err != nil {
+		return MergeQueueActionResult{}, err
+	}
+	if err := c.requireRunning(ctx, projectPath); err != nil {
+		return MergeQueueActionResult{}, err
+	}
+
+	callCtx, cancel := contextWithOptionalTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	var result MergeQueueActionResult
+	err = callRPC(callCtx, c.paths.socketFile(projectPath), "enqueue", enqueueRPCParams{
+		PRNumber: req.PRNumber,
+	}, &result)
+	if err != nil {
+		return MergeQueueActionResult{}, err
 	}
 	return result, nil
 }

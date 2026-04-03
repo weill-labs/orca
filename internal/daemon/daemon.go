@@ -18,6 +18,7 @@ const (
 	defaultAgentHandshakeTimeout = 30 * time.Second
 	defaultPollInterval          = 30 * time.Second
 	defaultMergeGracePeriod      = 10 * time.Minute
+	mergeQueueChecksIntervalSecs = "10"
 	mergedWrapUpPrompt           = "PR merged, wrap up.\n"
 )
 
@@ -43,6 +44,10 @@ type Daemon struct {
 	stopContext context.Context
 	stopCancel  context.CancelFunc
 	assignments map[string]*assignment
+	mergeQueue  []int
+	mergeQueued map[int]struct{}
+	activeMerge int
+	mergeBusy   bool
 	wg          sync.WaitGroup
 }
 
@@ -150,6 +155,7 @@ func New(opts Options) (*Daemon, error) {
 		pollInterval:     opts.PollInterval,
 		mergeGracePeriod: opts.MergeGracePeriod,
 		assignments:      make(map[string]*assignment),
+		mergeQueued:      make(map[int]struct{}),
 	}, nil
 }
 
@@ -451,6 +457,64 @@ func (d *Daemon) Cancel(ctx context.Context, issue string) error {
 	return d.finishAssignment(ctx, active, TaskStatusCancelled, EventTaskCancelled, false)
 }
 
+func (d *Daemon) Enqueue(ctx context.Context, prNumber int) (MergeQueueActionResult, error) {
+	if err := d.requireStarted(); err != nil {
+		return MergeQueueActionResult{}, err
+	}
+
+	active, err := d.assignmentByPRNumber(prNumber)
+	if err != nil {
+		return MergeQueueActionResult{}, err
+	}
+
+	now := d.now()
+
+	d.mu.Lock()
+	if _, exists := d.mergeQueued[prNumber]; exists {
+		d.mu.Unlock()
+		return MergeQueueActionResult{}, fmt.Errorf("PR #%d is already queued for landing", prNumber)
+	}
+	d.mergeQueue = append(d.mergeQueue, prNumber)
+	d.mergeQueued[prNumber] = struct{}{}
+	position := len(d.mergeQueue)
+	if d.activeMerge != 0 {
+		position++
+	}
+	shouldStart := !d.mergeBusy
+	if shouldStart {
+		d.mergeBusy = true
+	}
+	d.mu.Unlock()
+
+	d.emit(ctx, Event{
+		Time:         now,
+		Type:         EventPREnqueued,
+		Project:      d.project,
+		Issue:        active.task.Issue,
+		PaneID:       active.pane.ID,
+		PaneName:     active.pane.Name,
+		CloneName:    active.clone.Name,
+		ClonePath:    active.clone.Path,
+		Branch:       active.task.Branch,
+		AgentProfile: active.profile.Name,
+		PRNumber:     prNumber,
+		Message:      "pull request queued for landing",
+	})
+
+	if shouldStart {
+		d.wg.Add(1)
+		go d.processMergeQueue()
+	}
+
+	return MergeQueueActionResult{
+		Project:   d.project,
+		PRNumber:  prNumber,
+		Status:    "queued",
+		Position:  position,
+		UpdatedAt: now,
+	}, nil
+}
+
 func (d *Daemon) monitorAssignment(active *assignment) {
 	defer d.wg.Done()
 	defer active.captureTick.Stop()
@@ -466,6 +530,116 @@ func (d *Daemon) monitorAssignment(active *assignment) {
 			d.handlePRPoll(active)
 		}
 	}
+}
+
+func (d *Daemon) processMergeQueue() {
+	defer d.wg.Done()
+
+	for {
+		prNumber, active, ok := d.nextQueuedPR()
+		if !ok {
+			return
+		}
+		d.processQueuedPR(prNumber, active)
+		d.completeQueuedPR(prNumber)
+	}
+}
+
+func (d *Daemon) nextQueuedPR() (int, *assignment, bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if len(d.mergeQueue) == 0 {
+		d.mergeBusy = false
+		return 0, nil, false
+	}
+
+	prNumber := d.mergeQueue[0]
+	d.mergeQueue = d.mergeQueue[1:]
+	d.activeMerge = prNumber
+	return prNumber, d.assignmentByPRNumberLocked(prNumber), true
+}
+
+func (d *Daemon) completeQueuedPR(prNumber int) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	delete(d.mergeQueued, prNumber)
+	if d.activeMerge == prNumber {
+		d.activeMerge = 0
+	}
+}
+
+func (d *Daemon) processQueuedPR(prNumber int, active *assignment) {
+	ctx := d.mergeQueueContext()
+	if active == nil {
+		if ctx.Err() != nil {
+			return
+		}
+		d.emit(ctx, Event{
+			Time:     d.now(),
+			Type:     EventPRLandingFailed,
+			Project:  d.project,
+			PRNumber: prNumber,
+			Message:  fmt.Sprintf("PR #%d is no longer tracked by an active assignment", prNumber),
+		})
+		return
+	}
+
+	d.emit(ctx, Event{
+		Time:         d.now(),
+		Type:         EventPRLandingStarted,
+		Project:      d.project,
+		Issue:        active.task.Issue,
+		PaneID:       active.pane.ID,
+		PaneName:     active.pane.Name,
+		CloneName:    active.clone.Name,
+		ClonePath:    active.clone.Path,
+		Branch:       active.task.Branch,
+		AgentProfile: active.profile.Name,
+		PRNumber:     prNumber,
+		Message:      "processing queued PR landing",
+	})
+
+	if err := d.rebaseQueuedPR(ctx, prNumber); err != nil {
+		d.handleQueuedPRFailure(ctx, active, prNumber, mergeQueueRebaseConflictPrompt(prNumber), err)
+		return
+	}
+	if err := d.waitForQueuedPRChecks(ctx, prNumber); err != nil {
+		d.handleQueuedPRFailure(ctx, active, prNumber, mergeQueueChecksFailedPrompt(prNumber), err)
+		return
+	}
+	if err := d.mergeQueuedPR(ctx, prNumber); err != nil {
+		d.handleQueuedPRFailure(ctx, active, prNumber, mergeQueueMergeFailedPrompt(prNumber), err)
+	}
+}
+
+func (d *Daemon) handleQueuedPRFailure(ctx context.Context, active *assignment, prNumber int, prompt string, err error) {
+	if ctx.Err() != nil {
+		return
+	}
+
+	_ = d.amux.SendKeys(ctx, active.pane.ID, ensureTrailingNewline(prompt))
+	d.emit(ctx, Event{
+		Time:         d.now(),
+		Type:         EventPRLandingFailed,
+		Project:      d.project,
+		Issue:        active.task.Issue,
+		PaneID:       active.pane.ID,
+		PaneName:     active.pane.Name,
+		CloneName:    active.clone.Name,
+		ClonePath:    active.clone.Path,
+		Branch:       active.task.Branch,
+		AgentProfile: active.profile.Name,
+		PRNumber:     prNumber,
+		Message:      err.Error(),
+	})
+}
+
+func (d *Daemon) mergeQueueContext() context.Context {
+	if d.stopContext != nil {
+		return d.stopContext
+	}
+	return context.Background()
 }
 
 func (d *Daemon) handleCapture(active *assignment) {
@@ -755,6 +929,21 @@ func (d *Daemon) cleanupClone(ctx context.Context, clonePath, branch string) err
 	return result
 }
 
+func (d *Daemon) rebaseQueuedPR(ctx context.Context, prNumber int) error {
+	_, err := d.commands.Run(ctx, d.project, "gh", "pr", "update-branch", fmt.Sprintf("%d", prNumber), "--rebase")
+	return err
+}
+
+func (d *Daemon) waitForQueuedPRChecks(ctx context.Context, prNumber int) error {
+	_, err := d.commands.Run(ctx, d.project, "gh", "pr", "checks", fmt.Sprintf("%d", prNumber), "--required", "--watch", "--fail-fast", "--interval", mergeQueueChecksIntervalSecs)
+	return err
+}
+
+func (d *Daemon) mergeQueuedPR(ctx context.Context, prNumber int) error {
+	_, err := d.commands.Run(ctx, d.project, "gh", "pr", "merge", fmt.Sprintf("%d", prNumber), "--squash")
+	return err
+}
+
 func (d *Daemon) lookupPRNumber(ctx context.Context, branch string) (int, error) {
 	output, err := d.commands.Run(ctx, d.project, "gh", "pr", "list", "--head", branch, "--json", "number")
 	if err != nil {
@@ -855,6 +1044,29 @@ func (d *Daemon) assignment(issue string) (*assignment, error) {
 	return active, nil
 }
 
+func (d *Daemon) assignmentByPRNumber(prNumber int) (*assignment, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	active := d.assignmentByPRNumberLocked(prNumber)
+	if active == nil {
+		return nil, fmt.Errorf("PR #%d is not associated with an active assignment", prNumber)
+	}
+	return active, nil
+}
+
+func (d *Daemon) assignmentByPRNumberLocked(prNumber int) *assignment {
+	for _, active := range d.assignments {
+		if active.pending {
+			continue
+		}
+		if active.prNumber == prNumber {
+			return active
+		}
+	}
+	return nil
+}
+
 func (d *Daemon) requireStarted() error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -927,4 +1139,16 @@ func normalizeReviewBody(body string) string {
 		return "requested changes without a review body."
 	}
 	return strings.Join(strings.Fields(trimmed), " ")
+}
+
+func mergeQueueRebaseConflictPrompt(prNumber int) string {
+	return fmt.Sprintf("Merge queue could not rebase PR #%d onto main. Resolve the conflicts, push an update, and re-run `orca enqueue %d` when ready.\n", prNumber, prNumber)
+}
+
+func mergeQueueChecksFailedPrompt(prNumber int) string {
+	return fmt.Sprintf("Merge queue rebased PR #%d onto main, but required checks did not pass. Fix the branch, push an update, and re-run `orca enqueue %d` when ready.\n", prNumber, prNumber)
+}
+
+func mergeQueueMergeFailedPrompt(prNumber int) string {
+	return fmt.Sprintf("Merge queue could not land PR #%d after verification. Check the PR state, push an update if needed, and re-run `orca enqueue %d` when ready.\n", prNumber, prNumber)
 }

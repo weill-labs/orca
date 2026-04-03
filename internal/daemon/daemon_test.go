@@ -833,6 +833,10 @@ func TestEnqueueSerializesQueuedPRLandingsFIFO(t *testing.T) {
 	t.Parallel()
 
 	deps := newTestDeps(t)
+	deps.pool.clones = []Clone{
+		deps.pool.clone,
+		{Name: "clone-02", Path: filepath.Join(t.TempDir(), "clone-02")},
+	}
 	deps.tickers.enqueue(newFakeTicker(), newFakeTicker(), newFakeTicker(), newFakeTicker())
 	d := deps.newDaemon(t)
 	ctx := context.Background()
@@ -873,7 +877,7 @@ func TestEnqueueSerializesQueuedPRLandingsFIFO(t *testing.T) {
 	deps.commands.queue("gh", []string{"pr", "checks", "43", "--required", "--watch", "--fail-fast", "--interval", "10"}, ``, nil)
 	deps.commands.queue("gh", []string{"pr", "merge", "43", "--squash"}, ``, nil)
 
-	if err := d.Enqueue(ctx, 42); err != nil {
+	if _, err := d.Enqueue(ctx, 42); err != nil {
 		t.Fatalf("Enqueue(42) error = %v", err)
 	}
 
@@ -883,7 +887,7 @@ func TestEnqueueSerializesQueuedPRLandingsFIFO(t *testing.T) {
 		t.Fatal("timed out waiting for first queued PR checks to start")
 	}
 
-	if err := d.Enqueue(ctx, 43); err != nil {
+	if _, err := d.Enqueue(ctx, 43); err != nil {
 		t.Fatalf("Enqueue(43) error = %v", err)
 	}
 
@@ -937,7 +941,7 @@ func TestEnqueueNotifiesWorkerWhenRebaseFailsAndAllowsRequeue(t *testing.T) {
 
 	deps.commands.queue("gh", []string{"pr", "update-branch", "42", "--rebase"}, ``, errors.New("rebase conflict"))
 
-	if err := d.Enqueue(ctx, 42); err != nil {
+	if _, err := d.Enqueue(ctx, 42); err != nil {
 		t.Fatalf("Enqueue(42) error = %v", err)
 	}
 
@@ -954,7 +958,7 @@ func TestEnqueueNotifiesWorkerWhenRebaseFailsAndAllowsRequeue(t *testing.T) {
 	deps.commands.queue("gh", []string{"pr", "checks", "42", "--required", "--watch", "--fail-fast", "--interval", "10"}, ``, nil)
 	deps.commands.queue("gh", []string{"pr", "merge", "42", "--squash"}, ``, nil)
 
-	if err := d.Enqueue(ctx, 42); err != nil {
+	if _, err := d.Enqueue(ctx, 42); err != nil {
 		t.Fatalf("Enqueue(42) after conflict error = %v", err)
 	}
 
@@ -977,7 +981,7 @@ func TestEnqueueRejectsPRsThatAreNotTrackedByActiveAssignments(t *testing.T) {
 		_ = d.Stop(context.Background())
 	})
 
-	if err := d.Enqueue(ctx, 42); err == nil {
+	if _, err := d.Enqueue(ctx, 42); err == nil {
 		t.Fatal("Enqueue(42) succeeded, want error")
 	} else if !strings.Contains(err.Error(), "active assignment") {
 		t.Fatalf("Enqueue(42) error = %v, want active assignment error", err)
@@ -1223,7 +1227,8 @@ type fakePool struct {
 	acquireRelease        chan struct{}
 	acquireCalls          int
 	clone                 Clone
-	acquired              bool
+	clones                []Clone
+	acquired              map[string]bool
 	released              []Clone
 }
 
@@ -1248,11 +1253,17 @@ func (p *fakePool) Acquire(ctx context.Context, project, issue string) (Clone, e
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.acquired {
-		return Clone{}, errors.New("clone already acquired")
+	for _, clone := range p.availableClones() {
+		if p.acquired == nil {
+			p.acquired = make(map[string]bool)
+		}
+		if p.acquired[clone.Path] {
+			continue
+		}
+		p.acquired[clone.Path] = true
+		return clone, nil
 	}
-	p.acquired = true
-	return p.clone, nil
+	return Clone{}, errors.New("clone already acquired")
 }
 
 func (p *fakePool) Release(ctx context.Context, project string, clone Clone) error {
@@ -1261,9 +1272,18 @@ func (p *fakePool) Release(ctx context.Context, project string, clone Clone) err
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.acquired = false
+	if p.acquired != nil {
+		delete(p.acquired, clone.Path)
+	}
 	p.released = append(p.released, clone)
 	return nil
+}
+
+func (p *fakePool) availableClones() []Clone {
+	if len(p.clones) > 0 {
+		return p.clones
+	}
+	return []Clone{p.clone}
 }
 
 func (p *fakePool) acquireCallCount() int {
@@ -1456,9 +1476,9 @@ func normalizeSentKeys(keys ...string) []string {
 }
 
 type fakeCommands struct {
-	mu     sync.Mutex
-	calls  []commandCall
-	queued map[string][]commandResult
+	mu      sync.Mutex
+	calls   []commandCall
+	queued  map[string][]commandResult
 	blocked map[string]commandBlock
 }
 

@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -26,6 +27,7 @@ commands:
   stop     Stop the orca daemon
   status   Show daemon and task status
   assign   Assign an issue to a worker
+  enqueue  Queue a PR for serialized landing
   cancel   Cancel a task
   workers  List workers and their state
   pool     List clone pool status
@@ -88,6 +90,8 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.runStatus(ctx, args[1:])
 	case "assign":
 		return a.runAssign(ctx, args[1:])
+	case "enqueue":
+		return a.runEnqueue(ctx, args[1:])
 	case "cancel":
 		return a.runCancel(ctx, args[1:])
 	case "workers":
@@ -250,6 +254,42 @@ func (a *App) runAssign(ctx context.Context, args []string) error {
 	}
 
 	_, err = fmt.Fprintf(a.stdout, "%s assigned to %s\n", result.Issue, result.Agent)
+	return err
+}
+
+func (a *App) runEnqueue(ctx context.Context, args []string) error {
+	fs := newFlagSet("enqueue")
+	var jsonOutput bool
+	fs.BoolVar(&jsonOutput, "json", false, "emit JSON output")
+
+	rawPR, err := parseRequiredSinglePositional(fs, args, "enqueue requires PR_NUMBER")
+	if err != nil {
+		return err
+	}
+
+	prNumber, err := strconv.Atoi(strings.TrimSpace(rawPR))
+	if err != nil || prNumber <= 0 {
+		return fmt.Errorf("enqueue requires numeric PR_NUMBER")
+	}
+
+	projectPath, err := a.resolveProject("")
+	if err != nil {
+		return err
+	}
+
+	result, err := a.daemon.Enqueue(ctx, daemon.EnqueueRequest{
+		Project:  projectPath,
+		PRNumber: prNumber,
+	})
+	if err != nil {
+		return err
+	}
+
+	if jsonOutput {
+		return writeJSON(a.stdout, result)
+	}
+
+	_, err = fmt.Fprintf(a.stdout, "queued PR #%d for landing at position %d\n", result.PRNumber, result.Position)
 	return err
 }
 
