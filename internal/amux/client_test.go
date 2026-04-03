@@ -62,7 +62,7 @@ func TestCLIClientSpawn(t *testing.T) {
 			},
 			output: "Spawned clone-01 in pane 7\n",
 			wantCmds: []recordedCommand{
-				{name: "/usr/local/bin/amux", args: []string{"-s", "override-session", "spawn", "--name", "clone-01"}},
+				{name: "/usr/local/bin/amux", args: []string{"-s", "override-session", "spawn", "--name", "clone-01", "--root", "--horizontal"}},
 				{name: "/usr/local/bin/amux", args: []string{"-s", "orca-dev", "send-keys", "7", "cd '/tmp/clone-01'"}},
 				{name: "/usr/local/bin/amux", args: []string{"-s", "orca-dev", "send-keys", "7", "Enter"}},
 				{name: "/usr/local/bin/amux", args: []string{"-s", "orca-dev", "wait", "idle", "7", "--timeout", "5s"}},
@@ -82,7 +82,7 @@ func TestCLIClientSpawn(t *testing.T) {
 			},
 			output: "Spawned worker-2 in pane 12\n",
 			wantCmds: []recordedCommand{
-				{name: "amux", args: []string{"-s", "default", "spawn", "--name", "worker-2"}},
+				{name: "amux", args: []string{"-s", "default", "spawn", "--name", "worker-2", "--root", "--horizontal"}},
 				{name: "amux", args: []string{"-s", "default", "send-keys", "12", "cd '/tmp/worker-2'"}},
 				{name: "amux", args: []string{"-s", "default", "send-keys", "12", "Enter"}},
 				{name: "amux", args: []string{"-s", "default", "wait", "idle", "12", "--timeout", "5s"}},
@@ -92,7 +92,7 @@ func TestCLIClientSpawn(t *testing.T) {
 			wantPane: Pane{ID: "12", Name: "worker-2"},
 		},
 		{
-			name: "splits from parent pane when AtPane is set",
+			name: "ignores AtPane and uses root horizontal worker spawn",
 			config: Config{
 				Session: "main",
 			},
@@ -104,7 +104,7 @@ func TestCLIClientSpawn(t *testing.T) {
 			},
 			output: "Split horizontal: new pane worker-LAB-99\n",
 			wantCmds: []recordedCommand{
-				{name: "amux", args: []string{"-s", "main", "spawn", "--name", "worker-LAB-99", "--at", "lead-pane", "--horizontal"}},
+				{name: "amux", args: []string{"-s", "main", "spawn", "--name", "worker-LAB-99", "--root", "--horizontal"}},
 				{name: "amux", args: []string{"-s", "main", "send-keys", "worker-LAB-99", "cd '/tmp/clone-5'"}},
 				{name: "amux", args: []string{"-s", "main", "send-keys", "worker-LAB-99", "Enter"}},
 				{name: "amux", args: []string{"-s", "main", "wait", "idle", "worker-LAB-99", "--timeout", "5s"}},
@@ -123,7 +123,7 @@ func TestCLIClientSpawn(t *testing.T) {
 			},
 			runErr: errors.New("exit status 1"),
 			wantCmds: []recordedCommand{
-				{name: "amux", args: []string{"-s", "default", "spawn", "--name", "worker-3"}},
+				{name: "amux", args: []string{"-s", "default", "spawn", "--name", "worker-3", "--root", "--horizontal"}},
 			},
 			wantErr: "exit status 1",
 		},
@@ -137,7 +137,7 @@ func TestCLIClientSpawn(t *testing.T) {
 			},
 			output: "Spawned worker-4\n",
 			wantCmds: []recordedCommand{
-				{name: "amux", args: []string{"-s", "default", "spawn", "--name", "worker-4"}},
+				{name: "amux", args: []string{"-s", "default", "spawn", "--name", "worker-4", "--root", "--horizontal"}},
 			},
 			wantErr: "parse pane id",
 		},
