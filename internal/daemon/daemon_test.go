@@ -121,7 +121,7 @@ func TestAssignAllocatesCloneStartsAgentAndRegistersState(t *testing.T) {
 		"issue":         "LAB-689",
 		"task":          "LAB-689",
 	})
-	deps.amux.requireSentKeys(t, "pane-1", []string{"Implement daemon core", "Enter"})
+	deps.amux.requireSentKeys(t, "pane-1", []string{"Implement daemon core\n"})
 
 	deps.events.requireTypes(t, EventDaemonStarted, EventTaskAssigned)
 }
@@ -151,7 +151,7 @@ func TestAssignConfirmsCodexTrustPromptBeforeSendingPrompt(t *testing.T) {
 		return ok && task.Status == TaskStatusActive
 	})
 
-	deps.amux.requireSentKeys(t, "pane-1", []string{"Enter", "Implement handshake", "Enter"})
+	deps.amux.requireSentKeys(t, "pane-1", []string{"\n", "Implement handshake\n"})
 	if got, want := deps.amux.captureCount("pane-1"), 2; got != want {
 		t.Fatalf("capture count = %d, want %d", got, want)
 	}
@@ -188,7 +188,7 @@ func TestAssignDoesNotBlindlyConfirmWhenTrustPromptNotPresent(t *testing.T) {
 		return ok && task.Status == TaskStatusActive
 	})
 
-	deps.amux.requireSentKeys(t, "pane-1", []string{"Implement handshake", "Enter"})
+	deps.amux.requireSentKeys(t, "pane-1", []string{"Implement handshake\n"})
 	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
 		{PaneID: "pane-1", Timeout: 30 * time.Second},
 	}; !reflect.DeepEqual(got, want) {
@@ -222,11 +222,9 @@ func TestAssignResumesCodexBeforeSendingPrompt(t *testing.T) {
 	})
 
 	deps.amux.requireSentKeys(t, "pane-1", []string{
-		"codex --yolo resume",
-		"Enter",
+		"codex --yolo resume\n",
 		".",
-		"Implement resume flow",
-		"Enter",
+		"Implement resume flow\n",
 	})
 	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
 		{PaneID: "pane-1", Timeout: 30 * time.Second},
@@ -659,8 +657,7 @@ func TestPRMergePollingSendsWrapUpAndCleansClone(t *testing.T) {
 		t.Fatalf("released clones = %#v, want %#v", got, want)
 	}
 	deps.amux.requireSentKeys(t, "pane-1", []string{
-		"Implement daemon core",
-		"Enter",
+		"Implement daemon core\n",
 		"PR merged, wrap up.\n",
 	})
 	deps.events.requireTypes(t, EventDaemonStarted, EventTaskAssigned, EventPRDetected, EventPRMerged, EventTaskCompleted)
@@ -760,8 +757,7 @@ func TestPRReviewPollingNudgesWorkerOncePerNewBlockingReviewBatch(t *testing.T) 
 	}
 
 	deps.amux.requireSentKeys(t, "pane-1", []string{
-		"Implement daemon core",
-		"Enter",
+		"Implement daemon core\n",
 		firstNudge,
 		secondNudge,
 	})
@@ -815,8 +811,7 @@ func TestPRReviewPollingAdvancesCountWithoutNudgingForNonBlockingReviews(t *test
 	}
 
 	deps.amux.requireSentKeys(t, "pane-1", []string{
-		"Implement daemon core",
-		"Enter",
+		"Implement daemon core\n",
 		firstNudge,
 	})
 	if got, want := deps.events.countType(EventWorkerNudgedReview), 1; got != want {
