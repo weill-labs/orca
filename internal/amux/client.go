@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-var spawnPanePattern = regexp.MustCompile(`\bpane\s+(\d+)\b`)
+var spawnPanePattern = regexp.MustCompile(`\bpane\s+(\S+)`)
 
 // Client wraps the amux CLI for daemon code and tests.
 type Client interface {
@@ -69,17 +69,20 @@ func NewClient(config Config) *CLIClient {
 }
 
 // Spawn creates a pane and returns its stable pane reference, e.g. pane-7.
+// amux spawn doesn't support --cwd or --command flags, so after creating the
+// pane we send-keys to cd into the working directory and start the command.
 func (c *CLIClient) Spawn(ctx context.Context, req SpawnRequest) (Pane, error) {
-	name := paneName(req.CWD)
-	args := []string{"--name", name}
-	if req.CWD != "" {
-		args = append(args, "--cwd", req.CWD)
+	name := req.Name
+	if name == "" {
+		name = paneName(req.CWD)
 	}
-	if req.Command != "" {
-		args = append(args, "--command", req.Command)
+	args := []string{"--name", name}
+	if req.AtPane != "" {
+		args = append(args, "--at", req.AtPane, "--horizontal")
 	}
 
-	output, err := c.run(ctx, c.resolveSession(req.Session), "spawn", args...)
+	session := c.resolveSession(req.Session)
+	output, err := c.run(ctx, session, "spawn", args...)
 	if err != nil {
 		return Pane{}, err
 	}
@@ -87,6 +90,28 @@ func (c *CLIClient) Spawn(ctx context.Context, req SpawnRequest) (Pane, error) {
 	if err != nil {
 		return Pane{}, err
 	}
+
+	if req.CWD != "" {
+		if err := c.SendKeys(ctx, paneID, fmt.Sprintf("cd %s", req.CWD)); err != nil {
+			return Pane{}, fmt.Errorf("send cd to pane: %w", err)
+		}
+		if err := c.SendKeys(ctx, paneID, "Enter"); err != nil {
+			return Pane{}, fmt.Errorf("send Enter after cd: %w", err)
+		}
+		if err := c.WaitIdle(ctx, paneID, 5*time.Second); err != nil {
+			return Pane{}, fmt.Errorf("wait for cd: %w", err)
+		}
+	}
+
+	if req.Command != "" {
+		if err := c.SendKeys(ctx, paneID, req.Command); err != nil {
+			return Pane{}, fmt.Errorf("send command to pane: %w", err)
+		}
+		if err := c.SendKeys(ctx, paneID, "Enter"); err != nil {
+			return Pane{}, fmt.Errorf("send Enter after command: %w", err)
+		}
+	}
+
 	return Pane{
 		ID:   paneID,
 		Name: name,
@@ -141,7 +166,7 @@ func (c *CLIClient) SetMetadata(ctx context.Context, paneID string, metadata map
 		args = append(args, fmt.Sprintf("%s=%s", key, metadata[key]))
 	}
 
-	_, err := c.run(ctx, c.session, "set-meta", args...)
+	_, err := c.run(ctx, c.session, "meta", append([]string{"set"}, args...)...)
 	return err
 }
 
@@ -195,7 +220,7 @@ func parseSpawnOutput(output string) (string, error) {
 	if len(match) != 2 {
 		return "", fmt.Errorf("parse pane id from spawn output: %q", strings.TrimSpace(output))
 	}
-	return "pane-" + match[1], nil
+	return match[1], nil
 }
 
 func paneName(cwd string) string {

@@ -85,11 +85,13 @@ func runDaemonProcess(args []string) error {
 
 	var session string
 	var projectPath string
+	var leadPane string
 	var stateDB string
 	var pidFile string
 
 	fs.StringVar(&session, "session", "", "daemon session")
 	fs.StringVar(&projectPath, "project", "", "project path")
+	fs.StringVar(&leadPane, "lead-pane", "", "lead pane to split from")
 	fs.StringVar(&stateDB, "state-db", "", "state db path")
 	fs.StringVar(&pidFile, "pid-file", "", "pid file path")
 
@@ -111,10 +113,11 @@ func runDaemonProcess(args []string) error {
 	defer stop()
 
 	return daemon.RunProcess(ctx, daemon.ServeRequest{
-		Session: session,
-		Project: projectPath,
-		StateDB: stateDB,
-		PIDFile: pidFile,
+		Session:  session,
+		Project:  projectPath,
+		LeadPane: leadPane,
+		StateDB:  stateDB,
+		PIDFile:  pidFile,
 	})
 }
 

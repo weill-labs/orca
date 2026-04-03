@@ -22,6 +22,7 @@ const (
 type Daemon struct {
 	project          string
 	session          string
+	leadPane         string
 	pidPath          string
 	config           ConfigProvider
 	state            StateStore
@@ -119,6 +120,7 @@ func New(opts Options) (*Daemon, error) {
 	return &Daemon{
 		project:          opts.Project,
 		session:          opts.Session,
+		leadPane:         opts.LeadPane,
 		pidPath:          opts.PIDPath,
 		config:           opts.Config,
 		state:            opts.State,
@@ -251,6 +253,8 @@ func (d *Daemon) Assign(ctx context.Context, issue, prompt, agentProfile string)
 
 	pane, err := d.amux.Spawn(ctx, SpawnRequest{
 		Session: d.session,
+		AtPane:  d.leadPane,
+		Name:    "worker-" + issue,
 		CWD:     clone.Path,
 		Command: profile.StartCommand,
 	})
