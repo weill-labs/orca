@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -58,7 +59,7 @@ type assignment struct {
 	lastOutput      string
 	lastActivity    time.Time
 	prNumber        int
-	LastReviewCount int
+	LastReviewCount atomic.Int64
 	escalated       bool
 	cleanupOnce     sync.Once
 }
@@ -513,9 +514,9 @@ func (d *Daemon) handlePRReviewPoll(active *assignment) {
 		return
 	}
 
-	previousCount := active.LastReviewCount
+	previousCount := int(active.LastReviewCount.Load())
 	if previousCount > len(payload.Reviews) {
-		active.LastReviewCount = len(payload.Reviews)
+		active.LastReviewCount.Store(int64(len(payload.Reviews)))
 		return
 	}
 	if previousCount == len(payload.Reviews) {
@@ -525,7 +526,7 @@ func (d *Daemon) handlePRReviewPoll(active *assignment) {
 	newReviews := payload.Reviews[previousCount:]
 	blocking := blockingReviews(payload.ReviewDecision, newReviews)
 	if len(blocking) == 0 {
-		active.LastReviewCount = len(payload.Reviews)
+		active.LastReviewCount.Store(int64(len(payload.Reviews)))
 		return
 	}
 
@@ -534,7 +535,7 @@ func (d *Daemon) handlePRReviewPoll(active *assignment) {
 		return
 	}
 
-	active.LastReviewCount = len(payload.Reviews)
+	active.LastReviewCount.Store(int64(len(payload.Reviews)))
 	d.emit(active.ctx, Event{
 		Time:         d.now(),
 		Type:         EventWorkerNudgedReview,

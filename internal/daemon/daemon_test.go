@@ -484,7 +484,7 @@ func TestPRReviewPollingNudgesWorkerOncePerNewBlockingReviewBatch(t *testing.T) 
 	if err != nil {
 		t.Fatalf("assignment() error = %v", err)
 	}
-	if got, want := active.LastReviewCount, 2; got != want {
+	if got, want := active.LastReviewCount.Load(), int64(2); got != want {
 		t.Fatalf("assignment.LastReviewCount = %d, want %d", got, want)
 	}
 
@@ -536,7 +536,7 @@ func TestPRReviewPollingAdvancesCountWithoutNudgingForNonBlockingReviews(t *test
 	if err != nil {
 		t.Fatalf("assignment() error = %v", err)
 	}
-	if got, want := active.LastReviewCount, 2; got != want {
+	if got, want := active.LastReviewCount.Load(), int64(2); got != want {
 		t.Fatalf("assignment.LastReviewCount = %d, want %d", got, want)
 	}
 
