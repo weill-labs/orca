@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/weill-labs/orca/internal/amux"
 	legacy "github.com/weill-labs/orca/internal/state"
 	_ "modernc.org/sqlite"
 )
@@ -714,7 +715,9 @@ func (s *SQLiteStore) execWithRetry(ctx context.Context, query string, args ...a
 			if !isBusyError(err) {
 				return err
 			}
-			time.Sleep(50 * time.Millisecond)
+			if err := amux.Wait(ctx, 50*time.Millisecond); err != nil {
+				return err
+			}
 			continue
 		}
 		return nil

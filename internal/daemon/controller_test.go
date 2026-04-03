@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/weill-labs/orca/internal/amux"
 	state "github.com/weill-labs/orca/internal/daemonstate"
 )
 
@@ -105,7 +106,7 @@ func TestStopReturnsContextErrorWhenPollingCancelled(t *testing.T) {
 		stopErr <- err
 	}()
 
-	time.Sleep(75 * time.Millisecond)
+	waitForDuration(t, 75*time.Millisecond)
 	cancel()
 
 	err := <-stopErr
@@ -171,7 +172,7 @@ func waitForPID(t *testing.T, path string) int {
 				return pid
 			}
 		}
-		time.Sleep(20 * time.Millisecond)
+		waitForDuration(t, 20*time.Millisecond)
 	}
 
 	t.Fatalf("timed out waiting for pid file %s", path)
@@ -190,7 +191,7 @@ func waitForProcessExit(t *testing.T, pid int) {
 		if !alive {
 			return
 		}
-		time.Sleep(20 * time.Millisecond)
+		waitForDuration(t, 20*time.Millisecond)
 	}
 
 	t.Fatalf("process %d still alive after deadline", pid)
@@ -208,6 +209,14 @@ func killTestProcess(t *testing.T, pid int) {
 	}
 	_ = process.Release()
 	waitForProcessExit(t, pid)
+}
+
+func waitForDuration(t *testing.T, duration time.Duration) {
+	t.Helper()
+
+	if err := amux.Wait(context.Background(), duration); err != nil {
+		t.Fatalf("Wait(%s) error = %v", duration, err)
+	}
 }
 
 func startDirectSleepProcess(t *testing.T, ignoreTERM bool) *exec.Cmd {
