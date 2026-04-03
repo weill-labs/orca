@@ -149,7 +149,7 @@ func newTestController(t *testing.T, store *fakeStore, projectPath string, optio
 		Paths:        Paths{StateDB: filepath.Join(tempDir, "state.db"), PIDDir: filepath.Join(tempDir, "pids")},
 		Executable:   scriptPath,
 		Now:          func() time.Time { return time.Unix(1, 0).UTC() },
-		StartTimeout: 400 * time.Millisecond,
+		StartTimeout: 1500 * time.Millisecond,
 		StopTimeout:  time.Second,
 	})
 	if err != nil {

@@ -2,13 +2,18 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
-	"strconv"
 	"time"
 
+	"github.com/weill-labs/orca/internal/amux"
+	"github.com/weill-labs/orca/internal/config"
 	state "github.com/weill-labs/orca/internal/daemonstate"
+	"github.com/weill-labs/orca/internal/pool"
 	"github.com/weill-labs/orca/internal/project"
 )
 
@@ -19,7 +24,20 @@ type ServeRequest struct {
 	PIDFile string
 }
 
+type serveDeps struct {
+	loadConfig func(projectDir string) (config.Config, error)
+	amux       AmuxClient
+	commands   CommandRunner
+	events     EventSink
+	poolRunner pool.Runner
+	socketPath string
+}
+
 func RunProcess(ctx context.Context, req ServeRequest) error {
+	return runProcess(ctx, req, serveDeps{})
+}
+
+func runProcess(ctx context.Context, req ServeRequest, deps serveDeps) error {
 	projectPath, err := project.CanonicalPath(req.Project)
 	if err != nil {
 		return err
@@ -31,48 +49,220 @@ func RunProcess(ctx context.Context, req ServeRequest) error {
 	}
 	defer store.Close()
 
-	now := time.Now().UTC()
-	pid := os.Getpid()
-
-	if err := os.MkdirAll(filepath.Dir(req.PIDFile), 0o755); err != nil {
-		return fmt.Errorf("create daemon pid directory: %w", err)
+	loadConfig := deps.loadConfig
+	if loadConfig == nil {
+		loadConfig = config.Load
 	}
-	if err := os.WriteFile(req.PIDFile, []byte(strconv.Itoa(pid)), 0o644); err != nil {
-		return fmt.Errorf("write daemon pid file: %w", err)
-	}
-	defer os.Remove(req.PIDFile)
 
+	cfg, err := loadConfig(projectPath)
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+
+	managerOptions := []pool.Option{}
+	if deps.poolRunner != nil {
+		managerOptions = append(managerOptions, pool.WithRunner(deps.poolRunner))
+	}
+	manager, err := pool.New(projectPath, poolConfigAdapter{cfg: cfg}, store, managerOptions...)
+	if err != nil {
+		return fmt.Errorf("create pool manager: %w", err)
+	}
+
+	amuxClient := deps.amux
+	if amuxClient == nil {
+		amuxClient = amux.NewClient(amux.Config{
+			Session: req.Session,
+		})
+	}
+
+	commandRunner := deps.commands
+	if commandRunner == nil {
+		commandRunner = execCommandRunner{}
+	}
+
+	socketPath := deps.socketPath
+	if socketPath == "" {
+		socketPath = socketFileForProject(filepath.Dir(req.StateDB), projectPath)
+	}
+
+	listener, err := listenUnixSocket(socketPath)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = listener.Close()
+		_ = os.Remove(socketPath)
+	}()
+
+	daemonState := newSQLiteStateAdapter(store)
+	instance, err := New(Options{
+		Project:          projectPath,
+		Session:          req.Session,
+		PIDPath:          req.PIDFile,
+		Config:           configAdapter{cfg: cfg},
+		State:            daemonState,
+		Pool:             pool.NewAdapter(manager),
+		Amux:             amuxClient,
+		Commands:         commandRunner,
+		Events:           deps.events,
+		PollInterval:     cfg.Daemon.PollInterval,
+		MergeGracePeriod: defaultMergeGracePeriod,
+	})
+	if err != nil {
+		return fmt.Errorf("create daemon: %w", err)
+	}
+
+	if err := instance.Start(ctx); err != nil {
+		return err
+	}
+
+	startedAt := time.Now().UTC()
 	if err := store.UpsertDaemon(ctx, projectPath, state.DaemonStatus{
 		Session:   req.Session,
-		PID:       pid,
+		PID:       os.Getpid(),
 		Status:    "running",
-		StartedAt: now,
-		UpdatedAt: now,
+		StartedAt: startedAt,
+		UpdatedAt: startedAt,
 	}); err != nil {
+		_ = instance.Stop(context.Background())
 		return err
 	}
 
-	if _, err := store.AppendEvent(ctx, state.Event{
-		Project:   projectPath,
-		Kind:      "daemon.started",
-		Message:   fmt.Sprintf("daemon started for %s", projectPath),
-		CreatedAt: now,
-	}); err != nil {
-		return err
+	serverErrCh := make(chan error, 1)
+	go func() {
+		serverErrCh <- serveRPC(ctx, listener, instance, store, projectPath)
+	}()
+
+	var serverErr error
+	select {
+	case <-ctx.Done():
+		_ = listener.Close()
+		serverErr = <-serverErrCh
+	case serverErr = <-serverErrCh:
 	}
 
-	<-ctx.Done()
+	stopErr := instance.Stop(context.Background())
+	markStoppedErr := store.MarkDaemonStopped(context.Background(), projectPath, time.Now().UTC())
 
-	stoppedAt := time.Now().UTC()
-	if err := store.MarkDaemonStopped(context.Background(), projectPath, stoppedAt); err != nil {
-		return err
+	if serverErr != nil && !errors.Is(serverErr, net.ErrClosed) {
+		return errors.Join(serverErr, stopErr, markStoppedErr)
+	}
+	return errors.Join(stopErr, markStoppedErr)
+}
+
+func listenUnixSocket(socketPath string) (net.Listener, error) {
+	if err := os.MkdirAll(filepath.Dir(socketPath), 0o755); err != nil {
+		return nil, fmt.Errorf("create daemon socket directory: %w", err)
+	}
+	if err := os.Remove(socketPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("remove stale daemon socket: %w", err)
 	}
 
-	_, err = store.AppendEvent(context.Background(), state.Event{
-		Project:   projectPath,
-		Kind:      "daemon.stopped",
-		Message:   fmt.Sprintf("daemon stopped for %s", projectPath),
-		CreatedAt: stoppedAt,
-	})
-	return err
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		return nil, fmt.Errorf("listen on daemon socket %s: %w", socketPath, err)
+	}
+	if err := os.Chmod(socketPath, 0o600); err != nil {
+		_ = listener.Close()
+		return nil, fmt.Errorf("chmod daemon socket %s: %w", socketPath, err)
+	}
+	return listener, nil
+}
+
+func serveRPC(ctx context.Context, listener net.Listener, instance *Daemon, store *state.SQLiteStore, projectPath string) error {
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
+				return nil
+			}
+			return fmt.Errorf("accept daemon socket connection: %w", err)
+		}
+
+		go handleRPCConn(ctx, conn, instance, store, projectPath)
+	}
+}
+
+func handleRPCConn(ctx context.Context, conn net.Conn, instance *Daemon, store *state.SQLiteStore, projectPath string) {
+	defer conn.Close()
+	if err := conn.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		_ = json.NewEncoder(conn).Encode(rpcFailure(nil, -32000, fmt.Errorf("set read deadline: %w", err)))
+		return
+	}
+
+	var request rpcRequest
+	if err := json.NewDecoder(conn).Decode(&request); err != nil {
+		_ = json.NewEncoder(conn).Encode(rpcFailure(nil, -32700, fmt.Errorf("decode request: %w", err)))
+		return
+	}
+
+	response := dispatchRPCRequest(ctx, request, instance, store, projectPath)
+	_ = json.NewEncoder(conn).Encode(response)
+}
+
+func dispatchRPCRequest(ctx context.Context, request rpcRequest, instance *Daemon, store *state.SQLiteStore, projectPath string) rpcResponse {
+	switch request.Method {
+	case "assign":
+		var params assignRPCParams
+		if err := decodeRPCParams(request.Params, &params); err != nil {
+			return rpcFailure(request.ID, -32602, fmt.Errorf("decode assign params: %w", err))
+		}
+		if err := instance.Assign(ctx, params.Issue, params.Prompt, params.Agent); err != nil {
+			return rpcFailure(request.ID, -32000, err)
+		}
+
+		taskStatus, err := store.TaskStatus(ctx, projectPath, params.Issue)
+		if err != nil {
+			return rpcFailure(request.ID, -32000, err)
+		}
+
+		return rpcSuccess(request.ID, TaskActionResult{
+			Project:   projectPath,
+			Issue:     taskStatus.Task.Issue,
+			Status:    taskStatus.Task.Status,
+			Agent:     taskStatus.Task.Agent,
+			UpdatedAt: taskStatus.Task.UpdatedAt,
+		})
+	case "cancel":
+		var params cancelRPCParams
+		if err := decodeRPCParams(request.Params, &params); err != nil {
+			return rpcFailure(request.ID, -32602, fmt.Errorf("decode cancel params: %w", err))
+		}
+		if err := instance.Cancel(ctx, params.Issue); err != nil {
+			return rpcFailure(request.ID, -32000, err)
+		}
+
+		taskStatus, err := store.TaskStatus(ctx, projectPath, params.Issue)
+		if err != nil {
+			return rpcFailure(request.ID, -32000, err)
+		}
+
+		return rpcSuccess(request.ID, TaskActionResult{
+			Project:   projectPath,
+			Issue:     taskStatus.Task.Issue,
+			Status:    taskStatus.Task.Status,
+			Agent:     taskStatus.Task.Agent,
+			UpdatedAt: taskStatus.Task.UpdatedAt,
+		})
+	case "status":
+		var params statusRPCParams
+		if err := decodeRPCParams(request.Params, &params); err != nil {
+			return rpcFailure(request.ID, -32602, fmt.Errorf("decode status params: %w", err))
+		}
+		if params.Issue == "" {
+			status, err := store.ProjectStatus(ctx, projectPath)
+			if err != nil {
+				return rpcFailure(request.ID, -32000, err)
+			}
+			return rpcSuccess(request.ID, status)
+		}
+
+		status, err := store.TaskStatus(ctx, projectPath, params.Issue)
+		if err != nil {
+			return rpcFailure(request.ID, -32000, err)
+		}
+		return rpcSuccess(request.ID, status)
+	default:
+		return rpcFailure(request.ID, -32601, fmt.Errorf("unknown method %q", request.Method))
+	}
 }

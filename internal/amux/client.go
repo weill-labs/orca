@@ -1,37 +1,33 @@
 package amux
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
+	"time"
 )
 
 var spawnPanePattern = regexp.MustCompile(`\bpane\s+(\d+)\b`)
 
 // Client wraps the amux CLI for daemon code and tests.
 type Client interface {
-	Spawn(opts SpawnOptions) (string, error)
-	SendKeys(paneID, text string) error
-	Capture(paneID string) (string, error)
-	Meta(paneID, key, value string) error
-	Kill(paneID string) error
+	Spawn(ctx context.Context, req SpawnRequest) (Pane, error)
+	SendKeys(ctx context.Context, paneID, text string) error
+	Capture(ctx context.Context, paneID string) (string, error)
+	SetMetadata(ctx context.Context, paneID string, metadata map[string]string) error
+	KillPane(ctx context.Context, paneID string) error
+	WaitIdle(ctx context.Context, paneID string, timeout time.Duration) error
 }
 
 // Config configures the CLI-backed amux client.
 type Config struct {
 	Binary  string
 	Session string
-}
-
-// SpawnOptions mirrors the supported amux spawn flags Orca needs today.
-type SpawnOptions struct {
-	Name       string
-	Host       string
-	Task       string
-	Color      string
-	Background bool
 }
 
 // CLIClient shells out to the amux binary.
@@ -42,13 +38,13 @@ type CLIClient struct {
 }
 
 type commandRunner interface {
-	Run(name string, args []string) ([]byte, error)
+	Run(ctx context.Context, name string, args []string) ([]byte, error)
 }
 
 type execRunner struct{}
 
-func (execRunner) Run(name string, args []string) ([]byte, error) {
-	return exec.Command(name, args...).CombinedOutput()
+func (execRunner) Run(ctx context.Context, name string, args []string) ([]byte, error) {
+	return exec.CommandContext(ctx, name, args...).CombinedOutput()
 }
 
 type captureCommandError struct {
@@ -73,39 +69,39 @@ func NewClient(config Config) *CLIClient {
 }
 
 // Spawn creates a pane and returns its stable pane reference, e.g. pane-7.
-func (c *CLIClient) Spawn(opts SpawnOptions) (string, error) {
-	args := []string{
-		"--name", opts.Name,
+func (c *CLIClient) Spawn(ctx context.Context, req SpawnRequest) (Pane, error) {
+	name := paneName(req.CWD)
+	args := []string{"--name", name}
+	if req.CWD != "" {
+		args = append(args, "--cwd", req.CWD)
 	}
-	if opts.Host != "" {
-		args = append(args, "--host", opts.Host)
-	}
-	if opts.Task != "" {
-		args = append(args, "--task", opts.Task)
-	}
-	if opts.Color != "" {
-		args = append(args, "--color", opts.Color)
-	}
-	if opts.Background {
-		args = append(args, "--background")
+	if req.Command != "" {
+		args = append(args, "--command", req.Command)
 	}
 
-	output, err := c.run("spawn", args...)
+	output, err := c.run(ctx, c.resolveSession(req.Session), "spawn", args...)
 	if err != nil {
-		return "", err
+		return Pane{}, err
 	}
-	return parseSpawnOutput(string(output))
+	paneID, err := parseSpawnOutput(string(output))
+	if err != nil {
+		return Pane{}, err
+	}
+	return Pane{
+		ID:   paneID,
+		Name: name,
+	}, nil
 }
 
 // SendKeys forwards text to a pane with amux send-keys.
-func (c *CLIClient) SendKeys(paneID, text string) error {
-	_, err := c.run("send-keys", paneID, text)
+func (c *CLIClient) SendKeys(ctx context.Context, paneID, text string) error {
+	_, err := c.run(ctx, c.session, "send-keys", paneID, text)
 	return err
 }
 
 // Capture returns the visible screen output for one pane.
-func (c *CLIClient) Capture(paneID string) (string, error) {
-	output, err := c.run("capture", "--format", "json", paneID)
+func (c *CLIClient) Capture(ctx context.Context, paneID string) (string, error) {
+	output, err := c.run(ctx, c.session, "capture", "--format", "json", paneID)
 	if err != nil {
 		return "", err
 	}
@@ -127,35 +123,64 @@ func (c *CLIClient) Capture(paneID string) (string, error) {
 	return strings.Join(pane.Content, "\n"), nil
 }
 
-// Meta sets one metadata key on a pane.
-func (c *CLIClient) Meta(paneID, key, value string) error {
-	_, err := c.run("set-meta", paneID, fmt.Sprintf("%s=%s", key, value))
+// SetMetadata applies the provided metadata on a pane.
+func (c *CLIClient) SetMetadata(ctx context.Context, paneID string, metadata map[string]string) error {
+	if len(metadata) == 0 {
+		return nil
+	}
+
+	keys := make([]string, 0, len(metadata))
+	for key := range metadata {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	args := make([]string, 0, len(keys)+1)
+	args = append(args, paneID)
+	for _, key := range keys {
+		args = append(args, fmt.Sprintf("%s=%s", key, metadata[key]))
+	}
+
+	_, err := c.run(ctx, c.session, "set-meta", args...)
 	return err
 }
 
-// Kill terminates a pane.
-func (c *CLIClient) Kill(paneID string) error {
-	_, err := c.run("kill", paneID)
+// KillPane terminates a pane.
+func (c *CLIClient) KillPane(ctx context.Context, paneID string) error {
+	_, err := c.run(ctx, c.session, "kill", paneID)
 	return err
 }
 
-func (c *CLIClient) run(subcommand string, extraArgs ...string) ([]byte, error) {
-	args := c.commandArgs(subcommand, extraArgs...)
-	output, err := c.runner.Run(c.binary, args)
+// WaitIdle waits for a pane to become idle before returning.
+func (c *CLIClient) WaitIdle(ctx context.Context, paneID string, timeout time.Duration) error {
+	_, err := c.run(ctx, c.session, "wait", "idle", paneID, "--settle", "2s", "--timeout", timeout.String())
+	return err
+}
+
+func (c *CLIClient) run(ctx context.Context, session, subcommand string, extraArgs ...string) ([]byte, error) {
+	args := c.commandArgs(session, subcommand, extraArgs...)
+	output, err := c.runner.Run(ctx, c.binary, args)
 	if err != nil {
 		return output, commandError(c.binary, args, output, err)
 	}
 	return output, nil
 }
 
-func (c *CLIClient) commandArgs(subcommand string, extraArgs ...string) []string {
+func (c *CLIClient) commandArgs(session, subcommand string, extraArgs ...string) []string {
 	args := make([]string, 0, len(extraArgs)+3)
-	if c.session != "" {
-		args = append(args, "-s", c.session)
+	if session != "" {
+		args = append(args, "-s", session)
 	}
 	args = append(args, subcommand)
 	args = append(args, extraArgs...)
 	return args
+}
+
+func (c *CLIClient) resolveSession(session string) string {
+	if strings.TrimSpace(session) != "" {
+		return session
+	}
+	return c.session
 }
 
 func defaultBinary(binary string) string {
@@ -171,6 +196,14 @@ func parseSpawnOutput(output string) (string, error) {
 		return "", fmt.Errorf("parse pane id from spawn output: %q", strings.TrimSpace(output))
 	}
 	return "pane-" + match[1], nil
+}
+
+func paneName(cwd string) string {
+	base := filepath.Base(strings.TrimSpace(cwd))
+	if base == "." || base == string(filepath.Separator) || base == "" {
+		return "orca"
+	}
+	return base
 }
 
 func commandString(binary string, args []string) string {

@@ -1,0 +1,102 @@
+package pool_test
+
+import (
+	"context"
+	"path/filepath"
+	"testing"
+
+	"github.com/weill-labs/orca/internal/pool"
+	"github.com/weill-labs/orca/internal/state"
+)
+
+func TestAdapterAcquireReturnsNamedClone(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	origin := newOrigin(t, "main")
+	clonePath := newClone(t, origin, filepath.Join(root, "orca01"))
+	store := newStore(t)
+	manager := newManager(t, project, staticConfig{
+		pattern: filepath.Join(root, "orca*"),
+	}, store)
+
+	adapter := pool.NewAdapter(manager)
+	clone, err := adapter.Acquire(context.Background(), project, "LAB-718")
+	if err != nil {
+		t.Fatalf("Acquire() error = %v", err)
+	}
+
+	if got, want := clone.Name, "orca01"; got != want {
+		t.Fatalf("clone.Name = %q, want %q", got, want)
+	}
+	if got, want := clone.Path, clonePath; got != want {
+		t.Fatalf("clone.Path = %q, want %q", got, want)
+	}
+	if got, want := clone.CurrentBranch, "LAB-718"; got != want {
+		t.Fatalf("clone.CurrentBranch = %q, want %q", got, want)
+	}
+}
+
+func TestAdapterReleaseUsesCloneBranchInformation(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name          string
+		currentBranch string
+		assignedTask  string
+	}{
+		{
+			name:          "prefers current branch",
+			currentBranch: "LAB-718",
+			assignedTask:  "LAB-999",
+		},
+		{
+			name:          "falls back to assigned task",
+			currentBranch: "",
+			assignedTask:  "LAB-718",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			root := t.TempDir()
+			project := filepath.Join(root, "project")
+			origin := newOrigin(t, "main")
+			clonePath := newClone(t, origin, filepath.Join(root, "orca01"))
+			store := newStore(t)
+			manager := newManager(t, project, staticConfig{
+				pattern: filepath.Join(root, "orca*"),
+			}, store)
+			adapter := pool.NewAdapter(manager)
+
+			if _, err := store.EnsureClone(context.Background(), project, clonePath); err != nil {
+				t.Fatalf("EnsureClone() error = %v", err)
+			}
+			ok, err := store.TryOccupyClone(context.Background(), project, clonePath, "LAB-718", "LAB-718")
+			if err != nil {
+				t.Fatalf("TryOccupyClone() error = %v", err)
+			}
+			if !ok {
+				t.Fatal("TryOccupyClone() = false, want true")
+			}
+
+			err = adapter.Release(context.Background(), project, pool.Clone{
+				Path:          clonePath,
+				CurrentBranch: tc.currentBranch,
+				AssignedTask:  tc.assignedTask,
+			})
+			if err != nil {
+				t.Fatalf("Release() error = %v", err)
+			}
+
+			record := lookupClone(t, store, project, clonePath)
+			if got, want := record.Status, state.CloneStatusFree; got != want {
+				t.Fatalf("record.Status = %q, want %q", got, want)
+			}
+		})
+	}
+}

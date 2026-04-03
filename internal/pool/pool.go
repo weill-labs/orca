@@ -25,6 +25,7 @@ const (
 )
 
 type Clone struct {
+	Name          string
 	Path          string
 	Status        Status
 	CurrentBranch string
@@ -314,6 +315,7 @@ func branchExists(ctx context.Context, path, branch string) (bool, error) {
 
 func fromState(record state.CloneRecord) Clone {
 	return Clone{
+		Name:          filepath.Base(record.Path),
 		Path:          record.Path,
 		Status:        Status(record.Status),
 		CurrentBranch: record.CurrentBranch,

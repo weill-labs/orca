@@ -246,7 +246,7 @@ func (a *App) runAssign(ctx context.Context, args []string) error {
 		return writeJSON(a.stdout, result)
 	}
 
-	_, err = fmt.Fprintf(a.stdout, "%s queued for %s\n", result.Issue, result.Agent)
+	_, err = fmt.Fprintf(a.stdout, "%s assigned to %s\n", result.Issue, result.Agent)
 	return err
 }
 

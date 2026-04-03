@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	legacy "github.com/weill-labs/orca/internal/state"
 	_ "modernc.org/sqlite"
 )
 
@@ -385,6 +386,104 @@ func (s *SQLiteStore) UpsertTask(ctx context.Context, project string, task Task)
 	return nil
 }
 
+func (s *SQLiteStore) UpsertWorker(ctx context.Context, project string, worker Worker) error {
+	if worker.UpdatedAt.IsZero() {
+		worker.UpdatedAt = s.now()
+	}
+
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO workers(project, pane_id, agent, state, issue, clone_path, updated_at)
+		VALUES(?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(project, pane_id) DO UPDATE SET
+			agent = excluded.agent,
+			state = excluded.state,
+			issue = excluded.issue,
+			clone_path = excluded.clone_path,
+			updated_at = excluded.updated_at
+	`, project, worker.PaneID, worker.Agent, worker.State, worker.Issue, worker.ClonePath, formatTime(worker.UpdatedAt))
+	if err != nil {
+		return fmt.Errorf("upsert worker: %w", err)
+	}
+
+	return nil
+}
+
+func (s *SQLiteStore) DeleteWorker(ctx context.Context, project, paneID string) error {
+	result, err := s.db.ExecContext(ctx, `
+		DELETE FROM workers
+		WHERE project = ? AND pane_id = ?
+	`, project, paneID)
+	if err != nil {
+		return fmt.Errorf("delete worker: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("delete worker rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		return ErrNotFound
+	}
+
+	return nil
+}
+
+func (s *SQLiteStore) EnsureClone(ctx context.Context, project, path string) (legacy.CloneRecord, error) {
+	now := s.now()
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO clones(project, path, status, issue, branch, updated_at)
+		VALUES(?, ?, 'free', '', '', ?)
+		ON CONFLICT(project, path) DO NOTHING
+	`, project, path, formatTime(now))
+	if err != nil {
+		return legacy.CloneRecord{}, fmt.Errorf("ensure clone: %w", err)
+	}
+
+	record, err := s.lookupCloneRecord(ctx, project, path)
+	if err != nil {
+		return legacy.CloneRecord{}, fmt.Errorf("load clone: %w", err)
+	}
+	return record, nil
+}
+
+func (s *SQLiteStore) TryOccupyClone(ctx context.Context, project, path, branch, task string) (bool, error) {
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE clones
+		SET status = 'occupied', issue = ?, branch = ?, updated_at = ?
+		WHERE project = ? AND path = ? AND status = 'free'
+	`, task, branch, formatTime(s.now()), project, path)
+	if err != nil {
+		return false, fmt.Errorf("occupy clone: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("occupy clone rows affected: %w", err)
+	}
+	return rowsAffected == 1, nil
+}
+
+func (s *SQLiteStore) MarkCloneFree(ctx context.Context, project, path string) error {
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE clones
+		SET status = 'free', issue = '', branch = '', updated_at = ?
+		WHERE project = ? AND path = ?
+	`, formatTime(s.now()), project, path)
+	if err != nil {
+		return fmt.Errorf("mark clone free: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("mark clone free rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		return legacy.ErrCloneNotFound
+	}
+
+	return nil
+}
+
 func (s *SQLiteStore) UpdateTaskStatus(ctx context.Context, project, issue, status string, updatedAt time.Time) (Task, error) {
 	if updatedAt.IsZero() {
 		updatedAt = s.now()
@@ -546,6 +645,24 @@ func (s *SQLiteStore) queryEvents(ctx context.Context, project, issue string, af
 	}
 
 	return events, nil
+}
+
+func (s *SQLiteStore) lookupCloneRecord(ctx context.Context, project, path string) (legacy.CloneRecord, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT project, path, status, branch, issue
+		FROM clones
+		WHERE project = ? AND path = ?
+	`, project, path)
+
+	var record legacy.CloneRecord
+	if err := row.Scan(&record.Project, &record.Path, &record.Status, &record.CurrentBranch, &record.AssignedTask); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return legacy.CloneRecord{}, legacy.ErrCloneNotFound
+		}
+		return legacy.CloneRecord{}, err
+	}
+
+	return record, nil
 }
 
 type rowScanner interface {

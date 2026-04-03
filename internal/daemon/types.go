@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"github.com/weill-labs/orca/internal/amux"
+	"github.com/weill-labs/orca/internal/pool"
 )
 
 const (
@@ -100,21 +103,9 @@ type AgentProfile struct {
 	MaxNudgeRetries   int
 }
 
-type Clone struct {
-	Name string `json:"name,omitempty"`
-	Path string `json:"path,omitempty"`
-}
-
-type Pane struct {
-	ID   string `json:"id,omitempty"`
-	Name string `json:"name,omitempty"`
-}
-
-type SpawnRequest struct {
-	Session string `json:"session,omitempty"`
-	CWD     string `json:"cwd,omitempty"`
-	Command string `json:"command,omitempty"`
-}
+type Clone = pool.Clone
+type Pane = amux.Pane
+type SpawnRequest = amux.SpawnRequest
 
 type Task struct {
 	Project      string    `json:"project,omitempty"`

@@ -2,8 +2,6 @@ package daemon
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -287,36 +285,19 @@ func (c *LocalController) Assign(ctx context.Context, req AssignRequest) (TaskAc
 		return TaskActionResult{}, err
 	}
 
-	now := c.now()
-	task := state.Task{
-		Issue:     strings.TrimSpace(req.Issue),
-		Status:    "queued",
-		Agent:     strings.TrimSpace(req.Agent),
-		Prompt:    req.Prompt,
-		CreatedAt: now,
-		UpdatedAt: now,
-	}
-	if err := c.store.UpsertTask(ctx, projectPath, task); err != nil {
+	callCtx, cancel := contextWithOptionalTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	var result TaskActionResult
+	err = callRPC(callCtx, c.paths.socketFile(projectPath), "assign", assignRPCParams{
+		Issue:  strings.TrimSpace(req.Issue),
+		Prompt: req.Prompt,
+		Agent:  strings.TrimSpace(req.Agent),
+	}, &result)
+	if err != nil {
 		return TaskActionResult{}, err
 	}
-
-	if _, err := c.store.AppendEvent(ctx, state.Event{
-		Project:   projectPath,
-		Kind:      "task.assigned",
-		Issue:     task.Issue,
-		Message:   fmt.Sprintf("%s queued", task.Issue),
-		CreatedAt: now,
-	}); err != nil {
-		return TaskActionResult{}, err
-	}
-
-	return TaskActionResult{
-		Project:   projectPath,
-		Issue:     task.Issue,
-		Status:    task.Status,
-		Agent:     task.Agent,
-		UpdatedAt: task.UpdatedAt,
-	}, nil
+	return result, nil
 }
 
 func (c *LocalController) Cancel(ctx context.Context, req CancelRequest) (TaskActionResult, error) {
@@ -328,29 +309,17 @@ func (c *LocalController) Cancel(ctx context.Context, req CancelRequest) (TaskAc
 		return TaskActionResult{}, err
 	}
 
-	now := c.now()
-	task, err := c.store.UpdateTaskStatus(ctx, projectPath, strings.TrimSpace(req.Issue), "cancelled", now)
+	callCtx, cancel := contextWithOptionalTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	var result TaskActionResult
+	err = callRPC(callCtx, c.paths.socketFile(projectPath), "cancel", cancelRPCParams{
+		Issue: strings.TrimSpace(req.Issue),
+	}, &result)
 	if err != nil {
 		return TaskActionResult{}, err
 	}
-
-	if _, err := c.store.AppendEvent(ctx, state.Event{
-		Project:   projectPath,
-		Kind:      "task.cancelled",
-		Issue:     task.Issue,
-		Message:   fmt.Sprintf("%s cancelled", task.Issue),
-		CreatedAt: now,
-	}); err != nil {
-		return TaskActionResult{}, err
-	}
-
-	return TaskActionResult{
-		Project:   projectPath,
-		Issue:     task.Issue,
-		Status:    task.Status,
-		Agent:     task.Agent,
-		UpdatedAt: task.UpdatedAt,
-	}, nil
+	return result, nil
 }
 
 func (c *LocalController) preparePIDState(ctx context.Context, projectPath string) error {
@@ -509,8 +478,11 @@ func (c *LocalController) cleanupFailedStart(projectPath, pidFile string, proces
 }
 
 func (p Paths) pidFile(projectPath string) string {
-	hash := sha256.Sum256([]byte(projectPath))
-	return filepath.Join(p.PIDDir, hex.EncodeToString(hash[:])+".pid")
+	return filepath.Join(p.PIDDir, projectHash(projectPath)+".pid")
+}
+
+func (p Paths) socketFile(projectPath string) string {
+	return socketFileForProject(p.ConfigDir, projectPath)
 }
 
 var _ Controller = (*LocalController)(nil)
