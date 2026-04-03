@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -42,6 +41,7 @@ type Daemon struct {
 	amux             AmuxClient
 	issueTracker     IssueTracker
 	commands         CommandRunner
+	github           gitHubClient
 	events           EventSink
 	now              func() time.Time
 	newTicker        func(time.Duration) Ticker
@@ -162,6 +162,7 @@ func New(opts Options) (*Daemon, error) {
 		amux:             opts.Amux,
 		issueTracker:     opts.IssueTracker,
 		commands:         opts.Commands,
+		github:           newDefaultGitHubClient(opts.Project, opts.Commands),
 		events:           opts.Events,
 		now:              opts.Now,
 		newTicker:        opts.NewTicker,
@@ -1021,35 +1022,11 @@ func (d *Daemon) mergeQueuedPR(ctx context.Context, prNumber int) error {
 	return err
 }
 func (d *Daemon) lookupPRNumber(ctx context.Context, branch string) (int, error) {
-	output, err := d.commands.Run(ctx, d.project, "gh", "pr", "list", "--head", branch, "--json", "number")
-	if err != nil {
-		return 0, err
-	}
-	return parsePRNumberList(output)
+	return d.github.lookupPRNumber(ctx, branch)
 }
 
 func (d *Daemon) lookupOpenPRNumber(ctx context.Context, branch string) (int, error) {
-	output, err := d.commands.Run(ctx, d.project, "gh", "pr", "list", "--head", branch, "--state", "open", "--json", "number")
-	if err != nil {
-		return 0, err
-	}
-	return parsePRNumberList(output)
-}
-
-func parsePRNumberList(output []byte) (int, error) {
-	var prs []struct {
-		Number int `json:"number"`
-	}
-	if len(output) == 0 {
-		return 0, nil
-	}
-	if err := json.Unmarshal(output, &prs); err != nil {
-		return 0, err
-	}
-	if len(prs) == 0 {
-		return 0, nil
-	}
-	return prs[0].Number, nil
+	return d.github.lookupOpenPRNumber(ctx, branch)
 }
 
 func taskBlocksAssignment(status string) bool {
@@ -1103,36 +1080,11 @@ func (d *Daemon) lookupPRChecksState(ctx context.Context, prNumber int) (string,
 }
 
 func (d *Daemon) isPRMerged(ctx context.Context, prNumber int) (bool, error) {
-	output, err := d.commands.Run(ctx, d.project, "gh", "pr", "view", fmt.Sprintf("%d", prNumber), "--json", "mergedAt")
-	if err != nil {
-		return false, err
-	}
-	if len(output) == 0 {
-		return false, nil
-	}
-	var payload struct {
-		MergedAt *string `json:"mergedAt"`
-	}
-	if err := json.Unmarshal(output, &payload); err != nil {
-		return false, err
-	}
-	return payload.MergedAt != nil && *payload.MergedAt != "", nil
+	return d.github.isPRMerged(ctx, prNumber)
 }
 
 func (d *Daemon) lookupPRReviews(ctx context.Context, prNumber int) (prReviewPayload, bool, error) {
-	output, err := d.commands.Run(ctx, d.project, "gh", "pr", "view", fmt.Sprintf("%d", prNumber), "--json", "reviews,reviewDecision")
-	if err != nil {
-		return prReviewPayload{}, false, err
-	}
-	if len(output) == 0 {
-		return prReviewPayload{}, false, nil
-	}
-
-	var payload prReviewPayload
-	if err := json.Unmarshal(output, &payload); err != nil {
-		return prReviewPayload{}, false, err
-	}
-	return payload, true, nil
+	return d.github.lookupPRReviews(ctx, prNumber)
 }
 
 func (d *Daemon) setPaneMetadata(ctx context.Context, paneID string, metadata map[string]string) error {

@@ -1923,6 +1923,8 @@ type testDeps struct {
 	pidPath      string
 }
 
+func noSleep(context.Context, time.Duration) error { return nil }
+
 func newTestDeps(t *testing.T) *testDeps {
 	t.Helper()
 
@@ -1981,6 +1983,13 @@ func (d *testDeps) newDaemon(t *testing.T) *Daemon {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
+	daemon.github = newGitHubCLIClient(gitHubCLIClientConfig{
+		project:     "/tmp/project",
+		commands:    d.commands,
+		now:         d.clock.Now,
+		sleep:       noSleep,
+		maxAttempts: 1,
+	})
 	return daemon
 }
 
