@@ -168,6 +168,42 @@ func TestAssignConfirmsCodexTrustPromptBeforeSendingPrompt(t *testing.T) {
 	}
 }
 
+func TestAssignEnforcesCodexYoloFlag(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	deps.config.profiles["codex"] = AgentProfile{
+		Name:              "codex",
+		StartCommand:      "codex",
+		PostmortemEnabled: true,
+		StuckTimeout:      5 * time.Minute,
+		NudgeCommand:      "\n",
+		MaxNudgeRetries:   3,
+	}
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-696", "Implement lifecycle enforcement", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	waitFor(t, "spawn request", func() bool {
+		return len(deps.amux.spawnRequests) == 1
+	})
+
+	if got, want := deps.amux.spawnRequests[0].Command, "codex --yolo"; got != want {
+		t.Fatalf("spawn.Command = %q, want %q", got, want)
+	}
+}
+
 func TestAssignDoesNotBlindlyConfirmWhenTrustPromptNotPresent(t *testing.T) {
 	t.Parallel()
 
@@ -263,7 +299,12 @@ func TestAssignRollsBackOnPromptSendFailure(t *testing.T) {
 		t.Fatal("task stored despite rollback")
 	}
 
-	if got, want := deps.pool.releasedClones(), []Clone{deps.pool.clone}; !reflect.DeepEqual(got, want) {
+	if got, want := deps.pool.releasedClones(), []Clone{{
+		Name:          deps.pool.clone.Name,
+		Path:          deps.pool.clone.Path,
+		CurrentBranch: "LAB-689",
+		AssignedTask:  "LAB-689",
+	}}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("released clones = %#v, want %#v", got, want)
 	}
 
@@ -271,15 +312,13 @@ func TestAssignRollsBackOnPromptSendFailure(t *testing.T) {
 		t.Fatalf("kill calls = %#v, want %#v", got, want)
 	}
 
-	wantCleanup := []commandCall{
-		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"reset", "--hard"}},
+	wantGit := []commandCall{
 		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"checkout", "main"}},
 		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"pull"}},
-		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"clean", "-fdx", "--exclude=.orca-pool"}},
-		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"branch", "-D", "LAB-689"}},
+		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"checkout", "-B", "LAB-689"}},
 	}
-	if got := deps.commands.tailGitCalls(5); !reflect.DeepEqual(got, wantCleanup) {
-		t.Fatalf("cleanup git calls = %#v, want %#v", got, wantCleanup)
+	if got := deps.commands.callsByName("git"); !reflect.DeepEqual(got, wantGit) {
+		t.Fatalf("git calls = %#v, want %#v", got, wantGit)
 	}
 
 	deps.events.requireTypes(t, EventDaemonStarted, EventTaskAssignFailed)
@@ -316,15 +355,13 @@ func TestAssignRollsBackOnAgentHandshakeFailure(t *testing.T) {
 		t.Fatalf("kill calls = %#v, want %#v", got, want)
 	}
 
-	wantCleanup := []commandCall{
-		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"reset", "--hard"}},
+	wantGit := []commandCall{
 		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"checkout", "main"}},
 		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"pull"}},
-		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"clean", "-fdx", "--exclude=.orca-pool"}},
-		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"branch", "-D", "LAB-720"}},
+		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"checkout", "-B", "LAB-720"}},
 	}
-	if got := deps.commands.tailGitCalls(5); !reflect.DeepEqual(got, wantCleanup) {
-		t.Fatalf("cleanup git calls = %#v, want %#v", got, wantCleanup)
+	if got := deps.commands.callsByName("git"); !reflect.DeepEqual(got, wantGit) {
+		t.Fatalf("git calls = %#v, want %#v", got, wantGit)
 	}
 
 	deps.events.requireTypes(t, EventDaemonStarted, EventTaskAssignFailed)
@@ -517,10 +554,19 @@ func TestAssignAllowsReassigningInactiveStoredIssueWhenNoOpenPRExists(t *testing
 	}
 }
 func TestCancelKillsAgentCleansCloneAndFreesResources(t *testing.T) {
-	t.Parallel()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
 
 	deps := newTestDeps(t)
 	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	postmortemDir := filepath.Join(home, "sync", "postmortems")
+	deps.amux.sendKeysHook = func(_ string, keys []string) {
+		for _, key := range keys {
+			if key == "$postmortem" {
+				writePostmortemLog(t, postmortemDir, "LAB-689", deps.clock.Now().Add(time.Minute))
+			}
+		}
+	}
 	d := deps.newDaemon(t)
 	ctx := context.Background()
 
@@ -557,22 +603,173 @@ func TestCancelKillsAgentCleansCloneAndFreesResources(t *testing.T) {
 	if got, want := deps.amux.killCalls, []string{"pane-1"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("kill calls = %#v, want %#v", got, want)
 	}
-	if got, want := deps.pool.releasedClones(), []Clone{deps.pool.clone}; !reflect.DeepEqual(got, want) {
+	if got, want := deps.pool.releasedClones(), []Clone{{
+		Name:          deps.pool.clone.Name,
+		Path:          deps.pool.clone.Path,
+		CurrentBranch: "LAB-689",
+		AssignedTask:  "LAB-689",
+	}}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("released clones = %#v, want %#v", got, want)
 	}
 
-	wantCleanup := []commandCall{
-		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"reset", "--hard"}},
-		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"checkout", "main"}},
-		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"pull"}},
-		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"clean", "-fdx", "--exclude=.orca-pool"}},
-		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"branch", "-D", "LAB-689"}},
-	}
-	if got := deps.commands.callsByName("git"); !reflect.DeepEqual(got, wantCleanup) {
-		t.Fatalf("cleanup git calls = %#v, want %#v", got, wantCleanup)
+	if got := deps.commands.callsByName("git"); len(got) != 0 {
+		t.Fatalf("git calls = %#v, want none during daemon cleanup", got)
 	}
 
 	deps.events.requireTypes(t, EventDaemonStarted, EventTaskAssigned, EventTaskCancelled)
+}
+
+func TestCancelRequiresVerifiedPostmortemBeforeCleanup(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	deps := newTestDeps(t)
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	postmortemDir := filepath.Join(home, "sync", "postmortems")
+	deps.amux.sendKeysHook = func(_ string, keys []string) {
+		for _, key := range keys {
+			if key == "$postmortem" {
+				writePostmortemLog(t, postmortemDir, "LAB-689", deps.clock.Now().Add(time.Minute))
+			}
+		}
+	}
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-689", "Implement daemon core", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	deps.commands.reset()
+	deps.amux.waitIdleCalls = nil
+	deps.amux.killCalls = nil
+
+	if err := d.Cancel(ctx, "LAB-689"); err != nil {
+		t.Fatalf("Cancel() error = %v", err)
+	}
+
+	waitFor(t, "task cancellation", func() bool {
+		task, ok := deps.state.task("LAB-689")
+		return ok && task.Status == TaskStatusCancelled
+	})
+
+	deps.amux.requireSentKeys(t, "pane-1", []string{"Implement daemon core", "Enter", "$postmortem", "Enter"})
+	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
+		{PaneID: "pane-1", Timeout: 2 * time.Minute},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("waitIdle calls = %#v, want %#v", got, want)
+	}
+	if got, want := deps.amux.killCalls, []string{"pane-1"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("kill calls = %#v, want %#v", got, want)
+	}
+	if got := deps.commands.callsByName("git"); len(got) != 0 {
+		t.Fatalf("git calls = %#v, want none during daemon cleanup", got)
+	}
+}
+
+func TestCancelSkipsPostmortemWhenSessionAlreadyRecorded(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	deps := newTestDeps(t)
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	postmortemDir := filepath.Join(home, "sync", "postmortems")
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-689", "Implement daemon core", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	writePostmortemLog(t, postmortemDir, "LAB-689", deps.clock.Now().Add(time.Minute))
+
+	deps.commands.reset()
+	deps.amux.waitIdleCalls = nil
+	deps.amux.killCalls = nil
+
+	if err := d.Cancel(ctx, "LAB-689"); err != nil {
+		t.Fatalf("Cancel() error = %v", err)
+	}
+
+	waitFor(t, "task cancellation", func() bool {
+		task, ok := deps.state.task("LAB-689")
+		return ok && task.Status == TaskStatusCancelled
+	})
+
+	deps.amux.requireSentKeys(t, "pane-1", []string{"Implement daemon core", "Enter"})
+	if got := deps.amux.waitIdleCalls; len(got) != 0 {
+		t.Fatalf("waitIdle calls = %#v, want none", got)
+	}
+	if got := deps.commands.callsByName("git"); len(got) != 0 {
+		t.Fatalf("git calls = %#v, want none during daemon cleanup", got)
+	}
+}
+
+func TestCancelSkipsPostmortemWhenProfileDisablesIt(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	deps.config.profiles["claude"] = AgentProfile{
+		Name:            "claude",
+		StartCommand:    "claude --dangerously-skip-permissions",
+		StuckTimeout:    5 * time.Minute,
+		NudgeCommand:    "\n",
+		MaxNudgeRetries: 2,
+	}
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-690", "Implement daemon core", "claude"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	deps.commands.reset()
+	deps.amux.waitIdleCalls = nil
+	deps.amux.killCalls = nil
+
+	if err := d.Cancel(ctx, "LAB-690"); err != nil {
+		t.Fatalf("Cancel() error = %v", err)
+	}
+
+	waitFor(t, "task cancellation", func() bool {
+		task, ok := deps.state.task("LAB-690")
+		return ok && task.Status == TaskStatusCancelled
+	})
+
+	deps.amux.requireSentKeys(t, "pane-1", []string{"Implement daemon core", "Enter"})
+	if got := deps.amux.waitIdleCalls; len(got) != 0 {
+		t.Fatalf("waitIdle calls = %#v, want none", got)
+	}
+	if got, want := deps.amux.killCalls, []string{"pane-1"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("kill calls = %#v, want %#v", got, want)
+	}
+	if got := deps.commands.callsByName("git"); len(got) != 0 {
+		t.Fatalf("git calls = %#v, want none during daemon cleanup", got)
+	}
 }
 
 func TestStuckDetectionMatchesTextPatternsThenEscalates(t *testing.T) {
@@ -688,12 +885,21 @@ func TestStuckDetectionUsesIdleTimeoutAndRecoversOnOutputChange(t *testing.T) {
 }
 
 func TestPRMergePollingSendsWrapUpAndCleansClone(t *testing.T) {
-	t.Parallel()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
 
 	deps := newTestDeps(t)
 	captureTicker := newFakeTicker()
 	prTicker := newFakeTicker()
 	deps.tickers.enqueue(captureTicker, prTicker)
+	postmortemDir := filepath.Join(home, "sync", "postmortems")
+	deps.amux.sendKeysHook = func(_ string, keys []string) {
+		for _, key := range keys {
+			if key == "$postmortem" {
+				writePostmortemLog(t, postmortemDir, "LAB-689", deps.clock.Now().Add(time.Minute))
+			}
+		}
+	}
 	deps.amux.rejectCanceledContext = true
 	deps.pool.rejectCanceledContext = true
 	deps.state.rejectCanceledContext = true
@@ -727,10 +933,16 @@ func TestPRMergePollingSendsWrapUpAndCleansClone(t *testing.T) {
 	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
 		{PaneID: "pane-1", Timeout: 30 * time.Second},
 		{PaneID: "pane-1", Timeout: 2 * time.Minute},
+		{PaneID: "pane-1", Timeout: 2 * time.Minute},
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("wait idle calls = %#v, want %#v", got, want)
 	}
-	if got, want := deps.pool.releasedClones(), []Clone{deps.pool.clone}; !reflect.DeepEqual(got, want) {
+	if got, want := deps.pool.releasedClones(), []Clone{{
+		Name:          deps.pool.clone.Name,
+		Path:          deps.pool.clone.Path,
+		CurrentBranch: "LAB-689",
+		AssignedTask:  "LAB-689",
+	}}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("released clones = %#v, want %#v", got, want)
 	}
 	if got, want := deps.issueTracker.statuses(), []issueStatusUpdate{
@@ -741,6 +953,7 @@ func TestPRMergePollingSendsWrapUpAndCleansClone(t *testing.T) {
 	}
 	deps.amux.requireSentKeys(t, "pane-1", []string{
 		"Implement daemon core\n",
+		"$postmortem\n",
 		"PR merged, wrap up.\n",
 	})
 	deps.events.requireTypes(t, EventDaemonStarted, EventTaskAssigned, EventPRDetected, EventPRMerged, EventTaskCompleted)
@@ -753,6 +966,15 @@ func TestPRMergeCleanupContinuesWhenIssueTrackerDoneUpdateFails(t *testing.T) {
 	captureTicker := newFakeTicker()
 	prTicker := newFakeTicker()
 	deps.tickers.enqueue(captureTicker, prTicker)
+	deps.config.profiles["codex"] = AgentProfile{
+		Name:              "codex",
+		StartCommand:      "codex --yolo",
+		ResumeSequence:    []string{"codex --yolo resume", "Enter", "."},
+		PostmortemEnabled: false,
+		StuckTimeout:      5 * time.Minute,
+		NudgeCommand:      "\n",
+		MaxNudgeRetries:   3,
+	}
 	deps.amux.rejectCanceledContext = true
 	deps.pool.rejectCanceledContext = true
 	deps.state.rejectCanceledContext = true
@@ -784,7 +1006,12 @@ func TestPRMergeCleanupContinuesWhenIssueTrackerDoneUpdateFails(t *testing.T) {
 	if _, ok := deps.state.worker("pane-1"); ok {
 		t.Fatal("worker still present after merge cleanup")
 	}
-	if got, want := deps.pool.releasedClones(), []Clone{deps.pool.clone}; !reflect.DeepEqual(got, want) {
+	if got, want := deps.pool.releasedClones(), []Clone{{
+		Name:          deps.pool.clone.Name,
+		Path:          deps.pool.clone.Path,
+		CurrentBranch: "LAB-689",
+		AssignedTask:  "LAB-689",
+	}}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("released clones = %#v, want %#v", got, want)
 	}
 	if got, want := deps.issueTracker.statuses(), []issueStatusUpdate{
@@ -797,6 +1024,80 @@ func TestPRMergeCleanupContinuesWhenIssueTrackerDoneUpdateFails(t *testing.T) {
 		t.Fatal("missing PR merged event")
 	} else if !strings.Contains(event.Message, "failed to update Linear issue status") {
 		t.Fatalf("PR merged event message = %q, want tracker failure context", event.Message)
+	}
+}
+
+func TestPRMergePollingReportsCompletionFailureWhenPostmortemNotRecorded(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	deps := newTestDeps(t)
+	captureTicker := newFakeTicker()
+	prTicker := newFakeTicker()
+	deps.tickers.enqueue(captureTicker, prTicker)
+	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-690", "--json", "number"}, `[{"number":42}]`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":"2026-04-02T12:00:00Z"}`, nil)
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-690", "Implement daemon core", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	prTicker.tick(deps.clock.Now())
+	waitFor(t, "task completion failure event", func() bool {
+		return deps.events.countType(EventTaskCompletionFailed) == 1
+	})
+
+	task, ok := deps.state.task("LAB-690")
+	if !ok {
+		t.Fatal("task missing after merge completion failure")
+	}
+	if got, want := task.Status, TaskStatusActive; got != want {
+		t.Fatalf("task.Status = %q, want %q", got, want)
+	}
+	if _, ok := deps.state.worker("pane-1"); !ok {
+		t.Fatal("worker removed after merge completion failure, want worker to remain active")
+	}
+	if got := deps.pool.releasedClones(); len(got) != 0 {
+		t.Fatalf("released clones = %#v, want none", got)
+	}
+	if got, want := deps.issueTracker.statuses(), []issueStatusUpdate{
+		{Issue: "LAB-690", State: IssueStateInProgress},
+		{Issue: "LAB-690", State: IssueStateDone},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("issue tracker statuses = %#v, want %#v", got, want)
+	}
+	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
+		{PaneID: "pane-1", Timeout: 30 * time.Second},
+		{PaneID: "pane-1", Timeout: 2 * time.Minute},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("wait idle calls = %#v, want %#v", got, want)
+	}
+	deps.amux.requireSentKeys(t, "pane-1", []string{
+		"Implement daemon core\n",
+		"$postmortem\n",
+	})
+	deps.events.requireTypes(t, EventDaemonStarted, EventTaskAssigned, EventPRDetected, EventPRMerged, EventTaskCompletionFailed)
+
+	deps.events.mu.Lock()
+	defer deps.events.mu.Unlock()
+	var failure Event
+	for _, event := range deps.events.events {
+		if event.Type == EventTaskCompletionFailed {
+			failure = event
+			break
+		}
+	}
+	if !strings.Contains(failure.Message, "postmortem not recorded") {
+		t.Fatalf("failure.Message = %q, want to contain %q", failure.Message, "postmortem not recorded")
 	}
 }
 
@@ -1328,6 +1629,287 @@ func TestNDJSONEmitterWritesLineDelimitedJSON(t *testing.T) {
 	}
 }
 
+func TestEnsureFlag(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		command string
+		flag    string
+		want    string
+	}{
+		{
+			name:    "empty command",
+			command: "",
+			flag:    "--yolo",
+			want:    "",
+		},
+		{
+			name:    "empty flag",
+			command: "codex",
+			flag:    "",
+			want:    "codex",
+		},
+		{
+			name:    "appends missing flag",
+			command: "codex",
+			flag:    "--yolo",
+			want:    "codex --yolo",
+		},
+		{
+			name:    "preserves existing flag",
+			command: "codex --yolo --profile fast",
+			flag:    "--yolo",
+			want:    "codex --yolo --profile fast",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := ensureFlag(tt.command, tt.flag); got != tt.want {
+				t.Fatalf("ensureFlag(%q, %q) = %q, want %q", tt.command, tt.flag, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestEnsurePostmortemErrorPathsAndCache(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	startedAt := time.Date(2026, 4, 2, 12, 0, 0, 0, time.UTC)
+	newActive := func() *assignment {
+		return &assignment{
+			profile:   AgentProfile{Name: "codex", PostmortemEnabled: true},
+			task:      Task{Issue: "LAB-730", Branch: "LAB-730"},
+			pane:      Pane{ID: "pane-1"},
+			startedAt: startedAt,
+		}
+	}
+
+	t.Run("request failure", func(t *testing.T) {
+		deps := newTestDeps(t)
+		deps.amux.sendKeysErr = errors.New("send failed")
+		d := deps.newDaemon(t)
+
+		err := d.ensurePostmortem(context.Background(), newActive())
+		if err == nil || !strings.Contains(err.Error(), "request postmortem") {
+			t.Fatalf("ensurePostmortem() error = %v, want request postmortem failure", err)
+		}
+	})
+
+	t.Run("wait failure", func(t *testing.T) {
+		deps := newTestDeps(t)
+		deps.amux.waitIdleErr = errors.New("idle timeout")
+		d := deps.newDaemon(t)
+
+		err := d.ensurePostmortem(context.Background(), newActive())
+		if err == nil || !strings.Contains(err.Error(), "wait for postmortem") {
+			t.Fatalf("ensurePostmortem() error = %v, want wait for postmortem failure", err)
+		}
+	})
+
+	t.Run("cached postmortem skips send", func(t *testing.T) {
+		deps := newTestDeps(t)
+		d := deps.newDaemon(t)
+		d.postmortems["pane-1"] = startedAt
+
+		if err := d.ensurePostmortem(context.Background(), newActive()); err != nil {
+			t.Fatalf("ensurePostmortem() error = %v", err)
+		}
+		if got := deps.amux.sentKeys["pane-1"]; len(got) != 0 {
+			t.Fatalf("sent keys = %#v, want none", got)
+		}
+		if got := deps.amux.waitIdleCalls; len(got) != 0 {
+			t.Fatalf("waitIdle calls = %#v, want none", got)
+		}
+	})
+}
+
+func TestFindPostmortemHelpers(t *testing.T) {
+	writeFixture := func(t *testing.T, dir, name, issue, branch string, modTime time.Time) {
+		t.Helper()
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q) error = %v", dir, err)
+		}
+		path := filepath.Join(dir, name)
+		content := strings.Join([]string{
+			"### Metadata",
+			"- **Repo**: orca",
+			"- **Branch**: " + branch,
+			"- **Issues**: " + issue,
+			"",
+		}, "\n")
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatalf("WriteFile(%q) error = %v", path, err)
+		}
+		if err := os.Chtimes(path, modTime, modTime); err != nil {
+			t.Fatalf("Chtimes(%q) error = %v", path, err)
+		}
+	}
+
+	t.Run("findPostmortemInDir filters by session and modtime", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		startedAt := time.Date(2026, 4, 2, 12, 0, 0, 0, time.UTC)
+		active := &assignment{
+			startedAt: startedAt,
+			task:      Task{Issue: "LAB-731", Branch: "LAB-731"},
+		}
+
+		writeFixture(t, dir, "stale.md", "LAB-731", "LAB-731", startedAt.Add(-time.Minute))
+		writeFixture(t, dir, "wrong.md", "LAB-999", "LAB-999", startedAt.Add(time.Minute))
+		writeFixture(t, dir, "match.md", "LAB-731", "LAB-731", startedAt.Add(2*time.Minute))
+
+		recordedAt, ok, err := findPostmortemInDir(dir, active)
+		if err != nil {
+			t.Fatalf("findPostmortemInDir() error = %v", err)
+		}
+		if !ok {
+			t.Fatal("findPostmortemInDir() ok = false, want true")
+		}
+		if got, want := recordedAt, startedAt.Add(2*time.Minute); !got.Equal(want) {
+			t.Fatalf("recordedAt = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("findPostmortemInDir missing dir", func(t *testing.T) {
+		t.Parallel()
+
+		active := &assignment{startedAt: time.Now(), task: Task{Issue: "LAB-731", Branch: "LAB-731"}}
+		recordedAt, ok, err := findPostmortemInDir(filepath.Join(t.TempDir(), "missing"), active)
+		if err != nil {
+			t.Fatalf("findPostmortemInDir() error = %v", err)
+		}
+		if ok {
+			t.Fatal("findPostmortemInDir() ok = true, want false")
+		}
+		if !recordedAt.IsZero() {
+			t.Fatalf("recordedAt = %v, want zero", recordedAt)
+		}
+	})
+
+	t.Run("findPostmortemInDir unreadable target", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		path := filepath.Join(dir, "broken.md")
+		if err := os.Symlink(filepath.Join(dir, "missing-target"), path); err != nil {
+			t.Fatalf("Symlink(%q) error = %v", path, err)
+		}
+
+		active := &assignment{
+			startedAt: time.Date(2026, 4, 2, 12, 0, 0, 0, time.UTC),
+			task:      Task{Issue: "LAB-731", Branch: "LAB-731"},
+		}
+		if _, _, err := findPostmortemInDir(dir, active); err == nil || !strings.Contains(err.Error(), "read postmortem") {
+			t.Fatalf("findPostmortemInDir() error = %v, want read postmortem failure", err)
+		}
+	})
+
+	t.Run("findPostmortem chooses newest known directory entry", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+
+		startedAt := time.Date(2026, 4, 2, 12, 0, 0, 0, time.UTC)
+		active := &assignment{
+			startedAt: startedAt,
+			task:      Task{Issue: "LAB-732", Branch: "LAB-732"},
+		}
+
+		writeFixture(t, filepath.Join(home, "sync", "postmortems"), "older.md", "LAB-732", "LAB-732", startedAt.Add(time.Minute))
+		writeFixture(t, filepath.Join(home, ".local", "share", "postmortems"), "newer.md", "LAB-732", "LAB-732", startedAt.Add(2*time.Minute))
+
+		recordedAt, ok, err := findPostmortem(active)
+		if err != nil {
+			t.Fatalf("findPostmortem() error = %v", err)
+		}
+		if !ok {
+			t.Fatal("findPostmortem() ok = false, want true")
+		}
+		if got, want := recordedAt, startedAt.Add(2*time.Minute); !got.Equal(want) {
+			t.Fatalf("recordedAt = %v, want %v", got, want)
+		}
+	})
+}
+
+func TestMatchesPostmortemSession(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		content string
+		issue   string
+		branch  string
+		want    bool
+	}{
+		{
+			name:    "matches issue and branch case-insensitively",
+			content: "issue lab-issue-733 branch feature/task-733",
+			issue:   "LAB-ISSUE-733",
+			branch:  "feature/TASK-733",
+			want:    true,
+		},
+		{
+			name:    "rejects missing issue",
+			content: "branch feature/task-733",
+			issue:   "LAB-ISSUE-733",
+			branch:  "feature/TASK-733",
+			want:    false,
+		},
+		{
+			name:    "rejects missing branch",
+			content: "issue lab-issue-733",
+			issue:   "LAB-ISSUE-733",
+			branch:  "feature/TASK-733",
+			want:    false,
+		},
+		{
+			name:    "branch-only match succeeds",
+			content: "branch feature/task-733",
+			issue:   "",
+			branch:  "feature/TASK-733",
+			want:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := matchesPostmortemSession(tt.content, tt.issue, tt.branch); got != tt.want {
+				t.Fatalf("matchesPostmortemSession(%q, %q, %q) = %v, want %v", tt.content, tt.issue, tt.branch, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCleanupCloneAndReleaseDefaultsCloneMetadata(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	d := deps.newDaemon(t)
+	clone := Clone{Name: deps.pool.clone.Name, Path: deps.pool.clone.Path}
+
+	if err := d.cleanupCloneAndRelease(context.Background(), clone, "LAB-734"); err != nil {
+		t.Fatalf("cleanupCloneAndRelease() error = %v", err)
+	}
+
+	if got, want := deps.pool.releasedClones(), []Clone{{
+		Name:          deps.pool.clone.Name,
+		Path:          deps.pool.clone.Path,
+		CurrentBranch: "LAB-734",
+		AssignedTask:  "LAB-734",
+	}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("released clones = %#v, want %#v", got, want)
+	}
+}
+
 type testDeps struct {
 	clock        *fakeClock
 	config       *fakeConfig
@@ -1355,12 +1937,13 @@ func newTestDeps(t *testing.T) *testDeps {
 		config: &fakeConfig{
 			profiles: map[string]AgentProfile{
 				"codex": {
-					Name:            "codex",
-					StartCommand:    "codex --yolo",
-					ResumeSequence:  []string{"codex --yolo resume", "Enter", "."},
-					StuckTimeout:    5 * time.Minute,
-					NudgeCommand:    "\n",
-					MaxNudgeRetries: 3,
+					Name:              "codex",
+					StartCommand:      "codex --yolo",
+					ResumeSequence:    []string{"codex --yolo resume", "Enter", "."},
+					PostmortemEnabled: true,
+					StuckTimeout:      5 * time.Minute,
+					NudgeCommand:      "\n",
+					MaxNudgeRetries:   3,
 				},
 			},
 		},
@@ -1643,6 +2226,7 @@ type fakeAmux struct {
 	spawnPane             Pane
 	sendKeysErr           error
 	sendKeysResults       []error
+	sendKeysHook          func(paneID string, keys []string)
 	waitIdleErr           error
 	rejectCanceledContext bool
 	spawnRequests         []SpawnRequest
@@ -1698,6 +2282,9 @@ func (a *fakeAmux) SetMetadata(ctx context.Context, paneID string, metadata map[
 func (a *fakeAmux) SendKeys(ctx context.Context, paneID string, keys ...string) error {
 	if a.rejectCanceledContext && ctx.Err() != nil {
 		return ctx.Err()
+	}
+	if a.sendKeysHook != nil {
+		a.sendKeysHook(paneID, append([]string(nil), keys...))
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -1800,32 +2387,53 @@ func (a *fakeAmux) requireSentKeys(t *testing.T, paneID string, want []string) {
 	t.Helper()
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if got := a.sentKeys[paneID]; !reflect.DeepEqual(got, want) {
+	got := append([]string(nil), a.sentKeys[paneID]...)
+	want = normalizeSentKeys(want...)
+	if len(got) == 0 && len(want) == 0 {
+		return
+	}
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("sentKeys[%q] = %#v, want %#v", paneID, got, want)
 	}
 }
 
 func normalizeSentKeys(keys ...string) []string {
 	normalized := make([]string, 0, len(keys))
-	var builder strings.Builder
-	flush := func() {
-		if builder.Len() == 0 {
-			return
-		}
-		normalized = append(normalized, builder.String())
-		builder.Reset()
-	}
-
 	for _, key := range keys {
 		if key == "Enter" {
-			builder.WriteString("\n")
-			flush()
+			if len(normalized) == 0 {
+				normalized = append(normalized, "\n")
+				continue
+			}
+			normalized[len(normalized)-1] += "\n"
 			continue
 		}
-		builder.WriteString(key)
+		normalized = append(normalized, key)
 	}
-	flush()
 	return normalized
+}
+
+func writePostmortemLog(t *testing.T, dir, issue string, modTime time.Time) {
+	t.Helper()
+
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", dir, err)
+	}
+
+	path := filepath.Join(dir, issue+".md")
+	content := strings.Join([]string{
+		"### Metadata",
+		"- **Repo**: orca",
+		"- **Branch**: " + issue,
+		"- **Issues**: " + issue,
+		"",
+	}, "\n")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", path, err)
+	}
+	if err := os.Chtimes(path, modTime, modTime); err != nil {
+		t.Fatalf("Chtimes(%q) error = %v", path, err)
+	}
 }
 
 type fakeCommands struct {

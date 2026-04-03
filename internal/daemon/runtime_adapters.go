@@ -26,6 +26,7 @@ func (a configAdapter) AgentProfile(_ context.Context, name string) (AgentProfil
 	profile := AgentProfile{
 		Name:              name,
 		StartCommand:      cfgProfile.StartCommand,
+		PostmortemEnabled: cfgProfile.PostmortemEnabled,
 		StuckTextPatterns: append([]string(nil), cfgProfile.StuckTextPatterns...),
 		StuckTimeout:      cfgProfile.StuckTimeout,
 		NudgeCommand:      cfgProfile.NudgeCommand,

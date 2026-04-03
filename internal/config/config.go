@@ -35,6 +35,7 @@ type PoolConfig struct {
 
 type AgentProfile struct {
 	StartCommand      string
+	PostmortemEnabled bool
 	IdleTimeout       time.Duration
 	StuckTimeout      time.Duration
 	StuckTextPatterns []string
@@ -98,6 +99,7 @@ type rawPoolConfig struct {
 
 type rawAgentProfile struct {
 	StartCommand         *string  `toml:"start_command"`
+	PostmortemEnabled    *bool    `toml:"postmortem_enabled"`
 	IdleTimeout          *string  `toml:"idle_timeout"`
 	StuckTimeout         *string  `toml:"stuck_timeout"`
 	StuckTextPatterns    []string `toml:"stuck_text_patterns"`
@@ -173,6 +175,9 @@ func (r *rawPoolConfig) merge(override rawPoolConfig) {
 func (r *rawAgentProfile) merge(override rawAgentProfile) {
 	if override.StartCommand != nil {
 		r.StartCommand = override.StartCommand
+	}
+	if override.PostmortemEnabled != nil {
+		r.PostmortemEnabled = override.PostmortemEnabled
 	}
 	if override.IdleTimeout != nil {
 		r.IdleTimeout = override.IdleTimeout
@@ -254,6 +259,9 @@ func (r rawAgentProfile) toConfig(prefix string) (AgentProfile, error) {
 
 	if r.StartCommand != nil {
 		cfg.StartCommand = *r.StartCommand
+	}
+	if r.PostmortemEnabled != nil {
+		cfg.PostmortemEnabled = *r.PostmortemEnabled
 	}
 
 	if r.IdleTimeout != nil {
