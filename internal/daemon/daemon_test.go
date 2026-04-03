@@ -91,6 +91,11 @@ func TestAssignAllocatesCloneStartsAgentAndRegistersState(t *testing.T) {
 	if got, want := worker.AgentProfile, "codex"; got != want {
 		t.Fatalf("worker.AgentProfile = %q, want %q", got, want)
 	}
+	if got, want := deps.issueTracker.statuses(), []issueStatusUpdate{
+		{Issue: "LAB-689", State: "In Progress"},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("issue tracker statuses = %#v, want %#v", got, want)
+	}
 
 	wantGit := []commandCall{
 		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"checkout", "main"}},
@@ -618,6 +623,12 @@ func TestPRMergePollingSendsWrapUpAndCleansClone(t *testing.T) {
 	if got, want := deps.pool.releasedClones(), []Clone{deps.pool.clone}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("released clones = %#v, want %#v", got, want)
 	}
+	if got, want := deps.issueTracker.statuses(), []issueStatusUpdate{
+		{Issue: "LAB-689", State: "In Progress"},
+		{Issue: "LAB-689", State: "Done"},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("issue tracker statuses = %#v, want %#v", got, want)
+	}
 	deps.amux.requireSentKeys(t, "pane-1", []string{
 		"Implement daemon core\n",
 		"PR merged, wrap up.\n",
@@ -1026,15 +1037,16 @@ func TestNDJSONEmitterWritesLineDelimitedJSON(t *testing.T) {
 }
 
 type testDeps struct {
-	clock    *fakeClock
-	config   *fakeConfig
-	state    *fakeState
-	pool     *fakePool
-	amux     *fakeAmux
-	commands *fakeCommands
-	events   *fakeEvents
-	tickers  *fakeTickerFactory
-	pidPath  string
+	clock        *fakeClock
+	config       *fakeConfig
+	state        *fakeState
+	pool         *fakePool
+	amux         *fakeAmux
+	issueTracker *fakeIssueTracker
+	commands     *fakeCommands
+	events       *fakeEvents
+	tickers      *fakeTickerFactory
+	pidPath      string
 }
 
 func newTestDeps(t *testing.T) *testDeps {
@@ -1059,13 +1071,14 @@ func newTestDeps(t *testing.T) *testDeps {
 				},
 			},
 		},
-		state:    newFakeState(),
-		pool:     &fakePool{clone: Clone{Name: "clone-01", Path: clonePath}},
-		amux:     &fakeAmux{spawnPane: Pane{ID: "pane-1", Name: "worker-1"}, captures: make(map[string][]string)},
-		commands: newFakeCommands(),
-		events:   newFakeEvents(),
-		tickers:  &fakeTickerFactory{},
-		pidPath:  filepath.Join(tmp, "orca.pid"),
+		state:        newFakeState(),
+		pool:         &fakePool{clone: Clone{Name: "clone-01", Path: clonePath}},
+		amux:         &fakeAmux{spawnPane: Pane{ID: "pane-1", Name: "worker-1"}, captures: make(map[string][]string)},
+		issueTracker: &fakeIssueTracker{},
+		commands:     newFakeCommands(),
+		events:       newFakeEvents(),
+		tickers:      &fakeTickerFactory{},
+		pidPath:      filepath.Join(tmp, "orca.pid"),
 	}
 }
 
@@ -1080,6 +1093,7 @@ func (d *testDeps) newDaemon(t *testing.T) *Daemon {
 		State:            d.state,
 		Pool:             d.pool,
 		Amux:             d.amux,
+		IssueTracker:     d.issueTracker,
 		Commands:         d.commands,
 		Events:           d.events,
 		Now:              d.clock.Now,
@@ -1126,6 +1140,31 @@ func (c *fakeClock) Advance(delta time.Duration) {
 
 type fakeConfig struct {
 	profiles map[string]AgentProfile
+}
+
+type issueStatusUpdate struct {
+	Issue string
+	State string
+}
+
+type fakeIssueTracker struct {
+	mu      sync.Mutex
+	updates []issueStatusUpdate
+}
+
+func (t *fakeIssueTracker) SetIssueStatus(_ context.Context, issue, state string) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.updates = append(t.updates, issueStatusUpdate{Issue: issue, State: state})
+	return nil
+}
+
+func (t *fakeIssueTracker) statuses() []issueStatusUpdate {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	out := make([]issueStatusUpdate, len(t.updates))
+	copy(out, t.updates)
+	return out
 }
 
 func (c *fakeConfig) AgentProfile(_ context.Context, name string) (AgentProfile, error) {
