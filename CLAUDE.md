@@ -32,6 +32,12 @@ Red-green-refactor with separate commits per phase:
 2. **Green** — minimal code to pass, commit separately
 3. **Refactor** — simplify, commit separately
 
+### Code Organization
+
+- Files should be under 500 lines. When a file grows past ~500 LOC, split it by concern. Each concern (stuck detection, PR polling, review nudge, etc.) belongs in its own file with colocated tests.
+- Split by concern within a package, not by creating new packages. Methods on a shared struct can live in separate files.
+- Patch coverage on PRs must be at least 80%.
+
 ### Test Philosophy
 
 - Table-driven tests with `t.Run` and `t.Parallel()`
