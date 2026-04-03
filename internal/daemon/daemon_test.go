@@ -1187,7 +1187,7 @@ func (a *fakeAmux) SendKeys(ctx context.Context, paneID string, keys ...string) 
 	if a.sentKeys == nil {
 		a.sentKeys = make(map[string][]string)
 	}
-	a.sentKeys[paneID] = append(a.sentKeys[paneID], keys...)
+	a.sentKeys[paneID] = append(a.sentKeys[paneID], normalizeSentKeys(keys...)...)
 	return a.sendKeysErr
 }
 
@@ -1275,6 +1275,29 @@ func (a *fakeAmux) requireSentKeys(t *testing.T, paneID string, want []string) {
 	if got := a.sentKeys[paneID]; !reflect.DeepEqual(got, want) {
 		t.Fatalf("sentKeys[%q] = %#v, want %#v", paneID, got, want)
 	}
+}
+
+func normalizeSentKeys(keys ...string) []string {
+	normalized := make([]string, 0, len(keys))
+	var builder strings.Builder
+	flush := func() {
+		if builder.Len() == 0 {
+			return
+		}
+		normalized = append(normalized, builder.String())
+		builder.Reset()
+	}
+
+	for _, key := range keys {
+		if key == "Enter" {
+			builder.WriteString("\n")
+			flush()
+			continue
+		}
+		builder.WriteString(key)
+	}
+	flush()
+	return normalized
 }
 
 type fakeCommands struct {

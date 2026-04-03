@@ -257,9 +257,7 @@ func (d *Daemon) Assign(ctx context.Context, issue, prompt, agentProfile string)
 
 	existingTask, err := d.state.TaskByIssue(ctx, d.project, issue)
 	if err == nil {
-		switch existingTask.Status {
-		case "", TaskStatusDone, TaskStatusCancelled, TaskStatusFailed:
-		default:
+		if taskBlocksAssignment(existingTask.Status) {
 			releaseReservation()
 			return fmt.Errorf("issue %s already assigned", issue)
 		}
@@ -303,12 +301,7 @@ func (d *Daemon) Assign(ctx context.Context, issue, prompt, agentProfile string)
 		return fmt.Errorf("spawn pane: %w", err)
 	}
 
-	if err := d.amux.SetMetadata(ctx, pane.ID, map[string]string{
-		"agent_profile": profile.Name,
-		"branch":        issue,
-		"issue":         issue,
-		"task":          issue,
-	}); err != nil {
+	if err := d.amux.SetMetadata(ctx, pane.ID, assignmentMetadata(profile.Name, issue, issue, 0)); err != nil {
 		_ = d.rollbackAssignment(ctx, clone, pane, issue)
 		releaseReservation()
 		return fmt.Errorf("set pane metadata: %w", err)
@@ -531,13 +524,7 @@ func (d *Daemon) handlePRPoll(active *assignment) {
 			active.task.PRNumber = prNumber
 			active.task.UpdatedAt = d.now()
 			_ = d.state.PutTask(active.ctx, active.task)
-			_ = d.amux.SetMetadata(active.ctx, active.pane.ID, map[string]string{
-				"agent_profile": active.profile.Name,
-				"branch":        active.task.Branch,
-				"issue":         active.task.Issue,
-				"pr":            fmt.Sprintf("%d", prNumber),
-				"task":          active.task.Issue,
-			})
+			_ = d.amux.SetMetadata(active.ctx, active.pane.ID, assignmentMetadata(active.profile.Name, active.task.Branch, active.task.Issue, prNumber))
 			d.emit(active.ctx, Event{
 				Time:         d.now(),
 				Type:         EventPRDetected,
@@ -798,6 +785,28 @@ func parsePRNumberList(output []byte) (int, error) {
 		return 0, nil
 	}
 	return prs[0].Number, nil
+}
+
+func taskBlocksAssignment(status string) bool {
+	switch status {
+	case "", TaskStatusDone, TaskStatusCancelled, TaskStatusFailed:
+		return false
+	default:
+		return true
+	}
+}
+
+func assignmentMetadata(agentProfile, branch, issue string, prNumber int) map[string]string {
+	metadata := map[string]string{
+		"agent_profile": agentProfile,
+		"branch":        branch,
+		"issue":         issue,
+		"task":          issue,
+	}
+	if prNumber > 0 {
+		metadata["pr"] = fmt.Sprintf("%d", prNumber)
+	}
+	return metadata
 }
 
 func (d *Daemon) isPRMerged(ctx context.Context, prNumber int) (bool, error) {
