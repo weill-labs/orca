@@ -211,6 +211,34 @@ func TestManagerAllocate(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "repairs unhealthy clone before creating issue branch",
+			run: func(t *testing.T, manager *pool.Manager, store *state.SQLiteStore, project string, clones []string) {
+				t.Helper()
+
+				mustRun(t, clones[0], "git", "checkout", "-b", "scratch")
+				mustWriteFile(t, filepath.Join(clones[0], "README.md"), "dirty")
+				mustWriteFile(t, filepath.Join(clones[0], "junk.txt"), "junk")
+
+				clone, err := manager.Allocate(context.Background(), "LAB-687", "LAB-687")
+				if err != nil {
+					t.Fatalf("Allocate() error = %v", err)
+				}
+
+				if got, want := gitCurrentBranch(t, clone.Path), "LAB-687"; got != want {
+					t.Fatalf("current branch = %q, want %q", got, want)
+				}
+				if got := gitStatusPorcelain(t, clone.Path); !gitStatusClean(got) {
+					t.Fatalf("git status --porcelain = %q, want clean worktree except %s", got, ".orca-pool")
+				}
+				if _, err := os.Stat(filepath.Join(clone.Path, "junk.txt")); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("junk.txt stat error = %v, want not exist", err)
+				}
+				if _, err := os.Stat(filepath.Join(clone.Path, ".orca-pool")); err != nil {
+					t.Fatalf(".orca-pool stat error = %v", err)
+				}
+			},
+		},
 	}
 
 	for _, tc := range cases {
@@ -232,6 +260,109 @@ func TestManagerAllocate(t *testing.T) {
 			}, store)
 
 			tc.run(t, manager, store, project, clones)
+		})
+	}
+}
+
+func TestManagerHealthCheck(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name       string
+		baseBranch string
+		setup      func(t *testing.T, clonePath string)
+		verify     func(t *testing.T, clonePath string)
+		wantErr    string
+	}{
+		{
+			name: "repairs dirty clone back to base branch",
+			setup: func(t *testing.T, clonePath string) {
+				t.Helper()
+
+				mustRun(t, clonePath, "git", "checkout", "-b", "scratch")
+				mustWriteFile(t, filepath.Join(clonePath, "README.md"), "dirty")
+				mustWriteFile(t, filepath.Join(clonePath, "junk.txt"), "junk")
+			},
+			verify: func(t *testing.T, clonePath string) {
+				t.Helper()
+
+				if got, want := gitCurrentBranch(t, clonePath), "main"; got != want {
+					t.Fatalf("current branch = %q, want %q", got, want)
+				}
+				if got := gitStatusPorcelain(t, clonePath); !gitStatusClean(got) {
+					t.Fatalf("git status --porcelain = %q, want clean worktree except %s", got, ".orca-pool")
+				}
+				if _, err := os.Stat(filepath.Join(clonePath, "junk.txt")); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("junk.txt stat error = %v, want not exist", err)
+				}
+				if _, err := os.Stat(filepath.Join(clonePath, ".orca-pool")); err != nil {
+					t.Fatalf(".orca-pool stat error = %v", err)
+				}
+			},
+		},
+		{
+			name:       "repairs clone to configured base branch",
+			baseBranch: "trunk",
+			setup: func(t *testing.T, clonePath string) {
+				t.Helper()
+
+				mustRun(t, clonePath, "git", "checkout", "-b", "scratch")
+			},
+			verify: func(t *testing.T, clonePath string) {
+				t.Helper()
+
+				if got, want := gitCurrentBranch(t, clonePath), "trunk"; got != want {
+					t.Fatalf("current branch = %q, want %q", got, want)
+				}
+			},
+		},
+		{
+			name: "returns error when remote is unreachable",
+			setup: func(t *testing.T, clonePath string) {
+				t.Helper()
+
+				mustRun(t, clonePath, "git", "remote", "set-url", "origin", filepath.Join(t.TempDir(), "missing-origin.git"))
+			},
+			wantErr: "remote",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			root := t.TempDir()
+			project := filepath.Join(root, "project")
+			origin := newOrigin(t, defaultBaseBranch(tc.baseBranch))
+			clonePath := newClone(t, origin, filepath.Join(root, "orca01"))
+			store := newStore(t)
+			manager := newManager(t, project, staticConfig{
+				pattern:    filepath.Join(root, "orca*"),
+				baseBranch: tc.baseBranch,
+			}, store)
+
+			if tc.setup != nil {
+				tc.setup(t, clonePath)
+			}
+
+			err := manager.HealthCheck(context.Background(), clonePath)
+			if tc.wantErr != "" {
+				if err == nil {
+					t.Fatalf("HealthCheck() error = nil, want substring %q", tc.wantErr)
+				}
+				if !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("HealthCheck() error = %v, want substring %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("HealthCheck() error = %v", err)
+			}
+
+			if tc.verify != nil {
+				tc.verify(t, clonePath)
+			}
 		})
 	}
 }
@@ -478,6 +609,24 @@ func gitBranchExists(t *testing.T, dir, branch string) bool {
 	cmd.Dir = dir
 	err := cmd.Run()
 	return err == nil
+}
+
+func gitStatusPorcelain(t *testing.T, dir string) string {
+	t.Helper()
+
+	return strings.TrimSpace(mustOutput(t, dir, "git", "status", "--porcelain"))
+}
+
+func gitStatusClean(status string) bool {
+	for _, line := range strings.Split(strings.TrimSpace(status), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || line == "?? .orca-pool" {
+			continue
+		}
+		return false
+	}
+
+	return true
 }
 
 func mustMkdir(t *testing.T, path string) {
