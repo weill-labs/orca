@@ -71,6 +71,19 @@ func newGitHubCLIClient(cfg gitHubCLIClientConfig) *gitHubCLIClient {
 	}
 }
 
+func newDefaultGitHubClient(project string, commands CommandRunner) gitHubClient {
+	return newGitHubCLIClient(gitHubCLIClientConfig{
+		project:        project,
+		commands:       commands,
+		now:            time.Now,
+		sleep:          sleepContext,
+		minInterval:    defaultGitHubAPIMinInterval,
+		initialBackoff: defaultGitHubAPIInitialBackoff,
+		maxBackoff:     defaultGitHubAPIMaxBackoff,
+		maxAttempts:    defaultGitHubAPIMaxAttempts,
+	})
+}
+
 func (c *gitHubCLIClient) lookupPRNumber(ctx context.Context, branch string) (int, error) {
 	output, err := c.run(ctx, "pr", "list", "--head", branch, "--json", "number")
 	if err != nil {

@@ -1037,6 +1037,8 @@ type testDeps struct {
 	pidPath  string
 }
 
+func noSleep(context.Context, time.Duration) error { return nil }
+
 func newTestDeps(t *testing.T) *testDeps {
 	t.Helper()
 
@@ -1095,7 +1097,7 @@ func (d *testDeps) newDaemon(t *testing.T) *Daemon {
 		project:     "/tmp/project",
 		commands:    d.commands,
 		now:         d.clock.Now,
-		sleep:       func(context.Context, time.Duration) error { return nil },
+		sleep:       noSleep,
 		maxAttempts: 1,
 	})
 	return daemon
