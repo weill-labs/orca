@@ -1069,7 +1069,7 @@ func (a *fakeAmux) SetMetadata(ctx context.Context, paneID string, metadata map[
 	return nil
 }
 
-func (a *fakeAmux) SendKeys(ctx context.Context, paneID, keys string) error {
+func (a *fakeAmux) SendKeys(ctx context.Context, paneID string, keys ...string) error {
 	if a.rejectCanceledContext && ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -1078,7 +1078,7 @@ func (a *fakeAmux) SendKeys(ctx context.Context, paneID, keys string) error {
 	if a.sentKeys == nil {
 		a.sentKeys = make(map[string][]string)
 	}
-	a.sentKeys[paneID] = append(a.sentKeys[paneID], keys)
+	a.sentKeys[paneID] = append(a.sentKeys[paneID], keys...)
 	return a.sendKeysErr
 }
 

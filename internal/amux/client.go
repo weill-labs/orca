@@ -17,7 +17,7 @@ var spawnPanePattern = regexp.MustCompile(`\bpane\s+(\S+)`)
 // Client wraps the amux CLI for daemon code and tests.
 type Client interface {
 	Spawn(ctx context.Context, req SpawnRequest) (Pane, error)
-	SendKeys(ctx context.Context, paneID, text string) error
+	SendKeys(ctx context.Context, paneID string, keys ...string) error
 	Capture(ctx context.Context, paneID string) (string, error)
 	SetMetadata(ctx context.Context, paneID string, metadata map[string]string) error
 	KillPane(ctx context.Context, paneID string) error
@@ -124,8 +124,10 @@ func (c *CLIClient) Spawn(ctx context.Context, req SpawnRequest) (Pane, error) {
 }
 
 // SendKeys forwards text to a pane with amux send-keys.
-func (c *CLIClient) SendKeys(ctx context.Context, paneID, text string) error {
-	_, err := c.run(ctx, c.session, "send-keys", paneID, text)
+// Extra keys arguments (e.g. "Enter") are passed as separate args.
+func (c *CLIClient) SendKeys(ctx context.Context, paneID string, keys ...string) error {
+	args := append([]string{paneID}, keys...)
+	_, err := c.run(ctx, c.session, "send-keys", args...)
 	return err
 }
 
