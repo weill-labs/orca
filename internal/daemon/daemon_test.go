@@ -922,27 +922,6 @@ func TestEnqueueNotifiesWorkerWhenRebaseFailsAndAllowsRequeue(t *testing.T) {
 	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
 	d := deps.newDaemon(t)
 	ctx := context.Background()
-
-=======
-func TestPRPollNudgesWorkerOncePerFailingCITransition(t *testing.T) {
-	t.Parallel()
-
-	deps := newTestDeps(t)
-	captureTicker := newFakeTicker()
-	prTicker := newFakeTicker()
-	deps.tickers.enqueue(captureTicker, prTicker)
-	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
-	deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[{"bucket":"fail"}]`, nil)
-	deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[{"bucket":"fail"}]`, nil)
-	deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[{"bucket":"pass"}]`, nil)
-	deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[{"bucket":"fail"}]`, nil)
-	for range 4 {
-		deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
-	}
-
-	d := deps.newDaemon(t)
-	ctx := context.Background()
->>>>>>> f53bdfd (test: cover PR check failure nudges)
 	if err := d.Start(ctx); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
@@ -954,7 +933,6 @@ func TestPRPollNudgesWorkerOncePerFailingCITransition(t *testing.T) {
 		t.Fatalf("Assign() error = %v", err)
 	}
 
-<<<<<<< HEAD
 	active, err := d.assignment("LAB-689")
 	if err != nil {
 		t.Fatalf("assignment() error = %v", err)
