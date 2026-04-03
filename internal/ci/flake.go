@@ -173,7 +173,7 @@ func AnalyzeTestOutput(r io.Reader, registry Registry) (Report, error) {
 		failedPackagesWithNamedTests[key.Package] = struct{}{}
 	}
 
-	report := Report{}
+	report := newReport()
 	for key, occurrences := range testFailures {
 		failure := Failure{
 			Package:     key.Package,
@@ -278,6 +278,8 @@ func ShouldAutoRerun(report Report, runAttempt, maxAttempts int) bool {
 }
 
 func WriteReport(w io.Writer, report Report) error {
+	normalizeReport(&report)
+
 	encoder := json.NewEncoder(w)
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(report); err != nil {
@@ -291,7 +293,28 @@ func ReadReport(r io.Reader) (Report, error) {
 	if err := json.NewDecoder(r).Decode(&report); err != nil {
 		return Report{}, fmt.Errorf("decode report: %w", err)
 	}
+	normalizeReport(&report)
 	return report, nil
+}
+
+func newReport() Report {
+	return Report{
+		KnownFailures:   []KnownFailure{},
+		UnknownFailures: []Failure{},
+		PackageFailures: []PackageFailure{},
+	}
+}
+
+func normalizeReport(report *Report) {
+	if report.KnownFailures == nil {
+		report.KnownFailures = []KnownFailure{}
+	}
+	if report.UnknownFailures == nil {
+		report.UnknownFailures = []Failure{}
+	}
+	if report.PackageFailures == nil {
+		report.PackageFailures = []PackageFailure{}
+	}
 }
 
 func suppressParentFailures(testFailures map[TestKey]int) map[TestKey]int {
