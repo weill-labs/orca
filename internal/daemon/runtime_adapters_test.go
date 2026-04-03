@@ -48,6 +48,31 @@ func TestConfigAdapterAgentProfile(t *testing.T) {
 	}
 }
 
+func TestNormalizeCodexStartCommand(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		command string
+		want    string
+	}{
+		{name: "empty command", command: "", want: "codex --yolo"},
+		{name: "adds yolo", command: "codex", want: "codex --yolo"},
+		{name: "preserves yolo", command: "codex --yolo", want: "codex --yolo"},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := normalizeCodexStartCommand(tt.command); got != tt.want {
+				t.Fatalf("normalizeCodexStartCommand(%q) = %q, want %q", tt.command, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestSQLiteStateAdapterRoundTrip(t *testing.T) {
 	t.Parallel()
 
