@@ -41,7 +41,7 @@ start_command = "codex --yolo"
 idle_timeout = "30s"
 stuck_timeout = "5m"
 stuck_text_patterns = ["permission prompt"]
-nudge_command = "y\n"
+nudge_command = "Enter"
 max_nudge_retries = 3
 EOF
 

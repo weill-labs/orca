@@ -184,7 +184,7 @@ func TestCancelSkipsPostmortemWhenProfileDisablesIt(t *testing.T) {
 		Name:            "claude",
 		StartCommand:    "claude --dangerously-skip-permissions",
 		StuckTimeout:    5 * time.Minute,
-		NudgeCommand:    "\n",
+		NudgeCommand:    "Enter",
 		MaxNudgeRetries: 2,
 	}
 

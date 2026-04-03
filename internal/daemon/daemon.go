@@ -54,24 +54,38 @@ type Daemon struct {
 }
 
 type assignment struct {
-	ctx             context.Context
-	cancel          context.CancelFunc
-	captureTick     Ticker
-	pollTick        Ticker
-	pending         bool
-	profile         AgentProfile
-	task            Task
-	worker          Worker
-	clone           Clone
-	pane            Pane
-	startedAt       time.Time
-	lastOutput      string
-	lastActivity    time.Time
-	prNumber        int
-	lastCIState     string
-	lastReviewCount atomic.Int64
-	escalated       bool
-	cleanupOnce     sync.Once
+	ctx                context.Context
+	cancel             context.CancelFunc
+	captureTick        Ticker
+	pollTick           Ticker
+	pending            bool
+	profile            AgentProfile
+	task               Task
+	worker             Worker
+	clone              Clone
+	pane               Pane
+	startedAt          time.Time
+	lastOutput         string
+	lastActivity       time.Time
+	prNumber           int
+	lastMergeableState atomic.Value
+	lastCIState        string
+	lastReviewCount    atomic.Int64
+	escalated          bool
+	cleanupOnce        sync.Once
+}
+
+func (a *assignment) mergeableState() string {
+	value := a.lastMergeableState.Load()
+	if value == nil {
+		return ""
+	}
+	state, _ := value.(string)
+	return state
+}
+
+func (a *assignment) setMergeableState(state string) {
+	a.lastMergeableState.Store(state)
 }
 
 type realTicker struct {

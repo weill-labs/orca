@@ -60,20 +60,22 @@ func runProcess(ctx context.Context, req ServeRequest, deps serveDeps) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	managerOptions := []pool.Option{}
+	amuxClient := deps.amux
+	if amuxClient == nil {
+		amuxClient = amux.NewClient(amux.Config{
+			Session: req.Session,
+		})
+	}
+
+	managerOptions := []pool.Option{
+		pool.WithCWDUsageChecker(amuxCWDUsageChecker{amux: amuxClient}),
+	}
 	if deps.poolRunner != nil {
 		managerOptions = append(managerOptions, pool.WithRunner(deps.poolRunner))
 	}
 	manager, err := pool.New(projectPath, poolConfigAdapter{cfg: cfg}, store, managerOptions...)
 	if err != nil {
 		return fmt.Errorf("create pool manager: %w", err)
-	}
-
-	amuxClient := deps.amux
-	if amuxClient == nil {
-		amuxClient = amux.NewClient(amux.Config{
-			Session: req.Session,
-		})
 	}
 
 	commandRunner := deps.commands

@@ -152,6 +152,7 @@ func TestManagerAllocate(t *testing.T) {
 	cases := []struct {
 		name       string
 		baseBranch string
+		options    func(clones []string) []pool.Option
 		run        func(t *testing.T, manager *pool.Manager, store *state.SQLiteStore, project string, clones []string)
 	}{
 		{
@@ -261,6 +262,86 @@ func TestManagerAllocate(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "skips free clone whose cwd is already used by another pane",
+			options: func(clones []string) []pool.Option {
+				return []pool.Option{
+					pool.WithCWDUsageChecker(fakeCWDUsageChecker{
+						paths: []string{clones[0]},
+					}),
+				}
+			},
+			run: func(t *testing.T, manager *pool.Manager, store *state.SQLiteStore, project string, clones []string) {
+				t.Helper()
+
+				clone, err := manager.Allocate(context.Background(), "LAB-687", "LAB-687")
+				if err != nil {
+					t.Fatalf("Allocate() error = %v", err)
+				}
+
+				if got, want := clone.Path, clones[1]; got != want {
+					t.Fatalf("clone.Path = %q, want %q", got, want)
+				}
+
+				record := lookupClone(t, store, project, clones[0])
+				if got, want := record.Status, state.CloneStatusFree; got != want {
+					t.Fatalf("record.Status = %q, want %q", got, want)
+				}
+				if got, want := gitCurrentBranch(t, clones[0]), "main"; got != want {
+					t.Fatalf("current branch = %q, want %q", got, want)
+				}
+			},
+		},
+		{
+			name: "returns no free clone when every free clone cwd is already used by another pane",
+			options: func(clones []string) []pool.Option {
+				return []pool.Option{
+					pool.WithCWDUsageChecker(fakeCWDUsageChecker{
+						paths: clones,
+					}),
+				}
+			},
+			run: func(t *testing.T, manager *pool.Manager, store *state.SQLiteStore, project string, clones []string) {
+				t.Helper()
+
+				_, err := manager.Allocate(context.Background(), "LAB-687", "LAB-687")
+				if !errors.Is(err, pool.ErrNoFreeClones) {
+					t.Fatalf("Allocate() error = %v, want ErrNoFreeClones", err)
+				}
+
+				for _, clonePath := range clones {
+					record := lookupClone(t, store, project, clonePath)
+					if got, want := record.Status, state.CloneStatusFree; got != want {
+						t.Fatalf("record.Status = %q, want %q", got, want)
+					}
+				}
+			},
+		},
+		{
+			name: "returns checker error before allocation",
+			options: func(clones []string) []pool.Option {
+				return []pool.Option{
+					pool.WithCWDUsageChecker(fakeCWDUsageChecker{
+						err: errors.New("list panes failed"),
+					}),
+				}
+			},
+			run: func(t *testing.T, manager *pool.Manager, store *state.SQLiteStore, project string, clones []string) {
+				t.Helper()
+
+				_, err := manager.Allocate(context.Background(), "LAB-687", "LAB-687")
+				if err == nil || !strings.Contains(err.Error(), "check active pane cwd usage: list panes failed") {
+					t.Fatalf("Allocate() error = %v, want checker failure", err)
+				}
+
+				for _, clonePath := range clones {
+					record := lookupClone(t, store, project, clonePath)
+					if got, want := record.Status, state.CloneStatusFree; got != want {
+						t.Fatalf("record.Status = %q, want %q", got, want)
+					}
+				}
+			},
+		},
 	}
 
 	for _, tc := range cases {
@@ -276,10 +357,14 @@ func TestManagerAllocate(t *testing.T) {
 				newClone(t, origin, filepath.Join(root, "orca02")),
 			}
 			store := newStore(t)
+			options := []pool.Option(nil)
+			if tc.options != nil {
+				options = tc.options(clones)
+			}
 			manager := newManager(t, project, staticConfig{
 				pattern:    filepath.Join(root, "orca*"),
 				baseBranch: tc.baseBranch,
-			}, store)
+			}, store, options...)
 
 			tc.run(t, manager, store, project, clones)
 		})
@@ -696,6 +781,18 @@ type recordingRunner struct {
 func (r *recordingRunner) Run(ctx context.Context, dir, name string, args ...string) error {
 	r.calls++
 	return r.err
+}
+
+type fakeCWDUsageChecker struct {
+	paths []string
+	err   error
+}
+
+func (c fakeCWDUsageChecker) ActiveCWDs(context.Context) ([]string, error) {
+	if c.err != nil {
+		return nil, c.err
+	}
+	return append([]string(nil), c.paths...), nil
 }
 
 func mustMkdir(t *testing.T, path string) {

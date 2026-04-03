@@ -30,6 +30,7 @@ const (
 	EventTaskCompletionFailed = "task.completion_failed"
 	EventWorkerNudged         = "worker.nudged"
 	EventWorkerNudgedCI       = "worker.nudged_ci"
+	EventWorkerNudgedConflict = "worker.nudged_conflict"
 	EventWorkerNudgedReview   = "worker.nudged_review"
 	EventWorkerEscalated      = "worker.escalated"
 	EventWorkerRecovered      = "worker.recovered"
@@ -85,6 +86,7 @@ type Pool interface {
 
 type AmuxClient interface {
 	Spawn(ctx context.Context, req SpawnRequest) (Pane, error)
+	ListPanes(ctx context.Context) ([]Pane, error)
 	SetMetadata(ctx context.Context, paneID string, metadata map[string]string) error
 	SendKeys(ctx context.Context, paneID string, keys ...string) error
 	Capture(ctx context.Context, paneID string) (string, error)

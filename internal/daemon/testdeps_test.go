@@ -45,7 +45,7 @@ func newTestDeps(t *testing.T) *testDeps {
 					ResumeSequence:    []string{"codex --yolo resume", "Enter", "."},
 					PostmortemEnabled: true,
 					StuckTimeout:      5 * time.Minute,
-					NudgeCommand:      "\n",
+					NudgeCommand:      "Enter",
 					MaxNudgeRetries:   3,
 				},
 			},

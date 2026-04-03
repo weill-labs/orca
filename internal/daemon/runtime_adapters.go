@@ -187,3 +187,25 @@ func (a poolConfigAdapter) PoolPattern() string {
 func (a poolConfigAdapter) BaseBranch() string {
 	return ""
 }
+
+type amuxCWDUsageChecker struct {
+	amux interface {
+		ListPanes(ctx context.Context) ([]Pane, error)
+	}
+}
+
+func (c amuxCWDUsageChecker) ActiveCWDs(ctx context.Context) ([]string, error) {
+	panes, err := c.amux.ListPanes(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	paths := make([]string, 0, len(panes))
+	for _, pane := range panes {
+		if strings.TrimSpace(pane.CWD) == "" {
+			continue
+		}
+		paths = append(paths, pane.CWD)
+	}
+	return paths, nil
+}

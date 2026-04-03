@@ -19,7 +19,7 @@ func TestAssignEnforcesCodexYoloFlag(t *testing.T) {
 		StartCommand:      "codex",
 		PostmortemEnabled: true,
 		StuckTimeout:      5 * time.Minute,
-		NudgeCommand:      "\n",
+		NudgeCommand:      "Enter",
 		MaxNudgeRetries:   3,
 	}
 	d := deps.newDaemon(t)

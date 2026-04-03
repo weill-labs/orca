@@ -12,6 +12,8 @@ import (
 type fakeAmux struct {
 	mu                    sync.Mutex
 	spawnPane             Pane
+	listPanes             []Pane
+	listPanesErr          error
 	sendKeysErr           error
 	sendKeysResults       []error
 	sendKeysHook          func(paneID string, keys []string)
@@ -45,6 +47,20 @@ func (a *fakeAmux) Spawn(ctx context.Context, req SpawnRequest) (Pane, error) {
 		a.sentKeys = make(map[string][]string)
 	}
 	return a.spawnPane, nil
+}
+
+func (a *fakeAmux) ListPanes(ctx context.Context) ([]Pane, error) {
+	if a.rejectCanceledContext && ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.listPanesErr != nil {
+		return nil, a.listPanesErr
+	}
+	out := make([]Pane, len(a.listPanes))
+	copy(out, a.listPanes)
+	return out, nil
 }
 
 func (a *fakeAmux) SetMetadata(ctx context.Context, paneID string, metadata map[string]string) error {

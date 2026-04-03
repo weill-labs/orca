@@ -34,7 +34,7 @@ func TestAssignConfirmsCodexTrustPromptBeforeSendingPrompt(t *testing.T) {
 		return ok && task.Status == TaskStatusActive
 	})
 
-	deps.amux.requireSentKeys(t, "pane-1", []string{"\n", "Implement handshake\n"})
+	deps.amux.requireSentKeys(t, "pane-1", []string{"Enter", "Implement handshake", "Enter"})
 	if got, want := deps.amux.captureCount("pane-1"), 2; got != want {
 		t.Fatalf("capture count = %d, want %d", got, want)
 	}

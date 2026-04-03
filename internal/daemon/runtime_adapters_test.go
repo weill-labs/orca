@@ -23,7 +23,7 @@ func TestConfigAdapterAgentProfile(t *testing.T) {
 				PostmortemEnabled: true,
 				StuckTimeout:      5 * time.Minute,
 				StuckTextPatterns: []string{"permission prompt"},
-				NudgeCommand:      "y\n",
+				NudgeCommand:      "Enter",
 				MaxNudgeRetries:   3,
 			},
 		},
@@ -41,6 +41,9 @@ func TestConfigAdapterAgentProfile(t *testing.T) {
 	}
 	if !profile.PostmortemEnabled {
 		t.Fatal("profile.PostmortemEnabled = false, want true")
+	}
+	if got, want := profile.NudgeCommand, "Enter"; got != want {
+		t.Fatalf("profile.NudgeCommand = %q, want %q", got, want)
 	}
 
 	if _, err := adapter.AgentProfile(context.Background(), "missing"); err == nil {
@@ -196,6 +199,55 @@ func TestNewLinearIssueTrackerFromEnv(t *testing.T) {
 	})
 }
 
+func TestAmuxCWDUsageChecker(t *testing.T) {
+	t.Parallel()
+
+	t.Run("returns active cwd values and skips blanks", func(t *testing.T) {
+		t.Parallel()
+
+		checker := amuxCWDUsageChecker{
+			amux: staticPaneLister{panes: []Pane{
+				{ID: "1", CWD: "/tmp/orca01"},
+				{ID: "2", CWD: "   "},
+				{ID: "3", CWD: "/tmp/orca03"},
+			}},
+		}
+
+		got, err := checker.ActiveCWDs(context.Background())
+		if err != nil {
+			t.Fatalf("ActiveCWDs() error = %v", err)
+		}
+		want := []string{"/tmp/orca01", "/tmp/orca03"}
+		if strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Fatalf("ActiveCWDs() = %#v, want %#v", got, want)
+		}
+	})
+
+	t.Run("returns amux error", func(t *testing.T) {
+		t.Parallel()
+
+		checker := amuxCWDUsageChecker{
+			amux: staticPaneLister{err: errors.New("list failed")},
+		}
+
+		_, err := checker.ActiveCWDs(context.Background())
+		if err == nil || !strings.Contains(err.Error(), "list failed") {
+			t.Fatalf("ActiveCWDs() error = %v, want list failed", err)
+		}
+	})
+}
+
+type staticPaneLister struct {
+	panes []Pane
+	err   error
+}
+
+func (s staticPaneLister) ListPanes(context.Context) ([]Pane, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	return append([]Pane(nil), s.panes...), nil
+}
 func openDaemonStateStore(t *testing.T) *state.SQLiteStore {
 	t.Helper()
 
