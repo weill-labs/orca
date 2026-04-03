@@ -108,9 +108,11 @@ func (a *App) runStart(ctx context.Context, args []string) error {
 	fs := newFlagSet("start")
 	var session string
 	var projectPath string
+	var leadPane string
 	var jsonOutput bool
 	fs.StringVar(&session, "session", "", "amux session name")
 	fs.StringVar(&projectPath, "project", "", "project path")
+	fs.StringVar(&leadPane, "lead-pane", "", "pane to split workers from")
 	fs.BoolVar(&jsonOutput, "json", false, "emit JSON output")
 
 	if err := parseFlags(fs, args); err != nil {
@@ -126,8 +128,9 @@ func (a *App) runStart(ctx context.Context, args []string) error {
 	}
 
 	result, err := a.daemon.Start(ctx, daemon.StartRequest{
-		Session: session,
-		Project: resolvedProject,
+		Session:  session,
+		Project:  resolvedProject,
+		LeadPane: leadPane,
 	})
 	if err != nil {
 		return err

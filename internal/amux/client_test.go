@@ -45,12 +45,12 @@ func TestCLIClientSpawn(t *testing.T) {
 		req      SpawnRequest
 		output   string
 		runErr   error
-		wantCmd  recordedCommand
+		wantCmds []recordedCommand
 		wantPane Pane
 		wantErr  string
 	}{
 		{
-			name: "builds spawn command with cwd and command",
+			name: "spawns pane then sends cd and command via send-keys",
 			config: Config{
 				Binary:  "/usr/local/bin/amux",
 				Session: "orca-dev",
@@ -61,17 +61,15 @@ func TestCLIClientSpawn(t *testing.T) {
 				Command: "codex --yolo",
 			},
 			output: "Spawned clone-01 in pane 7\n",
-			wantCmd: recordedCommand{
-				name: "/usr/local/bin/amux",
-				args: []string{
-					"-s", "override-session",
-					"spawn",
-					"--name", "clone-01",
-					"--cwd", "/tmp/clone-01",
-					"--command", "codex --yolo",
-				},
+			wantCmds: []recordedCommand{
+				{name: "/usr/local/bin/amux", args: []string{"-s", "override-session", "spawn", "--name", "clone-01"}},
+				{name: "/usr/local/bin/amux", args: []string{"-s", "orca-dev", "send-keys", "7", "cd '/tmp/clone-01'"}},
+				{name: "/usr/local/bin/amux", args: []string{"-s", "orca-dev", "send-keys", "7", "Enter"}},
+				{name: "/usr/local/bin/amux", args: []string{"-s", "orca-dev", "wait", "idle", "7", "--timeout", "5s"}},
+				{name: "/usr/local/bin/amux", args: []string{"-s", "orca-dev", "send-keys", "7", "codex --yolo"}},
+				{name: "/usr/local/bin/amux", args: []string{"-s", "orca-dev", "send-keys", "7", "Enter"}},
 			},
-			wantPane: Pane{ID: "pane-7", Name: "clone-01"},
+			wantPane: Pane{ID: "7", Name: "clone-01"},
 		},
 		{
 			name: "defaults binary name and session",
@@ -83,20 +81,40 @@ func TestCLIClientSpawn(t *testing.T) {
 				Command: "claude --dangerously-skip-permissions",
 			},
 			output: "Spawned worker-2 in pane 12\n",
-			wantCmd: recordedCommand{
-				name: "amux",
-				args: []string{
-					"-s", "default",
-					"spawn",
-					"--name", "worker-2",
-					"--cwd", "/tmp/worker-2",
-					"--command", "claude --dangerously-skip-permissions",
-				},
+			wantCmds: []recordedCommand{
+				{name: "amux", args: []string{"-s", "default", "spawn", "--name", "worker-2"}},
+				{name: "amux", args: []string{"-s", "default", "send-keys", "12", "cd '/tmp/worker-2'"}},
+				{name: "amux", args: []string{"-s", "default", "send-keys", "12", "Enter"}},
+				{name: "amux", args: []string{"-s", "default", "wait", "idle", "12", "--timeout", "5s"}},
+				{name: "amux", args: []string{"-s", "default", "send-keys", "12", "claude --dangerously-skip-permissions"}},
+				{name: "amux", args: []string{"-s", "default", "send-keys", "12", "Enter"}},
 			},
-			wantPane: Pane{ID: "pane-12", Name: "worker-2"},
+			wantPane: Pane{ID: "12", Name: "worker-2"},
 		},
 		{
-			name: "returns runner error",
+			name: "splits from parent pane when AtPane is set",
+			config: Config{
+				Session: "main",
+			},
+			req: SpawnRequest{
+				AtPane:  "lead-pane",
+				Name:    "worker-LAB-99",
+				CWD:     "/tmp/clone-5",
+				Command: "codex --yolo",
+			},
+			output: "Split horizontal: new pane worker-LAB-99\n",
+			wantCmds: []recordedCommand{
+				{name: "amux", args: []string{"-s", "main", "spawn", "--name", "worker-LAB-99", "--at", "lead-pane", "--horizontal"}},
+				{name: "amux", args: []string{"-s", "main", "send-keys", "worker-LAB-99", "cd '/tmp/clone-5'"}},
+				{name: "amux", args: []string{"-s", "main", "send-keys", "worker-LAB-99", "Enter"}},
+				{name: "amux", args: []string{"-s", "main", "wait", "idle", "worker-LAB-99", "--timeout", "5s"}},
+				{name: "amux", args: []string{"-s", "main", "send-keys", "worker-LAB-99", "codex --yolo"}},
+				{name: "amux", args: []string{"-s", "main", "send-keys", "worker-LAB-99", "Enter"}},
+			},
+			wantPane: Pane{ID: "worker-LAB-99", Name: "worker-LAB-99"},
+		},
+		{
+			name: "returns runner error on spawn failure",
 			config: Config{
 				Session: "default",
 			},
@@ -104,14 +122,8 @@ func TestCLIClientSpawn(t *testing.T) {
 				CWD: "/tmp/worker-3",
 			},
 			runErr: errors.New("exit status 1"),
-			wantCmd: recordedCommand{
-				name: "amux",
-				args: []string{
-					"-s", "default",
-					"spawn",
-					"--name", "worker-3",
-					"--cwd", "/tmp/worker-3",
-				},
+			wantCmds: []recordedCommand{
+				{name: "amux", args: []string{"-s", "default", "spawn", "--name", "worker-3"}},
 			},
 			wantErr: "exit status 1",
 		},
@@ -124,14 +136,8 @@ func TestCLIClientSpawn(t *testing.T) {
 				CWD: "/tmp/worker-4",
 			},
 			output: "Spawned worker-4\n",
-			wantCmd: recordedCommand{
-				name: "amux",
-				args: []string{
-					"-s", "default",
-					"spawn",
-					"--name", "worker-4",
-					"--cwd", "/tmp/worker-4",
-				},
+			wantCmds: []recordedCommand{
+				{name: "amux", args: []string{"-s", "default", "spawn", "--name", "worker-4"}},
 			},
 			wantErr: "parse pane id",
 		},
@@ -157,8 +163,8 @@ func TestCLIClientSpawn(t *testing.T) {
 				t.Fatalf("Spawn() error = %v", err)
 			}
 
-			if !reflect.DeepEqual(runner.calls, []recordedCommand{tt.wantCmd}) {
-				t.Fatalf("Spawn() commands = %#v, want %#v", runner.calls, []recordedCommand{tt.wantCmd})
+			if !reflect.DeepEqual(runner.calls, tt.wantCmds) {
+				t.Fatalf("Spawn() commands = %#v, want %#v", runner.calls, tt.wantCmds)
 			}
 
 			if gotPane != tt.wantPane {
@@ -185,14 +191,14 @@ func TestCLIClientSendKeys(t *testing.T) {
 			config: Config{
 				Session: "orca-dev",
 			},
-			paneID: "pane-7",
+			paneID: "7",
 			text:   "git status",
 			wantCmd: recordedCommand{
 				name: "amux",
 				args: []string{
 					"-s", "orca-dev",
 					"send-keys",
-					"pane-7",
+					"7",
 					"git status",
 				},
 			},
@@ -314,7 +320,7 @@ func TestCLIClientCapture(t *testing.T) {
 			config: Config{
 				Session: "orca-dev",
 			},
-			paneID: "pane-12",
+			paneID: "12",
 			runErr: errors.New("exit status 1"),
 			wantCmd: recordedCommand{
 				name: "amux",
@@ -322,7 +328,7 @@ func TestCLIClientCapture(t *testing.T) {
 					"-s", "orca-dev",
 					"capture",
 					"--format", "json",
-					"pane-12",
+					"12",
 				},
 			},
 			wantErr: "exit status 1",
@@ -386,7 +392,7 @@ func TestCLIClientSetMetadata(t *testing.T) {
 				name: "amux",
 				args: []string{
 					"-s", "orca-dev",
-					"set-meta",
+					"meta", "set",
 					"pane-13",
 					"issue=LAB-688",
 					"task=LAB-688",
@@ -407,7 +413,7 @@ func TestCLIClientSetMetadata(t *testing.T) {
 				name: "amux",
 				args: []string{
 					"-s", "orca-dev",
-					"set-meta",
+					"meta", "set",
 					"pane-14",
 					"issue=LAB-688",
 				},
@@ -526,7 +532,6 @@ func TestCLIClientWaitIdle(t *testing.T) {
 			"wait",
 			"idle",
 			"pane-17",
-			"--settle", "2s",
 			"--timeout", "45s",
 		},
 	}}
@@ -540,7 +545,7 @@ func TestMockClientRecordsCalls(t *testing.T) {
 
 	mock := &MockClient{
 		SpawnFunc: func(_ context.Context, req SpawnRequest) (Pane, error) {
-			return Pane{ID: "pane-20", Name: paneName(req.CWD)}, nil
+			return Pane{ID: "20", Name: paneName(req.CWD)}, nil
 		},
 		CaptureFunc: func(_ context.Context, paneID string) (string, error) {
 			return "captured output", nil
@@ -551,46 +556,46 @@ func TestMockClientRecordsCalls(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn() error = %v", err)
 	}
-	if gotPane.ID != "pane-20" {
-		t.Fatalf("Spawn() paneID = %q, want %q", gotPane.ID, "pane-20")
+	if gotPane.ID != "20" {
+		t.Fatalf("Spawn() paneID = %q, want %q", gotPane.ID, "20")
 	}
 
-	if err := mock.SendKeys(context.Background(), "pane-20", "make test"); err != nil {
+	if err := mock.SendKeys(context.Background(), "20", "make test"); err != nil {
 		t.Fatalf("SendKeys() error = %v", err)
 	}
-	gotCapture, err := mock.Capture(context.Background(), "pane-20")
+	gotCapture, err := mock.Capture(context.Background(), "20")
 	if err != nil {
 		t.Fatalf("Capture() error = %v", err)
 	}
 	if gotCapture != "captured output" {
 		t.Fatalf("Capture() output = %q, want %q", gotCapture, "captured output")
 	}
-	if err := mock.SetMetadata(context.Background(), "pane-20", map[string]string{"task": "LAB-688"}); err != nil {
+	if err := mock.SetMetadata(context.Background(), "20", map[string]string{"task": "LAB-688"}); err != nil {
 		t.Fatalf("SetMetadata() error = %v", err)
 	}
-	if err := mock.KillPane(context.Background(), "pane-20"); err != nil {
+	if err := mock.KillPane(context.Background(), "20"); err != nil {
 		t.Fatalf("KillPane() error = %v", err)
 	}
-	if err := mock.WaitIdle(context.Background(), "pane-20", 10*time.Second); err != nil {
+	if err := mock.WaitIdle(context.Background(), "20", 10*time.Second); err != nil {
 		t.Fatalf("WaitIdle() error = %v", err)
 	}
 
 	if !reflect.DeepEqual(mock.SpawnCalls, []SpawnRequest{{CWD: "/tmp/worker-20"}}) {
 		t.Fatalf("SpawnCalls = %#v", mock.SpawnCalls)
 	}
-	if !reflect.DeepEqual(mock.SendKeysCalls, []SendKeysCall{{PaneID: "pane-20", Text: "make test"}}) {
+	if !reflect.DeepEqual(mock.SendKeysCalls, []SendKeysCall{{PaneID: "20", Text: "make test"}}) {
 		t.Fatalf("SendKeysCalls = %#v", mock.SendKeysCalls)
 	}
-	if !reflect.DeepEqual(mock.CaptureCalls, []string{"pane-20"}) {
+	if !reflect.DeepEqual(mock.CaptureCalls, []string{"20"}) {
 		t.Fatalf("CaptureCalls = %#v", mock.CaptureCalls)
 	}
 	if !reflect.DeepEqual(mock.SetMetadataCalls, []MetadataCall{{
-		PaneID:   "pane-20",
+		PaneID:   "20",
 		Metadata: map[string]string{"task": "LAB-688"},
 	}}) {
 		t.Fatalf("SetMetadataCalls = %#v", mock.SetMetadataCalls)
 	}
-	if !reflect.DeepEqual(mock.KillPaneCalls, []string{"pane-20"}) {
+	if !reflect.DeepEqual(mock.KillPaneCalls, []string{"20"}) {
 		t.Fatalf("KillPaneCalls = %#v", mock.KillPaneCalls)
 	}
 	if got := len(mock.WaitIdleCalls); got != 1 {

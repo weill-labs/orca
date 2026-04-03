@@ -18,10 +18,11 @@ import (
 )
 
 type ServeRequest struct {
-	Session string
-	Project string
-	StateDB string
-	PIDFile string
+	Session  string
+	Project  string
+	LeadPane string
+	StateDB  string
+	PIDFile  string
 }
 
 type serveDeps struct {
@@ -98,6 +99,7 @@ func runProcess(ctx context.Context, req ServeRequest, deps serveDeps) error {
 	instance, err := New(Options{
 		Project:          projectPath,
 		Session:          req.Session,
+		LeadPane:         req.LeadPane,
 		PIDPath:          req.PIDFile,
 		Config:           configAdapter{cfg: cfg},
 		State:            daemonState,

@@ -41,6 +41,7 @@ var (
 type Options struct {
 	Project          string
 	Session          string
+	LeadPane         string
 	PIDPath          string
 	Config           ConfigProvider
 	State            StateStore

@@ -43,8 +43,9 @@ type ControllerOptions struct {
 }
 
 type StartRequest struct {
-	Session string
-	Project string
+	Session  string
+	Project  string
+	LeadPane string
 }
 
 type StartResult struct {
@@ -188,6 +189,7 @@ func (c *LocalController) Start(ctx context.Context, req StartRequest) (StartRes
 		"__daemon-serve",
 		"--session", session,
 		"--project", projectPath,
+		"--lead-pane", req.LeadPane,
 		"--state-db", c.paths.StateDB,
 		"--pid-file", pidFile,
 	)
