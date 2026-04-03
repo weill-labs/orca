@@ -20,11 +20,11 @@ const (
 	defaultMergeGracePeriod      = 10 * time.Minute
 	mergeQueueChecksIntervalSecs = "10"
 	mergedWrapUpPrompt           = "PR merged, wrap up.\n"
-	ciStateFail             = "fail"
-	ciStatePending          = "pending"
-	ciStatePass             = "pass"
-	ciStateCancel           = "cancel"
-	ciStateSkipping         = "skipping"
+	ciStateFail                  = "fail"
+	ciStatePending               = "pending"
+	ciStatePass                  = "pass"
+	ciStateCancel                = "cancel"
+	ciStateSkipping              = "skipping"
 )
 
 type Daemon struct {
@@ -818,12 +818,12 @@ func (d *Daemon) nudgeOrEscalate(active *assignment, reason string) {
 	})
 }
 
-func (d *Daemon) nudgeForCIFailure(active *assignment) {
+func (d *Daemon) nudgeForCIFailure(active *assignment) bool {
 	if active.profile.NudgeCommand == "" {
-		return
+		return false
 	}
 	if err := d.amux.SendKeys(active.ctx, active.pane.ID, active.profile.NudgeCommand); err != nil {
-		return
+		return false
 	}
 
 	d.emit(active.ctx, Event{
@@ -840,6 +840,7 @@ func (d *Daemon) nudgeForCIFailure(active *assignment) {
 		PRNumber:     active.prNumber,
 		Message:      "pull request checks failing",
 	})
+	return true
 }
 
 func (d *Daemon) finishAssignment(ctx context.Context, active *assignment, status, eventType string, merged bool) error {
