@@ -11,6 +11,7 @@ type fakeState struct {
 	rejectCanceledContext bool
 	tasks                 map[string]Task
 	workers               map[string]Worker
+	mergeQueue            []MergeQueueEntry
 	events                []Event
 }
 
@@ -34,6 +35,41 @@ func (s *fakeState) TaskByIssue(ctx context.Context, project, issue string) (Tas
 	return task, nil
 }
 
+func (s *fakeState) ClaimTask(ctx context.Context, task Task) (*Task, error) {
+	if s.rejectCanceledContext && ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	existing, ok := s.tasks[task.Issue]
+	if ok && (existing.Project == "" || existing.Project == task.Project) && taskBlocksAssignment(existing.Status) {
+		return nil, errors.New("task already assigned")
+	}
+
+	s.tasks[task.Issue] = task
+	if !ok {
+		return nil, nil
+	}
+
+	previous := existing
+	return &previous, nil
+}
+
+func (s *fakeState) RestoreTask(ctx context.Context, project, issue string, previous *Task) error {
+	if s.rejectCanceledContext && ctx.Err() != nil {
+		return ctx.Err()
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if previous == nil {
+		delete(s.tasks, issue)
+		return nil
+	}
+	s.tasks[issue] = *previous
+	return nil
+}
+
 func (s *fakeState) PutTask(ctx context.Context, task Task) error {
 	if s.rejectCanceledContext && ctx.Err() != nil {
 		return ctx.Err()
@@ -41,6 +77,19 @@ func (s *fakeState) PutTask(ctx context.Context, task Task) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.tasks[task.Issue] = task
+	return nil
+}
+
+func (s *fakeState) DeleteTask(ctx context.Context, project, issue string) error {
+	if s.rejectCanceledContext && ctx.Err() != nil {
+		return ctx.Err()
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.tasks[issue]; !ok {
+		return ErrTaskNotFound
+	}
+	delete(s.tasks, issue)
 	return nil
 }
 
@@ -68,6 +117,146 @@ func (s *fakeState) DeleteWorker(ctx context.Context, project, paneID string) er
 	return nil
 }
 
+func (s *fakeState) ActiveAssignments(ctx context.Context, project string) ([]ActiveAssignment, error) {
+	if s.rejectCanceledContext && ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	assignments := make([]ActiveAssignment, 0)
+	for _, task := range s.tasks {
+		if task.Project != "" && task.Project != project {
+			continue
+		}
+		if task.Status != TaskStatusActive {
+			continue
+		}
+		worker, ok := s.workers[task.PaneID]
+		if !ok {
+			continue
+		}
+		assignments = append(assignments, ActiveAssignment{Task: task, Worker: worker})
+	}
+	return assignments, nil
+}
+
+func (s *fakeState) ActiveAssignmentByIssue(ctx context.Context, project, issue string) (ActiveAssignment, error) {
+	if s.rejectCanceledContext && ctx.Err() != nil {
+		return ActiveAssignment{}, ctx.Err()
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	task, ok := s.tasks[issue]
+	if !ok || (task.Project != "" && task.Project != project) || task.Status != TaskStatusActive {
+		return ActiveAssignment{}, ErrTaskNotFound
+	}
+	worker, ok := s.workers[task.PaneID]
+	if !ok {
+		return ActiveAssignment{}, ErrTaskNotFound
+	}
+	return ActiveAssignment{Task: task, Worker: worker}, nil
+}
+
+func (s *fakeState) ActiveAssignmentByPRNumber(ctx context.Context, project string, prNumber int) (ActiveAssignment, error) {
+	if s.rejectCanceledContext && ctx.Err() != nil {
+		return ActiveAssignment{}, ctx.Err()
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for _, task := range s.tasks {
+		if task.Project != "" && task.Project != project {
+			continue
+		}
+		if task.Status != TaskStatusActive || task.PRNumber != prNumber {
+			continue
+		}
+		worker, ok := s.workers[task.PaneID]
+		if !ok {
+			break
+		}
+		return ActiveAssignment{Task: task, Worker: worker}, nil
+	}
+	return ActiveAssignment{}, ErrTaskNotFound
+}
+
+func (s *fakeState) EnqueueMerge(ctx context.Context, entry MergeQueueEntry) (int, error) {
+	if s.rejectCanceledContext && ctx.Err() != nil {
+		return 0, ctx.Err()
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, existing := range s.mergeQueue {
+		if existing.Project == entry.Project && existing.PRNumber == entry.PRNumber {
+			return 0, errors.New("merge already queued")
+		}
+	}
+	s.mergeQueue = append(s.mergeQueue, entry)
+	return len(s.mergeQueue), nil
+}
+
+func (s *fakeState) MergeEntry(ctx context.Context, project string, prNumber int) (*MergeQueueEntry, error) {
+	if s.rejectCanceledContext && ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, entry := range s.mergeQueue {
+		if entry.Project == project && entry.PRNumber == prNumber {
+			copied := entry
+			return &copied, nil
+		}
+	}
+	return nil, nil
+}
+
+func (s *fakeState) NextMergeEntry(ctx context.Context, project string) (*MergeQueueEntry, error) {
+	if s.rejectCanceledContext && ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, entry := range s.mergeQueue {
+		if entry.Project == project {
+			copied := entry
+			return &copied, nil
+		}
+	}
+	return nil, nil
+}
+
+func (s *fakeState) UpdateMergeEntry(ctx context.Context, entry MergeQueueEntry) error {
+	if s.rejectCanceledContext && ctx.Err() != nil {
+		return ctx.Err()
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, existing := range s.mergeQueue {
+		if existing.Project == entry.Project && existing.PRNumber == entry.PRNumber {
+			s.mergeQueue[i] = entry
+			return nil
+		}
+	}
+	return ErrTaskNotFound
+}
+
+func (s *fakeState) DeleteMergeEntry(ctx context.Context, project string, prNumber int) error {
+	if s.rejectCanceledContext && ctx.Err() != nil {
+		return ctx.Err()
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, entry := range s.mergeQueue {
+		if entry.Project == project && entry.PRNumber == prNumber {
+			s.mergeQueue = append(s.mergeQueue[:i], s.mergeQueue[i+1:]...)
+			return nil
+		}
+	}
+	return ErrTaskNotFound
+}
+
 func (s *fakeState) RecordEvent(ctx context.Context, event Event) error {
 	if s.rejectCanceledContext && ctx.Err() != nil {
 		return ctx.Err()
@@ -83,6 +272,12 @@ func (s *fakeState) task(issue string) (Task, bool) {
 	defer s.mu.Unlock()
 	task, ok := s.tasks[issue]
 	return task, ok
+}
+
+func (s *fakeState) putTaskForTest(task Task) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tasks[task.Issue] = task
 }
 
 func (s *fakeState) worker(paneID string) (Worker, bool) {
