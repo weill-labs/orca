@@ -277,38 +277,12 @@ func (d *Daemon) Assign(ctx context.Context, issue, prompt, agentProfile string)
 	}
 
 	if err := d.agentHandshake(ctx, pane.ID, profile); err != nil {
-		d.emit(ctx, Event{
-			Time:         d.now(),
-			Type:         EventTaskAssignFailed,
-			Project:      d.project,
-			Issue:        issue,
-			PaneID:       pane.ID,
-			CloneName:    clone.Name,
-			ClonePath:    clone.Path,
-			Branch:       issue,
-			AgentProfile: profile.Name,
-			Message:      err.Error(),
-		})
-		_ = d.rollbackAssignment(ctx, clone, pane, issue)
-		releaseReservation()
+		d.failPendingAssignment(ctx, issue, clone, pane, profile, err, releaseReservation)
 		return fmt.Errorf("agent handshake: %w", err)
 	}
 
 	if err := d.amux.SendKeys(ctx, pane.ID, ensureTrailingNewline(prompt)); err != nil {
-		d.emit(ctx, Event{
-			Time:         d.now(),
-			Type:         EventTaskAssignFailed,
-			Project:      d.project,
-			Issue:        issue,
-			PaneID:       pane.ID,
-			CloneName:    clone.Name,
-			ClonePath:    clone.Path,
-			Branch:       issue,
-			AgentProfile: profile.Name,
-			Message:      err.Error(),
-		})
-		_ = d.rollbackAssignment(ctx, clone, pane, issue)
-		releaseReservation()
+		d.failPendingAssignment(ctx, issue, clone, pane, profile, err, releaseReservation)
 		return fmt.Errorf("send prompt: %w", err)
 	}
 
@@ -381,6 +355,23 @@ func (d *Daemon) Assign(ctx context.Context, issue, prompt, agentProfile string)
 	d.wg.Add(1)
 	go d.monitorAssignment(active)
 	return nil
+}
+
+func (d *Daemon) failPendingAssignment(ctx context.Context, issue string, clone Clone, pane Pane, profile AgentProfile, err error, releaseReservation func()) {
+	d.emit(ctx, Event{
+		Time:         d.now(),
+		Type:         EventTaskAssignFailed,
+		Project:      d.project,
+		Issue:        issue,
+		PaneID:       pane.ID,
+		CloneName:    clone.Name,
+		ClonePath:    clone.Path,
+		Branch:       issue,
+		AgentProfile: profile.Name,
+		Message:      err.Error(),
+	})
+	_ = d.rollbackAssignment(ctx, clone, pane, issue)
+	releaseReservation()
 }
 
 func (d *Daemon) agentHandshake(ctx context.Context, paneID string, profile AgentProfile) error {
