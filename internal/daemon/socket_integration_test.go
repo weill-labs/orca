@@ -163,7 +163,7 @@ daemonReady:
 		"issue":         "LAB-718",
 		"task":          "LAB-718",
 	})
-	amuxClient.requireSentKeys(t, "pane-1", []string{"Implement Unix socket IPC.\n"})
+	amuxClient.requireSentKeys(t, "pane-1", []string{"Implement Unix socket IPC.", "Enter"})
 
 	cancelResult, err := controller.Cancel(context.Background(), CancelRequest{
 		Project: projectPath,
