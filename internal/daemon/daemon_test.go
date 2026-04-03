@@ -902,6 +902,8 @@ func TestEnqueueSerializesQueuedPRLandingsFIFO(t *testing.T) {
 	})
 
 	if got, want := deps.commands.callsByName("gh"), []commandCall{
+		{Dir: "/tmp/project", Name: "gh", Args: []string{"pr", "list", "--head", "LAB-689", "--state", "open", "--json", "number"}},
+		{Dir: "/tmp/project", Name: "gh", Args: []string{"pr", "list", "--head", "LAB-690", "--state", "open", "--json", "number"}},
 		{Dir: "/tmp/project", Name: "gh", Args: []string{"pr", "update-branch", "42", "--rebase"}},
 		{Dir: "/tmp/project", Name: "gh", Args: []string{"pr", "checks", "42", "--required", "--watch", "--fail-fast", "--interval", "10"}},
 		{Dir: "/tmp/project", Name: "gh", Args: []string{"pr", "merge", "42", "--squash"}},
