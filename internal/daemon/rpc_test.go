@@ -36,22 +36,23 @@ func TestCallRPCAndHelpers(t *testing.T) {
 		if err := json.NewDecoder(conn).Decode(&req); err != nil {
 			return
 		}
-		_ = json.NewEncoder(conn).Encode(rpcSuccess(req.ID, TaskActionResult{
-			Project: "/repo",
-			Issue:   "LAB-718",
-			Status:  TaskStatusActive,
+		_ = json.NewEncoder(conn).Encode(rpcSuccess(req.ID, MergeQueueActionResult{
+			Project:  "/repo",
+			PRNumber: 42,
+			Status:   "queued",
+			Position: 1,
 		}))
 	}()
 
-	var result TaskActionResult
-	if err := callRPC(context.Background(), socketPath, "assign", assignRPCParams{Issue: "LAB-718"}, &result); err != nil {
+	var result MergeQueueActionResult
+	if err := callRPC(context.Background(), socketPath, "enqueue", enqueueRPCParams{PRNumber: 42}, &result); err != nil {
 		t.Fatalf("callRPC() error = %v", err)
 	}
-	if got, want := result.Status, TaskStatusActive; got != want {
+	if got, want := result.Status, "queued"; got != want {
 		t.Fatalf("result.Status = %q, want %q", got, want)
 	}
 
-	if err := callRPC(context.Background(), filepath.Join(t.TempDir(), "missing.sock"), "assign", assignRPCParams{}, &result); !errors.Is(err, ErrDaemonNotRunning) {
+	if err := callRPC(context.Background(), filepath.Join(t.TempDir(), "missing.sock"), "enqueue", enqueueRPCParams{}, &result); !errors.Is(err, ErrDaemonNotRunning) {
 		t.Fatalf("callRPC() missing socket error = %v, want ErrDaemonNotRunning", err)
 	}
 
@@ -138,6 +139,15 @@ func TestHandleRPCConnAndDispatchStatusBranches(t *testing.T) {
 	}, &Daemon{}, store, project)
 	if badParams.Error == nil || badParams.Error.Code != -32602 {
 		t.Fatalf("dispatch bad params response = %#v", badParams)
+	}
+
+	enqueueErr := dispatchRPCRequest(context.Background(), rpcRequest{
+		ID:     json.RawMessage(`1`),
+		Method: "enqueue",
+		Params: mustJSON(t, enqueueRPCParams{PRNumber: 42}),
+	}, &Daemon{}, store, project)
+	if enqueueErr.Error == nil {
+		t.Fatalf("dispatch enqueue error response = %#v, want error", enqueueErr)
 	}
 
 	unknown := dispatchRPCRequest(context.Background(), rpcRequest{
