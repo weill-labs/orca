@@ -156,7 +156,7 @@ func TestAssignConfirmsCodexTrustPromptBeforeSendingPrompt(t *testing.T) {
 		return ok && task.Status == TaskStatusActive
 	})
 
-	deps.amux.requireSentKeys(t, "pane-1", []string{"\n", "Implement handshake\n"})
+	deps.amux.requireSentKeys(t, "pane-1", []string{"Enter", "Implement handshake", "Enter"})
 	if got, want := deps.amux.captureCount("pane-1"), 2; got != want {
 		t.Fatalf("capture count = %d, want %d", got, want)
 	}
@@ -178,7 +178,7 @@ func TestAssignEnforcesCodexYoloFlag(t *testing.T) {
 		StartCommand:      "codex",
 		PostmortemEnabled: true,
 		StuckTimeout:      5 * time.Minute,
-		NudgeCommand:      "\n",
+		NudgeCommand:      "Enter",
 		MaxNudgeRetries:   3,
 	}
 	d := deps.newDaemon(t)
@@ -729,7 +729,7 @@ func TestCancelSkipsPostmortemWhenProfileDisablesIt(t *testing.T) {
 		Name:            "claude",
 		StartCommand:    "claude --dangerously-skip-permissions",
 		StuckTimeout:    5 * time.Minute,
-		NudgeCommand:    "\n",
+		NudgeCommand:    "Enter",
 		MaxNudgeRetries: 2,
 	}
 
@@ -784,7 +784,7 @@ func TestStuckDetectionMatchesTextPatternsThenEscalates(t *testing.T) {
 		StartCommand:      "codex --yolo",
 		StuckTextPatterns: []string{"permission prompt"},
 		StuckTimeout:      time.Hour,
-		NudgeCommand:      "y\n",
+		NudgeCommand:      "Enter",
 		MaxNudgeRetries:   2,
 	}
 	deps.amux.captureSequence("pane-1", []string{
@@ -808,12 +808,12 @@ func TestStuckDetectionMatchesTextPatternsThenEscalates(t *testing.T) {
 
 	captureTicker.tick(deps.clock.Now())
 	waitFor(t, "first nudge", func() bool {
-		return deps.amux.countKey("pane-1", "y\n") == 1
+		return deps.amux.countKey("pane-1", "\n") == 1
 	})
 
 	captureTicker.tick(deps.clock.Now())
 	waitFor(t, "second nudge", func() bool {
-		return deps.amux.countKey("pane-1", "y\n") == 2
+		return deps.amux.countKey("pane-1", "\n") == 2
 	})
 
 	captureTicker.tick(deps.clock.Now())
@@ -821,7 +821,7 @@ func TestStuckDetectionMatchesTextPatternsThenEscalates(t *testing.T) {
 		return deps.events.countType(EventWorkerEscalated) == 1
 	})
 
-	if got, want := deps.amux.countKey("pane-1", "y\n"), 2; got != want {
+	if got, want := deps.amux.countKey("pane-1", "\n"), 2; got != want {
 		t.Fatalf("nudge count = %d, want %d", got, want)
 	}
 	deps.events.requireTypes(t, EventDaemonStarted, EventTaskAssigned, EventWorkerNudged, EventWorkerEscalated)
@@ -838,7 +838,7 @@ func TestStuckDetectionUsesIdleTimeoutAndRecoversOnOutputChange(t *testing.T) {
 		Name:            "codex",
 		StartCommand:    "codex --yolo",
 		StuckTimeout:    5 * time.Minute,
-		NudgeCommand:    "\n",
+		NudgeCommand:    "Enter",
 		MaxNudgeRetries: 1,
 	}
 	deps.amux.captureSequence("pane-1", []string{
@@ -972,7 +972,7 @@ func TestPRMergeCleanupContinuesWhenIssueTrackerDoneUpdateFails(t *testing.T) {
 		ResumeSequence:    []string{"codex --yolo resume", "Enter", "."},
 		PostmortemEnabled: false,
 		StuckTimeout:      5 * time.Minute,
-		NudgeCommand:      "\n",
+		NudgeCommand:      "Enter",
 		MaxNudgeRetries:   3,
 	}
 	deps.amux.rejectCanceledContext = true
@@ -1944,7 +1944,7 @@ func newTestDeps(t *testing.T) *testDeps {
 					ResumeSequence:    []string{"codex --yolo resume", "Enter", "."},
 					PostmortemEnabled: true,
 					StuckTimeout:      5 * time.Minute,
-					NudgeCommand:      "\n",
+					NudgeCommand:      "Enter",
 					MaxNudgeRetries:   3,
 				},
 			},

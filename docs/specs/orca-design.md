@@ -147,7 +147,7 @@ idle_signal = "screen_quiet"
 idle_timeout = "30s"
 stuck_text_patterns = ["permission prompt"]  # matched against screen output
 stuck_timeout = "5m"                         # idle longer than this = stuck
-nudge_command = "y\n"
+nudge_command = "Enter"
 max_nudge_retries = 3
 
 [agents.claude]
@@ -156,7 +156,7 @@ idle_signal = "screen_quiet"
 idle_timeout = "30s"
 stuck_text_patterns = ["tool denied"]
 stuck_timeout = "5m"
-nudge_command = "\n"
+nudge_command = "Enter"
 max_nudge_retries = 3
 
 [agents.aider]
@@ -351,7 +351,7 @@ start_command = "codex"
 idle_timeout = "30s"
 stuck_timeout = "5m"
 stuck_text_patterns = ["permission prompt"]
-nudge_command = "y\n"
+nudge_command = "Enter"
 max_nudge_retries = 3
 
 [agents.claude]
@@ -359,7 +359,7 @@ start_command = "claude --dangerously-skip-permissions"
 idle_timeout = "30s"
 stuck_timeout = "5m"
 stuck_text_patterns = ["tool denied"]
-nudge_command = "\n"
+nudge_command = "Enter"
 max_nudge_retries = 3
 
 # Fleet uses a single-coordinator topology: one orca daemon (on the local
