@@ -138,6 +138,35 @@ func TestExecCommandRunnerAndPoolConfigAdapter(t *testing.T) {
 	}
 }
 
+func TestNewLinearIssueTrackerFromEnv(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+
+	t.Run("missing key returns nil tracker", func(t *testing.T) {
+		t.Setenv("LINEAR_API_KEY", "")
+
+		tracker, err := newLinearIssueTrackerFromEnv()
+		if err != nil {
+			t.Fatalf("newLinearIssueTrackerFromEnv() error = %v", err)
+		}
+		if tracker != nil {
+			t.Fatalf("newLinearIssueTrackerFromEnv() = %#v, want nil", tracker)
+		}
+	})
+
+	t.Run("env key returns tracker", func(t *testing.T) {
+		t.Setenv("LINEAR_API_KEY", "test-key")
+
+		tracker, err := newLinearIssueTrackerFromEnv()
+		if err != nil {
+			t.Fatalf("newLinearIssueTrackerFromEnv() error = %v", err)
+		}
+		if tracker == nil {
+			t.Fatal("newLinearIssueTrackerFromEnv() = nil, want tracker")
+		}
+	})
+}
+
 func openDaemonStateStore(t *testing.T) *state.SQLiteStore {
 	t.Helper()
 

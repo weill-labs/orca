@@ -39,6 +39,7 @@ type Daemon struct {
 	state            StateStore
 	pool             Pool
 	amux             AmuxClient
+	issueTracker     IssueTracker
 	commands         CommandRunner
 	events           EventSink
 	now              func() time.Time
@@ -156,6 +157,7 @@ func New(opts Options) (*Daemon, error) {
 		state:            opts.State,
 		pool:             opts.Pool,
 		amux:             opts.Amux,
+		issueTracker:     opts.IssueTracker,
 		commands:         opts.Commands,
 		events:           opts.Events,
 		now:              opts.Now,
@@ -300,7 +302,7 @@ func (d *Daemon) Assign(ctx context.Context, issue, prompt, agentProfile string)
 		return fmt.Errorf("spawn pane: %w", err)
 	}
 
-	if err := d.amux.SetMetadata(ctx, pane.ID, assignmentMetadata(profile.Name, issue, issue, 0)); err != nil {
+	if err := d.setPaneMetadata(ctx, pane.ID, assignmentMetadata(profile.Name, issue, issue, 0)); err != nil {
 		_ = d.rollbackAssignment(ctx, clone, pane, issue)
 		releaseReservation()
 		return fmt.Errorf("set pane metadata: %w", err)
@@ -314,6 +316,11 @@ func (d *Daemon) Assign(ctx context.Context, issue, prompt, agentProfile string)
 	if err := d.amux.SendKeys(ctx, pane.ID, prompt, "Enter"); err != nil {
 		d.failPendingAssignment(ctx, issue, clone, pane, profile, err, releaseReservation)
 		return fmt.Errorf("send prompt: %w", err)
+	}
+	if err := d.setIssueStatus(ctx, issue, IssueStateInProgress); err != nil {
+		_ = d.rollbackAssignment(ctx, clone, pane, issue)
+		releaseReservation()
+		return fmt.Errorf("set issue status: %w", err)
 	}
 
 	now := d.now()
@@ -697,11 +704,13 @@ func (d *Daemon) handlePRPoll(active *assignment) {
 			return
 		}
 		if prNumber > 0 {
+			if err := d.setPaneMetadata(active.ctx, active.pane.ID, assignmentMetadata(active.profile.Name, active.task.Branch, active.task.Issue, prNumber)); err != nil {
+				return
+			}
 			active.prNumber = prNumber
 			active.task.PRNumber = prNumber
 			active.task.UpdatedAt = d.now()
 			_ = d.state.PutTask(active.ctx, active.task)
-			_ = d.amux.SetMetadata(active.ctx, active.pane.ID, assignmentMetadata(active.profile.Name, active.task.Branch, active.task.Issue, prNumber))
 			d.emit(active.ctx, Event{
 				Time:         d.now(),
 				Type:         EventPRDetected,
@@ -730,6 +739,10 @@ func (d *Daemon) handlePRPoll(active *assignment) {
 		d.handlePRReviewPoll(active)
 		return
 	}
+	message := "pull request merged"
+	if err := d.setIssueStatus(active.ctx, active.task.Issue, IssueStateDone); err != nil {
+		message = fmt.Sprintf("pull request merged (failed to update Linear issue status: %v)", err)
+	}
 
 	d.emit(active.ctx, Event{
 		Time:         d.now(),
@@ -743,7 +756,7 @@ func (d *Daemon) handlePRPoll(active *assignment) {
 		Branch:       active.task.Branch,
 		AgentProfile: active.profile.Name,
 		PRNumber:     active.prNumber,
-		Message:      "pull request merged",
+		Message:      message,
 	})
 	_ = d.finishAssignment(active.ctx, active, TaskStatusDone, EventTaskCompleted, true)
 }
@@ -1106,6 +1119,17 @@ func (d *Daemon) lookupPRReviews(ctx context.Context, prNumber int) (prReviewPay
 		return prReviewPayload{}, false, err
 	}
 	return payload, true, nil
+}
+
+func (d *Daemon) setPaneMetadata(ctx context.Context, paneID string, metadata map[string]string) error {
+	return d.amux.SetMetadata(ctx, paneID, metadata)
+}
+
+func (d *Daemon) setIssueStatus(ctx context.Context, issue, state string) error {
+	if d.issueTracker == nil {
+		return nil
+	}
+	return d.issueTracker.SetIssueStatus(ctx, issue, state)
 }
 
 func (d *Daemon) assignment(issue string) (*assignment, error) {

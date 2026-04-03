@@ -81,6 +81,11 @@ func runProcess(ctx context.Context, req ServeRequest, deps serveDeps) error {
 		commandRunner = execCommandRunner{}
 	}
 
+	issueTracker, err := newLinearIssueTrackerFromEnv()
+	if err != nil {
+		return fmt.Errorf("configure Linear issue tracker: %w", err)
+	}
+
 	socketPath := deps.socketPath
 	if socketPath == "" {
 		socketPath = socketFileForProject(filepath.Dir(req.StateDB), projectPath)
@@ -105,6 +110,7 @@ func runProcess(ctx context.Context, req ServeRequest, deps serveDeps) error {
 		State:            daemonState,
 		Pool:             pool.NewAdapter(manager),
 		Amux:             amuxClient,
+		IssueTracker:     issueTracker,
 		Commands:         commandRunner,
 		Events:           deps.events,
 		PollInterval:     cfg.Daemon.PollInterval,

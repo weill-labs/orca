@@ -91,6 +91,11 @@ func TestAssignAllocatesCloneStartsAgentAndRegistersState(t *testing.T) {
 	if got, want := worker.AgentProfile, "codex"; got != want {
 		t.Fatalf("worker.AgentProfile = %q, want %q", got, want)
 	}
+	if got, want := deps.issueTracker.statuses(), []issueStatusUpdate{
+		{Issue: "LAB-689", State: "In Progress"},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("issue tracker statuses = %#v, want %#v", got, want)
+	}
 
 	wantGit := []commandCall{
 		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"checkout", "main"}},
@@ -728,11 +733,71 @@ func TestPRMergePollingSendsWrapUpAndCleansClone(t *testing.T) {
 	if got, want := deps.pool.releasedClones(), []Clone{deps.pool.clone}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("released clones = %#v, want %#v", got, want)
 	}
+	if got, want := deps.issueTracker.statuses(), []issueStatusUpdate{
+		{Issue: "LAB-689", State: "In Progress"},
+		{Issue: "LAB-689", State: "Done"},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("issue tracker statuses = %#v, want %#v", got, want)
+	}
 	deps.amux.requireSentKeys(t, "pane-1", []string{
 		"Implement daemon core\n",
 		"PR merged, wrap up.\n",
 	})
 	deps.events.requireTypes(t, EventDaemonStarted, EventTaskAssigned, EventPRDetected, EventPRMerged, EventTaskCompleted)
+}
+
+func TestPRMergeCleanupContinuesWhenIssueTrackerDoneUpdateFails(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	captureTicker := newFakeTicker()
+	prTicker := newFakeTicker()
+	deps.tickers.enqueue(captureTicker, prTicker)
+	deps.amux.rejectCanceledContext = true
+	deps.pool.rejectCanceledContext = true
+	deps.state.rejectCanceledContext = true
+	deps.issueTracker.errors = map[string]error{
+		IssueStateDone: errors.New("linear unavailable"),
+	}
+	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":"2026-04-02T12:00:00Z"}`, nil)
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-689", "Implement daemon core", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	prTicker.tick(deps.clock.Now())
+	waitFor(t, "task completion after merge despite tracker failure", func() bool {
+		task, ok := deps.state.task("LAB-689")
+		return ok && task.Status == TaskStatusDone
+	})
+
+	if _, ok := deps.state.worker("pane-1"); ok {
+		t.Fatal("worker still present after merge cleanup")
+	}
+	if got, want := deps.pool.releasedClones(), []Clone{deps.pool.clone}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("released clones = %#v, want %#v", got, want)
+	}
+	if got, want := deps.issueTracker.statuses(), []issueStatusUpdate{
+		{Issue: "LAB-689", State: IssueStateInProgress},
+		{Issue: "LAB-689", State: IssueStateDone},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("issue tracker statuses = %#v, want %#v", got, want)
+	}
+	if event, ok := deps.events.lastEventOfType(EventPRMerged); !ok {
+		t.Fatal("missing PR merged event")
+	} else if !strings.Contains(event.Message, "failed to update Linear issue status") {
+		t.Fatalf("PR merged event message = %q, want tracker failure context", event.Message)
+	}
 }
 
 func TestPRDetectionSyncsPaneMetadata(t *testing.T) {
@@ -1264,15 +1329,16 @@ func TestNDJSONEmitterWritesLineDelimitedJSON(t *testing.T) {
 }
 
 type testDeps struct {
-	clock    *fakeClock
-	config   *fakeConfig
-	state    *fakeState
-	pool     *fakePool
-	amux     *fakeAmux
-	commands *fakeCommands
-	events   *fakeEvents
-	tickers  *fakeTickerFactory
-	pidPath  string
+	clock        *fakeClock
+	config       *fakeConfig
+	state        *fakeState
+	pool         *fakePool
+	amux         *fakeAmux
+	issueTracker *fakeIssueTracker
+	commands     *fakeCommands
+	events       *fakeEvents
+	tickers      *fakeTickerFactory
+	pidPath      string
 }
 
 func newTestDeps(t *testing.T) *testDeps {
@@ -1298,13 +1364,14 @@ func newTestDeps(t *testing.T) *testDeps {
 				},
 			},
 		},
-		state:    newFakeState(),
-		pool:     &fakePool{clone: Clone{Name: "clone-01", Path: clonePath}},
-		amux:     &fakeAmux{spawnPane: Pane{ID: "pane-1", Name: "worker-1"}, captures: make(map[string][]string)},
-		commands: newFakeCommands(),
-		events:   newFakeEvents(),
-		tickers:  &fakeTickerFactory{},
-		pidPath:  filepath.Join(tmp, "orca.pid"),
+		state:        newFakeState(),
+		pool:         &fakePool{clone: Clone{Name: "clone-01", Path: clonePath}},
+		amux:         &fakeAmux{spawnPane: Pane{ID: "pane-1", Name: "worker-1"}, captures: make(map[string][]string)},
+		issueTracker: &fakeIssueTracker{},
+		commands:     newFakeCommands(),
+		events:       newFakeEvents(),
+		tickers:      &fakeTickerFactory{},
+		pidPath:      filepath.Join(tmp, "orca.pid"),
 	}
 }
 
@@ -1319,6 +1386,7 @@ func (d *testDeps) newDaemon(t *testing.T) *Daemon {
 		State:            d.state,
 		Pool:             d.pool,
 		Amux:             d.amux,
+		IssueTracker:     d.issueTracker,
 		Commands:         d.commands,
 		Events:           d.events,
 		Now:              d.clock.Now,
@@ -1365,6 +1433,35 @@ func (c *fakeClock) Advance(delta time.Duration) {
 
 type fakeConfig struct {
 	profiles map[string]AgentProfile
+}
+
+type issueStatusUpdate struct {
+	Issue string
+	State string
+}
+
+type fakeIssueTracker struct {
+	mu      sync.Mutex
+	updates []issueStatusUpdate
+	errors  map[string]error
+}
+
+func (t *fakeIssueTracker) SetIssueStatus(_ context.Context, issue, state string) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.updates = append(t.updates, issueStatusUpdate{Issue: issue, State: state})
+	if err := t.errors[state]; err != nil {
+		return err
+	}
+	return nil
+}
+
+func (t *fakeIssueTracker) statuses() []issueStatusUpdate {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	out := make([]issueStatusUpdate, len(t.updates))
+	copy(out, t.updates)
+	return out
 }
 
 func (c *fakeConfig) AgentProfile(_ context.Context, name string) (AgentProfile, error) {
@@ -1587,7 +1684,10 @@ func (a *fakeAmux) SetMetadata(ctx context.Context, paneID string, metadata map[
 	if a.metadata == nil {
 		a.metadata = make(map[string]map[string]string)
 	}
-	copied := make(map[string]string, len(metadata))
+	copied := make(map[string]string, len(a.metadata[paneID])+len(metadata))
+	for key, value := range a.metadata[paneID] {
+		copied[key] = value
+	}
 	for key, value := range metadata {
 		copied[key] = value
 	}
@@ -1910,6 +2010,17 @@ func (e *fakeEvents) countType(eventType string) int {
 		}
 	}
 	return count
+}
+
+func (e *fakeEvents) lastEventOfType(eventType string) (Event, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for i := len(e.events) - 1; i >= 0; i-- {
+		if e.events[i].Type == eventType {
+			return e.events[i], true
+		}
+	}
+	return Event{}, false
 }
 
 func (e *fakeEvents) requireTypes(t *testing.T, want ...string) {

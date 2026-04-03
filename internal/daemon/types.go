@@ -15,6 +15,9 @@ const (
 	TaskStatusDone      = "done"
 	TaskStatusFailed    = "failed"
 
+	IssueStateInProgress = "In Progress"
+	IssueStateDone       = "Done"
+
 	WorkerHealthHealthy = "healthy"
 	WorkerHealthStuck   = "stuck"
 
@@ -52,6 +55,7 @@ type Options struct {
 	State            StateStore
 	Pool             Pool
 	Amux             AmuxClient
+	IssueTracker     IssueTracker
 	Commands         CommandRunner
 	Events           EventSink
 	Now              func() time.Time
@@ -85,6 +89,10 @@ type AmuxClient interface {
 	Capture(ctx context.Context, paneID string) (string, error)
 	KillPane(ctx context.Context, paneID string) error
 	WaitIdle(ctx context.Context, paneID string, timeout time.Duration) error
+}
+
+type IssueTracker interface {
+	SetIssueStatus(ctx context.Context, issue, state string) error
 }
 
 type CommandRunner interface {
