@@ -59,7 +59,7 @@ type assignment struct {
 	lastOutput      string
 	lastActivity    time.Time
 	prNumber        int
-	LastReviewCount atomic.Int64
+	lastReviewCount atomic.Int64
 	escalated       bool
 	cleanupOnce     sync.Once
 }
@@ -509,14 +509,14 @@ func (d *Daemon) handlePRPoll(active *assignment) {
 }
 
 func (d *Daemon) handlePRReviewPoll(active *assignment) {
-	payload, err := d.lookupPRReviews(active.ctx, active.prNumber)
-	if err != nil {
+	payload, ok, err := d.lookupPRReviews(active.ctx, active.prNumber)
+	if err != nil || !ok {
 		return
 	}
 
-	previousCount := int(active.LastReviewCount.Load())
+	previousCount := int(active.lastReviewCount.Load())
 	if previousCount > len(payload.Reviews) {
-		active.LastReviewCount.Store(int64(len(payload.Reviews)))
+		active.lastReviewCount.Store(int64(len(payload.Reviews)))
 		return
 	}
 	if previousCount == len(payload.Reviews) {
@@ -526,7 +526,7 @@ func (d *Daemon) handlePRReviewPoll(active *assignment) {
 	newReviews := payload.Reviews[previousCount:]
 	blocking := blockingReviews(payload.ReviewDecision, newReviews)
 	if len(blocking) == 0 {
-		active.LastReviewCount.Store(int64(len(payload.Reviews)))
+		active.lastReviewCount.Store(int64(len(payload.Reviews)))
 		return
 	}
 
@@ -535,7 +535,7 @@ func (d *Daemon) handlePRReviewPoll(active *assignment) {
 		return
 	}
 
-	active.LastReviewCount.Store(int64(len(payload.Reviews)))
+	active.lastReviewCount.Store(int64(len(payload.Reviews)))
 	d.emit(active.ctx, Event{
 		Time:         d.now(),
 		Type:         EventWorkerNudgedReview,
@@ -731,20 +731,20 @@ func (d *Daemon) isPRMerged(ctx context.Context, prNumber int) (bool, error) {
 	return payload.MergedAt != nil && *payload.MergedAt != "", nil
 }
 
-func (d *Daemon) lookupPRReviews(ctx context.Context, prNumber int) (prReviewPayload, error) {
+func (d *Daemon) lookupPRReviews(ctx context.Context, prNumber int) (prReviewPayload, bool, error) {
 	output, err := d.commands.Run(ctx, d.project, "gh", "pr", "view", fmt.Sprintf("%d", prNumber), "--json", "reviews,reviewDecision")
 	if err != nil {
-		return prReviewPayload{}, err
+		return prReviewPayload{}, false, err
 	}
 	if len(output) == 0 {
-		return prReviewPayload{}, nil
+		return prReviewPayload{}, false, nil
 	}
 
 	var payload prReviewPayload
 	if err := json.Unmarshal(output, &payload); err != nil {
-		return prReviewPayload{}, err
+		return prReviewPayload{}, false, err
 	}
-	return payload, nil
+	return payload, true, nil
 }
 
 func (d *Daemon) assignment(issue string) (*assignment, error) {
