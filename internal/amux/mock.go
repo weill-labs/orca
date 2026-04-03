@@ -2,6 +2,7 @@ package amux
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
 )
@@ -23,7 +24,7 @@ type MockClient struct {
 	mu sync.Mutex
 
 	SpawnFunc       func(ctx context.Context, req SpawnRequest) (Pane, error)
-	SendKeysFunc    func(ctx context.Context, paneID, text string) error
+	SendKeysFunc    func(ctx context.Context, paneID string, keys ...string) error
 	CaptureFunc     func(ctx context.Context, paneID string) (string, error)
 	SetMetadataFunc func(ctx context.Context, paneID string, metadata map[string]string) error
 	KillPaneFunc    func(ctx context.Context, paneID string) error
@@ -54,17 +55,17 @@ func (m *MockClient) Spawn(ctx context.Context, req SpawnRequest) (Pane, error) 
 	return Pane{}, nil
 }
 
-func (m *MockClient) SendKeys(ctx context.Context, paneID, text string) error {
+func (m *MockClient) SendKeys(ctx context.Context, paneID string, keys ...string) error {
 	m.mu.Lock()
 	m.SendKeysCalls = append(m.SendKeysCalls, SendKeysCall{
 		PaneID: paneID,
-		Text:   text,
+		Text:   strings.Join(keys, " "),
 	})
 	fn := m.SendKeysFunc
 	m.mu.Unlock()
 
 	if fn != nil {
-		return fn(ctx, paneID, text)
+		return fn(ctx, paneID, keys...)
 	}
 	return nil
 }
