@@ -1,5 +1,8 @@
 # orca
 
+[![CI](https://github.com/weill-labs/orca/actions/workflows/ci.yml/badge.svg)](https://github.com/weill-labs/orca/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/weill-labs/orca/graph/badge.svg)](https://codecov.io/gh/weill-labs/orca)
+
 Deterministic agent orchestration daemon for [amux](https://github.com/weill-labs/amux).
 
 Orca manages the full lifecycle of coding tasks: clone allocation, agent spawning, health monitoring, PR merge detection, and cleanup. It owns no AI — all intelligence lives in the worker agents (Claude Code, Codex, Aider, etc.).
