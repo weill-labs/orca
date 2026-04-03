@@ -325,8 +325,6 @@ func (d *Daemon) Assign(ctx context.Context, issue, prompt, agentProfile string)
 		d.failPendingAssignment(ctx, issue, clone, pane, profile, err, releaseReservation)
 		return fmt.Errorf("send prompt: %w", err)
 	}
-	// Brief wait for the agent to render the prompt text before submitting.
-	_ = d.amux.WaitIdle(ctx, pane.ID, 3*time.Second)
 	if err := d.amux.SendKeys(ctx, pane.ID, "Enter"); err != nil {
 		d.failPendingAssignment(ctx, issue, clone, pane, profile, err, releaseReservation)
 		return fmt.Errorf("send Enter after prompt: %w", err)
