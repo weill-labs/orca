@@ -13,6 +13,9 @@ import (
 )
 
 func TestRunProcessAssignAndCancelOverUnixSocket(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
 	projectDir := filepath.Join(t.TempDir(), "project")
 	if err := os.MkdirAll(filepath.Join(projectDir, ".orca"), 0o755); err != nil {
 		t.Fatalf("MkdirAll(.orca) error = %v", err)
@@ -60,6 +63,14 @@ max_nudge_retries = 1
 	amuxClient := &fakeAmux{
 		spawnPane: Pane{ID: "pane-1", Name: "worker-1"},
 		captures:  make(map[string][]string),
+	}
+	postmortemDir := filepath.Join(home, "sync", "postmortems")
+	amuxClient.sendKeysHook = func(_ string, keys []string) {
+		for _, key := range keys {
+			if key == "$postmortem" {
+				writePostmortemLog(t, postmortemDir, "LAB-718", time.Now().UTC())
+			}
+		}
 	}
 	commandRunner := newFakeCommands()
 	errCh := make(chan error, 1)

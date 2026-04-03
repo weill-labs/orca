@@ -168,6 +168,41 @@ func TestAssignConfirmsCodexTrustPromptBeforeSendingPrompt(t *testing.T) {
 	}
 }
 
+func TestAssignEnforcesCodexYoloFlag(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	deps.config.profiles["codex"] = AgentProfile{
+		Name:            "codex",
+		StartCommand:    "codex",
+		StuckTimeout:    5 * time.Minute,
+		NudgeCommand:    "\n",
+		MaxNudgeRetries: 3,
+	}
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-696", "Implement lifecycle enforcement", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	waitFor(t, "spawn request", func() bool {
+		return len(deps.amux.spawnRequests) == 1
+	})
+
+	if got, want := deps.amux.spawnRequests[0].Command, "codex --yolo"; got != want {
+		t.Fatalf("spawn.Command = %q, want %q", got, want)
+	}
+}
+
 func TestAssignDoesNotBlindlyConfirmWhenTrustPromptNotPresent(t *testing.T) {
 	t.Parallel()
 
@@ -263,7 +298,12 @@ func TestAssignRollsBackOnPromptSendFailure(t *testing.T) {
 		t.Fatal("task stored despite rollback")
 	}
 
-	if got, want := deps.pool.releasedClones(), []Clone{deps.pool.clone}; !reflect.DeepEqual(got, want) {
+	if got, want := deps.pool.releasedClones(), []Clone{{
+		Name:          deps.pool.clone.Name,
+		Path:          deps.pool.clone.Path,
+		CurrentBranch: "LAB-689",
+		AssignedTask:  "LAB-689",
+	}}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("released clones = %#v, want %#v", got, want)
 	}
 
@@ -271,15 +311,13 @@ func TestAssignRollsBackOnPromptSendFailure(t *testing.T) {
 		t.Fatalf("kill calls = %#v, want %#v", got, want)
 	}
 
-	wantCleanup := []commandCall{
-		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"reset", "--hard"}},
+	wantGit := []commandCall{
 		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"checkout", "main"}},
 		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"pull"}},
-		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"clean", "-fdx", "--exclude=.orca-pool"}},
-		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"branch", "-D", "LAB-689"}},
+		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"checkout", "-B", "LAB-689"}},
 	}
-	if got := deps.commands.tailGitCalls(5); !reflect.DeepEqual(got, wantCleanup) {
-		t.Fatalf("cleanup git calls = %#v, want %#v", got, wantCleanup)
+	if got := deps.commands.callsByName("git"); !reflect.DeepEqual(got, wantGit) {
+		t.Fatalf("git calls = %#v, want %#v", got, wantGit)
 	}
 
 	deps.events.requireTypes(t, EventDaemonStarted, EventTaskAssignFailed)
@@ -316,15 +354,13 @@ func TestAssignRollsBackOnAgentHandshakeFailure(t *testing.T) {
 		t.Fatalf("kill calls = %#v, want %#v", got, want)
 	}
 
-	wantCleanup := []commandCall{
-		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"reset", "--hard"}},
+	wantGit := []commandCall{
 		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"checkout", "main"}},
 		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"pull"}},
-		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"clean", "-fdx", "--exclude=.orca-pool"}},
-		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"branch", "-D", "LAB-720"}},
+		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"checkout", "-B", "LAB-720"}},
 	}
-	if got := deps.commands.tailGitCalls(5); !reflect.DeepEqual(got, wantCleanup) {
-		t.Fatalf("cleanup git calls = %#v, want %#v", got, wantCleanup)
+	if got := deps.commands.callsByName("git"); !reflect.DeepEqual(got, wantGit) {
+		t.Fatalf("git calls = %#v, want %#v", got, wantGit)
 	}
 
 	deps.events.requireTypes(t, EventDaemonStarted, EventTaskAssignFailed)
@@ -517,10 +553,19 @@ func TestAssignAllowsReassigningInactiveStoredIssueWhenNoOpenPRExists(t *testing
 	}
 }
 func TestCancelKillsAgentCleansCloneAndFreesResources(t *testing.T) {
-	t.Parallel()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
 
 	deps := newTestDeps(t)
 	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	postmortemDir := filepath.Join(home, "sync", "postmortems")
+	deps.amux.sendKeysHook = func(_ string, keys []string) {
+		for _, key := range keys {
+			if key == "$postmortem" {
+				writePostmortemLog(t, postmortemDir, "LAB-689", deps.clock.Now().Add(time.Minute))
+			}
+		}
+	}
 	d := deps.newDaemon(t)
 	ctx := context.Background()
 
@@ -557,22 +602,121 @@ func TestCancelKillsAgentCleansCloneAndFreesResources(t *testing.T) {
 	if got, want := deps.amux.killCalls, []string{"pane-1"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("kill calls = %#v, want %#v", got, want)
 	}
-	if got, want := deps.pool.releasedClones(), []Clone{deps.pool.clone}; !reflect.DeepEqual(got, want) {
+	if got, want := deps.pool.releasedClones(), []Clone{{
+		Name:          deps.pool.clone.Name,
+		Path:          deps.pool.clone.Path,
+		CurrentBranch: "LAB-689",
+		AssignedTask:  "LAB-689",
+	}}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("released clones = %#v, want %#v", got, want)
 	}
 
-	wantCleanup := []commandCall{
-		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"reset", "--hard"}},
-		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"checkout", "main"}},
-		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"pull"}},
-		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"clean", "-fdx", "--exclude=.orca-pool"}},
-		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"branch", "-D", "LAB-689"}},
-	}
-	if got := deps.commands.callsByName("git"); !reflect.DeepEqual(got, wantCleanup) {
-		t.Fatalf("cleanup git calls = %#v, want %#v", got, wantCleanup)
+	if got := deps.commands.callsByName("git"); len(got) != 0 {
+		t.Fatalf("git calls = %#v, want none during daemon cleanup", got)
 	}
 
 	deps.events.requireTypes(t, EventDaemonStarted, EventTaskAssigned, EventTaskCancelled)
+}
+
+func TestCancelRequiresVerifiedPostmortemBeforeCleanup(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	deps := newTestDeps(t)
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	postmortemDir := filepath.Join(home, "sync", "postmortems")
+	deps.amux.sendKeysHook = func(_ string, keys []string) {
+		for _, key := range keys {
+			if key == "$postmortem" {
+				writePostmortemLog(t, postmortemDir, "LAB-689", deps.clock.Now().Add(time.Minute))
+			}
+		}
+	}
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-689", "Implement daemon core", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	deps.commands.reset()
+	deps.amux.waitIdleCalls = nil
+	deps.amux.killCalls = nil
+
+	if err := d.Cancel(ctx, "LAB-689"); err != nil {
+		t.Fatalf("Cancel() error = %v", err)
+	}
+
+	waitFor(t, "task cancellation", func() bool {
+		task, ok := deps.state.task("LAB-689")
+		return ok && task.Status == TaskStatusCancelled
+	})
+
+	deps.amux.requireSentKeys(t, "pane-1", []string{"Implement daemon core", "Enter", "$postmortem", "Enter"})
+	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
+		{PaneID: "pane-1", Timeout: 2 * time.Minute},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("waitIdle calls = %#v, want %#v", got, want)
+	}
+	if got, want := deps.amux.killCalls, []string{"pane-1"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("kill calls = %#v, want %#v", got, want)
+	}
+	if got := deps.commands.callsByName("git"); len(got) != 0 {
+		t.Fatalf("git calls = %#v, want none during daemon cleanup", got)
+	}
+}
+
+func TestCancelSkipsPostmortemWhenSessionAlreadyRecorded(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	deps := newTestDeps(t)
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	postmortemDir := filepath.Join(home, "sync", "postmortems")
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-689", "Implement daemon core", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	writePostmortemLog(t, postmortemDir, "LAB-689", deps.clock.Now().Add(time.Minute))
+
+	deps.commands.reset()
+	deps.amux.waitIdleCalls = nil
+	deps.amux.killCalls = nil
+
+	if err := d.Cancel(ctx, "LAB-689"); err != nil {
+		t.Fatalf("Cancel() error = %v", err)
+	}
+
+	waitFor(t, "task cancellation", func() bool {
+		task, ok := deps.state.task("LAB-689")
+		return ok && task.Status == TaskStatusCancelled
+	})
+
+	deps.amux.requireSentKeys(t, "pane-1", []string{"Implement daemon core", "Enter"})
+	if got := deps.amux.waitIdleCalls; len(got) != 0 {
+		t.Fatalf("waitIdle calls = %#v, want none", got)
+	}
+	if got := deps.commands.callsByName("git"); len(got) != 0 {
+		t.Fatalf("git calls = %#v, want none during daemon cleanup", got)
+	}
 }
 
 func TestStuckDetectionMatchesTextPatternsThenEscalates(t *testing.T) {
@@ -688,12 +832,21 @@ func TestStuckDetectionUsesIdleTimeoutAndRecoversOnOutputChange(t *testing.T) {
 }
 
 func TestPRMergePollingSendsWrapUpAndCleansClone(t *testing.T) {
-	t.Parallel()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
 
 	deps := newTestDeps(t)
 	captureTicker := newFakeTicker()
 	prTicker := newFakeTicker()
 	deps.tickers.enqueue(captureTicker, prTicker)
+	postmortemDir := filepath.Join(home, "sync", "postmortems")
+	deps.amux.sendKeysHook = func(_ string, keys []string) {
+		for _, key := range keys {
+			if key == "$postmortem" {
+				writePostmortemLog(t, postmortemDir, "LAB-689", deps.clock.Now().Add(time.Minute))
+			}
+		}
+	}
 	deps.amux.rejectCanceledContext = true
 	deps.pool.rejectCanceledContext = true
 	deps.state.rejectCanceledContext = true
@@ -727,10 +880,16 @@ func TestPRMergePollingSendsWrapUpAndCleansClone(t *testing.T) {
 	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
 		{PaneID: "pane-1", Timeout: 30 * time.Second},
 		{PaneID: "pane-1", Timeout: 2 * time.Minute},
+		{PaneID: "pane-1", Timeout: 2 * time.Minute},
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("wait idle calls = %#v, want %#v", got, want)
 	}
-	if got, want := deps.pool.releasedClones(), []Clone{deps.pool.clone}; !reflect.DeepEqual(got, want) {
+	if got, want := deps.pool.releasedClones(), []Clone{{
+		Name:          deps.pool.clone.Name,
+		Path:          deps.pool.clone.Path,
+		CurrentBranch: "LAB-689",
+		AssignedTask:  "LAB-689",
+	}}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("released clones = %#v, want %#v", got, want)
 	}
 	if got, want := deps.issueTracker.statuses(), []issueStatusUpdate{
@@ -741,6 +900,7 @@ func TestPRMergePollingSendsWrapUpAndCleansClone(t *testing.T) {
 	}
 	deps.amux.requireSentKeys(t, "pane-1", []string{
 		"Implement daemon core\n",
+		"$postmortem\n",
 		"PR merged, wrap up.\n",
 	})
 	deps.events.requireTypes(t, EventDaemonStarted, EventTaskAssigned, EventPRDetected, EventPRMerged, EventTaskCompleted)
@@ -1643,6 +1803,7 @@ type fakeAmux struct {
 	spawnPane             Pane
 	sendKeysErr           error
 	sendKeysResults       []error
+	sendKeysHook          func(paneID string, keys []string)
 	waitIdleErr           error
 	rejectCanceledContext bool
 	spawnRequests         []SpawnRequest
@@ -1698,6 +1859,9 @@ func (a *fakeAmux) SetMetadata(ctx context.Context, paneID string, metadata map[
 func (a *fakeAmux) SendKeys(ctx context.Context, paneID string, keys ...string) error {
 	if a.rejectCanceledContext && ctx.Err() != nil {
 		return ctx.Err()
+	}
+	if a.sendKeysHook != nil {
+		a.sendKeysHook(paneID, append([]string(nil), keys...))
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -1800,7 +1964,9 @@ func (a *fakeAmux) requireSentKeys(t *testing.T, paneID string, want []string) {
 	t.Helper()
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if got := a.sentKeys[paneID]; !reflect.DeepEqual(got, want) {
+	got := normalizeSentKeys(a.sentKeys[paneID]...)
+	want = normalizeSentKeys(want...)
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("sentKeys[%q] = %#v, want %#v", paneID, got, want)
 	}
 }
@@ -1826,6 +1992,29 @@ func normalizeSentKeys(keys ...string) []string {
 	}
 	flush()
 	return normalized
+}
+
+func writePostmortemLog(t *testing.T, dir, issue string, modTime time.Time) {
+	t.Helper()
+
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", dir, err)
+	}
+
+	path := filepath.Join(dir, issue+".md")
+	content := strings.Join([]string{
+		"### Metadata",
+		"- **Repo**: orca",
+		"- **Branch**: " + issue,
+		"- **Issues**: " + issue,
+		"",
+	}, "\n")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", path, err)
+	}
+	if err := os.Chtimes(path, modTime, modTime); err != nil {
+		t.Fatalf("Chtimes(%q) error = %v", path, err)
+	}
 }
 
 type fakeCommands struct {
