@@ -1183,7 +1183,7 @@ func TestPRMergeablePollingNudgesWorkerOnConflictTransitions(t *testing.T) {
 	prTicker.tick(deps.clock.Now())
 	waitFor(t, "initial conflict nudge", func() bool {
 		return deps.amux.countKey("pane-1", conflictNudge) == 1 &&
-			active.lastMergeableState == "CONFLICTING"
+			active.mergeableState() == "CONFLICTING"
 	})
 
 	prTicker.tick(deps.clock.Now())
@@ -1200,7 +1200,7 @@ func TestPRMergeablePollingNudgesWorkerOnConflictTransitions(t *testing.T) {
 	prTicker.tick(deps.clock.Now())
 	waitFor(t, "mergeable state recovery", func() bool {
 		return deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "mergeable"}) == 3 &&
-			active.lastMergeableState == "MERGEABLE"
+			active.mergeableState() == "MERGEABLE"
 	})
 	if got, want := deps.amux.countKey("pane-1", conflictNudge), 1; got != want {
 		t.Fatalf("conflict nudge count after recovery = %d, want %d", got, want)
@@ -1209,7 +1209,7 @@ func TestPRMergeablePollingNudgesWorkerOnConflictTransitions(t *testing.T) {
 	prTicker.tick(deps.clock.Now())
 	waitFor(t, "conflict nudge after recovery", func() bool {
 		return deps.amux.countKey("pane-1", conflictNudge) == 2 &&
-			active.lastMergeableState == "CONFLICTING"
+			active.mergeableState() == "CONFLICTING"
 	})
 
 	if got, want := deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "mergeable"}), 4; got != want {

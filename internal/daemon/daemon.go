@@ -64,25 +64,38 @@ type Daemon struct {
 }
 
 type assignment struct {
-	ctx             context.Context
-	cancel          context.CancelFunc
-	captureTick     Ticker
-	pollTick        Ticker
-	pending         bool
-	profile         AgentProfile
-	task            Task
-	worker          Worker
-	clone           Clone
-	pane            Pane
-	startedAt       time.Time
-	lastOutput      string
-	lastActivity    time.Time
-	prNumber        int
-	lastMergeableState string
-	lastCIState     string
-	lastReviewCount atomic.Int64
-	escalated       bool
-	cleanupOnce     sync.Once
+	ctx                context.Context
+	cancel             context.CancelFunc
+	captureTick        Ticker
+	pollTick           Ticker
+	pending            bool
+	profile            AgentProfile
+	task               Task
+	worker             Worker
+	clone              Clone
+	pane               Pane
+	startedAt          time.Time
+	lastOutput         string
+	lastActivity       time.Time
+	prNumber           int
+	lastMergeableState atomic.Value
+	lastCIState        string
+	lastReviewCount    atomic.Int64
+	escalated          bool
+	cleanupOnce        sync.Once
+}
+
+func (a *assignment) mergeableState() string {
+	value := a.lastMergeableState.Load()
+	if value == nil {
+		return ""
+	}
+	state, _ := value.(string)
+	return state
+}
+
+func (a *assignment) setMergeableState(state string) {
+	a.lastMergeableState.Store(state)
 }
 
 type prReviewPayload struct {
@@ -872,9 +885,9 @@ func (d *Daemon) handlePRMergeablePoll(active *assignment) {
 		return
 	}
 
-	previousState := active.lastMergeableState
+	previousState := active.mergeableState()
 	if previousState == "CONFLICTING" || state != "CONFLICTING" {
-		active.lastMergeableState = state
+		active.setMergeableState(state)
 		return
 	}
 
@@ -882,7 +895,7 @@ func (d *Daemon) handlePRMergeablePoll(active *assignment) {
 		return
 	}
 
-	active.lastMergeableState = state
+	active.setMergeableState(state)
 
 	d.emit(active.ctx, Event{
 		Time:         d.now(),
