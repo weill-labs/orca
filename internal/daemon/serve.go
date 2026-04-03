@@ -185,6 +185,10 @@ func serveRPC(ctx context.Context, listener net.Listener, instance *Daemon, stor
 
 func handleRPCConn(ctx context.Context, conn net.Conn, instance *Daemon, store *state.SQLiteStore, projectPath string) {
 	defer conn.Close()
+	if err := conn.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		_ = json.NewEncoder(conn).Encode(rpcFailure(nil, -32000, fmt.Errorf("set read deadline: %w", err)))
+		return
+	}
 
 	var request rpcRequest
 	if err := json.NewDecoder(conn).Decode(&request); err != nil {

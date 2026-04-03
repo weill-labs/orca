@@ -1,9 +1,11 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -147,6 +149,29 @@ func TestHandleRPCConnAndDispatchStatusBranches(t *testing.T) {
 	}
 }
 
+func TestHandleRPCConnSetsReadDeadline(t *testing.T) {
+	t.Parallel()
+
+	conn := &deadlineConn{}
+	start := time.Now()
+	handleRPCConn(context.Background(), conn, nil, nil, "/repo")
+
+	if conn.readDeadline.IsZero() {
+		t.Fatal("read deadline was not set")
+	}
+	if conn.readDeadline.Before(start.Add(9*time.Second)) || conn.readDeadline.After(start.Add(11*time.Second)) {
+		t.Fatalf("read deadline = %v, want about 10s from %v", conn.readDeadline, start)
+	}
+
+	var response rpcResponse
+	if err := json.NewDecoder(bytes.NewReader(conn.writes.Bytes())).Decode(&response); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if response.Error == nil || response.Error.Code != -32700 {
+		t.Fatalf("response = %#v, want parse error", response)
+	}
+}
+
 func TestListenUnixSocketRemovesStaleFile(t *testing.T) {
 	t.Parallel()
 
@@ -182,3 +207,22 @@ func mustJSON(t *testing.T, value any) json.RawMessage {
 	}
 	return data
 }
+
+type deadlineConn struct {
+	writes       bytes.Buffer
+	readDeadline time.Time
+}
+
+func (c *deadlineConn) Read(_ []byte) (int, error)        { return 0, io.EOF }
+func (c *deadlineConn) Write(p []byte) (int, error)       { return c.writes.Write(p) }
+func (c *deadlineConn) Close() error                      { return nil }
+func (c *deadlineConn) LocalAddr() net.Addr               { return dummyAddr("local") }
+func (c *deadlineConn) RemoteAddr() net.Addr              { return dummyAddr("remote") }
+func (c *deadlineConn) SetDeadline(t time.Time) error     { c.readDeadline = t; return nil }
+func (c *deadlineConn) SetReadDeadline(t time.Time) error { c.readDeadline = t; return nil }
+func (c *deadlineConn) SetWriteDeadline(time.Time) error  { return nil }
+
+type dummyAddr string
+
+func (a dummyAddr) Network() string { return "test" }
+func (a dummyAddr) String() string  { return string(a) }

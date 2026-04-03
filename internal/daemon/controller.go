@@ -309,8 +309,11 @@ func (c *LocalController) Cancel(ctx context.Context, req CancelRequest) (TaskAc
 		return TaskActionResult{}, err
 	}
 
+	callCtx, cancel := contextWithOptionalTimeout(ctx, 30*time.Second)
+	defer cancel()
+
 	var result TaskActionResult
-	err = callRPC(ctx, c.paths.socketFile(projectPath), "cancel", cancelRPCParams{
+	err = callRPC(callCtx, c.paths.socketFile(projectPath), "cancel", cancelRPCParams{
 		Issue: strings.TrimSpace(req.Issue),
 	}, &result)
 	if err != nil {
