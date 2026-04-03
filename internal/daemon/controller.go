@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/weill-labs/orca/internal/amux"
 	state "github.com/weill-labs/orca/internal/daemonstate"
 	"github.com/weill-labs/orca/internal/project"
 )
@@ -238,7 +239,7 @@ func (c *LocalController) Start(ctx context.Context, req StartRequest) (StartRes
 		if cleanupErr := c.cleanupFailedStart(projectPath, pidFile, process); cleanupErr != nil {
 			return StartResult{}, cleanupErr
 		}
-		if errors.Is(waitErr, errPollingDeadlineExceeded) {
+		if errors.Is(waitErr, amux.ErrWaitDeadlineExceeded) {
 			return StartResult{}, fmt.Errorf("daemon failed to report running state")
 		}
 		return StartResult{}, waitErr
@@ -285,7 +286,7 @@ func (c *LocalController) Stop(ctx context.Context, req StopRequest) (StopResult
 		if waitErr == nil {
 			continue
 		}
-		if errors.Is(waitErr, errPollingDeadlineExceeded) {
+		if errors.Is(waitErr, amux.ErrWaitDeadlineExceeded) {
 			return StopResult{}, fmt.Errorf("daemon did not stop within %s", c.stopTimeout)
 		}
 		return StopResult{}, waitErr
@@ -475,26 +476,8 @@ func processAlive(pid int) (bool, error) {
 	return false, fmt.Errorf("check process %d: %w", pid, err)
 }
 
-var errPollingDeadlineExceeded = errors.New("polling deadline exceeded")
-
 func waitForPollingInterval(ctx context.Context, deadline time.Time, interval time.Duration) error {
-	remaining := time.Until(deadline)
-	if remaining <= 0 {
-		return errPollingDeadlineExceeded
-	}
-	if remaining < interval {
-		interval = remaining
-	}
-
-	timer := time.NewTimer(interval)
-	defer timer.Stop()
-
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
-	}
+	return amux.WaitUntil(ctx, deadline, interval)
 }
 
 func (c *LocalController) cleanupFailedStart(projectPath, pidFile string, process *os.Process) error {

@@ -1409,7 +1409,7 @@ func waitFor(t *testing.T, name string, condition func() bool) {
 		if condition() {
 			return
 		}
-		time.Sleep(10 * time.Millisecond)
+		waitForDuration(t, 10*time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %s", name)
 }

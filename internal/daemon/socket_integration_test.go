@@ -92,14 +92,14 @@ max_nudge_retries = 1
 		}
 
 		if _, err := os.Stat(socketPath); err != nil {
-			time.Sleep(25 * time.Millisecond)
+			waitForDuration(t, 25*time.Millisecond)
 			continue
 		}
 		status, err := store.ProjectStatus(context.Background(), projectPath)
 		if err == nil && status.Daemon != nil && status.Daemon.Status == "running" {
 			goto daemonReady
 		}
-		time.Sleep(25 * time.Millisecond)
+		waitForDuration(t, 25*time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for daemon socket %s", socketPath)
 
