@@ -18,6 +18,7 @@ type fakeAmux struct {
 	sendKeysResults       []error
 	sendKeysHook          func(paneID string, keys []string)
 	waitIdleErr           error
+	waitIdleHook          func(paneID string, timeout time.Duration)
 	rejectCanceledContext bool
 	spawnRequests         []SpawnRequest
 	metadata              map[string]map[string]string
@@ -145,6 +146,9 @@ func (a *fakeAmux) KillPane(ctx context.Context, paneID string) error {
 func (a *fakeAmux) WaitIdle(ctx context.Context, paneID string, timeout time.Duration) error {
 	if a.rejectCanceledContext && ctx.Err() != nil {
 		return ctx.Err()
+	}
+	if a.waitIdleHook != nil {
+		a.waitIdleHook(paneID, timeout)
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()

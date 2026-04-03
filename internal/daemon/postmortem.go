@@ -37,37 +37,77 @@ func ensureFlag(command, flag string) string {
 	return command + " " + flag
 }
 
-func (d *Daemon) ensurePostmortem(ctx context.Context, active ActiveAssignment) error {
+func (d *Daemon) ensurePostmortem(ctx context.Context, active ActiveAssignment, allowTrigger bool) error {
+	status, message, err := d.postmortemStatus(ctx, active, allowTrigger)
+	profile, profileErr := d.profileForTask(ctx, active.Task)
+	if profileErr != nil {
+		profile = AgentProfile{Name: active.Task.AgentProfile}
+	}
+	d.emit(ctx, Event{
+		Time:         d.now(),
+		Type:         EventWorkerPostmortem,
+		Project:      d.project,
+		Issue:        active.Task.Issue,
+		PaneID:       active.Task.PaneID,
+		PaneName:     active.Task.PaneName,
+		CloneName:    active.Task.CloneName,
+		ClonePath:    active.Task.ClonePath,
+		Branch:       active.Task.Branch,
+		AgentProfile: profile.Name,
+		PRNumber:     active.Task.PRNumber,
+		Message:      fmt.Sprintf("postmortem %s: %s", status, message),
+	})
+	return err
+}
+
+func (d *Daemon) postmortemStatus(ctx context.Context, active ActiveAssignment, allowTrigger bool) (string, string, error) {
 	profile, err := d.profileForTask(ctx, active.Task)
 	if err != nil {
-		return fmt.Errorf("load agent profile: %w", err)
+		return "failed", fmt.Sprintf("load agent profile: %v", err), err
 	}
 
 	command := postmortemCommandForProfile(profile)
 	if command == "" {
-		return nil
+		return "skipped", "postmortem disabled for agent profile", nil
 	}
 
-	if ok, err := postmortemRecorded(active); err != nil {
-		return fmt.Errorf("check postmortem: %w", err)
-	} else if ok {
-		return nil
+	keys := postmortemSessionKeys(active)
+	if len(keys) == 0 {
+		return "skipped", "no worker session metadata available", nil
 	}
 
+	path, err := findRecentPostmortem(d.postmortemDir, keys, d.now(), d.postmortemWindow)
+	if err != nil {
+		return "failed", fmt.Sprintf("check failed: %v", err), err
+	}
+	if path != "" {
+		return "found", path, nil
+	}
+	if !allowTrigger {
+		return "skipped", "cleanup already had an error before postmortem trigger", nil
+	}
+	if strings.TrimSpace(active.Task.PaneID) == "" {
+		return "skipped", "worker pane missing", nil
+	}
 	if err := d.amux.SendKeys(ctx, active.Task.PaneID, command, "Enter"); err != nil {
-		return fmt.Errorf("request postmortem: %w", err)
-	}
-	if err := d.amux.WaitIdle(ctx, active.Task.PaneID, d.mergeGracePeriod); err != nil {
-		return fmt.Errorf("wait for postmortem: %w", err)
+		return "failed", fmt.Sprintf("trigger failed: %v", err), err
 	}
 
-	if ok, err := postmortemRecorded(active); err != nil {
-		return fmt.Errorf("verify postmortem: %w", err)
-	} else if ok {
-		return nil
+	waitErr := d.amux.WaitIdle(ctx, active.Task.PaneID, d.postmortemTimeout)
+	path, checkErr := findRecentPostmortem(d.postmortemDir, keys, d.now(), d.postmortemWindow)
+	if checkErr != nil {
+		return "failed", fmt.Sprintf("recheck failed: %v", checkErr), checkErr
 	}
-
-	return errors.New("postmortem not recorded")
+	if path != "" {
+		if waitErr != nil {
+			return "triggered", fmt.Sprintf("%s (wait idle: %v)", path, waitErr), nil
+		}
+		return "triggered", path, nil
+	}
+	if waitErr != nil {
+		return "triggered", fmt.Sprintf("wait idle returned %v", waitErr), nil
+	}
+	return "triggered", "prompt sent and wait completed", nil
 }
 
 func postmortemCommandForProfile(profile AgentProfile) string {
@@ -77,102 +117,113 @@ func postmortemCommandForProfile(profile AgentProfile) string {
 	return postmortemCommand
 }
 
-func postmortemRecorded(active ActiveAssignment) (bool, error) {
-	_, ok, err := findPostmortem(active)
-	return ok, err
-}
-
-func findPostmortem(active ActiveAssignment) (time.Time, bool, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return time.Time{}, false, fmt.Errorf("resolve home directory: %w", err)
+func findRecentPostmortem(dir string, keys []string, now time.Time, window time.Duration) (string, error) {
+	if strings.TrimSpace(dir) == "" {
+		return "", nil
 	}
 
-	var newest time.Time
-	for _, dir := range []string{
-		filepath.Join(home, "sync", "postmortems"),
-		filepath.Join(home, ".local", "share", "postmortems"),
-	} {
-		recordedAt, ok, err := findPostmortemInDir(dir, active)
-		if err != nil {
-			return time.Time{}, false, err
-		}
-		if ok && recordedAt.After(newest) {
-			newest = recordedAt
-		}
-	}
-
-	if newest.IsZero() {
-		return time.Time{}, false, nil
-	}
-	return newest, true, nil
-}
-
-func findPostmortemInDir(dir string, active ActiveAssignment) (time.Time, bool, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return time.Time{}, false, nil
+			return "", nil
 		}
-		return time.Time{}, false, fmt.Errorf("read postmortem dir %q: %w", dir, err)
+		return "", err
 	}
 
-	var newest time.Time
+	cutoff := now.Add(-window)
+	var matchPath string
+	var matchTime time.Time
+
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
 		}
 
-		path := filepath.Join(dir, entry.Name())
 		info, err := entry.Info()
 		if err != nil {
-			return time.Time{}, false, fmt.Errorf("stat postmortem %q: %w", path, err)
+			continue
 		}
-
-		startedAt := active.Task.CreatedAt
-		if startedAt.IsZero() {
-			startedAt = active.Task.UpdatedAt
-		}
-		if !startedAt.IsZero() && info.ModTime().Before(startedAt) {
+		if info.ModTime().Before(cutoff) {
 			continue
 		}
 
-		data, err := os.ReadFile(path)
+		path := filepath.Join(dir, entry.Name())
+		matches, err := postmortemMatchesSession(path, entry.Name(), keys)
 		if err != nil {
-			return time.Time{}, false, fmt.Errorf("read postmortem %q: %w", path, err)
-		}
-		if !matchesPostmortemSession(string(data), active.Task.Issue, active.Task.Branch) {
 			continue
 		}
-		if info.ModTime().After(newest) {
-			newest = info.ModTime()
+		if !matches {
+			continue
+		}
+		if matchPath == "" || info.ModTime().After(matchTime) {
+			matchPath = path
+			matchTime = info.ModTime()
 		}
 	}
 
-	if newest.IsZero() {
-		return time.Time{}, false, nil
-	}
-	return newest, true, nil
+	return matchPath, nil
 }
 
-func matchesPostmortemSession(content, issue, branch string) bool {
-	content = strings.ToLower(content)
-	issue = strings.ToLower(strings.TrimSpace(issue))
-	branch = strings.ToLower(strings.TrimSpace(branch))
-	if issue != "" && !strings.Contains(content, issue) {
-		return false
+func postmortemMatchesSession(path, name string, keys []string) (bool, error) {
+	for _, key := range keys {
+		if strings.Contains(name, key) {
+			return true, nil
+		}
 	}
-	if branch != "" && !strings.Contains(content, branch) {
-		return false
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return false, err
 	}
-	return true
+	text := string(content)
+	for _, key := range keys {
+		if strings.Contains(text, key) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func postmortemSessionKeys(active ActiveAssignment) []string {
+	clonePath := strings.TrimSpace(active.Task.ClonePath)
+	if clonePath == "" {
+		clonePath = strings.TrimSpace(active.Worker.ClonePath)
+	}
+	paneName := strings.TrimSpace(active.Task.PaneName)
+	if paneName == "" {
+		paneName = strings.TrimSpace(active.Worker.PaneName)
+	}
+	paneID := strings.TrimSpace(active.Task.PaneID)
+	if paneID == "" {
+		paneID = strings.TrimSpace(active.Worker.PaneID)
+	}
+	keys := []string{
+		clonePath,
+		strings.TrimSpace(active.Task.Issue),
+		strings.TrimSpace(active.Task.Branch),
+		paneName,
+		paneID,
+	}
+	if clonePath != "" {
+		keys = append(keys, filepath.Base(clonePath))
+	}
+
+	out := make([]string, 0, len(keys))
+	seen := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		if key == "" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, key)
+	}
+	return out
 }
 
 func (d *Daemon) finishAssignment(ctx context.Context, active ActiveAssignment, status, eventType string, merged bool) error {
-	if err := d.ensurePostmortem(ctx, active); err != nil {
-		return err
-	}
-
 	var result error
 	cleanupCtx := context.WithoutCancel(ctx)
 
@@ -181,9 +232,13 @@ func (d *Daemon) finishAssignment(ctx context.Context, active ActiveAssignment, 
 			result = errors.Join(result, err)
 		}
 		if err := d.amux.WaitIdle(cleanupCtx, active.Task.PaneID, d.mergeGracePeriod); err != nil {
-			result = errors.Join(result, d.amux.KillPane(cleanupCtx, active.Task.PaneID))
+			result = errors.Join(result, err)
 		}
-	} else {
+	}
+
+	result = errors.Join(result, d.ensurePostmortem(cleanupCtx, active, result == nil))
+
+	if !merged || result != nil {
 		result = errors.Join(result, d.amux.KillPane(cleanupCtx, active.Task.PaneID))
 	}
 

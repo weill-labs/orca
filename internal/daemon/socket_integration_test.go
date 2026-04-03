@@ -65,7 +65,7 @@ max_nudge_retries = 1
 		spawnPane: Pane{ID: "pane-1", Name: "worker-1"},
 		captures:  make(map[string][]string),
 	}
-	postmortemDir := filepath.Join(home, "sync", "postmortems")
+	postmortemDir := filepath.Join(home, ".local", "share", "postmortems")
 	amuxClient.sendKeysHook = func(_ string, keys []string) {
 		for _, key := range keys {
 			if key == "$postmortem" {
