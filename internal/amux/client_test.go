@@ -3,6 +3,7 @@ package amux
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -18,6 +19,12 @@ type fakeRunner struct {
 	output []byte
 	err    error
 	calls  []recordedCommand
+	queue  []runnerResult
+}
+
+type runnerResult struct {
+	output []byte
+	err    error
 }
 
 func (r *fakeRunner) Run(_ context.Context, name string, args []string) ([]byte, error) {
@@ -25,6 +32,11 @@ func (r *fakeRunner) Run(_ context.Context, name string, args []string) ([]byte,
 		name: name,
 		args: append([]string(nil), args...),
 	})
+	if len(r.queue) > 0 {
+		result := r.queue[0]
+		r.queue = r.queue[1:]
+		return result.output, result.err
+	}
 	return r.output, r.err
 }
 
@@ -245,6 +257,48 @@ func TestCLIClientSendKeys(t *testing.T) {
 				t.Fatalf("SendKeys() commands = %#v, want %#v", runner.calls, []recordedCommand{tt.wantCmd})
 			}
 		})
+	}
+}
+
+func TestCLIClientListPanes(t *testing.T) {
+	t.Parallel()
+
+	listOutput := strings.Join([]string{
+		fmt.Sprintf("%-6s %-20s %-15s %-30s %-9s %-10s %-12s %s", "PANE", "NAME", "HOST", "BRANCH", "IDLE", "WINDOW", "TASK", "META"),
+		fmt.Sprintf("%-6s %-20s %-15s %-30s %-9s %-10s %-12s %s", "*1", "worker-LAB-711", "local", "LAB-711", "--", "main", "LAB-711", "agent=codex"),
+		fmt.Sprintf("%-6s %-20s %-15s %-30s %-9s %-10s %-12s %s", "2", "worker-LAB-712", "local", "LAB-712", "--", "main", "LAB-712", "agent=codex"),
+		"",
+	}, "\n")
+
+	runner := &fakeRunner{
+		queue: []runnerResult{
+			{output: []byte(listOutput)},
+			{output: []byte(`{"id":1,"name":"worker-LAB-711","cwd":"/tmp/orca01"}`)},
+			{output: []byte(`{"id":2,"name":"worker-LAB-712","cwd":"/tmp/orca02"}`)},
+		},
+	}
+	client := newTestClient(Config{Session: "orca-dev"}, runner)
+
+	panes, err := client.ListPanes(context.Background())
+	if err != nil {
+		t.Fatalf("ListPanes() error = %v", err)
+	}
+
+	wantPanes := []Pane{
+		{ID: "1", Name: "worker-LAB-711", CWD: "/tmp/orca01"},
+		{ID: "2", Name: "worker-LAB-712", CWD: "/tmp/orca02"},
+	}
+	if !reflect.DeepEqual(panes, wantPanes) {
+		t.Fatalf("ListPanes() = %#v, want %#v", panes, wantPanes)
+	}
+
+	wantCmds := []recordedCommand{
+		{name: "amux", args: []string{"-s", "orca-dev", "list", "--no-cwd"}},
+		{name: "amux", args: []string{"-s", "orca-dev", "capture", "--format", "json", "1"}},
+		{name: "amux", args: []string{"-s", "orca-dev", "capture", "--format", "json", "2"}},
+	}
+	if !reflect.DeepEqual(runner.calls, wantCmds) {
+		t.Fatalf("ListPanes() commands = %#v, want %#v", runner.calls, wantCmds)
 	}
 }
 
