@@ -332,6 +332,76 @@ func TestAssignRejectsConcurrentDuplicateIssueBeforeCloneAcquire(t *testing.T) {
 	}
 }
 
+func TestAssignRejectsIssueAlreadyActiveInStateBeforeCloneAcquire(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+	deps.state.tasks["LAB-689"] = Task{
+		Project:      "/tmp/project",
+		Issue:        "LAB-689",
+		Status:       TaskStatusActive,
+		PaneID:       "pane-existing",
+		ClonePath:    "/tmp/existing-clone",
+		Branch:       "LAB-689",
+		AgentProfile: "codex",
+	}
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	err := d.Assign(ctx, "LAB-689", "Implement daemon core", "codex")
+	if err == nil {
+		t.Fatal("Assign() succeeded, want duplicate assignment error")
+	}
+	if !strings.Contains(err.Error(), "already assigned") {
+		t.Fatalf("Assign() error = %v, want duplicate assignment error", err)
+	}
+	if got, want := deps.pool.acquireCallCount(), 0; got != want {
+		t.Fatalf("pool acquire calls = %d, want %d", got, want)
+	}
+	if got, want := len(deps.amux.spawnRequests), 0; got != want {
+		t.Fatalf("spawn requests = %d, want %d", got, want)
+	}
+}
+
+func TestAssignRejectsOpenPRBeforeCloneAcquire(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--state", "open", "--json", "number"}, `[{"number":42}]`, nil)
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	err := d.Assign(ctx, "LAB-689", "Implement daemon core", "codex")
+	if err == nil {
+		t.Fatal("Assign() succeeded, want open PR error")
+	}
+	if !strings.Contains(err.Error(), "open PR #42") {
+		t.Fatalf("Assign() error = %v, want open PR context", err)
+	}
+	if got, want := deps.pool.acquireCallCount(), 0; got != want {
+		t.Fatalf("pool acquire calls = %d, want %d", got, want)
+	}
+	if got, want := len(deps.amux.spawnRequests), 0; got != want {
+		t.Fatalf("spawn requests = %d, want %d", got, want)
+	}
+}
+
 func TestCancelKillsAgentCleansCloneAndFreesResources(t *testing.T) {
 	t.Parallel()
 
@@ -553,6 +623,45 @@ func TestPRMergePollingSendsWrapUpAndCleansClone(t *testing.T) {
 		"PR merged, wrap up.\n",
 	})
 	deps.events.requireTypes(t, EventDaemonStarted, EventTaskAssigned, EventPRDetected, EventPRMerged, EventTaskCompleted)
+}
+
+func TestPRDetectionSyncsPaneMetadata(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	captureTicker := newFakeTicker()
+	prTicker := newFakeTicker()
+	deps.tickers.enqueue(captureTicker, prTicker)
+	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision"}, ``, nil)
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-689", "Implement daemon core", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	prTicker.tick(deps.clock.Now())
+	waitFor(t, "pr metadata sync", func() bool {
+		task, ok := deps.state.task("LAB-689")
+		return ok && task.PRNumber == 42
+	})
+
+	deps.amux.requireMetadata(t, "pane-1", map[string]string{
+		"agent_profile": "codex",
+		"branch":        "LAB-689",
+		"issue":         "LAB-689",
+		"pr":            "42",
+		"task":          "LAB-689",
+	})
 }
 
 func TestPRReviewPollingNudgesWorkerOncePerNewBlockingReviewBatch(t *testing.T) {
@@ -1078,7 +1187,7 @@ func (a *fakeAmux) SendKeys(ctx context.Context, paneID string, keys ...string) 
 	if a.sentKeys == nil {
 		a.sentKeys = make(map[string][]string)
 	}
-	a.sentKeys[paneID] = append(a.sentKeys[paneID], keys...)
+	a.sentKeys[paneID] = append(a.sentKeys[paneID], normalizeSentKeys(keys...)...)
 	return a.sendKeysErr
 }
 
@@ -1166,6 +1275,29 @@ func (a *fakeAmux) requireSentKeys(t *testing.T, paneID string, want []string) {
 	if got := a.sentKeys[paneID]; !reflect.DeepEqual(got, want) {
 		t.Fatalf("sentKeys[%q] = %#v, want %#v", paneID, got, want)
 	}
+}
+
+func normalizeSentKeys(keys ...string) []string {
+	normalized := make([]string, 0, len(keys))
+	var builder strings.Builder
+	flush := func() {
+		if builder.Len() == 0 {
+			return
+		}
+		normalized = append(normalized, builder.String())
+		builder.Reset()
+	}
+
+	for _, key := range keys {
+		if key == "Enter" {
+			builder.WriteString("\n")
+			flush()
+			continue
+		}
+		builder.WriteString(key)
+	}
+	flush()
+	return normalized
 }
 
 type fakeCommands struct {
