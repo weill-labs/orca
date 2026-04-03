@@ -141,6 +141,7 @@ func TestAnalyzeTestOutput(t *testing.T) {
 			input: strings.Join([]string{
 				testEventJSON("fail", "github.com/weill-labs/orca/internal/daemon", "TestKnownDaemonFlake"),
 				testEventJSON("fail", "github.com/weill-labs/orca/internal/daemon", "TestKnownDaemonFlake"),
+				testEventJSON("fail", "github.com/weill-labs/orca/internal/daemon", ""),
 			}, "\n"),
 			want: Report{
 				KnownFailures: []KnownFailure{
@@ -212,6 +213,20 @@ func TestAnalyzeTestOutput(t *testing.T) {
 						Occurrences: 1,
 					},
 				},
+				ShouldRerun: false,
+			},
+			summary:  []string{"new failure — investigate", "TestBrandNewFailure"},
+			reject:   []string{"package-level failure"},
+			attempt:  1,
+			maxTries: 2,
+			rerun:    false,
+		},
+		{
+			name: "package-only failure blocks rerun",
+			input: strings.Join([]string{
+				testEventJSON("fail", "github.com/weill-labs/orca/internal/daemon", ""),
+			}, "\n"),
+			want: Report{
 				PackageFailures: []PackageFailure{
 					{
 						Package:     "github.com/weill-labs/orca/internal/daemon",
@@ -220,7 +235,7 @@ func TestAnalyzeTestOutput(t *testing.T) {
 				},
 				ShouldRerun: false,
 			},
-			summary:  []string{"new failure — investigate", "TestBrandNewFailure", "package-level failure"},
+			summary:  []string{"new failure — investigate", "package-level failure"},
 			attempt:  1,
 			maxTries: 2,
 			rerun:    false,

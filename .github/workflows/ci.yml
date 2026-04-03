@@ -68,6 +68,16 @@ jobs:
         if: steps.changes.outputs.code_changed == 'true'
         run: make test-flakes
 
+      - name: Upload flake analysis
+        if: ${{ always() && steps.changes.outputs.code_changed == 'true' && hashFiles('flake-report.json') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: flake-report-${{ github.run_attempt }}
+          path: |
+            flake-report.json
+            flake-summary.md
+            flake-results.json
+
       - name: GoReleaser snapshot
         if: steps.changes.outputs.code_changed == 'true'
         uses: goreleaser/goreleaser-action@v7.0.0
