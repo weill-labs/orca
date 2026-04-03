@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -759,24 +760,12 @@ func (d *Daemon) handlePRPoll(active *assignment) {
 	d.handlePRChecksPoll(active)
 
 	merged, err := d.isPRMerged(active.ctx, active.prNumber)
-	if err == nil && merged {
-		d.emit(active.ctx, Event{
-			Time:         d.now(),
-			Type:         EventPRMerged,
-			Project:      d.project,
-			Issue:        active.task.Issue,
-			PaneID:       active.pane.ID,
-			PaneName:     active.pane.Name,
-			CloneName:    active.clone.Name,
-			ClonePath:    active.clone.Path,
-			Branch:       active.task.Branch,
-			AgentProfile: active.profile.Name,
-			PRNumber:     active.prNumber,
-			Message:      "pull request merged",
-		})
-		_ = d.finishAssignment(active.ctx, active, TaskStatusDone, EventTaskCompleted, true)
+	if err != nil || !merged {
+		d.handlePRMergeablePoll(active)
+		d.handlePRReviewPoll(active)
 		return
 	}
+
 	message := "pull request merged"
 	if err := d.setIssueStatus(active.ctx, active.task.Issue, IssueStateDone); err != nil {
 		message = fmt.Sprintf("pull request merged (failed to update Linear issue status: %v)", err)
@@ -812,8 +801,6 @@ func (d *Daemon) handlePRPoll(active *assignment) {
 			Message:      err.Error(),
 		})
 	}
-	d.handlePRMergeablePoll(active)
-	d.handlePRReviewPoll(active)
 }
 
 func (d *Daemon) handlePRReviewPoll(active *assignment) {
