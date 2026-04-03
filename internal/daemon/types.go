@@ -25,6 +25,7 @@ const (
 	EventTaskCancelled      = "task.cancelled"
 	EventTaskCompleted      = "task.completed"
 	EventWorkerNudged       = "worker.nudged"
+	EventWorkerNudgedCI     = "worker.nudged_ci"
 	EventWorkerNudgedReview = "worker.nudged_review"
 	EventWorkerEscalated    = "worker.escalated"
 	EventWorkerRecovered    = "worker.recovered"
