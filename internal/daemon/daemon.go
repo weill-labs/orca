@@ -13,10 +13,11 @@ import (
 )
 
 const (
-	defaultCaptureInterval  = 5 * time.Second
-	defaultPollInterval     = 30 * time.Second
-	defaultMergeGracePeriod = 10 * time.Minute
-	mergedWrapUpPrompt      = "PR merged, wrap up.\n"
+	defaultCaptureInterval       = 5 * time.Second
+	defaultAgentHandshakeTimeout = 30 * time.Second
+	defaultPollInterval          = 30 * time.Second
+	defaultMergeGracePeriod      = 10 * time.Minute
+	mergedWrapUpPrompt           = "PR merged, wrap up.\n"
 )
 
 type Daemon struct {
@@ -275,21 +276,13 @@ func (d *Daemon) Assign(ctx context.Context, issue, prompt, agentProfile string)
 		return fmt.Errorf("set pane metadata: %w", err)
 	}
 
+	if err := d.agentHandshake(ctx, pane.ID, profile); err != nil {
+		d.failPendingAssignment(ctx, issue, clone, pane, profile, err, releaseReservation)
+		return fmt.Errorf("agent handshake: %w", err)
+	}
+
 	if err := d.amux.SendKeys(ctx, pane.ID, ensureTrailingNewline(prompt)); err != nil {
-		d.emit(ctx, Event{
-			Time:         d.now(),
-			Type:         EventTaskAssignFailed,
-			Project:      d.project,
-			Issue:        issue,
-			PaneID:       pane.ID,
-			CloneName:    clone.Name,
-			ClonePath:    clone.Path,
-			Branch:       issue,
-			AgentProfile: profile.Name,
-			Message:      err.Error(),
-		})
-		_ = d.rollbackAssignment(ctx, clone, pane, issue)
-		releaseReservation()
+		d.failPendingAssignment(ctx, issue, clone, pane, profile, err, releaseReservation)
 		return fmt.Errorf("send prompt: %w", err)
 	}
 
@@ -362,6 +355,57 @@ func (d *Daemon) Assign(ctx context.Context, issue, prompt, agentProfile string)
 	d.wg.Add(1)
 	go d.monitorAssignment(active)
 	return nil
+}
+
+func (d *Daemon) failPendingAssignment(ctx context.Context, issue string, clone Clone, pane Pane, profile AgentProfile, err error, releaseReservation func()) {
+	d.emit(ctx, Event{
+		Time:         d.now(),
+		Type:         EventTaskAssignFailed,
+		Project:      d.project,
+		Issue:        issue,
+		PaneID:       pane.ID,
+		CloneName:    clone.Name,
+		ClonePath:    clone.Path,
+		Branch:       issue,
+		AgentProfile: profile.Name,
+		Message:      err.Error(),
+	})
+	_ = d.rollbackAssignment(ctx, clone, pane, issue)
+	releaseReservation()
+}
+
+func (d *Daemon) agentHandshake(ctx context.Context, paneID string, profile AgentProfile) error {
+	if err := d.amux.WaitIdle(ctx, paneID, defaultAgentHandshakeTimeout); err != nil {
+		return fmt.Errorf("wait for startup idle: %w", err)
+	}
+
+	output, err := d.amux.Capture(ctx, paneID)
+	if err != nil {
+		return fmt.Errorf("capture startup output: %w", err)
+	}
+
+	if !hasTrustPrompt(profile, output) {
+		return nil
+	}
+
+	if err := d.amux.SendKeys(ctx, paneID, "\n"); err != nil {
+		return fmt.Errorf("confirm trust prompt: %w", err)
+	}
+
+	if err := d.amux.WaitIdle(ctx, paneID, defaultAgentHandshakeTimeout); err != nil {
+		return fmt.Errorf("wait for post-confirm idle: %w", err)
+	}
+
+	return nil
+}
+
+func hasTrustPrompt(profile AgentProfile, output string) bool {
+	switch strings.ToLower(profile.Name) {
+	case "codex":
+		return strings.Contains(strings.ToLower(output), "do you trust")
+	default:
+		return false
+	}
 }
 
 func (d *Daemon) Cancel(ctx context.Context, issue string) error {
