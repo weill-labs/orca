@@ -151,7 +151,7 @@ func (m *Manager) HealthCheck(ctx context.Context, path string) error {
 
 	if err := m.cleanupClone(ctx, clonePath, ""); err != nil {
 		if health.remoteErr != nil {
-			return fmt.Errorf("repair clone %q after remote check failed: %w", clonePath, err)
+			return fmt.Errorf("repair clone %q after remote check failed: %w", clonePath, errors.Join(health.remoteErr, err))
 		}
 		return fmt.Errorf("repair clone %q: %w", clonePath, err)
 	}

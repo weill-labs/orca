@@ -295,6 +295,7 @@ func TestManagerHealthCheck(t *testing.T) {
 		setup      func(t *testing.T, clonePath string)
 		verify     func(t *testing.T, clonePath string)
 		wantErr    string
+		verifyErr  func(t *testing.T, err error)
 	}{
 		{
 			name: "repairs dirty clone back to base branch",
@@ -346,6 +347,18 @@ func TestManagerHealthCheck(t *testing.T) {
 				mustRun(t, clonePath, "git", "remote", "set-url", "origin", filepath.Join(t.TempDir(), "missing-origin.git"))
 			},
 			wantErr: "remote",
+			verifyErr: func(t *testing.T, err error) {
+				t.Helper()
+
+				for _, want := range []string{
+					"git ls-remote --exit-code origin HEAD",
+					"git pull",
+				} {
+					if !strings.Contains(err.Error(), want) {
+						t.Fatalf("HealthCheck() error = %v, want substring %q", err, want)
+					}
+				}
+			},
 		},
 	}
 
@@ -375,6 +388,9 @@ func TestManagerHealthCheck(t *testing.T) {
 				}
 				if !strings.Contains(err.Error(), tc.wantErr) {
 					t.Fatalf("HealthCheck() error = %v, want substring %q", err, tc.wantErr)
+				}
+				if tc.verifyErr != nil {
+					tc.verifyErr(t, err)
 				}
 				return
 			}
