@@ -53,7 +53,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	defer store.Close()
 
-	controller, err := daemon.NewLocalController(daemon.Options{
+	controller, err := daemon.NewLocalController(daemon.ControllerOptions{
 		Store: store,
 		Paths: paths,
 	})

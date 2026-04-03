@@ -35,7 +35,7 @@ type Paths struct {
 	PIDDir    string
 }
 
-type Options struct {
+type ControllerOptions struct {
 	Store        state.Store
 	Paths        Paths
 	Executable   string
@@ -120,7 +120,7 @@ func ResolvePaths() (Paths, error) {
 	}, nil
 }
 
-func NewLocalController(options Options) (*LocalController, error) {
+func NewLocalController(options ControllerOptions) (*LocalController, error) {
 	if options.Store == nil {
 		return nil, fmt.Errorf("daemon controller requires a state store")
 	}

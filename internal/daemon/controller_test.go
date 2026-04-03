@@ -144,7 +144,7 @@ func newTestController(t *testing.T, store *fakeStore, projectPath string, optio
 		t.Fatalf("write helper daemon script: %v", err)
 	}
 
-	controller, err := NewLocalController(Options{
+	controller, err := NewLocalController(ControllerOptions{
 		Store:        store,
 		Paths:        Paths{StateDB: filepath.Join(tempDir, "state.db"), PIDDir: filepath.Join(tempDir, "pids")},
 		Executable:   scriptPath,
