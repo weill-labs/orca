@@ -146,7 +146,7 @@ func AnalyzeTestOutput(r io.Reader, registry Registry) (Report, error) {
 
 		var event testEvent
 		if err := json.Unmarshal([]byte(line), &event); err != nil {
-			return Report{}, fmt.Errorf("parse test output: %w", err)
+			continue
 		}
 		if event.Action != "fail" || event.Package == "" {
 			continue
@@ -324,10 +324,6 @@ func suppressParentFailures(testFailures map[TestKey]int) map[TestKey]int {
 	}
 
 	for parent := range testFailures {
-		if strings.Contains(parent.Test, "/") {
-			continue
-		}
-
 		prefix := parent.Test + "/"
 		for child := range testFailures {
 			if child.Package == parent.Package && strings.HasPrefix(child.Test, prefix) {

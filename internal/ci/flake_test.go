@@ -1,6 +1,7 @@
 package ci
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -122,6 +123,15 @@ func TestAnalyzeTestOutput(t *testing.T) {
 				LastSeen: time.Date(2026, 4, 2, 0, 0, 0, 0, time.UTC),
 				Issue:    "LAB-702",
 			},
+			{
+				Package: "github.com/weill-labs/orca/internal/daemon",
+				Test:    "TestKnownDaemonFlake/subcase/nested",
+			}: {
+				Package:  "github.com/weill-labs/orca/internal/daemon",
+				Test:     "TestKnownDaemonFlake/subcase/nested",
+				LastSeen: time.Date(2026, 4, 3, 0, 0, 0, 0, time.UTC),
+				Issue:    "LAB-703",
+			},
 		},
 	}
 
@@ -188,6 +198,32 @@ func TestAnalyzeTestOutput(t *testing.T) {
 			rerun:    true,
 		},
 		{
+			name: "nested failing subtest suppresses intermediate parent failure",
+			input: strings.Join([]string{
+				testEventJSON("fail", "github.com/weill-labs/orca/internal/daemon", "TestKnownDaemonFlake/subcase/nested"),
+				testEventJSON("fail", "github.com/weill-labs/orca/internal/daemon", "TestKnownDaemonFlake/subcase"),
+				testEventJSON("fail", "github.com/weill-labs/orca/internal/daemon", "TestKnownDaemonFlake"),
+			}, "\n"),
+			want: Report{
+				KnownFailures: []KnownFailure{
+					{
+						Failure: Failure{
+							Package:     "github.com/weill-labs/orca/internal/daemon",
+							Test:        "TestKnownDaemonFlake/subcase/nested",
+							Occurrences: 1,
+						},
+						LastSeen: time.Date(2026, 4, 3, 0, 0, 0, 0, time.UTC),
+						Issue:    "LAB-703",
+					},
+				},
+				ShouldRerun: true,
+			},
+			reject:   []string{"new failure — investigate"},
+			attempt:  1,
+			maxTries: 2,
+			rerun:    true,
+		},
+		{
 			name: "unknown test and package failures block rerun",
 			input: strings.Join([]string{
 				testEventJSON("fail", "github.com/weill-labs/orca/internal/daemon", "TestKnownDaemonFlake"),
@@ -239,6 +275,33 @@ func TestAnalyzeTestOutput(t *testing.T) {
 			attempt:  1,
 			maxTries: 2,
 			rerun:    false,
+		},
+		{
+			name: "non json lines are ignored",
+			input: strings.Join([]string{
+				"# github.com/weill-labs/orca/internal/daemon",
+				"internal/daemon/bad.go:7:2: undefined: nope",
+				testEventJSON("fail", "github.com/weill-labs/orca/internal/daemon", "TestKnownDaemonFlake"),
+				testEventJSON("fail", "github.com/weill-labs/orca/internal/daemon", ""),
+			}, "\n"),
+			want: Report{
+				KnownFailures: []KnownFailure{
+					{
+						Failure: Failure{
+							Package:     "github.com/weill-labs/orca/internal/daemon",
+							Test:        "TestKnownDaemonFlake",
+							Occurrences: 1,
+						},
+						LastSeen: time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC),
+						Issue:    "LAB-701",
+					},
+				},
+				ShouldRerun: true,
+			},
+			reject:   []string{"new failure — investigate"},
+			attempt:  1,
+			maxTries: 2,
+			rerun:    true,
 		},
 	}
 
@@ -324,8 +387,18 @@ func assertPackageFailures(t *testing.T, got, want []PackageFailure) {
 }
 
 func testEventJSON(action, pkg, test string) string {
-	if test == "" {
-		return `{"Action":"` + action + `","Package":"` + pkg + `"}`
+	event := testEvent{
+		Action:  action,
+		Package: pkg,
 	}
-	return `{"Action":"` + action + `","Package":"` + pkg + `","Test":"` + test + `"}`
+	if test != "" {
+		event.Test = test
+	}
+
+	data, err := json.Marshal(event)
+	if err != nil {
+		panic(err)
+	}
+
+	return string(data)
 }
