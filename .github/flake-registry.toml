@@ -1,0 +1,9 @@
+# Known flaky tests for LAB-693.
+# Package names should match the `Package` field emitted by `go test -json`.
+#
+# Example:
+# [[flake]]
+# package = "github.com/weill-labs/orca/internal/daemon"
+# test = "TestKnownDaemonFlake"
+# last_seen = "2026-04-03"
+# issue = "LAB-000"

@@ -17,7 +17,7 @@ test-race: ## Run the test suite with the race detector
 	go test -race ./... -timeout 120s
 
 test-flakes: ## Run the full test suite repeatedly to catch flakes
-	go test ./... -count=100 -timeout 15m
+	scripts/flake-check.sh
 
 bench: ## Run microbenchmarks
 	go test -bench=. -benchmem -count=3 -run='^$$' ./... -timeout 120s

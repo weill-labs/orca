@@ -1,0 +1,57 @@
+name: CI Flake Rerun
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  rerun-known-flakes:
+    if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect flake report
+        id: decision
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+
+          run_attempt=$(gh api "/repos/${REPO}/actions/runs/${RUN_ID}" --jq '.run_attempt')
+          artifact_name="flake-report-${run_attempt}"
+          artifact_id=$(gh api "/repos/${REPO}/actions/runs/${RUN_ID}/artifacts" --jq ".artifacts[] | select(.name == \"${artifact_name}\") | .id" | head -n1 || true)
+
+          if [ -z "${artifact_id}" ]; then
+            echo "rerun=false" >> "${GITHUB_OUTPUT}"
+            echo "No flake report artifact found for run ${RUN_ID} attempt ${run_attempt}." >> "${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+
+          gh api "/repos/${REPO}/actions/artifacts/${artifact_id}/zip" > flake-report.zip
+          unzip -o flake-report.zip -d flake-artifacts >/dev/null
+
+          if [ -f flake-artifacts/flake-summary.md ]; then
+            cat flake-artifacts/flake-summary.md >> "${GITHUB_STEP_SUMMARY}"
+          fi
+
+          should_rerun=$(jq -r '.should_rerun' flake-artifacts/flake-report.json)
+          if [ "${should_rerun}" = "true" ] && [ "${run_attempt}" -lt 2 ]; then
+            echo "rerun=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          echo "rerun=false" >> "${GITHUB_OUTPUT}"
+
+      - name: Rerun failed jobs
+        if: steps.decision.outputs.rerun == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: gh run rerun "${RUN_ID}" --failed --repo "${REPO}"
