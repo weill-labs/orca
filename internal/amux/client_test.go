@@ -63,7 +63,7 @@ func TestCLIClientSpawn(t *testing.T) {
 			output: "Spawned clone-01 in pane 7\n",
 			wantCmds: []recordedCommand{
 				{name: "/usr/local/bin/amux", args: []string{"-s", "override-session", "spawn", "--name", "clone-01"}},
-				{name: "/usr/local/bin/amux", args: []string{"-s", "orca-dev", "send-keys", "7", "cd /tmp/clone-01"}},
+				{name: "/usr/local/bin/amux", args: []string{"-s", "orca-dev", "send-keys", "7", "cd '/tmp/clone-01'"}},
 				{name: "/usr/local/bin/amux", args: []string{"-s", "orca-dev", "send-keys", "7", "Enter"}},
 				{name: "/usr/local/bin/amux", args: []string{"-s", "orca-dev", "wait", "idle", "7", "--settle", "2s", "--timeout", "5s"}},
 				{name: "/usr/local/bin/amux", args: []string{"-s", "orca-dev", "send-keys", "7", "codex --yolo"}},
@@ -83,13 +83,35 @@ func TestCLIClientSpawn(t *testing.T) {
 			output: "Spawned worker-2 in pane 12\n",
 			wantCmds: []recordedCommand{
 				{name: "amux", args: []string{"-s", "default", "spawn", "--name", "worker-2"}},
-				{name: "amux", args: []string{"-s", "default", "send-keys", "12", "cd /tmp/worker-2"}},
+				{name: "amux", args: []string{"-s", "default", "send-keys", "12", "cd '/tmp/worker-2'"}},
 				{name: "amux", args: []string{"-s", "default", "send-keys", "12", "Enter"}},
 				{name: "amux", args: []string{"-s", "default", "wait", "idle", "12", "--settle", "2s", "--timeout", "5s"}},
 				{name: "amux", args: []string{"-s", "default", "send-keys", "12", "claude --dangerously-skip-permissions"}},
 				{name: "amux", args: []string{"-s", "default", "send-keys", "12", "Enter"}},
 			},
 			wantPane: Pane{ID: "12", Name: "worker-2"},
+		},
+		{
+			name: "splits from parent pane when AtPane is set",
+			config: Config{
+				Session: "main",
+			},
+			req: SpawnRequest{
+				AtPane:  "lead-pane",
+				Name:    "worker-LAB-99",
+				CWD:     "/tmp/clone-5",
+				Command: "codex --yolo",
+			},
+			output: "Split horizontal: new pane worker-LAB-99\n",
+			wantCmds: []recordedCommand{
+				{name: "amux", args: []string{"-s", "main", "spawn", "--name", "worker-LAB-99", "--at", "lead-pane", "--horizontal"}},
+				{name: "amux", args: []string{"-s", "main", "send-keys", "worker-LAB-99", "cd '/tmp/clone-5'"}},
+				{name: "amux", args: []string{"-s", "main", "send-keys", "worker-LAB-99", "Enter"}},
+				{name: "amux", args: []string{"-s", "main", "wait", "idle", "worker-LAB-99", "--settle", "2s", "--timeout", "5s"}},
+				{name: "amux", args: []string{"-s", "main", "send-keys", "worker-LAB-99", "codex --yolo"}},
+				{name: "amux", args: []string{"-s", "main", "send-keys", "worker-LAB-99", "Enter"}},
+			},
+			wantPane: Pane{ID: "worker-LAB-99", Name: "worker-LAB-99"},
 		},
 		{
 			name: "returns runner error on spawn failure",

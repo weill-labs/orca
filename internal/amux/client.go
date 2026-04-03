@@ -92,22 +92,27 @@ func (c *CLIClient) Spawn(ctx context.Context, req SpawnRequest) (Pane, error) {
 	}
 
 	if req.CWD != "" {
-		if err := c.SendKeys(ctx, paneID, fmt.Sprintf("cd %s", req.CWD)); err != nil {
+		if err := c.SendKeys(ctx, paneID, fmt.Sprintf("cd '%s'", req.CWD)); err != nil {
+			_ = c.KillPane(ctx, paneID)
 			return Pane{}, fmt.Errorf("send cd to pane: %w", err)
 		}
 		if err := c.SendKeys(ctx, paneID, "Enter"); err != nil {
+			_ = c.KillPane(ctx, paneID)
 			return Pane{}, fmt.Errorf("send Enter after cd: %w", err)
 		}
 		if err := c.WaitIdle(ctx, paneID, 5*time.Second); err != nil {
+			_ = c.KillPane(ctx, paneID)
 			return Pane{}, fmt.Errorf("wait for cd: %w", err)
 		}
 	}
 
 	if req.Command != "" {
 		if err := c.SendKeys(ctx, paneID, req.Command); err != nil {
+			_ = c.KillPane(ctx, paneID)
 			return Pane{}, fmt.Errorf("send command to pane: %w", err)
 		}
 		if err := c.SendKeys(ctx, paneID, "Enter"); err != nil {
+			_ = c.KillPane(ctx, paneID)
 			return Pane{}, fmt.Errorf("send Enter after command: %w", err)
 		}
 	}
