@@ -9,6 +9,7 @@ See [docs/specs/orca-design.md](docs/specs/orca-design.md) for the full design d
 ## Architecture
 
 - **Daemon**: long-lived background process per project, SQLite state at `~/.config/orca/state.db`
+- **Stateless binary**: the daemon holds zero state in memory. All state lives in SQLite. The daemon is a pure poll loop that reads active tasks from the DB, runs monitoring checks, and writes results back. This means `orca stop && orca start` is seamless — the new daemon picks up exactly where the old one left off. Never store per-task state in Go structs, maps, or goroutines.
 - **Clone pool**: convention-based discovery of independent git clones (not worktrees)
 - **Agent profiles**: pluggable configs for codex, claude, aider encoding agent-specific quirks
 - **amux consumer**: orca calls amux CLI commands and subscribes to amux events — amux knows nothing about orca
@@ -30,6 +31,12 @@ Red-green-refactor with separate commits per phase:
 1. **Red** — write failing tests, commit alone
 2. **Green** — minimal code to pass, commit separately
 3. **Refactor** — simplify, commit separately
+
+### Code Organization
+
+- Files should be under 500 lines. When a file grows past ~500 LOC, split it by concern. Each concern (stuck detection, PR polling, review nudge, etc.) belongs in its own file with colocated tests.
+- Split by concern within a package, not by creating new packages. Methods on a shared struct can live in separate files.
+- Patch coverage on PRs must be at least 80%.
 
 ### Test Philosophy
 
