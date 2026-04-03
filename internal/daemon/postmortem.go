@@ -75,7 +75,7 @@ func (d *Daemon) postmortemRecorded(active *assignment) (bool, error) {
 		return true, nil
 	}
 
-	recordedAt, ok, err := findPostmortem(active, d.project)
+	recordedAt, ok, err := findPostmortem(active)
 	if err != nil || !ok {
 		return ok, err
 	}
@@ -86,7 +86,7 @@ func (d *Daemon) postmortemRecorded(active *assignment) (bool, error) {
 	return true, nil
 }
 
-func findPostmortem(active *assignment, project string) (time.Time, bool, error) {
+func findPostmortem(active *assignment) (time.Time, bool, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return time.Time{}, false, fmt.Errorf("resolve home directory: %w", err)
@@ -97,7 +97,7 @@ func findPostmortem(active *assignment, project string) (time.Time, bool, error)
 		filepath.Join(home, "sync", "postmortems"),
 		filepath.Join(home, ".local", "share", "postmortems"),
 	} {
-		recordedAt, ok, err := findPostmortemInDir(dir, active, project)
+		recordedAt, ok, err := findPostmortemInDir(dir, active)
 		if err != nil {
 			return time.Time{}, false, err
 		}
@@ -112,7 +112,7 @@ func findPostmortem(active *assignment, project string) (time.Time, bool, error)
 	return newest, true, nil
 }
 
-func findPostmortemInDir(dir string, active *assignment, project string) (time.Time, bool, error) {
+func findPostmortemInDir(dir string, active *assignment) (time.Time, bool, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -140,7 +140,7 @@ func findPostmortemInDir(dir string, active *assignment, project string) (time.T
 		if err != nil {
 			return time.Time{}, false, fmt.Errorf("read postmortem %q: %w", path, err)
 		}
-		if !matchesPostmortemSession(string(data), project, active.task.Issue, active.task.Branch) {
+		if !matchesPostmortemSession(string(data), active.task.Issue, active.task.Branch) {
 			continue
 		}
 		if info.ModTime().After(newest) {
@@ -154,7 +154,7 @@ func findPostmortemInDir(dir string, active *assignment, project string) (time.T
 	return newest, true, nil
 }
 
-func matchesPostmortemSession(content, project, issue, branch string) bool {
+func matchesPostmortemSession(content, issue, branch string) bool {
 	content = strings.ToLower(content)
 	issue = strings.ToLower(strings.TrimSpace(issue))
 	branch = strings.ToLower(strings.TrimSpace(branch))
