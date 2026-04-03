@@ -10,6 +10,7 @@ import (
 
 	orcacheckconfig "github.com/weill-labs/orca/internal/config"
 	state "github.com/weill-labs/orca/internal/daemonstate"
+	"github.com/weill-labs/orca/internal/linear"
 )
 
 type configAdapter struct {
@@ -134,6 +135,17 @@ func (execCommandRunner) Run(ctx context.Context, dir, name string, args ...stri
 	}
 
 	return output, nil
+}
+
+func newLinearIssueTrackerFromEnv() (IssueTracker, error) {
+	client, err := linear.New(linear.Options{})
+	if err != nil {
+		if errors.Is(err, linear.ErrMissingAPIKey) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return client, nil
 }
 
 type poolConfigAdapter struct {

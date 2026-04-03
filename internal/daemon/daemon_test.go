@@ -1386,7 +1386,10 @@ func (a *fakeAmux) SetMetadata(ctx context.Context, paneID string, metadata map[
 	if a.metadata == nil {
 		a.metadata = make(map[string]map[string]string)
 	}
-	copied := make(map[string]string, len(metadata))
+	copied := make(map[string]string, len(a.metadata[paneID])+len(metadata))
+	for key, value := range a.metadata[paneID] {
+		copied[key] = value
+	}
 	for key, value := range metadata {
 		copied[key] = value
 	}
