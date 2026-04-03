@@ -689,8 +689,9 @@ func (d *Daemon) handlePRPoll(active *assignment) {
 		d.handlePRReviewPoll(active)
 		return
 	}
+	message := "pull request merged"
 	if err := d.setIssueStatus(active.ctx, active.task.Issue, IssueStateDone); err != nil {
-		return
+		message = fmt.Sprintf("pull request merged (failed to update Linear issue status: %v)", err)
 	}
 
 	d.emit(active.ctx, Event{
@@ -705,7 +706,7 @@ func (d *Daemon) handlePRPoll(active *assignment) {
 		Branch:       active.task.Branch,
 		AgentProfile: active.profile.Name,
 		PRNumber:     active.prNumber,
-		Message:      "pull request merged",
+		Message:      message,
 	})
 	_ = d.finishAssignment(active.ctx, active, TaskStatusDone, EventTaskCompleted, true)
 }

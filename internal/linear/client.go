@@ -18,15 +18,18 @@ const defaultEndpoint = "https://api.linear.app/graphql"
 var ErrMissingAPIKey = errors.New("LINEAR_API_KEY not set")
 
 const (
+	workflowStatesPageSize = 250
+
 	issueLookupQuery = `query($id: String!) {
 		issue(id: $id) {
 			team { key }
 			state { id name }
 		}
 	}`
-	workflowStatesQuery = `query($teamKey: String!) {
-		workflowStates(filter: { team: { key: { eq: $teamKey } } }) {
+	workflowStatesQuery = `query($teamKey: String!, $first: Int!, $after: String) {
+		workflowStates(first: $first, after: $after, filter: { team: { key: { eq: $teamKey } } }) {
 			nodes { id name }
+			pageInfo { hasNextPage endCursor }
 		}
 	}`
 	issueUpdateMutation = `mutation($id: String!, $stateId: String!) {
@@ -96,15 +99,8 @@ func APIKeyFromEnv() (string, error) {
 		return "", fmt.Errorf("read ~/.env: %w", err)
 	}
 
-	const prefix = "export LINEAR_API_KEY="
 	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(line, prefix) {
-			continue
-		}
-		value := strings.TrimSpace(strings.TrimPrefix(line, prefix))
-		value = strings.Trim(value, `"'`)
-		if value != "" {
+		if value, ok := parseAPIKeyLine(line); ok {
 			return value, nil
 		}
 	}
@@ -175,28 +171,42 @@ func (c *Client) lookupIssue(ctx context.Context, issue string) (issueMetadata, 
 }
 
 func (c *Client) lookupStateID(ctx context.Context, teamKey, targetState string) (string, error) {
-	var response struct {
-		WorkflowStates struct {
-			Nodes []struct {
-				ID   string `json:"id"`
-				Name string `json:"name"`
-			} `json:"nodes"`
-		} `json:"workflowStates"`
-	}
-	err := c.graphQL(ctx, graphQLRequest{
-		Query:     workflowStatesQuery,
-		Variables: map[string]string{"teamKey": teamKey},
-	}, &response)
-	if err != nil {
-		return "", fmt.Errorf("lookup workflow states for team %s: %w", teamKey, err)
-	}
-
-	for _, state := range response.WorkflowStates.Nodes {
-		if state.Name == targetState {
-			return state.ID, nil
+	var cursor any
+	for {
+		var response struct {
+			WorkflowStates struct {
+				Nodes []struct {
+					ID   string `json:"id"`
+					Name string `json:"name"`
+				} `json:"nodes"`
+				PageInfo struct {
+					HasNextPage bool   `json:"hasNextPage"`
+					EndCursor   string `json:"endCursor"`
+				} `json:"pageInfo"`
+			} `json:"workflowStates"`
 		}
+		err := c.graphQL(ctx, graphQLRequest{
+			Query: workflowStatesQuery,
+			Variables: map[string]any{
+				"teamKey": teamKey,
+				"first":   workflowStatesPageSize,
+				"after":   cursor,
+			},
+		}, &response)
+		if err != nil {
+			return "", fmt.Errorf("lookup workflow states for team %s: %w", teamKey, err)
+		}
+
+		for _, state := range response.WorkflowStates.Nodes {
+			if state.Name == targetState {
+				return state.ID, nil
+			}
+		}
+		if !response.WorkflowStates.PageInfo.HasNextPage || response.WorkflowStates.PageInfo.EndCursor == "" {
+			return "", nil
+		}
+		cursor = response.WorkflowStates.PageInfo.EndCursor
 	}
-	return "", nil
 }
 
 func (c *Client) updateIssueState(ctx context.Context, issue, stateID string) error {
@@ -297,4 +307,25 @@ func formatGraphQLErrors(graphQLErrors []graphQLError) error {
 
 func errorsJoin(messages []string) error {
 	return errors.New(strings.Join(messages, "; "))
+}
+
+func parseAPIKeyLine(line string) (string, bool) {
+	line = strings.TrimSpace(line)
+	if line == "" || strings.HasPrefix(line, "#") {
+		return "", false
+	}
+	if strings.HasPrefix(line, "export ") {
+		line = strings.TrimSpace(strings.TrimPrefix(line, "export "))
+	}
+	const prefix = "LINEAR_API_KEY="
+	if !strings.HasPrefix(line, prefix) {
+		return "", false
+	}
+
+	value := strings.TrimSpace(strings.TrimPrefix(line, prefix))
+	value = strings.Trim(value, `"'`)
+	if value == "" {
+		return "", false
+	}
+	return value, true
 }
