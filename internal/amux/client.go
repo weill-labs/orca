@@ -76,10 +76,7 @@ func (c *CLIClient) Spawn(ctx context.Context, req SpawnRequest) (Pane, error) {
 	if name == "" {
 		name = paneName(req.CWD)
 	}
-	args := []string{"--name", name}
-	if req.AtPane != "" {
-		args = append(args, "--at", req.AtPane, "--horizontal")
-	}
+	args := []string{"--name", name, "--root", "--horizontal"}
 
 	session := c.resolveSession(req.Session)
 	output, err := c.run(ctx, session, "spawn", args...)
