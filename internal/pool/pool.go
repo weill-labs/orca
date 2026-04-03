@@ -129,6 +129,31 @@ func (m *Manager) Discover(ctx context.Context) ([]Clone, error) {
 	return clones, nil
 }
 
+func (m *Manager) HealthCheck(ctx context.Context, path string) error {
+	clonePath, err := filepath.Abs(path)
+	if err != nil {
+		return fmt.Errorf("resolve clone path: %w", err)
+	}
+	clonePath = filepath.Clean(clonePath)
+
+	health, err := inspectCloneHealth(ctx, clonePath)
+	if err != nil {
+		return err
+	}
+	if health.healthy(m.baseBranch) {
+		return nil
+	}
+
+	if err := m.cleanupClone(ctx, clonePath, ""); err != nil {
+		if health.remoteErr != nil {
+			return fmt.Errorf("repair clone %q after remote check failed: %w", clonePath, err)
+		}
+		return fmt.Errorf("repair clone %q: %w", clonePath, err)
+	}
+
+	return nil
+}
+
 func (m *Manager) Allocate(ctx context.Context, taskID, issueBranch string) (Clone, error) {
 	clones, err := m.Discover(ctx)
 	if err != nil {
@@ -146,6 +171,14 @@ func (m *Manager) Allocate(ctx context.Context, taskID, issueBranch string) (Clo
 		}
 		if !ok {
 			continue
+		}
+
+		if err := m.HealthCheck(ctx, clone.Path); err != nil {
+			freeErr := m.store.MarkCloneFree(ctx, m.project, clone.Path)
+			if freeErr != nil {
+				err = errors.Join(err, freeErr)
+			}
+			return Clone{}, fmt.Errorf("health check clone %q: %w", clone.Path, err)
 		}
 
 		if err := m.prepareClone(ctx, clone.Path, issueBranch); err != nil {
@@ -311,6 +344,70 @@ func branchExists(ctx context.Context, path, branch string) (bool, error) {
 	}
 
 	return false, fmt.Errorf("git show-ref --verify --quiet refs/heads/%s: %w", branch, err)
+}
+
+type cloneHealth struct {
+	clean         bool
+	currentBranch string
+	remoteErr     error
+}
+
+func (h cloneHealth) healthy(baseBranch string) bool {
+	return h.clean && h.currentBranch == baseBranch && h.remoteErr == nil
+}
+
+func inspectCloneHealth(ctx context.Context, path string) (cloneHealth, error) {
+	status, err := gitOutput(ctx, path, "status", "--porcelain")
+	if err != nil {
+		return cloneHealth{}, err
+	}
+
+	branch, err := gitOutput(ctx, path, "rev-parse", "--abbrev-ref", "HEAD")
+	if err != nil {
+		return cloneHealth{}, err
+	}
+
+	return cloneHealth{
+		clean:         statusClean(status),
+		currentBranch: strings.TrimSpace(branch),
+		remoteErr:     gitCommand(ctx, path, "ls-remote", "--exit-code", "origin", "HEAD"),
+	}, nil
+}
+
+func statusClean(status string) bool {
+	for _, line := range strings.Split(strings.TrimSpace(status), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || line == "?? "+markerFile {
+			continue
+		}
+		return false
+	}
+
+	return true
+}
+
+func gitOutput(ctx context.Context, path string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = path
+
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+	}
+
+	return string(out), nil
+}
+
+func gitCommand(ctx context.Context, path string, args ...string) error {
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = path
+
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+	}
+
+	return nil
 }
 
 func fromState(record state.CloneRecord) Clone {
