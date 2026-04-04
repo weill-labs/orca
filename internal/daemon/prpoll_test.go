@@ -11,18 +11,14 @@ import (
 )
 
 func TestPRMergePollingSendsWrapUpAndCleansClone(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-
 	deps := newTestDeps(t)
 	captureTicker := newFakeTicker()
 	prTicker := newFakeTicker()
 	deps.tickers.enqueue(captureTicker, prTicker)
-	postmortemDir := filepath.Join(home, "sync", "postmortems")
 	deps.amux.sendKeysHook = func(_ string, keys []string) {
 		for _, key := range keys {
 			if key == "$postmortem" {
-				writePostmortemLog(t, postmortemDir, "LAB-689", deps.clock.Now().Add(time.Minute))
+				writePostmortemLog(t, deps.postmortemDir, "LAB-689", deps.clock.Now().Add(time.Minute))
 			}
 		}
 	}
@@ -77,12 +73,15 @@ func TestPRMergePollingSendsWrapUpAndCleansClone(t *testing.T) {
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("issue tracker statuses = %#v, want %#v", got, want)
 	}
+	if got := deps.amux.killCalls; len(got) != 0 {
+		t.Fatalf("kill calls = %#v, want none", got)
+	}
 	deps.amux.requireSentKeys(t, "pane-1", []string{
 		"Implement daemon core\n",
-		"$postmortem\n",
 		"PR merged, wrap up.\n",
+		"$postmortem\n",
 	})
-	deps.events.requireTypes(t, EventDaemonStarted, EventTaskAssigned, EventPRDetected, EventPRMerged, EventTaskCompleted)
+	deps.events.requireTypes(t, EventDaemonStarted, EventTaskAssigned, EventPRDetected, EventPRMerged, EventWorkerPostmortem, EventTaskCompleted)
 }
 
 func TestPRMergeCleanupContinuesWhenIssueTrackerDoneUpdateFails(t *testing.T) {
@@ -151,6 +150,57 @@ func TestPRMergeCleanupContinuesWhenIssueTrackerDoneUpdateFails(t *testing.T) {
 	} else if !strings.Contains(event.Message, "failed to update Linear issue status") {
 		t.Fatalf("PR merged event message = %q, want tracker failure context", event.Message)
 	}
+	if got := deps.amux.killCalls; len(got) != 0 {
+		t.Fatalf("kill calls = %#v, want none", got)
+	}
+}
+
+func TestPRMergePollingSkipsPostmortemTriggerAfterWrapUpError(t *testing.T) {
+	deps := newTestDeps(t)
+	captureTicker := newFakeTicker()
+	prTicker := newFakeTicker()
+	deps.tickers.enqueue(captureTicker, prTicker)
+	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--state", "open", "--json", "number"}, `[]`, nil)
+	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":"2026-04-02T12:00:00Z"}`, nil)
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-689", "Implement daemon core", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	deps.amux.sendKeysResults = []error{errors.New("wrap up failed")}
+
+	prTicker.tick(deps.clock.Now())
+	waitFor(t, "task completion after merge error", func() bool {
+		task, ok := deps.state.task("LAB-689")
+		return ok && task.Status == TaskStatusDone
+	})
+
+	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
+		{PaneID: "pane-1", Timeout: 30 * time.Second},
+		{PaneID: "pane-1", Timeout: 2 * time.Minute},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("wait idle calls = %#v, want %#v", got, want)
+	}
+	if got, want := deps.amux.killCalls, []string{"pane-1"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("kill calls = %#v, want %#v", got, want)
+	}
+	if got, want := deps.amux.countKey("pane-1", "$postmortem\n"), 0; got != want {
+		t.Fatalf("postmortem prompt count = %d, want %d", got, want)
+	}
+	if got := deps.events.lastMessage(EventWorkerPostmortem); !strings.Contains(got, "skipped") {
+		t.Fatalf("postmortem event message = %q, want skipped status", got)
+	}
+	deps.events.requireTypes(t, EventTaskCompletionFailed)
 }
 
 func TestPRDetectionSyncsPaneMetadata(t *testing.T) {

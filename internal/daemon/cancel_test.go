@@ -2,23 +2,19 @@ package daemon
 
 import (
 	"context"
-	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
 
 func TestCancelKillsAgentCleansCloneAndFreesResources(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-
 	deps := newTestDeps(t)
 	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
-	postmortemDir := filepath.Join(home, "sync", "postmortems")
 	deps.amux.sendKeysHook = func(_ string, keys []string) {
 		for _, key := range keys {
 			if key == "$postmortem" {
-				writePostmortemLog(t, postmortemDir, "LAB-689", deps.clock.Now().Add(time.Minute))
+				writePostmortemLog(t, deps.postmortemDir, "LAB-689", deps.clock.Now().Add(time.Minute))
 			}
 		}
 	}
@@ -70,21 +66,20 @@ func TestCancelKillsAgentCleansCloneAndFreesResources(t *testing.T) {
 	if got := deps.commands.callsByName("git"); len(got) != 0 {
 		t.Fatalf("git calls = %#v, want none during daemon cleanup", got)
 	}
+	if got := deps.events.lastMessage(EventWorkerPostmortem); !strings.Contains(got, "triggered") {
+		t.Fatalf("postmortem event message = %q, want triggered status", got)
+	}
 
-	deps.events.requireTypes(t, EventDaemonStarted, EventTaskAssigned, EventTaskCancelled)
+	deps.events.requireTypes(t, EventDaemonStarted, EventTaskAssigned, EventWorkerPostmortem, EventTaskCancelled)
 }
 
 func TestCancelRequiresVerifiedPostmortemBeforeCleanup(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-
 	deps := newTestDeps(t)
 	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
-	postmortemDir := filepath.Join(home, "sync", "postmortems")
 	deps.amux.sendKeysHook = func(_ string, keys []string) {
 		for _, key := range keys {
 			if key == "$postmortem" {
-				writePostmortemLog(t, postmortemDir, "LAB-689", deps.clock.Now().Add(time.Minute))
+				writePostmortemLog(t, deps.postmortemDir, "LAB-689", deps.clock.Now().Add(time.Minute))
 			}
 		}
 	}
@@ -128,15 +123,14 @@ func TestCancelRequiresVerifiedPostmortemBeforeCleanup(t *testing.T) {
 	if got := deps.commands.callsByName("git"); len(got) != 0 {
 		t.Fatalf("git calls = %#v, want none during daemon cleanup", got)
 	}
+	if got := deps.events.lastMessage(EventWorkerPostmortem); !strings.Contains(got, "triggered") {
+		t.Fatalf("postmortem event message = %q, want triggered status", got)
+	}
 }
 
-func TestCancelSkipsPostmortemWhenSessionAlreadyRecorded(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-
+func TestCancelSkipsPostmortemPromptWhenRecentSummaryExists(t *testing.T) {
 	deps := newTestDeps(t)
 	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
-	postmortemDir := filepath.Join(home, "sync", "postmortems")
 	d := deps.newDaemon(t)
 	ctx := context.Background()
 
@@ -151,7 +145,7 @@ func TestCancelSkipsPostmortemWhenSessionAlreadyRecorded(t *testing.T) {
 		t.Fatalf("Assign() error = %v", err)
 	}
 
-	writePostmortemLog(t, postmortemDir, "LAB-689", deps.clock.Now().Add(time.Minute))
+	writePostmortemLog(t, deps.postmortemDir, "LAB-689", deps.clock.Now().Add(time.Minute))
 
 	deps.commands.reset()
 	deps.amux.waitIdleCalls = nil
@@ -172,6 +166,9 @@ func TestCancelSkipsPostmortemWhenSessionAlreadyRecorded(t *testing.T) {
 	}
 	if got := deps.commands.callsByName("git"); len(got) != 0 {
 		t.Fatalf("git calls = %#v, want none during daemon cleanup", got)
+	}
+	if got := deps.events.lastMessage(EventWorkerPostmortem); !strings.Contains(got, "found") {
+		t.Fatalf("postmortem event message = %q, want found status", got)
 	}
 }
 
@@ -224,5 +221,8 @@ func TestCancelSkipsPostmortemWhenProfileDisablesIt(t *testing.T) {
 	}
 	if got := deps.commands.callsByName("git"); len(got) != 0 {
 		t.Fatalf("git calls = %#v, want none during daemon cleanup", got)
+	}
+	if got := deps.events.lastMessage(EventWorkerPostmortem); !strings.Contains(got, "skipped") {
+		t.Fatalf("postmortem event message = %q, want skipped status", got)
 	}
 }

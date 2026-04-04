@@ -12,16 +12,17 @@ import (
 )
 
 type testDeps struct {
-	clock        *fakeClock
-	config       *fakeConfig
-	state        *fakeState
-	pool         *fakePool
-	amux         *fakeAmux
-	issueTracker *fakeIssueTracker
-	commands     *fakeCommands
-	events       *fakeEvents
-	tickers      *fakeTickerFactory
-	pidPath      string
+	clock         *fakeClock
+	config        *fakeConfig
+	state         *fakeState
+	pool          *fakePool
+	amux          *fakeAmux
+	issueTracker  *fakeIssueTracker
+	commands      *fakeCommands
+	events        *fakeEvents
+	tickers       *fakeTickerFactory
+	pidPath       string
+	postmortemDir string
 }
 
 func noSleep(context.Context, time.Duration) error { return nil }
@@ -50,14 +51,15 @@ func newTestDeps(t *testing.T) *testDeps {
 				},
 			},
 		},
-		state:        newFakeState(),
-		pool:         &fakePool{clone: Clone{Name: "clone-01", Path: clonePath}},
-		amux:         &fakeAmux{spawnPane: Pane{ID: "pane-1", Name: "worker-1"}, captures: make(map[string][]string)},
-		issueTracker: &fakeIssueTracker{},
-		commands:     newFakeCommands(),
-		events:       newFakeEvents(),
-		tickers:      &fakeTickerFactory{},
-		pidPath:      filepath.Join(tmp, "orca.pid"),
+		state:         newFakeState(),
+		pool:          &fakePool{clone: Clone{Name: "clone-01", Path: clonePath}},
+		amux:          &fakeAmux{spawnPane: Pane{ID: "pane-1", Name: "worker-1"}, captures: make(map[string][]string)},
+		issueTracker:  &fakeIssueTracker{},
+		commands:      newFakeCommands(),
+		events:        newFakeEvents(),
+		tickers:       &fakeTickerFactory{},
+		pidPath:       filepath.Join(tmp, "orca.pid"),
+		postmortemDir: filepath.Join(tmp, ".local", "share", "postmortems"),
 	}
 }
 
@@ -80,6 +82,7 @@ func (d *testDeps) newDaemon(t *testing.T) *Daemon {
 		CaptureInterval:  5 * time.Second,
 		PollInterval:     30 * time.Second,
 		MergeGracePeriod: 2 * time.Minute,
+		PostmortemDir:    d.postmortemDir,
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)

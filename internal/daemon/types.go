@@ -39,6 +39,7 @@ const (
 	EventWorkerNudgedReview   = "worker.nudged_review"
 	EventWorkerEscalated      = "worker.escalated"
 	EventWorkerRecovered      = "worker.recovered"
+	EventWorkerPostmortem     = "worker.postmortem"
 	EventPRDetected           = "pr.detected"
 	EventPREnqueued           = "pr.enqueued"
 	EventPRLandingStarted     = "pr.landing_started"
@@ -54,22 +55,25 @@ var (
 )
 
 type Options struct {
-	Project          string
-	Session          string
-	LeadPane         string
-	PIDPath          string
-	Config           ConfigProvider
-	State            StateStore
-	Pool             Pool
-	Amux             AmuxClient
-	IssueTracker     IssueTracker
-	Commands         CommandRunner
-	Events           EventSink
-	Now              func() time.Time
-	NewTicker        func(time.Duration) Ticker
-	CaptureInterval  time.Duration
-	PollInterval     time.Duration
-	MergeGracePeriod time.Duration
+	Project           string
+	Session           string
+	LeadPane          string
+	PIDPath           string
+	Config            ConfigProvider
+	State             StateStore
+	Pool              Pool
+	Amux              AmuxClient
+	IssueTracker      IssueTracker
+	Commands          CommandRunner
+	Events            EventSink
+	Now               func() time.Time
+	NewTicker         func(time.Duration) Ticker
+	CaptureInterval   time.Duration
+	PollInterval      time.Duration
+	MergeGracePeriod  time.Duration
+	PostmortemDir     string
+	PostmortemWindow  time.Duration
+	PostmortemTimeout time.Duration
 }
 
 type ConfigProvider interface {

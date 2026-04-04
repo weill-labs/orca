@@ -46,6 +46,14 @@ func (e *fakeEvents) lastEventOfType(eventType string) (Event, bool) {
 	return Event{}, false
 }
 
+func (e *fakeEvents) lastMessage(eventType string) string {
+	event, ok := e.lastEventOfType(eventType)
+	if !ok {
+		return ""
+	}
+	return event.Message
+}
+
 func (e *fakeEvents) requireTypes(t *testing.T, want ...string) {
 	t.Helper()
 	e.mu.Lock()

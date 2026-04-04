@@ -11,77 +11,40 @@ import (
 	"time"
 )
 
-func TestPRMergePollingReportsCompletionFailureWhenPostmortemNotRecorded(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
+func TestNewUsesDefaultPostmortemConfig(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
 
 	deps := newTestDeps(t)
-	captureTicker := newFakeTicker()
-	prTicker := newFakeTicker()
-	deps.tickers.enqueue(captureTicker, prTicker)
-	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-690", "--json", "number"}, `[{"number":42}]`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":"2026-04-02T12:00:00Z"}`, nil)
-
-	d := deps.newDaemon(t)
-	ctx := context.Background()
-	if err := d.Start(ctx); err != nil {
-		t.Fatalf("Start() error = %v", err)
-	}
-	t.Cleanup(func() {
-		_ = d.Stop(context.Background())
+	daemon, err := New(Options{
+		Project:          "/tmp/project",
+		Session:          "test-session",
+		PIDPath:          deps.pidPath,
+		Config:           deps.config,
+		State:            deps.state,
+		Pool:             deps.pool,
+		Amux:             deps.amux,
+		IssueTracker:     deps.issueTracker,
+		Commands:         deps.commands,
+		Events:           deps.events,
+		Now:              deps.clock.Now,
+		NewTicker:        deps.tickers.NewTicker,
+		CaptureInterval:  5 * time.Second,
+		PollInterval:     30 * time.Second,
+		MergeGracePeriod: 2 * time.Minute,
 	})
-
-	if err := d.Assign(ctx, "LAB-690", "Implement daemon core", "codex"); err != nil {
-		t.Fatalf("Assign() error = %v", err)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
 	}
 
-	prTicker.tick(deps.clock.Now())
-	waitFor(t, "task completion failure event", func() bool {
-		return deps.events.countType(EventTaskCompletionFailed) == 1
-	})
-
-	task, ok := deps.state.task("LAB-690")
-	if !ok {
-		t.Fatal("task missing after merge completion failure")
+	if got, want := daemon.postmortemDir, filepath.Join(homeDir, ".local", "share", "postmortems"); got != want {
+		t.Fatalf("daemon.postmortemDir = %q, want %q", got, want)
 	}
-	if got, want := task.Status, TaskStatusActive; got != want {
-		t.Fatalf("task.Status = %q, want %q", got, want)
+	if got, want := daemon.postmortemWindow, 10*time.Minute; got != want {
+		t.Fatalf("daemon.postmortemWindow = %s, want %s", got, want)
 	}
-	if _, ok := deps.state.worker("pane-1"); !ok {
-		t.Fatal("worker removed after merge completion failure, want worker to remain active")
-	}
-	if got := deps.pool.releasedClones(); len(got) != 0 {
-		t.Fatalf("released clones = %#v, want none", got)
-	}
-	if got, want := deps.issueTracker.statuses(), []issueStatusUpdate{
-		{Issue: "LAB-690", State: IssueStateInProgress},
-		{Issue: "LAB-690", State: IssueStateDone},
-	}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("issue tracker statuses = %#v, want %#v", got, want)
-	}
-	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
-		{PaneID: "pane-1", Timeout: 30 * time.Second},
-		{PaneID: "pane-1", Timeout: 2 * time.Minute},
-	}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("wait idle calls = %#v, want %#v", got, want)
-	}
-	deps.amux.requireSentKeys(t, "pane-1", []string{
-		"Implement daemon core\n",
-		"$postmortem\n",
-	})
-	deps.events.requireTypes(t, EventDaemonStarted, EventTaskAssigned, EventPRDetected, EventPRMerged, EventTaskCompletionFailed)
-
-	deps.events.mu.Lock()
-	defer deps.events.mu.Unlock()
-	var failure Event
-	for _, event := range deps.events.events {
-		if event.Type == EventTaskCompletionFailed {
-			failure = event
-			break
-		}
-	}
-	if !strings.Contains(failure.Message, "postmortem not recorded") {
-		t.Fatalf("failure.Message = %q, want to contain %q", failure.Message, "postmortem not recorded")
+	if got, want := daemon.postmortemTimeout, 2*time.Minute; got != want {
+		t.Fatalf("daemon.postmortemTimeout = %s, want %s", got, want)
 	}
 }
 
@@ -112,203 +75,185 @@ func TestEnsureFlag(t *testing.T) {
 	}
 }
 
-func TestEnsurePostmortemErrorPathsAndExistingRecord(t *testing.T) {
-	newActive := func(startedAt time.Time) ActiveAssignment {
-		return ActiveAssignment{
-			Task: Task{
-				Issue:        "LAB-730",
-				Branch:       "LAB-730",
-				PaneID:       "pane-1",
-				AgentProfile: "codex",
-				CreatedAt:    startedAt,
-				UpdatedAt:    startedAt,
-			},
-		}
+func TestFindRecentPostmortemSkipsBrokenEntriesAndReturnsNewestMatch(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Date(2026, 4, 3, 18, 30, 0, 0, time.UTC)
+
+	if err := os.Symlink("does-not-exist", filepath.Join(dir, "broken")); err != nil {
+		t.Fatalf("Symlink() error = %v", err)
 	}
 
-	t.Run("request failure", func(t *testing.T) {
-		home := t.TempDir()
-		t.Setenv("HOME", home)
+	oldMatch := writeRecentPostmortem(t, dir, now.Add(-11*time.Minute), filepath.Join(dir, "clone-01"), "LAB-689", "worker-old")
+	newMatch := writeRecentPostmortem(t, dir, now, filepath.Join(dir, "clone-01"), "LAB-689", "worker-new")
+	writeRecentPostmortem(t, dir, now, filepath.Join(dir, "clone-02"), "LAB-700", "worker-other")
 
-		deps := newTestDeps(t)
-		deps.amux.sendKeysErr = errors.New("send failed")
-		d := deps.newDaemon(t)
-
-		err := d.ensurePostmortem(context.Background(), newActive(time.Date(2026, 4, 2, 12, 0, 0, 0, time.UTC)))
-		if err == nil || !strings.Contains(err.Error(), "request postmortem") {
-			t.Fatalf("ensurePostmortem() error = %v, want request postmortem failure", err)
-		}
-	})
-
-	t.Run("wait failure", func(t *testing.T) {
-		home := t.TempDir()
-		t.Setenv("HOME", home)
-
-		deps := newTestDeps(t)
-		deps.amux.waitIdleErr = errors.New("idle timeout")
-		d := deps.newDaemon(t)
-
-		err := d.ensurePostmortem(context.Background(), newActive(time.Date(2026, 4, 2, 12, 0, 0, 0, time.UTC)))
-		if err == nil || !strings.Contains(err.Error(), "wait for postmortem") {
-			t.Fatalf("ensurePostmortem() error = %v, want wait for postmortem failure", err)
-		}
-	})
-
-	t.Run("existing postmortem skips send", func(t *testing.T) {
-		home := t.TempDir()
-		t.Setenv("HOME", home)
-
-		startedAt := time.Date(2026, 4, 2, 12, 0, 0, 0, time.UTC)
-		writePostmortemLog(t, filepath.Join(home, "sync", "postmortems"), "LAB-730", startedAt.Add(time.Minute))
-
-		deps := newTestDeps(t)
-		d := deps.newDaemon(t)
-
-		if err := d.ensurePostmortem(context.Background(), newActive(startedAt)); err != nil {
-			t.Fatalf("ensurePostmortem() error = %v", err)
-		}
-		if got := deps.amux.sentKeys["pane-1"]; len(got) != 0 {
-			t.Fatalf("sent keys = %#v, want none", got)
-		}
-		if got := deps.amux.waitIdleCalls; len(got) != 0 {
-			t.Fatalf("waitIdle calls = %#v, want none", got)
-		}
-	})
+	got, err := findRecentPostmortem(dir, []string{"clone-01"}, now, 10*time.Minute)
+	if err != nil {
+		t.Fatalf("findRecentPostmortem() error = %v", err)
+	}
+	if got != newMatch {
+		t.Fatalf("findRecentPostmortem() = %q, want %q", got, newMatch)
+	}
+	if got == oldMatch {
+		t.Fatalf("findRecentPostmortem() returned stale match %q", got)
+	}
 }
 
-func TestFindPostmortemHelpers(t *testing.T) {
-	writeFixture := func(t *testing.T, dir, name, issue, branch string, modTime time.Time) {
-		t.Helper()
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			t.Fatalf("MkdirAll(%q) error = %v", dir, err)
-		}
-		path := filepath.Join(dir, name)
-		content := strings.Join([]string{
-			"### Metadata",
-			"- **Repo**: orca",
-			"- **Branch**: " + branch,
-			"- **Issues**: " + issue,
-			"",
-		}, "\n")
-		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-			t.Fatalf("WriteFile(%q) error = %v", path, err)
-		}
-		if err := os.Chtimes(path, modTime, modTime); err != nil {
-			t.Fatalf("Chtimes(%q) error = %v", path, err)
-		}
-	}
+func TestPostmortemStatusDifferentiatesFailuresSkipsAndTriggers(t *testing.T) {
+	now := time.Date(2026, 4, 3, 18, 30, 0, 0, time.UTC)
 
-	newActive := func(issue string, startedAt time.Time) ActiveAssignment {
-		return ActiveAssignment{
-			Task: Task{
-				Issue:     issue,
-				Branch:    issue,
-				CreatedAt: startedAt,
-				UpdatedAt: startedAt,
-			},
-		}
-	}
-
-	t.Run("findPostmortemInDir filters by session and modtime", func(t *testing.T) {
-		t.Parallel()
-
-		dir := t.TempDir()
-		startedAt := time.Date(2026, 4, 2, 12, 0, 0, 0, time.UTC)
-		active := newActive("LAB-731", startedAt)
-
-		writeFixture(t, dir, "stale.md", "LAB-731", "LAB-731", startedAt.Add(-time.Minute))
-		writeFixture(t, dir, "wrong.md", "LAB-999", "LAB-999", startedAt.Add(time.Minute))
-		writeFixture(t, dir, "match.md", "LAB-731", "LAB-731", startedAt.Add(2*time.Minute))
-
-		recordedAt, ok, err := findPostmortemInDir(dir, active)
-		if err != nil {
-			t.Fatalf("findPostmortemInDir() error = %v", err)
-		}
-		if !ok {
-			t.Fatal("findPostmortemInDir() ok = false, want true")
-		}
-		if got, want := recordedAt, startedAt.Add(2*time.Minute); !got.Equal(want) {
-			t.Fatalf("recordedAt = %v, want %v", got, want)
-		}
-	})
-
-	t.Run("findPostmortemInDir missing dir", func(t *testing.T) {
-		t.Parallel()
-
-		active := newActive("LAB-731", time.Now())
-		recordedAt, ok, err := findPostmortemInDir(filepath.Join(t.TempDir(), "missing"), active)
-		if err != nil {
-			t.Fatalf("findPostmortemInDir() error = %v", err)
-		}
-		if ok {
-			t.Fatal("findPostmortemInDir() ok = true, want false")
-		}
-		if !recordedAt.IsZero() {
-			t.Fatalf("recordedAt = %v, want zero", recordedAt)
-		}
-	})
-
-	t.Run("findPostmortemInDir unreadable target", func(t *testing.T) {
-		t.Parallel()
-
-		dir := t.TempDir()
-		path := filepath.Join(dir, "broken.md")
-		if err := os.Symlink(filepath.Join(dir, "missing-target"), path); err != nil {
-			t.Fatalf("Symlink(%q) error = %v", path, err)
-		}
-
-		active := newActive("LAB-731", time.Date(2026, 4, 2, 12, 0, 0, 0, time.UTC))
-		if _, _, err := findPostmortemInDir(dir, active); err == nil || !strings.Contains(err.Error(), "read postmortem") {
-			t.Fatalf("findPostmortemInDir() error = %v, want read postmortem failure", err)
-		}
-	})
-
-	t.Run("findPostmortem chooses newest known directory entry", func(t *testing.T) {
-		home := t.TempDir()
-		t.Setenv("HOME", home)
-
-		startedAt := time.Date(2026, 4, 2, 12, 0, 0, 0, time.UTC)
-		active := newActive("LAB-732", startedAt)
-
-		writeFixture(t, filepath.Join(home, "sync", "postmortems"), "older.md", "LAB-732", "LAB-732", startedAt.Add(time.Minute))
-		writeFixture(t, filepath.Join(home, ".local", "share", "postmortems"), "newer.md", "LAB-732", "LAB-732", startedAt.Add(2*time.Minute))
-
-		recordedAt, ok, err := findPostmortem(active)
-		if err != nil {
-			t.Fatalf("findPostmortem() error = %v", err)
-		}
-		if !ok {
-			t.Fatal("findPostmortem() ok = false, want true")
-		}
-		if got, want := recordedAt, startedAt.Add(2*time.Minute); !got.Equal(want) {
-			t.Fatalf("recordedAt = %v, want %v", got, want)
-		}
-	})
-}
-
-func TestMatchesPostmortemSession(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name    string
-		content string
-		issue   string
-		branch  string
-		want    bool
+	testCases := []struct {
+		name             string
+		setup            func(t *testing.T, deps *testDeps, daemon *Daemon, active ActiveAssignment)
+		active           func(deps *testDeps) ActiveAssignment
+		allowTrigger     bool
+		wantStatus       string
+		wantErr          bool
+		wantMessagePart  string
+		wantPostmortemCt int
 	}{
-		{name: "matches issue and branch case-insensitively", content: "issue lab-issue-733 branch feature/task-733", issue: "LAB-ISSUE-733", branch: "feature/TASK-733", want: true},
-		{name: "rejects missing issue", content: "branch feature/task-733", issue: "LAB-ISSUE-733", branch: "feature/TASK-733", want: false},
-		{name: "rejects missing branch", content: "issue lab-issue-733", issue: "LAB-ISSUE-733", branch: "feature/TASK-733", want: false},
-		{name: "branch-only match succeeds", content: "branch feature/task-733", issue: "", branch: "feature/TASK-733", want: true},
+		{
+			name: "skips without session metadata",
+			active: func(_ *testDeps) ActiveAssignment {
+				return ActiveAssignment{Task: Task{AgentProfile: "codex"}}
+			},
+			allowTrigger:    true,
+			wantStatus:      "skipped",
+			wantMessagePart: "no worker session metadata",
+		},
+		{
+			name: "skips when profile disables postmortem",
+			setup: func(_ *testing.T, deps *testDeps, _ *Daemon, _ ActiveAssignment) {
+				profile := deps.config.profiles["codex"]
+				profile.PostmortemEnabled = false
+				deps.config.profiles["codex"] = profile
+			},
+			active:          func(deps *testDeps) ActiveAssignment { return newPostmortemAssignment(deps) },
+			allowTrigger:    true,
+			wantStatus:      "skipped",
+			wantMessagePart: "postmortem disabled",
+		},
+		{
+			name: "fails when initial scan errors",
+			setup: func(t *testing.T, _ *testDeps, daemon *Daemon, _ ActiveAssignment) {
+				path := filepath.Join(t.TempDir(), "postmortems-file")
+				if err := os.WriteFile(path, []byte("not a directory"), 0o644); err != nil {
+					t.Fatalf("WriteFile(%q) error = %v", path, err)
+				}
+				daemon.postmortemDir = path
+			},
+			active:           func(deps *testDeps) ActiveAssignment { return newPostmortemAssignment(deps) },
+			allowTrigger:     true,
+			wantStatus:       "failed",
+			wantErr:          true,
+			wantMessagePart:  "check failed",
+			wantPostmortemCt: 0,
+		},
+		{
+			name:             "skips when trigger already disallowed",
+			active:           func(deps *testDeps) ActiveAssignment { return newPostmortemAssignment(deps) },
+			allowTrigger:     false,
+			wantStatus:       "skipped",
+			wantMessagePart:  "cleanup already had an error",
+			wantPostmortemCt: 0,
+		},
+		{
+			name: "skips when pane id missing",
+			active: func(deps *testDeps) ActiveAssignment {
+				active := newPostmortemAssignment(deps)
+				active.Task.PaneID = ""
+				active.Worker.PaneID = ""
+				return active
+			},
+			allowTrigger:     true,
+			wantStatus:       "skipped",
+			wantMessagePart:  "worker pane missing",
+			wantPostmortemCt: 0,
+		},
+		{
+			name: "fails when trigger send keys fails",
+			setup: func(_ *testing.T, deps *testDeps, _ *Daemon, _ ActiveAssignment) {
+				deps.amux.sendKeysErr = errors.New("send failed")
+			},
+			active:           func(deps *testDeps) ActiveAssignment { return newPostmortemAssignment(deps) },
+			allowTrigger:     true,
+			wantStatus:       "failed",
+			wantErr:          true,
+			wantMessagePart:  "trigger failed",
+			wantPostmortemCt: 0,
+		},
+		{
+			name: "triggered when file appears after prompt",
+			setup: func(t *testing.T, deps *testDeps, daemon *Daemon, active ActiveAssignment) {
+				deps.amux.waitIdleHook = func(_ string, _ time.Duration) {
+					writeRecentPostmortem(t, daemon.postmortemDir, now, active.Task.ClonePath, active.Task.Issue, active.Task.PaneName)
+				}
+			},
+			active:           func(deps *testDeps) ActiveAssignment { return newPostmortemAssignment(deps) },
+			allowTrigger:     true,
+			wantStatus:       "triggered",
+			wantMessagePart:  "worker-1",
+			wantPostmortemCt: 1,
+		},
+		{
+			name: "triggered when wait idle errors but file appears",
+			setup: func(t *testing.T, deps *testDeps, daemon *Daemon, active ActiveAssignment) {
+				deps.amux.waitIdleErr = errors.New("wait idle failed")
+				deps.amux.waitIdleHook = func(_ string, _ time.Duration) {
+					writeRecentPostmortem(t, daemon.postmortemDir, now, active.Task.ClonePath, active.Task.Issue, active.Task.PaneName)
+				}
+			},
+			active:           func(deps *testDeps) ActiveAssignment { return newPostmortemAssignment(deps) },
+			allowTrigger:     true,
+			wantStatus:       "triggered",
+			wantMessagePart:  "wait idle: wait idle failed",
+			wantPostmortemCt: 1,
+		},
+		{
+			name: "fails when recheck errors after prompt",
+			setup: func(t *testing.T, deps *testDeps, daemon *Daemon, _ ActiveAssignment) {
+				deps.amux.waitIdleHook = func(_ string, _ time.Duration) {
+					path := filepath.Join(t.TempDir(), "postmortems-file")
+					if err := os.WriteFile(path, []byte("not a directory"), 0o644); err != nil {
+						t.Fatalf("WriteFile(%q) error = %v", path, err)
+					}
+					daemon.postmortemDir = path
+				}
+			},
+			active:           func(deps *testDeps) ActiveAssignment { return newPostmortemAssignment(deps) },
+			allowTrigger:     true,
+			wantStatus:       "failed",
+			wantErr:          true,
+			wantMessagePart:  "recheck failed",
+			wantPostmortemCt: 1,
+		},
 	}
 
-	for _, tt := range tests {
-		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			deps := newTestDeps(t)
+			deps.clock.now = now
+			daemon := deps.newDaemon(t)
+			active := tc.active(deps)
+			if tc.setup != nil {
+				tc.setup(t, deps, daemon, active)
+			}
 
-			if got := matchesPostmortemSession(tt.content, tt.issue, tt.branch); got != tt.want {
-				t.Fatalf("matchesPostmortemSession(%q, %q, %q) = %v, want %v", tt.content, tt.issue, tt.branch, got, tt.want)
+			status, message, err := daemon.postmortemStatus(context.Background(), active, tc.allowTrigger)
+			if got, want := status, tc.wantStatus; got != want {
+				t.Fatalf("postmortemStatus() status = %q, want %q", got, want)
+			}
+			if tc.wantErr && err == nil {
+				t.Fatal("postmortemStatus() error = nil, want non-nil")
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("postmortemStatus() error = %v, want nil", err)
+			}
+			if !strings.Contains(message, tc.wantMessagePart) {
+				t.Fatalf("postmortemStatus() message = %q, want substring %q", message, tc.wantMessagePart)
+			}
+			if got, want := deps.amux.countKey(active.Task.PaneID, "$postmortem\n"), tc.wantPostmortemCt; got != want {
+				t.Fatalf("postmortem prompt count = %d, want %d", got, want)
 			}
 		})
 	}
@@ -332,5 +277,56 @@ func TestCleanupCloneAndReleaseDefaultsCloneMetadata(t *testing.T) {
 		AssignedTask:  "LAB-734",
 	}}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("released clones = %#v, want %#v", got, want)
+	}
+}
+
+func writeRecentPostmortem(t *testing.T, dir string, now time.Time, clonePath, issue, workerName string) string {
+	t.Helper()
+
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", dir, err)
+	}
+
+	filename := now.Format("2006-01-02-150405") + "-" + workerName + ".md"
+	path := filepath.Join(dir, filename)
+	content := strings.Join([]string{
+		"### Metadata",
+		"- **Repo**: orca",
+		"- **Clone**: " + clonePath,
+		"- **Branch**: " + issue,
+		"- **Issues**: " + issue,
+		"- **Pane**: " + workerName,
+		"",
+	}, "\n")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", path, err)
+	}
+	if err := os.Chtimes(path, now, now); err != nil {
+		t.Fatalf("Chtimes(%q) error = %v", path, err)
+	}
+	return path
+}
+
+func newPostmortemAssignment(deps *testDeps) ActiveAssignment {
+	return ActiveAssignment{
+		Task: Task{
+			Project:      "/tmp/project",
+			Issue:        "LAB-689",
+			Branch:       "LAB-689",
+			PaneID:       deps.amux.spawnPane.ID,
+			PaneName:     deps.amux.spawnPane.Name,
+			CloneName:    deps.pool.clone.Name,
+			ClonePath:    deps.pool.clone.Path,
+			AgentProfile: deps.config.profiles["codex"].Name,
+			CreatedAt:    deps.clock.Now(),
+			UpdatedAt:    deps.clock.Now(),
+		},
+		Worker: Worker{
+			Project:      "/tmp/project",
+			PaneID:       deps.amux.spawnPane.ID,
+			PaneName:     deps.amux.spawnPane.Name,
+			ClonePath:    deps.pool.clone.Path,
+			AgentProfile: deps.config.profiles["codex"].Name,
+		},
 	}
 }
