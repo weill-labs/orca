@@ -2,7 +2,11 @@ package daemon
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -185,6 +189,120 @@ func TestStuckDetectionEscalatesWithoutCleanupOrKill(t *testing.T) {
 	}
 	if got := deps.events.countType(EventTaskFailed); got != 0 {
 		t.Fatalf("task failed event count = %d, want 0", got)
+	}
+
+	deps.events.requireTypes(t, EventDaemonStarted, EventTaskAssigned, EventWorkerEscalated)
+}
+
+func TestStuckDetectionEscalationCapturesDiagnosticsWithoutCleanupOrKill(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	captureTicker := newFakeTicker()
+	prTicker := newFakeTicker()
+	deps.tickers.enqueue(captureTicker, prTicker)
+	deps.config.profiles["codex"] = AgentProfile{
+		Name:              "codex",
+		StartCommand:      "codex --yolo",
+		StuckTextPatterns: []string{"permission prompt"},
+		StuckTimeout:      time.Hour,
+		GoBased:           true,
+		NudgeCommand:      "Enter",
+		MaxNudgeRetries:   0,
+	}
+	deps.amux.captureSequence("pane-1", []string{"permission prompt"})
+	deps.amux.captureHistorySequence("pane-1", []PaneCapture{
+		{
+			Content:        []string{"stuck output"},
+			CWD:            "/tmp/clone-01",
+			CurrentCommand: "codex",
+			ChildPIDs:      []int{4242},
+		},
+		{
+			Content:        []string{"goroutine dump"},
+			CWD:            "/tmp/clone-01",
+			CurrentCommand: "codex",
+			ChildPIDs:      []int{4242},
+		},
+	})
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-710", "Leave escalated worker running", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	deps.commands.reset()
+	deps.amux.killCalls = nil
+
+	captureTicker.tick(deps.clock.Now())
+	waitFor(t, "worker escalation with diagnostics", func() bool {
+		active, err := deps.state.ActiveAssignmentByIssue(ctx, d.project, "LAB-710")
+		return err == nil && active.Worker.Health == WorkerHealthEscalated
+	})
+
+	task, ok := deps.state.task("LAB-710")
+	if !ok {
+		t.Fatal("task missing after stuck escalation")
+	}
+	if got, want := task.Status, TaskStatusActive; got != want {
+		t.Fatalf("task.Status = %q, want %q", got, want)
+	}
+
+	active, err := deps.state.ActiveAssignmentByIssue(ctx, d.project, "LAB-710")
+	if err != nil {
+		t.Fatalf("ActiveAssignmentByIssue() error = %v", err)
+	}
+	if got, want := active.Worker.Health, WorkerHealthEscalated; got != want {
+		t.Fatalf("worker.Health = %q, want %q", got, want)
+	}
+	if got := deps.amux.captureHistoryCount("pane-1"); got != 2 {
+		t.Fatalf("capture history count = %d, want %d", got, 2)
+	}
+	if got, want := deps.signalCalls(), []signalCall{{PID: 4242, Signal: syscall.SIGQUIT}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("signal calls = %#v, want %#v", got, want)
+	}
+	if got, want := deps.sleepCalls(), []time.Duration{5 * time.Second}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("sleep calls = %#v, want %#v", got, want)
+	}
+	if got, want := deps.amux.killCalls, []string(nil); !reflect.DeepEqual(got, want) {
+		t.Fatalf("kill calls = %#v, want none", got)
+	}
+	if got := deps.pool.releasedClones(); len(got) != 0 {
+		t.Fatalf("released clones = %#v, want none", got)
+	}
+	if got := deps.commands.callsByName("git"); len(got) != 0 {
+		t.Fatalf("cleanup git calls = %#v, want none", got)
+	}
+	if got := deps.events.countType(EventTaskFailed); got != 0 {
+		t.Fatalf("task failed event count = %d, want 0", got)
+	}
+
+	logPath := filepath.Join(deps.postmortemDir, "20260402T090000Z-goroutine-dump-LAB-710.log")
+	content, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", logPath, err)
+	}
+	text := string(content)
+	for _, want := range []string{"stuck output", "sigquit_pid: 4242", "goroutine dump"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("diagnostics log missing %q in %q", want, text)
+		}
+	}
+
+	event, ok := deps.events.lastEventOfType(EventWorkerEscalated)
+	if !ok {
+		t.Fatal("worker escalation event missing")
+	}
+	if !strings.Contains(event.Message, logPath) {
+		t.Fatalf("event.Message = %q, want to contain log path %q", event.Message, logPath)
 	}
 
 	deps.events.requireTypes(t, EventDaemonStarted, EventTaskAssigned, EventWorkerEscalated)
