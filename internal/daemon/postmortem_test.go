@@ -281,6 +281,81 @@ func TestCleanupCloneAndReleaseDefaultsCloneMetadata(t *testing.T) {
 	}
 }
 
+func TestFinishAssignmentMergedCleanupSendsWrapUpThenEnter(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	profile := deps.config.profiles["codex"]
+	profile.PostmortemEnabled = false
+	deps.config.profiles["codex"] = profile
+
+	d := deps.newDaemon(t)
+	active := newPostmortemAssignment(deps)
+	active.Task.Status = TaskStatusActive
+	deps.state.putTaskForTest(active.Task)
+	if err := deps.state.PutWorker(context.Background(), active.Worker); err != nil {
+		t.Fatalf("PutWorker() error = %v", err)
+	}
+
+	var operations []string
+	deps.amux.sendKeysHook = func(_ string, keys []string) {
+		operations = append(operations, "send:"+strings.Join(keys, "|"))
+	}
+	deps.amux.waitIdleHook = func(_ string, timeout time.Duration) {
+		operations = append(operations, "wait:"+timeout.String())
+	}
+
+	if err := d.finishAssignment(context.Background(), active, TaskStatusDone, EventTaskCompleted, true); err != nil {
+		t.Fatalf("finishAssignment() error = %v", err)
+	}
+
+	if got, want := operations, []string{
+		"send:PR merged, wrap up.",
+		"wait:2m0s",
+		"send:Enter",
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("operations = %#v, want %#v", got, want)
+	}
+}
+
+func TestFinishAssignmentMergedCleanupSendsEnterBeforePostmortem(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	d := deps.newDaemon(t)
+	active := newPostmortemAssignment(deps)
+	active.Task.Status = TaskStatusActive
+	deps.state.putTaskForTest(active.Task)
+	if err := deps.state.PutWorker(context.Background(), active.Worker); err != nil {
+		t.Fatalf("PutWorker() error = %v", err)
+	}
+
+	var operations []string
+	deps.amux.sendKeysHook = func(_ string, keys []string) {
+		operations = append(operations, "send:"+strings.Join(keys, "|"))
+		if len(keys) > 0 && keys[0] == postmortemCommand {
+			writeRecentPostmortem(t, d.postmortemDir, deps.clock.Now(), active.Task.ClonePath, active.Task.Issue, active.Task.PaneName)
+		}
+	}
+	deps.amux.waitIdleHook = func(_ string, timeout time.Duration) {
+		operations = append(operations, "wait:"+timeout.String())
+	}
+
+	if err := d.finishAssignment(context.Background(), active, TaskStatusDone, EventTaskCompleted, true); err != nil {
+		t.Fatalf("finishAssignment() error = %v", err)
+	}
+
+	if got, want := operations, []string{
+		"send:PR merged, wrap up.",
+		"wait:2m0s",
+		"send:Enter",
+		"send:$postmortem|Enter",
+		"wait:2m0s",
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("operations = %#v, want %#v", got, want)
+	}
+}
+
 func writeRecentPostmortem(t *testing.T, dir string, now time.Time, clonePath, issue, workerName string) string {
 	t.Helper()
 
