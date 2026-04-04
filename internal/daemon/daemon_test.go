@@ -7,7 +7,6 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 )
 
@@ -153,14 +152,5 @@ func TestNewOmitsLegacyPostmortemFields(t *testing.T) {
 		if _, ok := optionsType.FieldByName(fieldName); ok {
 			t.Fatalf("Options unexpectedly contains field %q", fieldName)
 		}
-	}
-	if daemon.sleep == nil {
-		t.Fatal("daemon.sleep = nil, want default sleep hook")
-	}
-	if daemon.signalProcess == nil {
-		t.Fatal("daemon.signalProcess = nil, want default signal hook")
-	}
-	if err := daemon.signalProcess(os.Getpid(), syscall.Signal(0)); err != nil {
-		t.Fatalf("daemon.signalProcess(signal 0) error = %v", err)
 	}
 }

@@ -254,12 +254,6 @@ func TestStuckDetectionEscalationCapturesDiagnosticsWithoutCleanupOrKill(t *test
 	if got := deps.amux.captureHistoryCount("pane-1"); got != 0 {
 		t.Fatalf("capture history count = %d, want 0", got)
 	}
-	if got := deps.signalCalls(); len(got) != 0 {
-		t.Fatalf("signal calls = %#v, want none", got)
-	}
-	if got := deps.sleepCalls(); len(got) != 0 {
-		t.Fatalf("sleep calls = %#v, want none", got)
-	}
 	if got, want := deps.amux.killCalls, []string(nil); !reflect.DeepEqual(got, want) {
 		t.Fatalf("kill calls = %#v, want none", got)
 	}

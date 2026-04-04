@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"sync/atomic"
-	"syscall"
 	"time"
 )
 
@@ -17,35 +16,28 @@ const (
 	defaultAgentHandshakeTimeout = 30 * time.Second
 	defaultPollInterval          = 30 * time.Second
 	defaultMergeGracePeriod      = 10 * time.Minute
-	defaultPostmortemWindow      = 10 * time.Minute
-	defaultPostmortemTimeout     = 2 * time.Minute
 )
 
 var autonomousBacklogPromptPattern = regexp.MustCompile(`(?i)pick up.*(work|issue|task|ticket)|from.*(backlog|queue|linear)|new work|next (issue|task|ticket)|find.*(issue|task|work).*backlog`)
 
 type Daemon struct {
-	project           string
-	session           string
-	leadPane          string
-	pidPath           string
-	postmortemDir     string
-	config            ConfigProvider
-	state             StateStore
-	pool              Pool
-	amux              AmuxClient
-	issueTracker      IssueTracker
-	commands          CommandRunner
-	github            gitHubClient
-	events            EventSink
-	now               func() time.Time
-	newTicker         func(time.Duration) Ticker
-	captureInterval   time.Duration
-	pollInterval      time.Duration
-	mergeGracePeriod  time.Duration
-	postmortemWindow  time.Duration
-	postmortemTimeout time.Duration
-	sleep             func(context.Context, time.Duration) error
-	signalProcess     func(int, syscall.Signal) error
+	project          string
+	session          string
+	leadPane         string
+	pidPath          string
+	config           ConfigProvider
+	state            StateStore
+	pool             Pool
+	amux             AmuxClient
+	issueTracker     IssueTracker
+	commands         CommandRunner
+	github           gitHubClient
+	events           EventSink
+	now              func() time.Time
+	newTicker        func(time.Duration) Ticker
+	captureInterval  time.Duration
+	pollInterval     time.Duration
+	mergeGracePeriod time.Duration
 
 	started     atomic.Bool
 	stopContext context.Context
@@ -97,18 +89,6 @@ func New(opts Options) (*Daemon, error) {
 	if opts.MergeGracePeriod <= 0 {
 		opts.MergeGracePeriod = defaultMergeGracePeriod
 	}
-	if opts.PostmortemWindow <= 0 {
-		opts.PostmortemWindow = defaultPostmortemWindow
-	}
-	if opts.PostmortemTimeout <= 0 {
-		opts.PostmortemTimeout = defaultPostmortemTimeout
-	}
-	if opts.Sleep == nil {
-		opts.Sleep = sleepContext
-	}
-	if opts.SignalProcess == nil {
-		opts.SignalProcess = syscall.Kill
-	}
 	if opts.PIDPath == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
@@ -119,37 +99,25 @@ func New(opts Options) (*Daemon, error) {
 	if opts.Session == "" {
 		opts.Session = "orca"
 	}
-	if opts.PostmortemDir == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return nil, fmt.Errorf("resolve home directory: %w", err)
-		}
-		opts.PostmortemDir = filepath.Join(home, ".local", "share", "postmortems")
-	}
 
 	return &Daemon{
-		project:           opts.Project,
-		session:           opts.Session,
-		leadPane:          opts.LeadPane,
-		pidPath:           opts.PIDPath,
-		postmortemDir:     opts.PostmortemDir,
-		config:            opts.Config,
-		state:             opts.State,
-		pool:              opts.Pool,
-		amux:              opts.Amux,
-		issueTracker:      opts.IssueTracker,
-		commands:          opts.Commands,
-		github:            newDefaultGitHubClient(opts.Project, opts.Commands),
-		events:            opts.Events,
-		now:               opts.Now,
-		newTicker:         opts.NewTicker,
-		captureInterval:   opts.CaptureInterval,
-		pollInterval:      opts.PollInterval,
-		mergeGracePeriod:  opts.MergeGracePeriod,
-		postmortemWindow:  opts.PostmortemWindow,
-		postmortemTimeout: opts.PostmortemTimeout,
-		sleep:             opts.Sleep,
-		signalProcess:     opts.SignalProcess,
+		project:          opts.Project,
+		session:          opts.Session,
+		leadPane:         opts.LeadPane,
+		pidPath:          opts.PIDPath,
+		config:           opts.Config,
+		state:            opts.State,
+		pool:             opts.Pool,
+		amux:             opts.Amux,
+		issueTracker:     opts.IssueTracker,
+		commands:         opts.Commands,
+		github:           newDefaultGitHubClient(opts.Project, opts.Commands),
+		events:           opts.Events,
+		now:              opts.Now,
+		newTicker:        opts.NewTicker,
+		captureInterval:  opts.CaptureInterval,
+		pollInterval:     opts.PollInterval,
+		mergeGracePeriod: opts.MergeGracePeriod,
 	}, nil
 }
 

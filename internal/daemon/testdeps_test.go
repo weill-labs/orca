@@ -7,34 +7,24 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 	"testing"
 	"time"
 )
 
 type testDeps struct {
-	clock         *fakeClock
-	config        *fakeConfig
-	state         *fakeState
-	pool          *fakePool
-	amux          *fakeAmux
-	issueTracker  *fakeIssueTracker
-	commands      *fakeCommands
-	events        *fakeEvents
-	tickers       *fakeTickerFactory
-	pidPath       string
-
-	mu      sync.Mutex
-	signals []signalCall
-	sleeps  []time.Duration
+	clock        *fakeClock
+	config       *fakeConfig
+	state        *fakeState
+	pool         *fakePool
+	amux         *fakeAmux
+	issueTracker *fakeIssueTracker
+	commands     *fakeCommands
+	events       *fakeEvents
+	tickers      *fakeTickerFactory
+	pidPath      string
 }
 
 func noSleep(context.Context, time.Duration) error { return nil }
-
-type signalCall struct {
-	PID    int
-	Signal syscall.Signal
-}
 
 func newTestDeps(t *testing.T) *testDeps {
 	t.Helper()
@@ -60,14 +50,14 @@ func newTestDeps(t *testing.T) *testDeps {
 				},
 			},
 		},
-		state:         newFakeState(),
-		pool:          &fakePool{clone: Clone{Name: "clone-01", Path: clonePath}},
-		amux:          &fakeAmux{spawnPane: Pane{ID: "pane-1", Name: "worker-1"}, captures: make(map[string][]string)},
-		issueTracker:  &fakeIssueTracker{},
-		commands:      newFakeCommands(),
-		events:        newFakeEvents(),
-		tickers:       &fakeTickerFactory{},
-		pidPath:       filepath.Join(tmp, "orca.pid"),
+		state:        newFakeState(),
+		pool:         &fakePool{clone: Clone{Name: "clone-01", Path: clonePath}},
+		amux:         &fakeAmux{spawnPane: Pane{ID: "pane-1", Name: "worker-1"}, captures: make(map[string][]string)},
+		issueTracker: &fakeIssueTracker{},
+		commands:     newFakeCommands(),
+		events:       newFakeEvents(),
+		tickers:      &fakeTickerFactory{},
+		pidPath:      filepath.Join(tmp, "orca.pid"),
 	}
 }
 
@@ -90,8 +80,6 @@ func (d *testDeps) newDaemon(t *testing.T) *Daemon {
 		CaptureInterval:  5 * time.Second,
 		PollInterval:     30 * time.Second,
 		MergeGracePeriod: 2 * time.Minute,
-		Sleep:            d.recordSleep,
-		SignalProcess:    d.recordSignal,
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -104,32 +92,6 @@ func (d *testDeps) newDaemon(t *testing.T) *Daemon {
 		maxAttempts: 1,
 	})
 	return daemon
-}
-
-func (d *testDeps) recordSignal(pid int, signal syscall.Signal) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.signals = append(d.signals, signalCall{PID: pid, Signal: signal})
-	return nil
-}
-
-func (d *testDeps) recordSleep(_ context.Context, delay time.Duration) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.sleeps = append(d.sleeps, delay)
-	return nil
-}
-
-func (d *testDeps) signalCalls() []signalCall {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	return append([]signalCall(nil), d.signals...)
-}
-
-func (d *testDeps) sleepCalls() []time.Duration {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	return append([]time.Duration(nil), d.sleeps...)
 }
 
 func waitFor(t *testing.T, name string, condition func() bool) {

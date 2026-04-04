@@ -42,18 +42,18 @@ func TestPostmortemStatusSendsOrSkips(t *testing.T) {
 	tests := []struct {
 		name             string
 		configure        func(*testDeps)
-		allowTrigger     bool
 		wantStatus       string
+		wantMessagePart  string
 		wantErrSubstring string
 		wantSendCount    int
 		wantWaitCount    int
 	}{
 		{
-			name:          "sends even when previous cleanup returned an error",
-			allowTrigger:  false,
-			wantStatus:    "sent",
-			wantSendCount: 1,
-			wantWaitCount: 1,
+			name:            "sends postmortem when enabled",
+			wantStatus:      "sent",
+			wantMessagePart: "command sent",
+			wantSendCount:   1,
+			wantWaitCount:   1,
 		},
 		{
 			name: "skips when profile disables postmortem",
@@ -62,18 +62,18 @@ func TestPostmortemStatusSendsOrSkips(t *testing.T) {
 				profile.PostmortemEnabled = false
 				deps.config.profiles["codex"] = profile
 			},
-			allowTrigger:  true,
-			wantStatus:    "skipped",
-			wantSendCount: 0,
-			wantWaitCount: 0,
+			wantStatus:      "skipped",
+			wantMessagePart: "disabled",
+			wantSendCount:   0,
+			wantWaitCount:   0,
 		},
 		{
 			name: "returns send error but keeps sent status",
 			configure: func(deps *testDeps) {
 				deps.amux.sendKeysErr = errors.New("send failed")
 			},
-			allowTrigger:     true,
 			wantStatus:       "sent",
+			wantMessagePart:  "command sent",
 			wantErrSubstring: "send failed",
 			wantSendCount:    0,
 			wantWaitCount:    0,
@@ -92,7 +92,7 @@ func TestPostmortemStatusSendsOrSkips(t *testing.T) {
 			d := deps.newDaemon(t)
 			active := newPostmortemAssignment(deps)
 
-			status, message, err := d.postmortemStatus(context.Background(), active, tt.allowTrigger)
+			status, message, err := d.postmortemStatus(context.Background(), active)
 			if got, want := status, tt.wantStatus; got != want {
 				t.Fatalf("postmortemStatus() status = %q, want %q", got, want)
 			}
@@ -104,8 +104,8 @@ func TestPostmortemStatusSendsOrSkips(t *testing.T) {
 					t.Fatalf("postmortemStatus() error = %v, want substring %q", err, tt.wantErrSubstring)
 				}
 			}
-			if !strings.Contains(message, tt.wantStatus) {
-				t.Fatalf("postmortemStatus() message = %q, want substring %q", message, tt.wantStatus)
+			if !strings.Contains(message, tt.wantMessagePart) {
+				t.Fatalf("postmortemStatus() message = %q, want substring %q", message, tt.wantMessagePart)
 			}
 			if got, want := deps.amux.countKey(active.Task.PaneID, "$postmortem\n"), tt.wantSendCount; got != want {
 				t.Fatalf("postmortem prompt count = %d, want %d", got, want)
