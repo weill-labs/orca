@@ -188,6 +188,7 @@ func TestPRMergePollingSkipsPostmortemTriggerAfterWrapUpError(t *testing.T) {
 
 	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
 		{PaneID: "pane-1", Timeout: 30 * time.Second},
+		{PaneID: "pane-1", Timeout: 2 * time.Minute},
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("wait idle calls = %#v, want %#v", got, want)
 	}
