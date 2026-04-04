@@ -3,28 +3,99 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
+	"strings"
 )
 
-func (d *Daemon) reconcileActiveAssignments(ctx context.Context) {
-	assignments, err := d.state.ActiveAssignments(ctx, d.project)
+func (d *Daemon) reconcileNonTerminalAssignments(ctx context.Context) {
+	tasks, err := d.state.NonTerminalTasks(ctx, d.project)
 	if err != nil {
 		return
 	}
 
-	for _, active := range assignments {
+	for _, task := range tasks {
 		if ctx.Err() != nil {
 			return
 		}
-		exists, err := d.amux.PaneExists(ctx, active.Task.PaneID)
-		if err != nil {
-			continue
-		}
-		if exists {
-			continue
-		}
-		_ = d.failAssignment(ctx, active, EventTaskFailed, "worker pane missing on daemon startup")
+		d.reconcileTaskOnStartup(ctx, task)
 	}
+}
+
+func (d *Daemon) reconcileTaskOnStartup(ctx context.Context, task Task) {
+	paneID := strings.TrimSpace(task.PaneID)
+	if paneID == "" {
+		_ = d.failTaskWithoutWorker(ctx, task, "worker pane missing on daemon startup")
+		return
+	}
+
+	worker, err := d.state.WorkerByPane(ctx, d.project, paneID)
+	if err != nil {
+		_ = d.failTaskWithoutWorker(ctx, task, "persisted worker missing on daemon startup")
+		return
+	}
+
+	active := ActiveAssignment{
+		Task:   task,
+		Worker: worker,
+	}
+
+	exists, err := d.amux.PaneExists(ctx, active.Task.PaneID)
+	if err != nil {
+		d.failStartingTaskOnStartupError(ctx, active, "worker pane liveness check failed on daemon startup", err)
+		return
+	}
+	if !exists {
+		_ = d.failAssignment(ctx, active, EventTaskFailed, "worker pane missing on daemon startup")
+		return
+	}
+
+	snapshot, err := d.amux.CapturePane(ctx, active.Task.PaneID)
+	if err != nil {
+		d.failStartingTaskOnStartupError(ctx, active, "worker pane capture failed on daemon startup", err)
+		return
+	}
+	if snapshot.Exited {
+		if active.Task.Status == TaskStatusStarting {
+			_ = d.failAssignment(ctx, active, EventTaskFailed, "worker pane exited on daemon startup")
+			return
+		}
+
+		profile, err := d.profileForTask(ctx, active.Task)
+		if err != nil {
+			profile = AgentProfile{Name: active.Task.AgentProfile}
+		}
+		d.handleExitedPaneCapture(ctx, active, profile, snapshot, d.now())
+		return
+	}
+
+	if active.Task.Status == TaskStatusStarting {
+		active.Task.Status = TaskStatusActive
+		active.Task.UpdatedAt = d.now()
+		_ = d.state.PutTask(ctx, active.Task)
+	}
+}
+
+func (d *Daemon) failStartingTaskOnStartupError(ctx context.Context, active ActiveAssignment, message string, err error) {
+	if active.Task.Status != TaskStatusStarting {
+		return
+	}
+	_ = d.failAssignment(ctx, active, EventTaskFailed, fmt.Sprintf("%s: %v", message, err))
+}
+
+func (d *Daemon) failTaskWithoutWorker(ctx context.Context, task Task, message string) error {
+	active := ActiveAssignment{
+		Task: task,
+		Worker: Worker{
+			Project:      d.project,
+			PaneID:       task.PaneID,
+			PaneName:     task.PaneName,
+			Issue:        task.Issue,
+			ClonePath:    task.ClonePath,
+			AgentProfile: task.AgentProfile,
+		},
+	}
+	return d.failAssignment(ctx, active, EventTaskFailed, message)
 }
 
 func (d *Daemon) failAssignment(ctx context.Context, active ActiveAssignment, eventType, message string) error {
@@ -44,9 +115,15 @@ func (d *Daemon) failAssignment(ctx context.Context, active ActiveAssignment, ev
 	}
 
 	var result error
-	result = errors.Join(result, d.cleanupCloneAndRelease(cleanupCtx, clone, active.Task.Branch))
+	if clone.Path != "" {
+		result = errors.Join(result, d.cleanupCloneAndRelease(cleanupCtx, clone, active.Task.Branch))
+	}
 	result = errors.Join(result, d.state.PutTask(cleanupCtx, task))
-	result = errors.Join(result, d.state.DeleteWorker(cleanupCtx, d.project, active.Task.PaneID))
+	if active.Task.PaneID != "" {
+		if err := d.state.DeleteWorker(cleanupCtx, d.project, active.Task.PaneID); err != nil && !errors.Is(err, ErrWorkerNotFound) {
+			result = errors.Join(result, err)
+		}
+	}
 	if active.Task.PRNumber > 0 {
 		if err := d.state.DeleteMergeEntry(cleanupCtx, d.project, active.Task.PRNumber); err != nil && !errors.Is(err, ErrTaskNotFound) {
 			result = errors.Join(result, err)

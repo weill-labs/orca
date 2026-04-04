@@ -457,6 +457,110 @@ func TestSQLiteStorePersistsWorkerMonitorStateAndMergeQueue(t *testing.T) {
 	}
 }
 
+func TestSQLiteStoreWorkerByPaneAndNonTerminalTasks(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	project := "/repo"
+	now := time.Date(2026, 4, 4, 11, 0, 0, 0, time.UTC)
+
+	prNumber := 42
+	for _, task := range []Task{
+		{
+			Issue:     "LAB-740",
+			Status:    "starting",
+			Agent:     "codex",
+			Prompt:    "Recover startup",
+			WorkerID:  "pane-1",
+			ClonePath: "/clones/clone-01",
+			CreatedAt: now,
+			UpdatedAt: now,
+		},
+		{
+			Issue:     "LAB-741",
+			Status:    "active",
+			Agent:     "codex",
+			Prompt:    "Keep running",
+			WorkerID:  "pane-2",
+			ClonePath: "/clones/clone-02",
+			PRNumber:  &prNumber,
+			CreatedAt: now,
+			UpdatedAt: now.Add(time.Minute),
+		},
+		{
+			Issue:     "LAB-742",
+			Status:    "done",
+			Agent:     "codex",
+			Prompt:    "Finished",
+			WorkerID:  "pane-3",
+			ClonePath: "/clones/clone-03",
+			CreatedAt: now,
+			UpdatedAt: now.Add(2 * time.Minute),
+		},
+	} {
+		if err := store.UpsertTask(context.Background(), project, task); err != nil {
+			t.Fatalf("UpsertTask(%s) error = %v", task.Issue, err)
+		}
+	}
+
+	if err := store.UpsertWorker(context.Background(), project, Worker{
+		PaneID:             "pane-2",
+		Agent:              "codex",
+		State:              "escalated",
+		Issue:              "LAB-741",
+		ClonePath:          "/clones/clone-02",
+		LastReviewCount:    2,
+		LastCIState:        "fail",
+		LastMergeableState: "CONFLICTING",
+		NudgeCount:         3,
+		LastCapture:        "permission prompt",
+		LastActivityAt:     now,
+		UpdatedAt:          now.Add(time.Minute),
+	}); err != nil {
+		t.Fatalf("UpsertWorker() error = %v", err)
+	}
+
+	tasks, err := store.NonTerminalTasks(context.Background(), project)
+	if err != nil {
+		t.Fatalf("NonTerminalTasks() error = %v", err)
+	}
+	if got, want := len(tasks), 2; got != want {
+		t.Fatalf("len(tasks) = %d, want %d", got, want)
+	}
+	if got, want := tasks[0].Issue, "LAB-741"; got != want {
+		t.Fatalf("tasks[0].Issue = %q, want %q", got, want)
+	}
+	if tasks[0].PRNumber == nil || *tasks[0].PRNumber != 42 {
+		t.Fatalf("tasks[0].PRNumber = %#v, want 42", tasks[0].PRNumber)
+	}
+	if got, want := tasks[1].Issue, "LAB-740"; got != want {
+		t.Fatalf("tasks[1].Issue = %q, want %q", got, want)
+	}
+
+	worker, err := store.WorkerByPane(context.Background(), project, "pane-2")
+	if err != nil {
+		t.Fatalf("WorkerByPane() error = %v", err)
+	}
+	if got, want := worker.LastReviewCount, 2; got != want {
+		t.Fatalf("worker.LastReviewCount = %d, want %d", got, want)
+	}
+	if got, want := worker.LastCIState, "fail"; got != want {
+		t.Fatalf("worker.LastCIState = %q, want %q", got, want)
+	}
+	if got, want := worker.LastMergeableState, "CONFLICTING"; got != want {
+		t.Fatalf("worker.LastMergeableState = %q, want %q", got, want)
+	}
+	if got, want := worker.NudgeCount, 3; got != want {
+		t.Fatalf("worker.NudgeCount = %d, want %d", got, want)
+	}
+	if got, want := worker.LastCapture, "permission prompt"; got != want {
+		t.Fatalf("worker.LastCapture = %q, want %q", got, want)
+	}
+	if _, err := store.WorkerByPane(context.Background(), project, "missing"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("WorkerByPane() missing error = %v, want ErrNotFound", err)
+	}
+}
+
 func newTestStore(t *testing.T) *SQLiteStore {
 	t.Helper()
 

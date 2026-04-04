@@ -188,6 +188,38 @@ func (a *sqliteStateAdapter) DeleteTask(ctx context.Context, project, issue stri
 	return err
 }
 
+func (a *sqliteStateAdapter) NonTerminalTasks(ctx context.Context, project string) ([]Task, error) {
+	tasks, err := a.store.NonTerminalTasks(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]Task, 0, len(tasks))
+	for _, task := range tasks {
+		converted := Task{
+			Project:      project,
+			Issue:        task.Issue,
+			Status:       task.Status,
+			Prompt:       task.Prompt,
+			PaneID:       task.WorkerID,
+			PaneName:     task.WorkerID,
+			ClonePath:    task.ClonePath,
+			Branch:       task.Issue,
+			AgentProfile: task.Agent,
+			CreatedAt:    task.CreatedAt,
+			UpdatedAt:    task.UpdatedAt,
+		}
+		if task.ClonePath != "" {
+			converted.CloneName = filepath.Base(task.ClonePath)
+		}
+		if task.PRNumber != nil {
+			converted.PRNumber = *task.PRNumber
+		}
+		out = append(out, converted)
+	}
+	return out, nil
+}
+
 func (a *sqliteStateAdapter) PutWorker(ctx context.Context, worker Worker) error {
 	return a.store.UpsertWorker(ctx, worker.Project, state.Worker{
 		PaneID:                worker.PaneID,
@@ -204,6 +236,33 @@ func (a *sqliteStateAdapter) PutWorker(ctx context.Context, worker Worker) error
 		LastActivityAt:        worker.LastActivityAt,
 		UpdatedAt:             worker.UpdatedAt,
 	})
+}
+
+func (a *sqliteStateAdapter) WorkerByPane(ctx context.Context, project, paneID string) (Worker, error) {
+	worker, err := a.store.WorkerByPane(ctx, project, paneID)
+	if err != nil {
+		if errors.Is(err, state.ErrNotFound) {
+			return Worker{}, ErrWorkerNotFound
+		}
+		return Worker{}, err
+	}
+
+	return Worker{
+		Project:            project,
+		PaneID:             worker.PaneID,
+		PaneName:           worker.PaneID,
+		Issue:              worker.Issue,
+		ClonePath:          worker.ClonePath,
+		AgentProfile:       worker.Agent,
+		Health:             worker.State,
+		LastReviewCount:    worker.LastReviewCount,
+		LastCIState:        worker.LastCIState,
+		LastMergeableState: worker.LastMergeableState,
+		NudgeCount:         worker.NudgeCount,
+		LastCapture:        worker.LastCapture,
+		LastActivityAt:     worker.LastActivityAt,
+		UpdatedAt:          worker.UpdatedAt,
+	}, nil
 }
 
 func (a *sqliteStateAdapter) DeleteWorker(ctx context.Context, project, paneID string) error {

@@ -145,6 +145,9 @@ func TestAssignRollsBackOnAgentHandshakeFailure(t *testing.T) {
 	if _, ok := deps.state.task("LAB-720"); ok {
 		t.Fatal("task stored despite handshake rollback")
 	}
+	if _, ok := deps.state.worker("pane-1"); ok {
+		t.Fatal("worker stored despite handshake rollback")
+	}
 
 	deps.amux.requireSentKeys(t, "pane-1", nil)
 	if got, want := deps.amux.killCalls, []string{"pane-1"}; !reflect.DeepEqual(got, want) {

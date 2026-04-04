@@ -167,6 +167,113 @@ func TestSQLiteStateAdapterRoundTrip(t *testing.T) {
 	}
 }
 
+func TestSQLiteStateAdapterNonTerminalTasksAndWorkerByPane(t *testing.T) {
+	t.Parallel()
+
+	store := openDaemonStateStore(t)
+	adapter := newSQLiteStateAdapter(store)
+	now := time.Date(2026, 4, 4, 10, 0, 0, 0, time.UTC)
+
+	for _, task := range []Task{
+		{
+			Project:      "/repo",
+			Issue:        "LAB-740",
+			Status:       TaskStatusStarting,
+			PaneID:       "pane-1",
+			ClonePath:    "/clones/clone-01",
+			AgentProfile: "codex",
+			CreatedAt:    now,
+			UpdatedAt:    now,
+		},
+		{
+			Project:      "/repo",
+			Issue:        "LAB-741",
+			Status:       TaskStatusActive,
+			PaneID:       "pane-2",
+			ClonePath:    "/clones/clone-02",
+			AgentProfile: "codex",
+			PRNumber:     42,
+			CreatedAt:    now,
+			UpdatedAt:    now.Add(time.Minute),
+		},
+		{
+			Project:      "/repo",
+			Issue:        "LAB-742",
+			Status:       TaskStatusDone,
+			PaneID:       "pane-3",
+			ClonePath:    "/clones/clone-03",
+			AgentProfile: "codex",
+			CreatedAt:    now,
+			UpdatedAt:    now.Add(2 * time.Minute),
+		},
+	} {
+		if err := adapter.PutTask(context.Background(), task); err != nil {
+			t.Fatalf("PutTask(%s) error = %v", task.Issue, err)
+		}
+	}
+
+	if err := adapter.PutWorker(context.Background(), Worker{
+		Project:            "/repo",
+		PaneID:             "pane-2",
+		Issue:              "LAB-741",
+		ClonePath:          "/clones/clone-02",
+		AgentProfile:       "codex",
+		Health:             WorkerHealthEscalated,
+		LastReviewCount:    2,
+		LastCIState:        "fail",
+		LastMergeableState: "CONFLICTING",
+		NudgeCount:         3,
+		LastCapture:        "permission prompt",
+		LastActivityAt:     now,
+		UpdatedAt:          now.Add(time.Minute),
+	}); err != nil {
+		t.Fatalf("PutWorker() error = %v", err)
+	}
+
+	tasks, err := adapter.NonTerminalTasks(context.Background(), "/repo")
+	if err != nil {
+		t.Fatalf("NonTerminalTasks() error = %v", err)
+	}
+	if got, want := len(tasks), 2; got != want {
+		t.Fatalf("len(tasks) = %d, want %d", got, want)
+	}
+	if got, want := tasks[0].Issue, "LAB-741"; got != want {
+		t.Fatalf("tasks[0].Issue = %q, want %q", got, want)
+	}
+	if got, want := tasks[0].PRNumber, 42; got != want {
+		t.Fatalf("tasks[0].PRNumber = %d, want %d", got, want)
+	}
+	if got, want := tasks[0].CloneName, "clone-02"; got != want {
+		t.Fatalf("tasks[0].CloneName = %q, want %q", got, want)
+	}
+	if got, want := tasks[1].Issue, "LAB-740"; got != want {
+		t.Fatalf("tasks[1].Issue = %q, want %q", got, want)
+	}
+
+	worker, err := adapter.WorkerByPane(context.Background(), "/repo", "pane-2")
+	if err != nil {
+		t.Fatalf("WorkerByPane() error = %v", err)
+	}
+	if got, want := worker.Health, WorkerHealthEscalated; got != want {
+		t.Fatalf("worker.Health = %q, want %q", got, want)
+	}
+	if got, want := worker.LastReviewCount, 2; got != want {
+		t.Fatalf("worker.LastReviewCount = %d, want %d", got, want)
+	}
+	if got, want := worker.LastCIState, "fail"; got != want {
+		t.Fatalf("worker.LastCIState = %q, want %q", got, want)
+	}
+	if got, want := worker.LastMergeableState, "CONFLICTING"; got != want {
+		t.Fatalf("worker.LastMergeableState = %q, want %q", got, want)
+	}
+	if got, want := worker.NudgeCount, 3; got != want {
+		t.Fatalf("worker.NudgeCount = %d, want %d", got, want)
+	}
+	if _, err := adapter.WorkerByPane(context.Background(), "/repo", "missing"); !errors.Is(err, ErrWorkerNotFound) {
+		t.Fatalf("WorkerByPane() missing error = %v, want ErrWorkerNotFound", err)
+	}
+}
+
 func TestExecCommandRunner(t *testing.T) {
 	t.Parallel()
 

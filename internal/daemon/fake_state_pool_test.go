@@ -103,6 +103,19 @@ func (s *fakeState) PutWorker(ctx context.Context, worker Worker) error {
 	return nil
 }
 
+func (s *fakeState) WorkerByPane(ctx context.Context, project, paneID string) (Worker, error) {
+	if s.rejectCanceledContext && ctx.Err() != nil {
+		return Worker{}, ctx.Err()
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	worker, ok := s.workers[paneID]
+	if !ok || worker.Project != "" && worker.Project != project {
+		return Worker{}, ErrWorkerNotFound
+	}
+	return worker, nil
+}
+
 func (s *fakeState) DeleteWorker(ctx context.Context, project, paneID string) error {
 	if s.rejectCanceledContext && ctx.Err() != nil {
 		return ctx.Err()
@@ -115,6 +128,28 @@ func (s *fakeState) DeleteWorker(ctx context.Context, project, paneID string) er
 	}
 	delete(s.workers, paneID)
 	return nil
+}
+
+func (s *fakeState) NonTerminalTasks(ctx context.Context, project string) ([]Task, error) {
+	if s.rejectCanceledContext && ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	tasks := make([]Task, 0)
+	for _, task := range s.tasks {
+		if task.Project != "" && task.Project != project {
+			continue
+		}
+		switch task.Status {
+		case "", TaskStatusDone, TaskStatusCancelled, TaskStatusFailed:
+			continue
+		default:
+			tasks = append(tasks, task)
+		}
+	}
+	return tasks, nil
 }
 
 func (s *fakeState) ActiveAssignments(ctx context.Context, project string) ([]ActiveAssignment, error) {

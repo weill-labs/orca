@@ -174,7 +174,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 	}
 
 	d.stopContext, d.stopCancel = context.WithCancel(context.Background())
-	d.reconcileActiveAssignments(ctx)
+	d.reconcileNonTerminalAssignments(ctx)
 	d.loopDone = make(chan struct{})
 	go d.runLoop(d.stopContext, d.loopDone)
 
@@ -282,6 +282,32 @@ func (d *Daemon) Assign(ctx context.Context, issue, prompt, agentProfile string)
 		return fmt.Errorf("set pane metadata: %w", err)
 	}
 
+	task := claimedTask
+	task.PaneID = pane.ID
+	task.PaneName = pane.Name
+	task.CloneName = clone.Name
+	task.ClonePath = clone.Path
+	task.UpdatedAt = d.now()
+	worker := Worker{
+		Project:        d.project,
+		PaneID:         pane.ID,
+		PaneName:       pane.Name,
+		Issue:          issue,
+		ClonePath:      clone.Path,
+		AgentProfile:   profile.Name,
+		Health:         WorkerHealthHealthy,
+		LastActivityAt: now,
+		UpdatedAt:      now,
+	}
+	if err := d.state.PutTask(ctx, task); err != nil {
+		d.failPendingAssignment(ctx, issue, clone, pane, profile, err, restoreReservation)
+		return fmt.Errorf("store pending task: %w", err)
+	}
+	if err := d.state.PutWorker(ctx, worker); err != nil {
+		d.failPendingAssignment(ctx, issue, clone, pane, profile, err, restoreReservation)
+		return fmt.Errorf("store pending worker: %w", err)
+	}
+
 	if err := d.agentHandshake(ctx, pane.ID, profile); err != nil {
 		d.failPendingAssignment(ctx, issue, clone, pane, profile, err, restoreReservation)
 		return fmt.Errorf("agent handshake: %w", err)
@@ -300,38 +326,15 @@ func (d *Daemon) Assign(ctx context.Context, issue, prompt, agentProfile string)
 		return fmt.Errorf("send prompt: %w", err)
 	}
 	if err := d.setIssueStatus(ctx, issue, IssueStateInProgress); err != nil {
-		_ = d.rollbackAssignment(ctx, clone, pane, issue)
-		restoreReservation()
+		d.failPendingAssignment(ctx, issue, clone, pane, profile, err, restoreReservation)
 		return fmt.Errorf("set issue status: %w", err)
 	}
 
-	task := claimedTask
 	task.Status = TaskStatusActive
-	task.PaneID = pane.ID
-	task.PaneName = pane.Name
-	task.CloneName = clone.Name
-	task.ClonePath = clone.Path
-	task.UpdatedAt = now
-	worker := Worker{
-		Project:        d.project,
-		PaneID:         pane.ID,
-		PaneName:       pane.Name,
-		Issue:          issue,
-		ClonePath:      clone.Path,
-		AgentProfile:   profile.Name,
-		Health:         WorkerHealthHealthy,
-		LastActivityAt: now,
-		UpdatedAt:      now,
-	}
+	task.UpdatedAt = d.now()
 	if err := d.state.PutTask(ctx, task); err != nil {
-		_ = d.rollbackAssignment(ctx, clone, pane, issue)
-		restoreReservation()
+		d.failPendingAssignment(ctx, issue, clone, pane, profile, err, restoreReservation)
 		return fmt.Errorf("store task: %w", err)
-	}
-	if err := d.state.PutWorker(ctx, worker); err != nil {
-		_ = d.rollbackAssignment(ctx, clone, pane, issue)
-		restoreReservation()
-		return fmt.Errorf("store worker: %w", err)
 	}
 
 	d.emit(ctx, Event{
@@ -396,6 +399,9 @@ func (d *Daemon) failPendingAssignment(ctx context.Context, issue string, clone 
 		Message:      err.Error(),
 	})
 	_ = d.rollbackAssignment(ctx, clone, pane, issue)
+	if deleteErr := d.state.DeleteWorker(context.WithoutCancel(ctx), d.project, pane.ID); deleteErr != nil && !errors.Is(deleteErr, ErrWorkerNotFound) {
+		_ = deleteErr
+	}
 	releaseReservation()
 }
 

@@ -21,6 +21,7 @@ type fakeAmux struct {
 	sendKeysHook          func(paneID string, keys []string)
 	waitIdleErr           error
 	waitIdleHook          func(paneID string, timeout time.Duration)
+	capturePaneErr        error
 	rejectCanceledContext bool
 	spawnRequests         []SpawnRequest
 	metadata              map[string]map[string]string
@@ -164,6 +165,9 @@ func (a *fakeAmux) CapturePane(ctx context.Context, paneID string) (PaneCapture,
 		a.captureCalls = make(map[string]int)
 	}
 	a.captureCalls[paneID]++
+	if a.capturePaneErr != nil {
+		return PaneCapture{}, a.capturePaneErr
+	}
 
 	if sequence := a.paneCaptures[paneID]; len(sequence) > 0 {
 		value, remaining, _ := nextPaneCapture(sequence)

@@ -68,6 +68,9 @@ func TestAssignRollsBackOnPromptSendFailure(t *testing.T) {
 	if _, ok := deps.state.task("LAB-689"); ok {
 		t.Fatal("task stored despite rollback")
 	}
+	if _, ok := deps.state.worker("pane-1"); ok {
+		t.Fatal("worker stored despite rollback")
+	}
 
 	if got, want := deps.pool.releasedClones(), []Clone{{
 		Name:          deps.pool.clone.Name,
@@ -89,6 +92,51 @@ func TestAssignRollsBackOnPromptSendFailure(t *testing.T) {
 	}
 	if got := deps.commands.callsByName("git"); !reflect.DeepEqual(got, wantGit) {
 		t.Fatalf("git calls = %#v, want %#v", got, wantGit)
+	}
+
+	deps.events.requireTypes(t, EventDaemonStarted, EventTaskAssignFailed)
+}
+
+func TestAssignRollsBackOnIssueStatusFailureAfterPersistingStartingState(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	deps.issueTracker.errors = map[string]error{
+		IssueStateInProgress: errors.New("linear unavailable"),
+	}
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-743", "Implement restart recovery", "codex"); err == nil {
+		t.Fatal("Assign() succeeded, want error")
+	} else if !strings.Contains(err.Error(), "set issue status") {
+		t.Fatalf("Assign() error = %v, want issue status context", err)
+	}
+
+	if _, ok := deps.state.task("LAB-743"); ok {
+		t.Fatal("task stored despite issue status rollback")
+	}
+	if _, ok := deps.state.worker("pane-1"); ok {
+		t.Fatal("worker stored despite issue status rollback")
+	}
+	if got, want := deps.pool.releasedClones(), []Clone{{
+		Name:          deps.pool.clone.Name,
+		Path:          deps.pool.clone.Path,
+		CurrentBranch: "LAB-743",
+		AssignedTask:  "LAB-743",
+	}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("released clones = %#v, want %#v", got, want)
+	}
+	if got, want := deps.amux.killCalls, []string{"pane-1"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("kill calls = %#v, want %#v", got, want)
 	}
 
 	deps.events.requireTypes(t, EventDaemonStarted, EventTaskAssignFailed)
@@ -154,6 +202,14 @@ func TestAssignRejectsIssueAlreadyActiveInStateBeforeCloneAcquire(t *testing.T) 
 		ClonePath:    "/tmp/existing-clone",
 		Branch:       "LAB-689",
 		AgentProfile: "codex",
+	}
+	deps.state.workers["pane-existing"] = Worker{
+		Project:      "/tmp/project",
+		PaneID:       "pane-existing",
+		Issue:        "LAB-689",
+		ClonePath:    "/tmp/existing-clone",
+		AgentProfile: "codex",
+		Health:       WorkerHealthHealthy,
 	}
 
 	if err := d.Start(ctx); err != nil {
