@@ -157,7 +157,7 @@ func (c *CLIClient) ListPanes(ctx context.Context) ([]Pane, error) {
 // SendKeys forwards text to a pane with amux send-keys.
 // Extra keys arguments (e.g. "Enter") are passed as separate args.
 func (c *CLIClient) SendKeys(ctx context.Context, paneID string, keys ...string) error {
-	args := append([]string{paneID}, keys...)
+	args := append([]string{paneID, "--delay-final", "250ms"}, keys...)
 	_, err := c.run(ctx, c.session, "send-keys", args...)
 	return err
 }
