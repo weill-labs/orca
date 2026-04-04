@@ -21,6 +21,7 @@ type PaneCapture struct {
 	CWD            string   `json:"cwd,omitempty"`
 	CurrentCommand string   `json:"current_command,omitempty"`
 	ChildPIDs      []int    `json:"child_pids,omitempty"`
+	Exited         bool     `json:"exited,omitempty"`
 }
 
 func (c PaneCapture) Output() string {

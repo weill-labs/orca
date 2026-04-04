@@ -21,6 +21,7 @@ type Client interface {
 	ListPanes(ctx context.Context) ([]Pane, error)
 	SendKeys(ctx context.Context, paneID string, keys ...string) error
 	Capture(ctx context.Context, paneID string) (string, error)
+	CapturePane(ctx context.Context, paneID string) (PaneCapture, error)
 	CaptureHistory(ctx context.Context, paneID string) (PaneCapture, error)
 	SetMetadata(ctx context.Context, paneID string, metadata map[string]string) error
 	KillPane(ctx context.Context, paneID string) error
@@ -61,6 +62,7 @@ type capturePane struct {
 	Content        []string             `json:"content"`
 	CurrentCommand string               `json:"current_command,omitempty"`
 	ChildPIDs      []int                `json:"child_pids,omitempty"`
+	Exited         bool                 `json:"exited,omitempty"`
 	Error          *captureCommandError `json:"error,omitempty"`
 }
 
@@ -171,6 +173,15 @@ func (c *CLIClient) Capture(ctx context.Context, paneID string) (string, error) 
 	return pane.toPaneCapture().Output(), nil
 }
 
+// CapturePane returns the visible screen output and process metadata for one pane.
+func (c *CLIClient) CapturePane(ctx context.Context, paneID string) (PaneCapture, error) {
+	pane, err := c.capturePaneJSON(ctx, paneID, false)
+	if err != nil {
+		return PaneCapture{}, err
+	}
+	return pane.toPaneCapture(), nil
+}
+
 // CaptureHistory returns retained pane history and process metadata.
 func (c *CLIClient) CaptureHistory(ctx context.Context, paneID string) (PaneCapture, error) {
 	pane, err := c.capturePaneJSON(ctx, paneID, true)
@@ -276,6 +287,7 @@ func (p capturePane) toPaneCapture() PaneCapture {
 		CWD:            p.CWD,
 		CurrentCommand: p.CurrentCommand,
 		ChildPIDs:      append([]int(nil), p.ChildPIDs...),
+		Exited:         p.Exited,
 	}
 }
 

@@ -26,6 +26,7 @@ type fakeAmux struct {
 	metadata              map[string]map[string]string
 	sentKeys              map[string][]string
 	captures              map[string][]string
+	paneCaptures          map[string][]PaneCapture
 	paneExistsCalls       []string
 	captureCalls          map[string]int
 	historyCaptures       map[string][]PaneCapture
@@ -157,6 +158,37 @@ func (a *fakeAmux) Capture(ctx context.Context, paneID string) (string, error) {
 	return value, nil
 }
 
+func (a *fakeAmux) CapturePane(ctx context.Context, paneID string) (PaneCapture, error) {
+	if a.rejectCanceledContext && ctx.Err() != nil {
+		return PaneCapture{}, ctx.Err()
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.captureCalls == nil {
+		a.captureCalls = make(map[string]int)
+	}
+	a.captureCalls[paneID]++
+
+	if sequence := a.paneCaptures[paneID]; len(sequence) > 0 {
+		if len(sequence) == 1 {
+			return clonePaneCapture(sequence[0]), nil
+		}
+		value := clonePaneCapture(sequence[0])
+		a.paneCaptures[paneID] = append([]PaneCapture(nil), sequence[1:]...)
+		return value, nil
+	}
+
+	sequence := a.captures[paneID]
+	if len(sequence) == 0 {
+		return PaneCapture{}, nil
+	}
+	value := paneCaptureFromOutput(sequence[0])
+	if len(sequence) > 1 {
+		a.captures[paneID] = sequence[1:]
+	}
+	return value, nil
+}
+
 func (a *fakeAmux) CaptureHistory(ctx context.Context, paneID string) (PaneCapture, error) {
 	if a.rejectCanceledContext && ctx.Err() != nil {
 		return PaneCapture{}, ctx.Err()
@@ -219,6 +251,19 @@ func (a *fakeAmux) captureSequence(paneID string, sequence []string) {
 	copied := make([]string, len(sequence))
 	copy(copied, sequence)
 	a.captures[paneID] = copied
+}
+
+func (a *fakeAmux) capturePaneSequence(paneID string, sequence []PaneCapture) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	copied := make([]PaneCapture, len(sequence))
+	for i, capture := range sequence {
+		copied[i] = clonePaneCapture(capture)
+	}
+	if a.paneCaptures == nil {
+		a.paneCaptures = make(map[string][]PaneCapture)
+	}
+	a.paneCaptures[paneID] = copied
 }
 
 func (a *fakeAmux) captureHistorySequence(paneID string, sequence []PaneCapture) {
@@ -313,7 +358,15 @@ func clonePaneCapture(capture PaneCapture) PaneCapture {
 		CWD:            capture.CWD,
 		CurrentCommand: capture.CurrentCommand,
 		ChildPIDs:      append([]int(nil), capture.ChildPIDs...),
+		Exited:         capture.Exited,
 	}
+}
+
+func paneCaptureFromOutput(output string) PaneCapture {
+	if output == "" {
+		return PaneCapture{}
+	}
+	return PaneCapture{Content: strings.Split(output, "\n")}
 }
 
 type fakeCommands struct {

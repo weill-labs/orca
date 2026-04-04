@@ -28,6 +28,7 @@ type MockClient struct {
 	ListPanesFunc      func(ctx context.Context) ([]Pane, error)
 	SendKeysFunc       func(ctx context.Context, paneID string, keys ...string) error
 	CaptureFunc        func(ctx context.Context, paneID string) (string, error)
+	CapturePaneFunc    func(ctx context.Context, paneID string) (PaneCapture, error)
 	CaptureHistoryFunc func(ctx context.Context, paneID string) (PaneCapture, error)
 	SetMetadataFunc    func(ctx context.Context, paneID string, metadata map[string]string) error
 	KillPaneFunc       func(ctx context.Context, paneID string) error
@@ -38,6 +39,7 @@ type MockClient struct {
 	ListPanesCalls      int
 	SendKeysCalls       []SendKeysCall
 	CaptureCalls        []string
+	CapturePaneCalls    []string
 	CaptureHistoryCalls []string
 	SetMetadataCalls    []MetadataCall
 	KillPaneCalls       []string
@@ -110,6 +112,18 @@ func (m *MockClient) Capture(ctx context.Context, paneID string) (string, error)
 		return fn(ctx, paneID)
 	}
 	return "", nil
+}
+
+func (m *MockClient) CapturePane(ctx context.Context, paneID string) (PaneCapture, error) {
+	m.mu.Lock()
+	m.CapturePaneCalls = append(m.CapturePaneCalls, paneID)
+	fn := m.CapturePaneFunc
+	m.mu.Unlock()
+
+	if fn != nil {
+		return fn(ctx, paneID)
+	}
+	return PaneCapture{}, nil
 }
 
 func (m *MockClient) CaptureHistory(ctx context.Context, paneID string) (PaneCapture, error) {
