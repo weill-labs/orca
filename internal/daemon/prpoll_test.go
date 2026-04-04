@@ -321,12 +321,99 @@ func TestPRMergeablePollingNudgesWorkerOnConflictTransitions(t *testing.T) {
 	if got, want := deps.events.countType(EventWorkerNudgedConflict), 2; got != want {
 		t.Fatalf("conflict nudge event count = %d, want %d", got, want)
 	}
+	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
+		{PaneID: "pane-1", Timeout: 30 * time.Second},
+		{PaneID: "pane-1", Timeout: 30 * time.Second},
+		{PaneID: "pane-1", Timeout: 30 * time.Second},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("wait idle calls = %#v, want %#v", got, want)
+	}
+
+	deps.amux.requireSentKeys(t, "pane-1", []string{
+		"Implement daemon core\n",
+		conflictNudgePrompt,
+		"\n",
+		conflictNudgePrompt,
+		"\n",
+	})
+}
+
+func TestPRMergeablePollingRetriesConflictNudgeAfterWaitIdleFailure(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	captureTicker := newFakeTicker()
+	prTicker := newFakeTicker()
+	deps.tickers.enqueue(captureTicker, prTicker)
+	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergeable"}, `{"mergeable":"CONFLICTING"}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergeable"}, `{"mergeable":"CONFLICTING"}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision"}, ``, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision"}, ``, nil)
+	waitIdleCalls := 0
+	deps.amux.waitIdleHook = func(_ string, _ time.Duration) {
+		waitIdleCalls++
+		if waitIdleCalls == 2 {
+			deps.amux.waitIdleErr = errors.New("wait idle failed")
+			return
+		}
+		deps.amux.waitIdleErr = nil
+	}
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-689", "Implement daemon core", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	prTicker.tick(deps.clock.Now())
+	waitFor(t, "failed conflict nudge attempt", func() bool {
+		return deps.amux.countKey("pane-1", conflictNudgePrompt) == 1
+	})
+
+	if worker, ok := deps.state.worker("pane-1"); !ok {
+		t.Fatal("worker missing after failed conflict nudge")
+	} else if worker.LastMergeableState != "" {
+		t.Fatalf("worker.LastMergeableState = %q, want empty after failed wait idle", worker.LastMergeableState)
+	}
+	if got, want := deps.events.countType(EventWorkerNudgedConflict), 0; got != want {
+		t.Fatalf("conflict nudge event count after failed wait idle = %d, want %d", got, want)
+	}
+	if got, want := deps.amux.countKey("pane-1", "\n"), 0; got != want {
+		t.Fatalf("enter key count after failed wait idle = %d, want %d", got, want)
+	}
+
+	prTicker.tick(deps.clock.Now())
+	waitFor(t, "retried conflict nudge", func() bool {
+		worker, ok := deps.state.worker("pane-1")
+		return ok &&
+			deps.amux.countKey("pane-1", conflictNudgePrompt) == 2 &&
+			deps.events.countType(EventWorkerNudgedConflict) == 1 &&
+			worker.LastMergeableState == "CONFLICTING"
+	})
 
 	deps.amux.requireSentKeys(t, "pane-1", []string{
 		"Implement daemon core\n",
 		conflictNudgePrompt,
 		conflictNudgePrompt,
+		"\n",
 	})
+	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
+		{PaneID: "pane-1", Timeout: 30 * time.Second},
+		{PaneID: "pane-1", Timeout: 30 * time.Second},
+		{PaneID: "pane-1", Timeout: 30 * time.Second},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("wait idle calls = %#v, want %#v", got, want)
+	}
 }
 
 func TestEnqueueSerializesQueuedPRLandingsFIFO(t *testing.T) {

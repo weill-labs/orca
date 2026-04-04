@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-const conflictNudgePrompt = "PR has merge conflicts, rebase onto origin/main and push.\n"
+const conflictNudgePrompt = "PR has merge conflicts, rebase onto origin/main and push."
 
 func (d *Daemon) handleQueuedPRFailure(ctx context.Context, active ActiveAssignment, prNumber int, prompt string, err error) {
 	if ctx.Err() != nil {
@@ -35,6 +35,12 @@ func (d *Daemon) handlePRMergeablePoll(ctx context.Context, active ActiveAssignm
 	}
 
 	if err := d.amux.SendKeys(ctx, active.Task.PaneID, conflictNudgePrompt); err != nil {
+		return
+	}
+	if err := d.amux.WaitIdle(ctx, active.Task.PaneID, defaultAgentHandshakeTimeout); err != nil {
+		return
+	}
+	if err := d.amux.SendKeys(ctx, active.Task.PaneID, "Enter"); err != nil {
 		return
 	}
 
