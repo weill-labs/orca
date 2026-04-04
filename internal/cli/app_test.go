@@ -314,6 +314,58 @@ func TestAppRunDispatchesCommands(t *testing.T) {
 	}
 }
 
+func TestAppRunStartDefaultsSessionFromAMUXSessionEnv(t *testing.T) {
+	repoRoot := newRepoRoot(t)
+	cwdPath := filepath.Join(repoRoot, "internal", "cli")
+	if err := os.MkdirAll(cwdPath, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", cwdPath, err)
+	}
+
+	otherRepo := newRepoRoot(t)
+	targetPath := filepath.Join(otherRepo, "cmd")
+	if err := os.MkdirAll(targetPath, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", targetPath, err)
+	}
+
+	t.Setenv("AMUX_SESSION", "from-env")
+
+	d := &fakeDaemon{
+		startResult: daemon.StartResult{
+			Project:   otherRepo,
+			Session:   "from-env",
+			PID:       321,
+			StartedAt: time.Now().UTC(),
+		},
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	app := New(Options{
+		Daemon:  d,
+		State:   &fakeState{},
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		Version: "build-123",
+		Cwd: func() (string, error) {
+			return cwdPath, nil
+		},
+	})
+
+	if err := app.Run(context.Background(), []string{"start", "--project", targetPath}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if d.startRequest == nil {
+		t.Fatal("expected start to be called")
+	}
+	if got, want := d.startRequest.Session, "from-env"; got != want {
+		t.Fatalf("start session = %q, want %q", got, want)
+	}
+	if stderr.String() != "" {
+		t.Fatalf("expected empty stderr, got %q", stderr.String())
+	}
+}
+
 func TestAppRunParseErrors(t *testing.T) {
 	t.Parallel()
 
