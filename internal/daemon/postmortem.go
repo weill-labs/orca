@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	mergedWrapUpPrompt          = "PR merged, wrap up.\n"
+	mergedWrapUpPrompt          = "PR merged, wrap up."
 	postmortemCommand           = "$postmortem"
 	stuckWorkerDiagnosticsDelay = 5 * time.Second
 )
@@ -234,11 +234,19 @@ func (d *Daemon) finishAssignmentWithMessage(ctx context.Context, active ActiveA
 	cleanupCtx := context.WithoutCancel(ctx)
 
 	if merged {
+		wrapUpPromptSent := false
 		if err := d.amux.SendKeys(cleanupCtx, active.Task.PaneID, mergedWrapUpPrompt); err != nil {
 			result = errors.Join(result, err)
+		} else {
+			wrapUpPromptSent = true
 		}
 		if err := d.amux.WaitIdle(cleanupCtx, active.Task.PaneID, d.mergeGracePeriod); err != nil {
 			result = errors.Join(result, err)
+		}
+		if wrapUpPromptSent {
+			if err := d.amux.SendKeys(cleanupCtx, active.Task.PaneID, "Enter"); err != nil {
+				result = errors.Join(result, err)
+			}
 		}
 	}
 
