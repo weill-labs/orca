@@ -53,7 +53,8 @@ for i in 1 2 3; do
 done
 
 # 3. Start the daemon
-orca start --session my-session --project ~/sync/github/myproject/myproject
+export AMUX_SESSION=my-session
+orca start --project ~/sync/github/myproject/myproject
 
 # 4. Assign work
 orca assign LAB-123 --prompt "Fix the auth bug. TDD. Open a PR when done."
@@ -72,7 +73,7 @@ orca cancel LAB-123
 orca stop
 ```
 
-All commands accept `--project` to target another checkout explicitly. If you omit it, Orca resolves the current working directory to the canonical git repo root. `orca start` requires `<repo>/.orca/config.toml` and fails clearly when it is missing.
+All commands accept `--project` to target another checkout explicitly. If you omit it, Orca resolves the current working directory to the canonical git repo root. `orca start` uses `AMUX_SESSION` by default when it is set; otherwise it falls back to the repo basename. `orca start` requires `<repo>/.orca/config.toml` and fails clearly when it is missing.
 
 ## Design principles
 

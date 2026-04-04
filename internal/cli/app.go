@@ -116,7 +116,7 @@ func (a *App) runStart(ctx context.Context, args []string) error {
 	var projectPath string
 	var leadPane string
 	var jsonOutput bool
-	fs.StringVar(&session, "session", "", "amux session name")
+	fs.StringVar(&session, "session", "", "amux session name (defaults to AMUX_SESSION)")
 	fs.StringVar(&projectPath, "project", "", "project path")
 	fs.StringVar(&leadPane, "lead-pane", "", "pane to split workers from")
 	fs.BoolVar(&jsonOutput, "json", false, "emit JSON output")
