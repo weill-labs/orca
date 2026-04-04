@@ -15,6 +15,14 @@ import (
 
 const jsonRPCVersion = "2.0"
 
+const (
+	// Darwin rejects AF_UNIX paths above 103 bytes, so keep the derived socket
+	// name under that ceiling and fall back to a shorter stable location when
+	// config dirs are deeply nested.
+	unixSocketPathMax   = 103
+	socketHashByteCount = 16
+)
+
 type rpcRequest struct {
 	JSONRPC string          `json:"jsonrpc"`
 	ID      json.RawMessage `json:"id,omitempty"`
@@ -58,7 +66,25 @@ func projectHash(projectPath string) string {
 }
 
 func socketFileForProject(configDir, projectPath string) string {
-	return filepath.Join(configDir, fmt.Sprintf("orca-%s.sock", projectHash(projectPath)))
+	candidates := []string{
+		filepath.Join(configDir, fmt.Sprintf("orca-%s.sock", projectHash(projectPath))),
+		filepath.Join(configDir, fmt.Sprintf("orca-%s.sock", shortProjectHash(projectPath, socketHashByteCount))),
+		filepath.Join(os.TempDir(), fmt.Sprintf("orca-%s.sock", shortProjectHash(projectPath, socketHashByteCount))),
+	}
+	for _, candidate := range candidates {
+		if len(candidate) <= unixSocketPathMax {
+			return candidate
+		}
+	}
+	return candidates[len(candidates)-1]
+}
+
+func shortProjectHash(projectPath string, bytes int) string {
+	sum := sha256.Sum256([]byte(projectPath))
+	if bytes <= 0 || bytes > len(sum) {
+		bytes = len(sum)
+	}
+	return hex.EncodeToString(sum[:bytes])
 }
 
 func callRPC(ctx context.Context, socketPath, method string, params any, result any) error {
