@@ -14,77 +14,59 @@ import (
 )
 
 type staticConfig struct {
-	pattern    string
-	baseBranch string
+	poolDir     string
+	cloneOrigin string
+	baseBranch  string
 }
 
-func (c staticConfig) PoolPattern() string {
-	return c.pattern
-}
-
-func (c staticConfig) BaseBranch() string {
-	return c.baseBranch
-}
+func (c staticConfig) PoolDir() string     { return c.poolDir }
+func (c staticConfig) CloneOrigin() string  { return c.cloneOrigin }
+func (c staticConfig) BaseBranch() string   { return c.baseBranch }
 
 func TestManagerDiscover(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
 		name         string
-		setup        func(t *testing.T, root string, store *state.SQLiteStore, project string) string
-		options      func(root string) []pool.Option
+		setup        func(t *testing.T, poolDir string, store *state.SQLiteStore, project string)
 		wantPaths    []string
 		wantStatuses map[string]pool.Status
 	}{
 		{
-			name: "returns only marked directories matching glob",
-			setup: func(t *testing.T, root string, store *state.SQLiteStore, project string) string {
+			name: "returns only subdirectories of pool dir",
+			setup: func(t *testing.T, poolDir string, store *state.SQLiteStore, project string) {
 				t.Helper()
 
-				mustMkdir(t, filepath.Join(root, "orca01"))
-				mustTouch(t, filepath.Join(root, "orca01", pool.MarkerFile))
-				mustMkdir(t, filepath.Join(root, "orca02"))
-				mustMkdir(t, filepath.Join(root, "notes"))
-				mustTouch(t, filepath.Join(root, "notes", pool.MarkerFile))
-
-				return filepath.Join(root, "orca*")
+				mustMkdir(t, filepath.Join(poolDir, "clone-01"))
+				mustMkdir(t, filepath.Join(poolDir, "clone-02"))
+				// regular file should be ignored
+				mustWriteFile(t, filepath.Join(poolDir, "notes.txt"), "not a clone")
 			},
 			wantPaths: []string{
-				"orca01",
+				"clone-01",
+				"clone-02",
 			},
 			wantStatuses: map[string]pool.Status{
-				"orca01": pool.StatusFree,
+				"clone-01": pool.StatusFree,
+				"clone-02": pool.StatusFree,
 			},
 		},
 		{
-			name: "expands tilde in pool pattern",
-			setup: func(t *testing.T, root string, store *state.SQLiteStore, project string) string {
+			name: "returns empty when pool dir does not exist",
+			setup: func(t *testing.T, poolDir string, store *state.SQLiteStore, project string) {
 				t.Helper()
-
-				path := filepath.Join(root, "clones", "orca01")
-				mustMkdir(t, path)
-				mustTouch(t, filepath.Join(path, pool.MarkerFile))
-
-				return filepath.Join("~", "clones", "orca*")
+				// remove the pool dir that was created by setup
+				_ = os.RemoveAll(poolDir)
 			},
-			options: func(root string) []pool.Option {
-				return []pool.Option{pool.WithHomeDir(root)}
-			},
-			wantPaths: []string{
-				"orca01",
-			},
-			wantStatuses: map[string]pool.Status{
-				"orca01": pool.StatusFree,
-			},
+			wantPaths: nil,
 		},
 		{
 			name: "preserves occupied status from state",
-			setup: func(t *testing.T, root string, store *state.SQLiteStore, project string) string {
+			setup: func(t *testing.T, poolDir string, store *state.SQLiteStore, project string) {
 				t.Helper()
 
-				path := filepath.Join(root, "orca01")
+				path := filepath.Join(poolDir, "clone-01")
 				mustMkdir(t, path)
-				mustTouch(t, filepath.Join(path, pool.MarkerFile))
 
 				if _, err := store.EnsureClone(context.Background(), project, path); err != nil {
 					t.Fatalf("EnsureClone() setup error = %v", err)
@@ -96,14 +78,12 @@ func TestManagerDiscover(t *testing.T) {
 				if !ok {
 					t.Fatal("TryOccupyClone() setup = false, want true")
 				}
-
-				return filepath.Join(root, "orca*")
 			},
 			wantPaths: []string{
-				"orca01",
+				"clone-01",
 			},
 			wantStatuses: map[string]pool.Status{
-				"orca01": pool.StatusOccupied,
+				"clone-01": pool.StatusOccupied,
 			},
 		},
 	}
@@ -115,14 +95,12 @@ func TestManagerDiscover(t *testing.T) {
 
 			root := t.TempDir()
 			project := filepath.Join(root, "project")
+			poolDir := filepath.Join(root, "pool")
+			mustMkdir(t, poolDir)
 			store := newStore(t)
 
-			pattern := tc.setup(t, root, store, project)
-			var options []pool.Option
-			if tc.options != nil {
-				options = tc.options(root)
-			}
-			manager := newManager(t, project, staticConfig{pattern: pattern}, store, options...)
+			tc.setup(t, poolDir, store, project)
+			manager := newManager(t, project, staticConfig{poolDir: poolDir}, store)
 
 			clones, err := manager.Discover(context.Background())
 			if err != nil {
@@ -138,8 +116,10 @@ func TestManagerDiscover(t *testing.T) {
 				if gotBase != tc.wantPaths[i] {
 					t.Fatalf("clone[%d].Path base = %q, want %q", i, gotBase, tc.wantPaths[i])
 				}
-				if clone.Status != tc.wantStatuses[gotBase] {
-					t.Fatalf("clone[%d].Status = %q, want %q", i, clone.Status, tc.wantStatuses[gotBase])
+				if tc.wantStatuses != nil {
+					if clone.Status != tc.wantStatuses[gotBase] {
+						t.Fatalf("clone[%d].Status = %q, want %q", i, clone.Status, tc.wantStatuses[gotBase])
+					}
 				}
 			}
 		})
@@ -189,7 +169,7 @@ func TestManagerAllocate(t *testing.T) {
 			},
 		},
 		{
-			name: "returns no free clone error when pool is exhausted",
+			name: "auto-creates clone when pool is exhausted",
 			run: func(t *testing.T, manager *pool.Manager, store *state.SQLiteStore, project string, clones []string) {
 				t.Helper()
 
@@ -206,9 +186,17 @@ func TestManagerAllocate(t *testing.T) {
 					}
 				}
 
-				_, err := manager.Allocate(context.Background(), "LAB-687", "LAB-687")
-				if !errors.Is(err, pool.ErrNoFreeClones) {
-					t.Fatalf("Allocate() error = %v, want ErrNoFreeClones", err)
+				clone, err := manager.Allocate(context.Background(), "LAB-687", "LAB-687")
+				if err != nil {
+					t.Fatalf("Allocate() error = %v", err)
+				}
+
+				if clone.Status != pool.StatusOccupied {
+					t.Fatalf("clone.Status = %q, want %q", clone.Status, pool.StatusOccupied)
+				}
+				// auto-created clone should be clone-03 (after clone-01, clone-02)
+				if got := filepath.Base(clone.Path); got != "clone-03" {
+					t.Fatalf("auto-created clone name = %q, want %q", got, "clone-03")
 				}
 			},
 		},
@@ -230,13 +218,10 @@ func TestManagerAllocate(t *testing.T) {
 					t.Fatalf("current branch = %q, want %q", got, want)
 				}
 				if got := gitStatusPorcelain(t, clone.Path); !gitStatusClean(got) {
-					t.Fatalf("git status --porcelain = %q, want clean worktree except %s", got, pool.MarkerFile)
+					t.Fatalf("git status --porcelain = %q, want clean worktree", got)
 				}
 				if _, err := os.Stat(filepath.Join(clone.Path, "junk.txt")); !errors.Is(err, os.ErrNotExist) {
 					t.Fatalf("junk.txt stat error = %v, want not exist", err)
-				}
-				if _, err := os.Stat(filepath.Join(clone.Path, pool.MarkerFile)); err != nil {
-					t.Fatalf("%s stat error = %v", pool.MarkerFile, err)
 				}
 			},
 		},
@@ -293,31 +278,6 @@ func TestManagerAllocate(t *testing.T) {
 			},
 		},
 		{
-			name: "returns no free clone when every free clone cwd is already used by another pane",
-			options: func(clones []string) []pool.Option {
-				return []pool.Option{
-					pool.WithCWDUsageChecker(fakeCWDUsageChecker{
-						paths: clones,
-					}),
-				}
-			},
-			run: func(t *testing.T, manager *pool.Manager, store *state.SQLiteStore, project string, clones []string) {
-				t.Helper()
-
-				_, err := manager.Allocate(context.Background(), "LAB-687", "LAB-687")
-				if !errors.Is(err, pool.ErrNoFreeClones) {
-					t.Fatalf("Allocate() error = %v, want ErrNoFreeClones", err)
-				}
-
-				for _, clonePath := range clones {
-					record := lookupClone(t, store, project, clonePath)
-					if got, want := record.Status, state.CloneStatusFree; got != want {
-						t.Fatalf("record.Status = %q, want %q", got, want)
-					}
-				}
-			},
-		},
-		{
 			name: "returns checker error before allocation",
 			options: func(clones []string) []pool.Option {
 				return []pool.Option{
@@ -351,10 +311,12 @@ func TestManagerAllocate(t *testing.T) {
 
 			root := t.TempDir()
 			project := filepath.Join(root, "project")
+			poolDir := filepath.Join(root, "pool")
+			mustMkdir(t, poolDir)
 			origin := newOrigin(t, defaultBaseBranch(tc.baseBranch))
 			clones := []string{
-				newClone(t, origin, filepath.Join(root, "orca01")),
-				newClone(t, origin, filepath.Join(root, "orca02")),
+				newClone(t, origin, filepath.Join(poolDir, "clone-01")),
+				newClone(t, origin, filepath.Join(poolDir, "clone-02")),
 			}
 			store := newStore(t)
 			options := []pool.Option(nil)
@@ -362,13 +324,89 @@ func TestManagerAllocate(t *testing.T) {
 				options = tc.options(clones)
 			}
 			manager := newManager(t, project, staticConfig{
-				pattern:    filepath.Join(root, "orca*"),
-				baseBranch: tc.baseBranch,
+				poolDir:     poolDir,
+				cloneOrigin: origin,
+				baseBranch:  tc.baseBranch,
 			}, store, options...)
 
 			tc.run(t, manager, store, project, clones)
 		})
 	}
+}
+
+func TestManagerCreateClone(t *testing.T) {
+	t.Parallel()
+
+	t.Run("creates clone-01 in empty pool", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		project := filepath.Join(root, "project")
+		poolDir := filepath.Join(root, "pool")
+		origin := newOrigin(t, "main")
+		store := newStore(t)
+		manager := newManager(t, project, staticConfig{
+			poolDir:     poolDir,
+			cloneOrigin: origin,
+		}, store)
+
+		path, err := manager.CreateClone(context.Background())
+		if err != nil {
+			t.Fatalf("CreateClone() error = %v", err)
+		}
+
+		if got := filepath.Base(path); got != "clone-01" {
+			t.Fatalf("clone name = %q, want clone-01", got)
+		}
+		if _, err := os.Stat(filepath.Join(path, ".git")); err != nil {
+			t.Fatalf(".git stat error = %v", err)
+		}
+	})
+
+	t.Run("increments clone number", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		project := filepath.Join(root, "project")
+		poolDir := filepath.Join(root, "pool")
+		origin := newOrigin(t, "main")
+		newClone(t, origin, filepath.Join(poolDir, "clone-01"))
+		newClone(t, origin, filepath.Join(poolDir, "clone-02"))
+		store := newStore(t)
+		manager := newManager(t, project, staticConfig{
+			poolDir:     poolDir,
+			cloneOrigin: origin,
+		}, store)
+
+		path, err := manager.CreateClone(context.Background())
+		if err != nil {
+			t.Fatalf("CreateClone() error = %v", err)
+		}
+
+		if got := filepath.Base(path); got != "clone-03" {
+			t.Fatalf("clone name = %q, want clone-03", got)
+		}
+	})
+
+	t.Run("fails without clone origin", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		project := filepath.Join(root, "project")
+		poolDir := filepath.Join(root, "pool")
+		store := newStore(t)
+		manager := newManager(t, project, staticConfig{
+			poolDir: poolDir,
+		}, store)
+
+		_, err := manager.CreateClone(context.Background())
+		if err == nil {
+			t.Fatal("CreateClone() error = nil, want error about missing origin")
+		}
+		if !errors.Is(err, pool.ErrNoFreeClones) {
+			t.Fatalf("CreateClone() error = %v, want ErrNoFreeClones", err)
+		}
+	})
 }
 
 func TestManagerHealthCheck(t *testing.T) {
@@ -398,13 +436,10 @@ func TestManagerHealthCheck(t *testing.T) {
 					t.Fatalf("current branch = %q, want %q", got, want)
 				}
 				if got := gitStatusPorcelain(t, clonePath); !gitStatusClean(got) {
-					t.Fatalf("git status --porcelain = %q, want clean worktree except %s", got, pool.MarkerFile)
+					t.Fatalf("git status --porcelain = %q, want clean worktree", got)
 				}
 				if _, err := os.Stat(filepath.Join(clonePath, "junk.txt")); !errors.Is(err, os.ErrNotExist) {
 					t.Fatalf("junk.txt stat error = %v, want not exist", err)
-				}
-				if _, err := os.Stat(filepath.Join(clonePath, pool.MarkerFile)); err != nil {
-					t.Fatalf("%s stat error = %v", pool.MarkerFile, err)
 				}
 			},
 		},
@@ -454,11 +489,13 @@ func TestManagerHealthCheck(t *testing.T) {
 
 			root := t.TempDir()
 			project := filepath.Join(root, "project")
+			poolDir := filepath.Join(root, "pool")
+			mustMkdir(t, poolDir)
 			origin := newOrigin(t, defaultBaseBranch(tc.baseBranch))
-			clonePath := newClone(t, origin, filepath.Join(root, "orca01"))
+			clonePath := newClone(t, origin, filepath.Join(poolDir, "clone-01"))
 			store := newStore(t)
 			manager := newManager(t, project, staticConfig{
-				pattern:    filepath.Join(root, "orca*"),
+				poolDir:    poolDir,
 				baseBranch: tc.baseBranch,
 			}, store)
 
@@ -495,12 +532,14 @@ func TestManagerHealthCheckHealthyCloneSkipsCleanup(t *testing.T) {
 
 	root := t.TempDir()
 	project := filepath.Join(root, "project")
+	poolDir := filepath.Join(root, "pool")
+	mustMkdir(t, poolDir)
 	origin := newOrigin(t, "main")
-	clonePath := newClone(t, origin, filepath.Join(root, "orca01"))
+	clonePath := newClone(t, origin, filepath.Join(poolDir, "clone-01"))
 	store := newStore(t)
 	runner := &recordingRunner{err: errors.New("unexpected cleanup call")}
 	manager := newManager(t, project, staticConfig{
-		pattern: filepath.Join(root, "orca*"),
+		poolDir: poolDir,
 	}, store, pool.WithRunner(runner))
 
 	if err := manager.HealthCheck(context.Background(), clonePath); err != nil {
@@ -541,9 +580,6 @@ func TestManagerRelease(t *testing.T) {
 				}
 				if _, err := os.Stat(filepath.Join(clone.Path, "junk.txt")); !errors.Is(err, os.ErrNotExist) {
 					t.Fatalf("junk.txt stat error = %v, want not exist", err)
-				}
-				if _, err := os.Stat(filepath.Join(clone.Path, pool.MarkerFile)); err != nil {
-					t.Fatalf("%s stat error = %v", pool.MarkerFile, err)
 				}
 				if gitBranchExists(t, clone.Path, "LAB-687") {
 					t.Fatal("task branch still exists after Release()")
@@ -609,9 +645,8 @@ func TestManagerRelease(t *testing.T) {
 			run: func(t *testing.T, manager *pool.Manager, store *state.SQLiteStore, project string, clones []string) {
 				t.Helper()
 
-				path := filepath.Join(t.TempDir(), "orca-bad")
+				path := filepath.Join(t.TempDir(), "clone-bad")
 				mustMkdir(t, path)
-				mustTouch(t, filepath.Join(path, pool.MarkerFile))
 
 				if _, err := store.EnsureClone(context.Background(), project, path); err != nil {
 					t.Fatalf("EnsureClone() setup error = %v", err)
@@ -644,14 +679,17 @@ func TestManagerRelease(t *testing.T) {
 
 			root := t.TempDir()
 			project := filepath.Join(root, "project")
+			poolDir := filepath.Join(root, "pool")
+			mustMkdir(t, poolDir)
 			origin := newOrigin(t, defaultBaseBranch(tc.baseBranch))
 			clones := []string{
-				newClone(t, origin, filepath.Join(root, "orca01")),
+				newClone(t, origin, filepath.Join(poolDir, "clone-01")),
 			}
 			store := newStore(t)
 			manager := newManager(t, project, staticConfig{
-				pattern:    filepath.Join(root, "orca*"),
-				baseBranch: tc.baseBranch,
+				poolDir:     poolDir,
+				cloneOrigin: origin,
+				baseBranch:  tc.baseBranch,
 			}, store)
 
 			tc.run(t, manager, store, project, clones)
@@ -717,7 +755,6 @@ func newClone(t *testing.T, origin, dest string) string {
 	t.Helper()
 
 	mustRun(t, "", "git", "clone", origin, dest)
-	mustTouch(t, filepath.Join(dest, pool.MarkerFile))
 
 	return dest
 }
@@ -763,8 +800,7 @@ func gitStatusPorcelain(t *testing.T, dir string) string {
 
 func gitStatusClean(status string) bool {
 	for _, line := range strings.Split(strings.TrimSpace(status), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || line == "?? "+pool.MarkerFile {
+		if strings.TrimSpace(line) == "" {
 			continue
 		}
 		return false
@@ -778,7 +814,7 @@ type recordingRunner struct {
 	err   error
 }
 
-func (r *recordingRunner) Run(ctx context.Context, dir, name string, args ...string) error {
+func (r *recordingRunner) Run(_ context.Context, _, _ string, _ ...string) error {
 	r.calls++
 	return r.err
 }
@@ -801,12 +837,6 @@ func mustMkdir(t *testing.T, path string) {
 	if err := os.MkdirAll(path, 0o755); err != nil {
 		t.Fatalf("MkdirAll(%q) error = %v", path, err)
 	}
-}
-
-func mustTouch(t *testing.T, path string) {
-	t.Helper()
-
-	mustWriteFile(t, path, "")
 }
 
 func mustWriteFile(t *testing.T, path, contents string) {

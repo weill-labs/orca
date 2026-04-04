@@ -1,226 +1,90 @@
 package config
 
 import (
-	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
-	"time"
 )
 
-func TestLoadFile(t *testing.T) {
+func TestDetectOrigin(t *testing.T) {
 	t.Parallel()
 
-	type want struct {
-		cfg Config
-		err string
-	}
+	t.Run("returns origin remote URL", func(t *testing.T) {
+		t.Parallel()
 
-	tests := []struct {
-		name        string
-		projectTOML string
-		want        want
-	}{
-		{
-			name: "missing repo config returns explicit error",
-			want: want{err: ".orca/config.toml"},
-		},
-		{
-			name: "loads project config",
-			projectTOML: `
-[daemon]
-poll_interval = "30s"
-notification_pane = "pane-9"
+		repo := newGitRepo(t)
+		runGit(t, repo, "remote", "add", "origin", "git@github.com:weill-labs/orca.git")
 
-[pool]
-pattern = "/tmp/project/amux*"
-clone_origin = "git@github.com:weill-labs/orca.git"
+		origin, err := DetectOrigin(repo)
+		if err != nil {
+			t.Fatalf("DetectOrigin() error = %v", err)
+		}
+		if got, want := origin, "git@github.com:weill-labs/orca.git"; got != want {
+			t.Fatalf("DetectOrigin() = %q, want %q", got, want)
+		}
+	})
 
-[agents.codex]
-start_command = "codex --yolo"
-postmortem_enabled = true
-idle_timeout = "30s"
-stuck_timeout = "9m"
-stuck_text_patterns = ["tool denied", "approval required"]
-go_based = false
-nudge_command = "Enter"
-max_nudge_retries = 3
+	t.Run("no origin remote returns error", func(t *testing.T) {
+		t.Parallel()
 
-[agents.aider]
-start_command = "aider"
-idle_timeout = "1m"
-stuck_timeout = "10m"
-stuck_text_patterns = []
-go_based = true
-nudge_command = "/run\n"
-max_nudge_retries = 1
-`,
-			want: want{
-				cfg: Config{
-					Daemon: DaemonConfig{
-						PollInterval:     30 * time.Second,
-						NotificationPane: "pane-9",
-					},
-					Pool: PoolConfig{
-						Pattern:     "/tmp/project/amux*",
-						CloneOrigin: "git@github.com:weill-labs/orca.git",
-					},
-					Agents: map[string]AgentProfile{
-						"aider": {
-							StartCommand:      "aider",
-							IdleTimeout:       time.Minute,
-							StuckTimeout:      10 * time.Minute,
-							StuckTextPatterns: []string{},
-							GoBased:           true,
-							NudgeCommand:      "/run\n",
-							MaxNudgeRetries:   1,
-						},
-						"codex": {
-							StartCommand:      "codex --yolo",
-							PostmortemEnabled: true,
-							IdleTimeout:       30 * time.Second,
-							StuckTimeout:      9 * time.Minute,
-							StuckTextPatterns: []string{"tool denied", "approval required"},
-							GoBased:           false,
-							NudgeCommand:      "Enter",
-							MaxNudgeRetries:   3,
-						},
-					},
-				},
-			},
-		},
-		{
-			name: "normalizes legacy enter-like nudge commands",
-			projectTOML: `
-[agents.codex]
-nudge_command = "y\n"
+		repo := newGitRepo(t)
 
-[agents.claude]
-nudge_command = "\n"
-`,
-			want: want{
-				cfg: Config{
-					Agents: map[string]AgentProfile{
-						"claude": {
-							NudgeCommand: "Enter",
-						},
-						"codex": {
-							NudgeCommand: "Enter",
-						},
-					},
-				},
-			},
-		},
-		{
-			name: "invalid duration returns error",
-			projectTOML: `
-[daemon]
-poll_interval = "soon"
-`,
-			want: want{err: "parse daemon.poll_interval"},
-		},
-	}
+		_, err := DetectOrigin(repo)
+		if err == nil {
+			t.Fatal("expected error for repo with no origin remote")
+		}
+		if !strings.Contains(err.Error(), "origin") {
+			t.Fatalf("error should mention origin, got: %v", err)
+		}
+	})
 
-	for _, tt := range tests {
-		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
+	t.Run("non-git directory returns error", func(t *testing.T) {
+		t.Parallel()
 
-			projectPath := filepath.Join(t.TempDir(), ".orca", "config.toml")
-			if tt.projectTOML != "" {
-				writeFile(t, projectPath, tt.projectTOML)
-			}
+		dir := t.TempDir()
 
-			cfg, err := LoadFile(projectPath)
-			if tt.want.err != "" {
-				if err == nil || !strings.Contains(err.Error(), tt.want.err) {
-					t.Fatalf("expected error containing %q, got %v", tt.want.err, err)
-				}
-				if tt.projectTOML == "" && !errors.Is(err, ErrConfigNotFound) {
-					t.Fatalf("expected ErrConfigNotFound, got %v", err)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("LoadFile() error = %v", err)
-			}
-
-			if !reflect.DeepEqual(cfg, tt.want.cfg) {
-				t.Fatalf("LoadFile() mismatch\nwant: %#v\ngot:  %#v", tt.want.cfg, cfg)
-			}
-		})
-	}
+		_, err := DetectOrigin(dir)
+		if err == nil {
+			t.Fatal("expected error for non-git directory")
+		}
+	})
 }
 
-func TestLoadUsesCanonicalRepoRoot(t *testing.T) {
-	repoRoot := newRepoRoot(t)
-	subdir := filepath.Join(repoRoot, "internal", "pkg")
-	if err := os.MkdirAll(subdir, 0o755); err != nil {
-		t.Fatalf("MkdirAll(%q): %v", subdir, err)
-	}
+func TestDetectOriginEnvVarOverride(t *testing.T) {
+	repo := newGitRepo(t)
+	runGit(t, repo, "remote", "add", "origin", "git@github.com:weill-labs/orca.git")
+	t.Setenv("ORCA_CLONE_ORIGIN", "https://override.example.com/repo.git")
 
-	homeDir := t.TempDir()
-	writeFile(t, filepath.Join(repoRoot, ".orca", "config.toml"), `
-[pool]
-pattern = "~/project/*"
-`)
-	t.Setenv("HOME", homeDir)
-
-	cfg, err := Load(subdir)
+	origin, err := DetectOrigin(repo)
 	if err != nil {
-		t.Fatalf("Load() error = %v", err)
+		t.Fatalf("DetectOrigin() error = %v", err)
 	}
-
-	if got, want := cfg.Pool.Pattern, filepath.Join(homeDir, "project", "*"); got != want {
-		t.Fatalf("Load() pattern = %q, want %q", got, want)
-	}
-}
-
-func TestLoadMissingRepoConfigReturnsCanonicalPath(t *testing.T) {
-	repoRoot := newRepoRoot(t)
-	subdir := filepath.Join(repoRoot, "cmd", "orca")
-	if err := os.MkdirAll(subdir, 0o755); err != nil {
-		t.Fatalf("MkdirAll(%q): %v", subdir, err)
-	}
-
-	_, err := Load(subdir)
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	if !errors.Is(err, ErrConfigNotFound) {
-		t.Fatalf("expected ErrConfigNotFound, got %v", err)
-	}
-
-	wantPath := filepath.Join(repoRoot, ".orca", "config.toml")
-	if !strings.Contains(err.Error(), wantPath) {
-		t.Fatalf("expected error containing %q, got %v", wantPath, err)
+	if got, want := origin, "https://override.example.com/repo.git"; got != want {
+		t.Fatalf("DetectOrigin() = %q, want %q", got, want)
 	}
 }
 
-func newRepoRoot(t *testing.T) string {
+func newGitRepo(t *testing.T) string {
 	t.Helper()
 
-	root := filepath.Join(t.TempDir(), "repo")
-	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
-		t.Fatalf("MkdirAll(.git): %v", err)
+	dir := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
 	}
 
-	resolvedRoot, err := filepath.EvalSymlinks(root)
-	if err != nil {
-		t.Fatalf("EvalSymlinks(%q): %v", root, err)
-	}
-	return resolvedRoot
+	runGit(t, dir, "init")
+	return dir
 }
 
-func writeFile(t *testing.T, path, contents string) {
+func runGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
 
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatalf("MkdirAll(%q): %v", filepath.Dir(path), err)
-	}
-	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
-		t.Fatalf("WriteFile(%q): %v", path, err)
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, out)
 	}
 }

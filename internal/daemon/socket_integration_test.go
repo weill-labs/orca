@@ -20,26 +20,9 @@ func TestRunProcessAssignAndCancelOverUnixSocket(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(projectDir, ".git"), 0o755); err != nil {
 		t.Fatalf("MkdirAll(.git) error = %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(projectDir, ".orca"), 0o755); err != nil {
-		t.Fatalf("MkdirAll(.orca) error = %v", err)
-	}
 
-	clonesRoot := filepath.Join(t.TempDir(), "clones")
-	clonePath := initPoolClone(t, clonesRoot, "orca01")
-	configPath := filepath.Join(projectDir, ".orca", "config.toml")
-	if err := os.WriteFile(configPath, []byte(`
-[pool]
-pattern = "`+filepath.Join(clonesRoot, "orca*")+`"
-
-[agents.codex]
-start_command = "codex --yolo"
-postmortem_enabled = true
-stuck_timeout = "5m"
-nudge_command = "Enter"
-max_nudge_retries = 1
-`), 0o644); err != nil {
-		t.Fatalf("WriteFile(config.toml) error = %v", err)
-	}
+	poolDir := filepath.Join(projectDir, ".orca", "pool")
+	initPoolClone(t, poolDir, "clone-01")
 
 	projectPath, err := project.CanonicalPath(projectDir)
 	if err != nil {
@@ -85,6 +68,9 @@ max_nudge_retries = 1
 			StateDB: stateDB,
 			PIDFile: pidFile,
 		}, serveDeps{
+			detectOrigin: func(_ string) (string, error) {
+				return "git@github.com:weill-labs/orca.git", nil
+			},
 			amux:       amuxClient,
 			commands:   commandRunner,
 			poolRunner: stubPoolRunner{},
@@ -132,7 +118,7 @@ daemonReady:
 		Project: projectPath,
 		Issue:   "LAB-718",
 		Prompt:  "Implement Unix socket IPC.",
-		Agent:   "codex",
+		Agent:   "claude",
 	})
 	if err != nil {
 		t.Fatalf("Assign() error = %v", err)
@@ -153,15 +139,16 @@ daemonReady:
 	if err != nil {
 		t.Fatalf("TaskStatus() error = %v", err)
 	}
-	if got, want := taskStatus.Task.ClonePath, clonePath; got != want {
-		t.Fatalf("task.ClonePath = %q, want %q", got, want)
+	wantClonePath := filepath.Join(projectPath, ".orca", "pool", "clone-01")
+	if got := taskStatus.Task.ClonePath; got != wantClonePath {
+		t.Fatalf("task.ClonePath = %q, want %q", got, wantClonePath)
 	}
 	if got, want := taskStatus.Task.WorkerID, "pane-1"; got != want {
 		t.Fatalf("task.WorkerID = %q, want %q", got, want)
 	}
 
 	amuxClient.requireMetadata(t, "pane-1", map[string]string{
-		"agent_profile": "codex",
+		"agent_profile": "claude",
 		"branch":        "LAB-718",
 		"issue":         "LAB-718",
 		"task":          "LAB-718",
@@ -221,13 +208,10 @@ func initPoolClone(t *testing.T, root, name string) string {
 	}
 	runGit(t, "", "init", clonePath)
 	runGit(t, clonePath, "checkout", "-b", "main")
-	if err := os.WriteFile(filepath.Join(clonePath, ".orca-pool"), []byte(""), 0o644); err != nil {
-		t.Fatalf("WriteFile(.orca-pool) error = %v", err)
-	}
 	if err := os.WriteFile(filepath.Join(clonePath, "README.md"), []byte("hello\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile(README.md) error = %v", err)
 	}
-	runGit(t, clonePath, "add", ".orca-pool", "README.md")
+	runGit(t, clonePath, "add", "README.md")
 	runGit(t, clonePath, "-c", "user.name=Orca Tests", "-c", "user.email=orca-tests@example.com", "commit", "-m", "initial commit")
 	return clonePath
 }

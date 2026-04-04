@@ -1,285 +1,30 @@
 package config
 
 import (
-	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
+	"os/exec"
 	"strings"
-	"time"
-
-	"github.com/BurntSushi/toml"
-	"github.com/weill-labs/orca/internal/project"
 )
 
-const (
-	projectConfigDir  = ".orca"
-	projectConfigFile = "config.toml"
-)
+// DetectOrigin returns the URL of the "origin" remote for the git repository
+// at projectDir. It falls back to the ORCA_CLONE_ORIGIN environment variable
+// if the git remote is not configured.
+func DetectOrigin(projectDir string) (string, error) {
+	if envOrigin := strings.TrimSpace(os.Getenv("ORCA_CLONE_ORIGIN")); envOrigin != "" {
+		return envOrigin, nil
+	}
 
-var ErrConfigNotFound = errors.New("config: repo-local .orca/config.toml not found")
-
-type Config struct {
-	Daemon DaemonConfig
-	Pool   PoolConfig
-	Agents map[string]AgentProfile
-}
-
-type DaemonConfig struct {
-	PollInterval     time.Duration
-	NotificationPane string
-}
-
-type PoolConfig struct {
-	Pattern     string
-	CloneOrigin string
-}
-
-type AgentProfile struct {
-	StartCommand      string
-	PostmortemEnabled bool
-	IdleTimeout       time.Duration
-	StuckTimeout      time.Duration
-	StuckTextPatterns []string
-	GoBased           bool
-	NudgeCommand      string
-	MaxNudgeRetries   int
-}
-
-func Load(projectDir string) (Config, error) {
-	projectRoot, err := project.CanonicalPath(projectDir)
+	cmd := exec.Command("git", "-C", projectDir, "remote", "get-url", "origin")
+	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return Config{}, err
+		return "", fmt.Errorf("detect clone origin: no 'origin' remote in %s (set ORCA_CLONE_ORIGIN or run 'git remote add origin <url>'): %w", projectDir, err)
 	}
 
-	return LoadFile(filepath.Join(projectRoot, projectConfigDir, projectConfigFile))
-}
-
-func LoadFile(projectPath string) (Config, error) {
-	projectRaw, err := readConfigFile(projectPath)
-	if err != nil {
-		return Config{}, err
+	origin := strings.TrimSpace(string(out))
+	if origin == "" {
+		return "", fmt.Errorf("detect clone origin: 'origin' remote is empty in %s", projectDir)
 	}
 
-	cfg, err := projectRaw.toConfig()
-	if err != nil {
-		return Config{}, err
-	}
-
-	cfg.expandPaths()
-	return cfg, nil
-}
-
-func (c *Config) expandPaths() {
-	c.Pool.Pattern = expandHome(c.Pool.Pattern)
-}
-
-type rawConfig struct {
-	Daemon *rawDaemonConfig           `toml:"daemon"`
-	Pool   *rawPoolConfig             `toml:"pool"`
-	Agents map[string]rawAgentProfile `toml:"agents"`
-}
-
-type rawDaemonConfig struct {
-	PollInterval     *string `toml:"poll_interval"`
-	NotificationPane *string `toml:"notification_pane"`
-}
-
-type rawPoolConfig struct {
-	Pattern     *string `toml:"pattern"`
-	CloneOrigin *string `toml:"clone_origin"`
-}
-
-type rawAgentProfile struct {
-	StartCommand         *string  `toml:"start_command"`
-	PostmortemEnabled    *bool    `toml:"postmortem_enabled"`
-	IdleTimeout          *string  `toml:"idle_timeout"`
-	StuckTimeout         *string  `toml:"stuck_timeout"`
-	StuckTextPatterns    []string `toml:"stuck_text_patterns"`
-	HasStuckTextPatterns bool     `toml:"-"`
-	GoBased              *bool    `toml:"go_based"`
-	NudgeCommand         *string  `toml:"nudge_command"`
-	MaxNudgeRetries      *int     `toml:"max_nudge_retries"`
-}
-
-func readConfigFile(path string) (rawConfig, error) {
-	data, err := os.ReadFile(path)
-	if err == nil {
-		var cfg rawConfig
-		meta, err := toml.Decode(string(data), &cfg)
-		if err != nil {
-			return rawConfig{}, fmt.Errorf("parse %s: %w", path, err)
-		}
-		markDefinedFields(&cfg, meta)
-		return cfg, nil
-	}
-
-	if errors.Is(err, os.ErrNotExist) {
-		return rawConfig{}, fmt.Errorf("%w: %s", ErrConfigNotFound, path)
-	}
-
-	return rawConfig{}, fmt.Errorf("read %s: %w", path, err)
-}
-
-func (r rawConfig) toConfig() (Config, error) {
-	cfg := Config{}
-	if len(r.Agents) > 0 {
-		cfg.Agents = make(map[string]AgentProfile, len(r.Agents))
-	}
-
-	if r.Daemon != nil {
-		var err error
-		cfg.Daemon, err = r.Daemon.toConfig()
-		if err != nil {
-			return Config{}, err
-		}
-	}
-
-	if r.Pool != nil {
-		cfg.Pool = r.Pool.toConfig()
-	}
-
-	for name, profile := range r.Agents {
-		parsed, err := profile.toConfig("agents." + name)
-		if err != nil {
-			return Config{}, err
-		}
-		cfg.Agents[name] = parsed
-	}
-
-	return cfg, nil
-}
-
-func (r rawDaemonConfig) toConfig() (DaemonConfig, error) {
-	cfg := DaemonConfig{}
-
-	if r.PollInterval != nil {
-		d, err := time.ParseDuration(*r.PollInterval)
-		if err != nil {
-			return DaemonConfig{}, fmt.Errorf("parse daemon.poll_interval: %w", err)
-		}
-		cfg.PollInterval = d
-	}
-	if r.NotificationPane != nil {
-		cfg.NotificationPane = *r.NotificationPane
-	}
-
-	return cfg, nil
-}
-
-func (r rawPoolConfig) toConfig() PoolConfig {
-	cfg := PoolConfig{}
-	if r.Pattern != nil {
-		cfg.Pattern = *r.Pattern
-	}
-	if r.CloneOrigin != nil {
-		cfg.CloneOrigin = *r.CloneOrigin
-	}
-	return cfg
-}
-
-func (r rawAgentProfile) toConfig(prefix string) (AgentProfile, error) {
-	cfg := AgentProfile{}
-
-	if r.StartCommand != nil {
-		cfg.StartCommand = *r.StartCommand
-	}
-	if r.PostmortemEnabled != nil {
-		cfg.PostmortemEnabled = *r.PostmortemEnabled
-	}
-
-	if r.IdleTimeout != nil {
-		d, err := time.ParseDuration(*r.IdleTimeout)
-		if err != nil {
-			return AgentProfile{}, fmt.Errorf("parse %s.idle_timeout: %w", prefix, err)
-		}
-		cfg.IdleTimeout = d
-	}
-
-	if r.StuckTimeout != nil {
-		d, err := time.ParseDuration(*r.StuckTimeout)
-		if err != nil {
-			return AgentProfile{}, fmt.Errorf("parse %s.stuck_timeout: %w", prefix, err)
-		}
-		cfg.StuckTimeout = d
-	}
-
-	if r.HasStuckTextPatterns {
-		if len(r.StuckTextPatterns) == 0 {
-			cfg.StuckTextPatterns = []string{}
-		} else {
-			cfg.StuckTextPatterns = append([]string(nil), r.StuckTextPatterns...)
-		}
-	}
-	if r.GoBased != nil {
-		cfg.GoBased = *r.GoBased
-	}
-
-	if r.NudgeCommand != nil {
-		cfg.NudgeCommand = normalizeNudgeCommand(*r.NudgeCommand)
-	}
-
-	if r.MaxNudgeRetries != nil {
-		cfg.MaxNudgeRetries = *r.MaxNudgeRetries
-	}
-
-	return cfg, nil
-}
-
-func normalizeNudgeCommand(command string) string {
-	if command == "" {
-		return ""
-	}
-
-	trimmedNewlines := strings.TrimRight(command, "\r\n")
-	switch {
-	case trimmedNewlines == "":
-		return "Enter"
-	case strings.EqualFold(trimmedNewlines, "y"):
-		return "Enter"
-	default:
-		return command
-	}
-}
-
-func expandHome(value string) string {
-	if value == "" || value == "~" {
-		if value == "~" {
-			if homeDir, err := currentHomeDir(); err == nil {
-				return homeDir
-			}
-		}
-		return value
-	}
-
-	if !strings.HasPrefix(value, "~/") {
-		return value
-	}
-
-	homeDir, err := currentHomeDir()
-	if err != nil {
-		return value
-	}
-
-	return filepath.Join(homeDir, strings.TrimPrefix(value, "~/"))
-}
-
-func currentHomeDir() (string, error) {
-	if homeDir := strings.TrimSpace(os.Getenv("HOME")); homeDir != "" {
-		return homeDir, nil
-	}
-	return os.UserHomeDir()
-}
-
-func markDefinedFields(cfg *rawConfig, meta toml.MetaData) {
-	if cfg == nil {
-		return
-	}
-
-	for name, profile := range cfg.Agents {
-		if meta.IsDefined("agents", name, "stuck_text_patterns") {
-			profile.HasStuckTextPatterns = true
-			cfg.Agents[name] = profile
-		}
-	}
+	return origin, nil
 }

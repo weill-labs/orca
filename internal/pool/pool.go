@@ -13,11 +13,6 @@ import (
 	"github.com/weill-labs/orca/internal/state"
 )
 
-const markerFile = ".orca-pool"
-
-// MarkerFile names the file that marks a clone as eligible for the pool.
-const MarkerFile = markerFile
-
 var ErrNoFreeClones = errors.New("pool: no free clones available")
 
 type Status string
@@ -36,7 +31,8 @@ type Clone struct {
 }
 
 type Config interface {
-	PoolPattern() string
+	PoolDir() string
+	CloneOrigin() string
 	BaseBranch() string
 }
 
@@ -58,11 +54,11 @@ type Option func(*Manager)
 
 type Manager struct {
 	project         string
-	pattern         string
+	poolDir         string
+	cloneOrigin     string
 	baseBranch      string
 	store           Store
 	runner          Runner
-	homeDir         string
 	cwdUsageChecker CWDUsageChecker
 }
 
@@ -73,8 +69,8 @@ func New(project string, cfg Config, store Store, opts ...Option) (*Manager, err
 	if store == nil {
 		return nil, errors.New("pool: store is required")
 	}
-	if strings.TrimSpace(cfg.PoolPattern()) == "" {
-		return nil, errors.New("pool: pool pattern is required")
+	if strings.TrimSpace(cfg.PoolDir()) == "" {
+		return nil, errors.New("pool: pool directory is required")
 	}
 
 	absProject, err := filepath.Abs(project)
@@ -82,18 +78,13 @@ func New(project string, cfg Config, store Store, opts ...Option) (*Manager, err
 		return nil, fmt.Errorf("resolve project path: %w", err)
 	}
 
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return nil, fmt.Errorf("resolve home directory: %w", err)
-	}
-
 	manager := &Manager{
-		project:    filepath.Clean(absProject),
-		pattern:    cfg.PoolPattern(),
-		baseBranch: defaultBaseBranch(cfg.BaseBranch()),
-		store:      store,
-		runner:     execRunner{},
-		homeDir:    homeDir,
+		project:     filepath.Clean(absProject),
+		poolDir:     cfg.PoolDir(),
+		cloneOrigin: cfg.CloneOrigin(),
+		baseBranch:  defaultBaseBranch(cfg.BaseBranch()),
+		store:       store,
+		runner:      execRunner{},
 	}
 
 	for _, opt := range opts {
@@ -113,9 +104,9 @@ func WithRunner(runner Runner) Option {
 	}
 }
 
-func WithHomeDir(homeDir string) Option {
+func WithCloneOrigin(origin string) Option {
 	return func(manager *Manager) {
-		manager.homeDir = homeDir
+		manager.cloneOrigin = origin
 	}
 }
 
@@ -180,46 +171,44 @@ func (m *Manager) Allocate(ctx context.Context, taskID, issueBranch string) (Clo
 		return Clone{}, fmt.Errorf("check active pane cwd usage: %w", err)
 	}
 
-	for _, clone := range clones {
-		if clone.Status != StatusFree {
-			continue
-		}
-		if _, ok := activeCWDs[clone.Path]; ok {
-			continue
-		}
-
-		ok, err := m.store.TryOccupyClone(ctx, m.project, clone.Path, issueBranch, taskID)
-		if err != nil {
-			return Clone{}, fmt.Errorf("occupy clone %q: %w", clone.Path, err)
-		}
-		if !ok {
-			continue
-		}
-
-		if err := m.HealthCheck(ctx, clone.Path); err != nil {
-			freeErr := m.store.MarkCloneFree(ctx, m.project, clone.Path)
-			if freeErr != nil {
-				err = errors.Join(err, freeErr)
-				return Clone{}, fmt.Errorf("health check clone %q: %w", clone.Path, err)
-			}
-			continue
-		}
-
-		if err := m.prepareClone(ctx, clone.Path, issueBranch); err != nil {
-			freeErr := m.store.MarkCloneFree(ctx, m.project, clone.Path)
-			if freeErr != nil {
-				err = errors.Join(err, freeErr)
-			}
-			return Clone{}, fmt.Errorf("prepare clone %q: %w", clone.Path, err)
-		}
-
-		clone.Status = StatusOccupied
-		clone.CurrentBranch = issueBranch
-		clone.AssignedTask = taskID
-		return clone, nil
+	clone, err := m.tryAllocateExisting(ctx, clones, activeCWDs, taskID, issueBranch)
+	if err != nil {
+		return Clone{}, err
+	}
+	if clone != nil {
+		return *clone, nil
 	}
 
-	return Clone{}, ErrNoFreeClones
+	newPath, err := m.CreateClone(ctx)
+	if err != nil {
+		return Clone{}, fmt.Errorf("auto-create clone: %w", err)
+	}
+
+	record, err := m.store.EnsureClone(ctx, m.project, newPath)
+	if err != nil {
+		return Clone{}, fmt.Errorf("register new clone %q: %w", newPath, err)
+	}
+
+	ok, err := m.store.TryOccupyClone(ctx, m.project, record.Path, issueBranch, taskID)
+	if err != nil {
+		return Clone{}, fmt.Errorf("occupy new clone %q: %w", newPath, err)
+	}
+	if !ok {
+		return Clone{}, fmt.Errorf("occupy new clone %q: unexpectedly contested", newPath)
+	}
+
+	if err := m.prepareClone(ctx, record.Path, issueBranch); err != nil {
+		_ = m.store.MarkCloneFree(ctx, m.project, record.Path)
+		return Clone{}, fmt.Errorf("prepare new clone %q: %w", record.Path, err)
+	}
+
+	return Clone{
+		Name:          filepath.Base(record.Path),
+		Path:          record.Path,
+		Status:        StatusOccupied,
+		CurrentBranch: issueBranch,
+		AssignedTask:  taskID,
+	}, nil
 }
 
 func (m *Manager) activeCWDSet(ctx context.Context) (map[string]struct{}, error) {
@@ -264,46 +253,128 @@ func (m *Manager) Release(ctx context.Context, path, taskBranch string) error {
 	return nil
 }
 
-func (m *Manager) eligibleClonePaths() ([]string, error) {
-	pattern, err := m.expandPattern(m.pattern)
-	if err != nil {
-		return nil, err
+func (m *Manager) tryAllocateExisting(ctx context.Context, clones []Clone, activeCWDs map[string]struct{}, taskID, issueBranch string) (*Clone, error) {
+	for _, clone := range clones {
+		if clone.Status != StatusFree {
+			continue
+		}
+		if _, ok := activeCWDs[clone.Path]; ok {
+			continue
+		}
+
+		ok, err := m.store.TryOccupyClone(ctx, m.project, clone.Path, issueBranch, taskID)
+		if err != nil {
+			return nil, fmt.Errorf("occupy clone %q: %w", clone.Path, err)
+		}
+		if !ok {
+			continue
+		}
+
+		if err := m.HealthCheck(ctx, clone.Path); err != nil {
+			freeErr := m.store.MarkCloneFree(ctx, m.project, clone.Path)
+			if freeErr != nil {
+				err = errors.Join(err, freeErr)
+				return nil, fmt.Errorf("health check clone %q: %w", clone.Path, err)
+			}
+			continue
+		}
+
+		if err := m.prepareClone(ctx, clone.Path, issueBranch); err != nil {
+			freeErr := m.store.MarkCloneFree(ctx, m.project, clone.Path)
+			if freeErr != nil {
+				err = errors.Join(err, freeErr)
+			}
+			return nil, fmt.Errorf("prepare clone %q: %w", clone.Path, err)
+		}
+
+		clone.Status = StatusOccupied
+		clone.CurrentBranch = issueBranch
+		clone.AssignedTask = taskID
+		return &clone, nil
 	}
 
-	matches, err := filepath.Glob(pattern)
-	if err != nil {
-		return nil, fmt.Errorf("glob clone pool pattern: %w", err)
+	return nil, nil
+}
+
+// CreateClone creates a new clone in the pool directory by cloning the origin.
+func (m *Manager) CreateClone(ctx context.Context) (string, error) {
+	if strings.TrimSpace(m.cloneOrigin) == "" {
+		return "", fmt.Errorf("%w: set a git origin remote or ORCA_CLONE_ORIGIN", ErrNoFreeClones)
 	}
 
-	sort.Strings(matches)
+	if err := os.MkdirAll(m.poolDir, 0o755); err != nil {
+		return "", fmt.Errorf("create pool directory: %w", err)
+	}
 
-	paths := make([]string, 0, len(matches))
-	for _, match := range matches {
-		info, err := os.Stat(match)
+	next, err := m.nextCloneName()
+	if err != nil {
+		return "", err
+	}
+
+	clonePath := filepath.Join(m.poolDir, next)
+	if err := m.runner.Run(ctx, m.poolDir, "git", "clone", m.cloneOrigin, clonePath); err != nil {
+		return "", fmt.Errorf("git clone into %q: %w", clonePath, err)
+	}
+
+	absPath, err := filepath.Abs(clonePath)
+	if err != nil {
+		return "", fmt.Errorf("resolve clone path %q: %w", clonePath, err)
+	}
+
+	return filepath.Clean(absPath), nil
+}
+
+func (m *Manager) nextCloneName() (string, error) {
+	entries, err := os.ReadDir(m.poolDir)
+	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
+			return "clone-01", nil
+		}
+		return "", fmt.Errorf("read pool directory: %w", err)
+	}
+
+	maxNum := 0
+	for _, entry := range entries {
+		if !entry.IsDir() {
 			continue
 		}
-		if err != nil {
-			return nil, fmt.Errorf("stat clone path %q: %w", match, err)
+		name := entry.Name()
+		if !strings.HasPrefix(name, "clone-") {
+			continue
 		}
-		if !info.IsDir() {
+		suffix := strings.TrimPrefix(name, "clone-")
+		var num int
+		if _, err := fmt.Sscanf(suffix, "%d", &num); err == nil && num > maxNum {
+			maxNum = num
+		}
+	}
+
+	return fmt.Sprintf("clone-%02d", maxNum+1), nil
+}
+
+func (m *Manager) eligibleClonePaths() ([]string, error) {
+	entries, err := os.ReadDir(m.poolDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read pool directory: %w", err)
+	}
+
+	paths := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir() {
 			continue
 		}
 
-		markerPath := filepath.Join(match, markerFile)
-		if _, err := os.Stat(markerPath); errors.Is(err, os.ErrNotExist) {
-			continue
-		} else if err != nil {
-			return nil, fmt.Errorf("stat marker file %q: %w", markerPath, err)
-		}
-
-		absPath, err := filepath.Abs(match)
+		absPath, err := filepath.Abs(filepath.Join(m.poolDir, entry.Name()))
 		if err != nil {
-			return nil, fmt.Errorf("resolve clone path %q: %w", match, err)
+			return nil, fmt.Errorf("resolve clone path %q: %w", entry.Name(), err)
 		}
 		paths = append(paths, filepath.Clean(absPath))
 	}
 
+	sort.Strings(paths)
 	return paths, nil
 }
 
@@ -314,20 +385,6 @@ func resolveClonePath(path string) (string, error) {
 	}
 
 	return filepath.Clean(clonePath), nil
-}
-
-func (m *Manager) expandPattern(pattern string) (string, error) {
-	if pattern == "~" {
-		return m.homeDir, nil
-	}
-	if strings.HasPrefix(pattern, "~/") {
-		if strings.TrimSpace(m.homeDir) == "" {
-			return "", errors.New("pool: home directory is required for ~ expansion")
-		}
-		return filepath.Join(m.homeDir, pattern[2:]), nil
-	}
-
-	return pattern, nil
 }
 
 func (m *Manager) prepareClone(ctx context.Context, path, issueBranch string) error {
@@ -351,7 +408,7 @@ func (m *Manager) cleanupClone(ctx context.Context, path, taskBranch string) err
 		{"reset", "--hard"},
 		{"checkout", m.baseBranch},
 		{"pull"},
-		{"clean", "-fdx", "--exclude=.orca-pool"},
+		{"clean", "-fdx"},
 	}
 
 	for _, args := range commands {
@@ -434,8 +491,7 @@ func inspectCloneHealth(ctx context.Context, path string) (cloneHealth, error) {
 
 func statusClean(status string) bool {
 	for _, line := range strings.Split(strings.TrimSpace(status), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || line == "?? "+markerFile {
+		if strings.TrimSpace(line) == "" {
 			continue
 		}
 		return false

@@ -17,7 +17,7 @@ import (
 	"github.com/weill-labs/orca/internal/project"
 )
 
-const defaultAgent = "codex"
+const defaultAgent = "claude"
 
 const usageText = `orca: agent orchestration daemon
 usage: orca <command>

@@ -9,50 +9,70 @@ import (
 	"testing"
 	"time"
 
-	"github.com/weill-labs/orca/internal/config"
 	state "github.com/weill-labs/orca/internal/daemonstate"
 )
 
-func TestConfigAdapterAgentProfile(t *testing.T) {
+func TestBuiltinConfigProviderAgentProfile(t *testing.T) {
 	t.Parallel()
 
-	adapter := configAdapter{cfg: config.Config{
-		Agents: map[string]config.AgentProfile{
-			"codex": {
-				StartCommand:      "codex --yolo",
-				PostmortemEnabled: true,
-				StuckTimeout:      5 * time.Minute,
-				StuckTextPatterns: []string{"permission prompt"},
-				GoBased:           true,
-				NudgeCommand:      "Enter",
-				MaxNudgeRetries:   3,
-			},
-		},
-	}}
+	provider := builtinConfigProvider{}
 
-	profile, err := adapter.AgentProfile(context.Background(), "codex")
-	if err != nil {
-		t.Fatalf("AgentProfile() error = %v", err)
-	}
-	if got, want := profile.StartCommand, "codex --yolo"; got != want {
-		t.Fatalf("profile.StartCommand = %q, want %q", got, want)
-	}
-	if got, want := profile.ResumeSequence, []string{"codex --yolo resume", "Enter", "."}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("profile.ResumeSequence = %#v, want %#v", got, want)
-	}
-	if !profile.PostmortemEnabled {
-		t.Fatal("profile.PostmortemEnabled = false, want true")
-	}
-	if !profile.GoBased {
-		t.Fatal("profile.GoBased = false, want true")
-	}
-	if got, want := profile.NudgeCommand, "Enter"; got != want {
-		t.Fatalf("profile.NudgeCommand = %q, want %q", got, want)
-	}
+	t.Run("claude profile", func(t *testing.T) {
+		t.Parallel()
 
-	if _, err := adapter.AgentProfile(context.Background(), "missing"); err == nil {
-		t.Fatal("AgentProfile() missing = nil error, want non-nil")
-	}
+		profile, err := provider.AgentProfile(context.Background(), "claude")
+		if err != nil {
+			t.Fatalf("AgentProfile(claude) error = %v", err)
+		}
+		if got, want := profile.StartCommand, "claude"; got != want {
+			t.Fatalf("StartCommand = %q, want %q", got, want)
+		}
+		if got, want := profile.StuckTimeout, 8*time.Minute; got != want {
+			t.Fatalf("StuckTimeout = %v, want %v", got, want)
+		}
+		if got, want := profile.NudgeCommand, "Enter"; got != want {
+			t.Fatalf("NudgeCommand = %q, want %q", got, want)
+		}
+		if got, want := profile.MaxNudgeRetries, 3; got != want {
+			t.Fatalf("MaxNudgeRetries = %d, want %d", got, want)
+		}
+	})
+
+	t.Run("codex profile with quirks", func(t *testing.T) {
+		t.Parallel()
+
+		profile, err := provider.AgentProfile(context.Background(), "codex")
+		if err != nil {
+			t.Fatalf("AgentProfile(codex) error = %v", err)
+		}
+		if got, want := profile.StartCommand, "codex --yolo"; got != want {
+			t.Fatalf("StartCommand = %q, want %q", got, want)
+		}
+		if got, want := profile.ResumeSequence, []string{"codex --yolo resume", "Enter", "."}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("ResumeSequence = %#v, want %#v", got, want)
+		}
+	})
+
+	t.Run("case insensitive lookup", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := provider.AgentProfile(context.Background(), "Claude")
+		if err != nil {
+			t.Fatalf("AgentProfile(Claude) error = %v", err)
+		}
+	})
+
+	t.Run("unknown agent returns error", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := provider.AgentProfile(context.Background(), "missing")
+		if err == nil {
+			t.Fatal("AgentProfile(missing) = nil error, want non-nil")
+		}
+		if !strings.Contains(err.Error(), "unknown agent") {
+			t.Fatalf("error = %v, want 'unknown agent'", err)
+		}
+	})
 }
 
 func TestNormalizeCodexStartCommand(t *testing.T) {
@@ -147,7 +167,7 @@ func TestSQLiteStateAdapterRoundTrip(t *testing.T) {
 	}
 }
 
-func TestExecCommandRunnerAndPoolConfigAdapter(t *testing.T) {
+func TestExecCommandRunner(t *testing.T) {
 	t.Parallel()
 
 	runner := execCommandRunner{}
@@ -163,13 +183,19 @@ func TestExecCommandRunnerAndPoolConfigAdapter(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "boom") {
 		t.Fatalf("Run() failure error = %v, want stderr in message", err)
 	}
+}
 
-	cfg := config.Config{Pool: config.PoolConfig{Pattern: "/tmp/orca*"}}
-	adapter := poolConfigAdapter{cfg: cfg}
-	if got, want := adapter.PoolPattern(), "/tmp/orca*"; got != want {
-		t.Fatalf("PoolPattern() = %q, want %q", got, want)
+func TestInternalPoolConfig(t *testing.T) {
+	t.Parallel()
+
+	cfg := internalPoolConfig{poolDir: "/tmp/pool", origin: "git@github.com:org/repo.git"}
+	if got, want := cfg.PoolDir(), "/tmp/pool"; got != want {
+		t.Fatalf("PoolDir() = %q, want %q", got, want)
 	}
-	if got := adapter.BaseBranch(); got != "" {
+	if got, want := cfg.CloneOrigin(), "git@github.com:org/repo.git"; got != want {
+		t.Fatalf("CloneOrigin() = %q, want %q", got, want)
+	}
+	if got := cfg.BaseBranch(); got != "" {
 		t.Fatalf("BaseBranch() = %q, want empty string", got)
 	}
 }

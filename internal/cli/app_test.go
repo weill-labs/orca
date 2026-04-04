@@ -127,8 +127,8 @@ func TestAppRunDispatchesCommands(t *testing.T) {
 				if d.assignRequest.Prompt != "Implement CLI wiring" {
 					t.Fatalf("expected prompt to be parsed, got %q", d.assignRequest.Prompt)
 				}
-				if d.assignRequest.Agent != "codex" {
-					t.Fatalf("expected default agent codex, got %q", d.assignRequest.Agent)
+				if d.assignRequest.Agent != "claude" {
+					t.Fatalf("expected default agent claude, got %q", d.assignRequest.Agent)
 				}
 				if !strings.Contains(stdout, "LAB-690") {
 					t.Fatalf("expected issue in output, got %q", stdout)
