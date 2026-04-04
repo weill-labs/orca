@@ -193,8 +193,8 @@ func TestPRMergePollingSkipsPostmortemTriggerAfterWrapUpError(t *testing.T) {
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("wait idle calls = %#v, want %#v", got, want)
 	}
-	if got, want := deps.amux.killCalls, []string{"pane-1"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("kill calls = %#v, want %#v", got, want)
+	if got := deps.amux.killCalls; len(got) != 0 {
+		t.Fatalf("kill calls = %#v, want none", got)
 	}
 	if got, want := deps.amux.countKey("pane-1", "$postmortem\n"), 0; got != want {
 		t.Fatalf("postmortem prompt count = %d, want %d", got, want)

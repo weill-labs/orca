@@ -2,11 +2,7 @@ package daemon
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"reflect"
-	"strings"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -123,181 +119,7 @@ func TestStuckDetectionUsesIdleTimeoutAndRecoversOnOutputChange(t *testing.T) {
 	deps.events.requireTypes(t, EventDaemonStarted, EventTaskAssigned, EventWorkerNudged, EventWorkerRecovered)
 }
 
-func TestStuckDetectionCapturesDiagnosticsBeforeForceKill(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name              string
-		goBased           bool
-		historySequence   []PaneCapture
-		wantLogName       string
-		wantSignalCalls   []signalCall
-		wantSleepCalls    []time.Duration
-		wantHistoryCalls  int
-		wantLogSubstrings []string
-		wantNoLogStrings  []string
-	}{
-		{
-			name:    "go worker sends sigquit before kill",
-			goBased: true,
-			historySequence: []PaneCapture{
-				{
-					Content:        []string{"stuck output"},
-					CWD:            "/tmp/clone-01",
-					CurrentCommand: "codex",
-					ChildPIDs:      []int{4242},
-				},
-				{
-					Content:        []string{"goroutine dump"},
-					CWD:            "/tmp/clone-01",
-					CurrentCommand: "codex",
-					ChildPIDs:      []int{4242},
-				},
-			},
-			wantLogName:      "20260402T090000Z-goroutine-dump-LAB-710.log",
-			wantSignalCalls:  []signalCall{{PID: 4242, Signal: syscall.SIGQUIT}},
-			wantSleepCalls:   []time.Duration{5 * time.Second},
-			wantHistoryCalls: 2,
-			wantLogSubstrings: []string{
-				"stuck output",
-				"sigquit_pid: 4242",
-				"goroutine dump",
-			},
-		},
-		{
-			name:    "non go worker skips sigquit and still saves pane output",
-			goBased: false,
-			historySequence: []PaneCapture{
-				{
-					Content:        []string{"stuck output only"},
-					CWD:            "/tmp/clone-01",
-					CurrentCommand: "claude",
-				},
-			},
-			wantLogName:      "20260402T090000Z-pane-output-LAB-710.log",
-			wantHistoryCalls: 1,
-			wantLogSubstrings: []string{
-				"stuck output only",
-			},
-		},
-		{
-			name:    "go worker with no child pids skips sigquit",
-			goBased: true,
-			historySequence: []PaneCapture{
-				{
-					Content:        []string{"stuck output without child pids"},
-					CWD:            "/tmp/clone-01",
-					CurrentCommand: "codex",
-				},
-			},
-			wantLogName:      "20260402T090000Z-goroutine-dump-LAB-710.log",
-			wantHistoryCalls: 1,
-			wantLogSubstrings: []string{
-				"stuck output without child pids",
-				"go_based: true",
-			},
-			wantNoLogStrings: []string{
-				"sigquit_pid:",
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			deps := newTestDeps(t)
-			captureTicker := newFakeTicker()
-			prTicker := newFakeTicker()
-			deps.tickers.enqueue(captureTicker, prTicker)
-			deps.config.profiles["codex"] = AgentProfile{
-				Name:              "codex",
-				StartCommand:      "codex --yolo",
-				StuckTextPatterns: []string{"permission prompt"},
-				StuckTimeout:      time.Hour,
-				GoBased:           tt.goBased,
-				NudgeCommand:      "Enter",
-				MaxNudgeRetries:   0,
-			}
-			deps.amux.captureSequence("pane-1", []string{"permission prompt"})
-			deps.amux.captureHistorySequence("pane-1", tt.historySequence)
-
-			d := deps.newDaemon(t)
-			ctx := context.Background()
-			if err := d.Start(ctx); err != nil {
-				t.Fatalf("Start() error = %v", err)
-			}
-			t.Cleanup(func() {
-				_ = d.Stop(context.Background())
-			})
-
-			if err := d.Assign(ctx, "LAB-710", "Capture diagnostics before kill", "codex"); err != nil {
-				t.Fatalf("Assign() error = %v", err)
-			}
-			deps.commands.reset()
-			deps.amux.killCalls = nil
-
-			captureTicker.tick(deps.clock.Now())
-			waitFor(t, "task failure after stuck diagnostics", func() bool {
-				task, ok := deps.state.task("LAB-710")
-				return ok && task.Status == TaskStatusFailed
-			})
-
-			task, _ := deps.state.task("LAB-710")
-			if got, want := task.Status, TaskStatusFailed; got != want {
-				t.Fatalf("task.Status = %q, want %q", got, want)
-			}
-			if _, ok := deps.state.worker("pane-1"); ok {
-				t.Fatal("worker still present after force kill")
-			}
-
-			if got, want := deps.amux.killCalls, []string{"pane-1"}; !reflect.DeepEqual(got, want) {
-				t.Fatalf("kill calls = %#v, want %#v", got, want)
-			}
-			if got := deps.amux.captureHistoryCount("pane-1"); got != tt.wantHistoryCalls {
-				t.Fatalf("capture history count = %d, want %d", got, tt.wantHistoryCalls)
-			}
-			if got, want := deps.signalCalls(), tt.wantSignalCalls; !reflect.DeepEqual(got, want) {
-				t.Fatalf("signal calls = %#v, want %#v", got, want)
-			}
-			if got, want := deps.sleepCalls(), tt.wantSleepCalls; !reflect.DeepEqual(got, want) {
-				t.Fatalf("sleep calls = %#v, want %#v", got, want)
-			}
-			if got, want := deps.pool.releasedClones(), []Clone{{
-				Name:          deps.pool.clone.Name,
-				Path:          deps.pool.clone.Path,
-				CurrentBranch: "LAB-710",
-				AssignedTask:  "LAB-710",
-			}}; !reflect.DeepEqual(got, want) {
-				t.Fatalf("released clones = %#v, want %#v", got, want)
-			}
-			if got := deps.commands.callsByName("git"); len(got) != 0 {
-				t.Fatalf("cleanup git calls = %#v, want none", got)
-			}
-
-			logPath := filepath.Join(deps.postmortemDir, tt.wantLogName)
-			data, err := os.ReadFile(logPath)
-			if err != nil {
-				t.Fatalf("ReadFile(%q) error = %v", logPath, err)
-			}
-			for _, want := range tt.wantLogSubstrings {
-				if !strings.Contains(string(data), want) {
-					t.Fatalf("postmortem log missing %q in %q", want, string(data))
-				}
-			}
-			for _, unwanted := range tt.wantNoLogStrings {
-				if strings.Contains(string(data), unwanted) {
-					t.Fatalf("postmortem log unexpectedly contained %q in %q", unwanted, string(data))
-				}
-			}
-
-			deps.events.requireTypes(t, EventDaemonStarted, EventTaskAssigned, EventWorkerEscalated, EventTaskFailed)
-		})
-	}
-}
-
-func TestStopInterruptsStuckWorkerDiagnosticsWait(t *testing.T) {
+func TestStuckDetectionEscalatesWithoutCleanupOrKill(t *testing.T) {
 	t.Parallel()
 
 	deps := newTestDeps(t)
@@ -314,68 +136,121 @@ func TestStopInterruptsStuckWorkerDiagnosticsWait(t *testing.T) {
 		MaxNudgeRetries:   0,
 	}
 	deps.amux.captureSequence("pane-1", []string{"permission prompt"})
-	deps.amux.captureHistorySequence("pane-1", []PaneCapture{{
-		Content:        []string{"stuck output"},
-		CWD:            "/tmp/clone-01",
-		CurrentCommand: "codex",
-		ChildPIDs:      []int{4242},
-	}})
 
 	d := deps.newDaemon(t)
-	sleepStarted := make(chan struct{})
-	d.sleep = func(ctx context.Context, delay time.Duration) error {
-		close(sleepStarted)
-		<-ctx.Done()
-		return ctx.Err()
-	}
-
 	ctx := context.Background()
 	if err := d.Start(ctx); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
 
-	if err := d.Assign(ctx, "LAB-710", "Capture diagnostics before kill", "codex"); err != nil {
+	if err := d.Assign(ctx, "LAB-710", "Leave escalated worker running", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	deps.commands.reset()
+	deps.amux.killCalls = nil
+
+	captureTicker.tick(deps.clock.Now())
+	waitFor(t, "worker escalation", func() bool {
+		active, err := deps.state.ActiveAssignmentByIssue(ctx, d.project, "LAB-710")
+		return err == nil && active.Worker.Health == WorkerHealthEscalated
+	})
+
+	task, ok := deps.state.task("LAB-710")
+	if !ok {
+		t.Fatal("task missing after stuck escalation")
+	}
+	if got, want := task.Status, TaskStatusActive; got != want {
+		t.Fatalf("task.Status = %q, want %q", got, want)
+	}
+
+	active, err := deps.state.ActiveAssignmentByIssue(ctx, d.project, "LAB-710")
+	if err != nil {
+		t.Fatalf("ActiveAssignmentByIssue() error = %v", err)
+	}
+	if got, want := active.Worker.Health, WorkerHealthEscalated; got != want {
+		t.Fatalf("worker.Health = %q, want %q", got, want)
+	}
+	if got, want := deps.amux.killCalls, []string(nil); !reflect.DeepEqual(got, want) {
+		t.Fatalf("kill calls = %#v, want none", got)
+	}
+	if got := deps.pool.releasedClones(); len(got) != 0 {
+		t.Fatalf("released clones = %#v, want none", got)
+	}
+	if got := deps.commands.callsByName("git"); len(got) != 0 {
+		t.Fatalf("cleanup git calls = %#v, want none", got)
+	}
+	if got := deps.events.countType(EventTaskFailed); got != 0 {
+		t.Fatalf("task failed event count = %d, want 0", got)
+	}
+
+	deps.events.requireTypes(t, EventDaemonStarted, EventTaskAssigned, EventWorkerEscalated)
+}
+
+func TestCancelKillsPaneAfterStuckEscalation(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	captureTicker := newFakeTicker()
+	prTicker := newFakeTicker()
+	deps.tickers.enqueue(captureTicker, prTicker)
+	deps.config.profiles["codex"] = AgentProfile{
+		Name:              "codex",
+		StartCommand:      "codex --yolo",
+		StuckTextPatterns: []string{"permission prompt"},
+		StuckTimeout:      time.Hour,
+		NudgeCommand:      "Enter",
+		MaxNudgeRetries:   0,
+	}
+	deps.amux.captureSequence("pane-1", []string{"permission prompt"})
+	deps.amux.sendKeysHook = func(_ string, keys []string) {
+		for _, key := range keys {
+			if key == "$postmortem" {
+				writePostmortemLog(t, deps.postmortemDir, "LAB-710", deps.clock.Now().Add(time.Minute))
+			}
+		}
+	}
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-710", "Cancel escalated worker", "codex"); err != nil {
 		t.Fatalf("Assign() error = %v", err)
 	}
 
 	captureTicker.tick(deps.clock.Now())
-	select {
-	case <-sleepStarted:
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for stuck diagnostics sleep")
+	waitFor(t, "worker escalation", func() bool {
+		active, err := deps.state.ActiveAssignmentByIssue(ctx, d.project, "LAB-710")
+		return err == nil && active.Worker.Health == WorkerHealthEscalated
+	})
+
+	deps.commands.reset()
+	deps.amux.killCalls = nil
+
+	if err := d.Cancel(ctx, "LAB-710"); err != nil {
+		t.Fatalf("Cancel() error = %v", err)
 	}
 
-	stopDone := make(chan error, 1)
-	go func() {
-		stopDone <- d.Stop(context.Background())
-	}()
+	waitFor(t, "task cancellation", func() bool {
+		task, ok := deps.state.task("LAB-710")
+		return ok && task.Status == TaskStatusCancelled
+	})
 
-	select {
-	case err := <-stopDone:
-		if err != nil {
-			t.Fatalf("Stop() error = %v", err)
-		}
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("Stop() blocked while stuck diagnostics wait was in progress")
+	if _, ok := deps.state.worker("pane-1"); ok {
+		t.Fatal("worker still present after cancellation")
+	}
+	if got, want := deps.amux.killCalls, []string{"pane-1"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("kill calls = %#v, want %#v", got, want)
 	}
 
-	if got := deps.amux.captureHistoryCount("pane-1"); got != 1 {
-		t.Fatalf("capture history count = %d, want 1", got)
-	}
-
-	task, ok := deps.state.task("LAB-710")
-	if !ok {
-		t.Fatal("task missing after stop")
-	}
-	if got, want := task.Status, TaskStatusFailed; got != want {
-		t.Fatalf("task.Status = %q, want %q", got, want)
-	}
-
-	event, ok := deps.events.lastEventOfType(EventTaskFailed)
-	if !ok {
-		t.Fatalf("lastEventOfType(%q) = false, want true", EventTaskFailed)
-	}
-	if strings.Contains(event.Message, "diagnostics error") {
-		t.Fatalf("event.Message = %q, want no diagnostics error after stop cancellation", event.Message)
-	}
+	deps.events.requireTypes(t, EventDaemonStarted, EventTaskAssigned, EventWorkerEscalated, EventWorkerPostmortem, EventTaskCancelled)
 }

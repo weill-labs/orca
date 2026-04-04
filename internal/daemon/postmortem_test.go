@@ -407,50 +407,6 @@ func newPostmortemAssignment(deps *testDeps) ActiveAssignment {
 	}
 }
 
-func TestFailStuckWorkerIncludesDiagnosticsErrorInEventMessage(t *testing.T) {
-	t.Parallel()
-
-	deps := newTestDeps(t)
-	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
-	d := deps.newDaemon(t)
-	ctx := context.Background()
-
-	if err := d.Start(ctx); err != nil {
-		t.Fatalf("Start() error = %v", err)
-	}
-	t.Cleanup(func() {
-		_ = d.Stop(context.Background())
-	})
-
-	if err := d.Assign(ctx, "LAB-710", "Capture diagnostics before kill", "codex"); err != nil {
-		t.Fatalf("Assign() error = %v", err)
-	}
-	active, err := deps.state.ActiveAssignmentByIssue(ctx, d.project, "LAB-710")
-	if err != nil {
-		t.Fatalf("ActiveAssignmentByIssue() error = %v", err)
-	}
-	profile, err := d.profileForTask(ctx, active.Task)
-	if err != nil {
-		t.Fatalf("profileForTask() error = %v", err)
-	}
-	deps.amux.captureHistoryErrors("pane-1", []error{errors.New("history unavailable")})
-
-	d.failStuckWorker(ctx, active, profile, "idle timeout exceeded")
-
-	waitFor(t, "failed task", func() bool {
-		task, ok := deps.state.task("LAB-710")
-		return ok && task.Status == TaskStatusFailed
-	})
-
-	event, ok := deps.events.lastEventOfType(EventTaskFailed)
-	if !ok {
-		t.Fatalf("lastEventOfType(%q) = false, want true", EventTaskFailed)
-	}
-	if !strings.Contains(event.Message, "diagnostics error: capture pane history: history unavailable") {
-		t.Fatalf("event.Message = %q, want diagnostics error context", event.Message)
-	}
-}
-
 func TestFinishAssignmentDefaultsFailedEventMessageWhenEmpty(t *testing.T) {
 	t.Parallel()
 
@@ -484,6 +440,9 @@ func TestFinishAssignmentDefaultsFailedEventMessageWhenEmpty(t *testing.T) {
 	}
 	if got := event.Message; got != "task failed" {
 		t.Fatalf("event.Message = %q, want %q", got, "task failed")
+	}
+	if got := deps.amux.killCalls; len(got) != 0 {
+		t.Fatalf("kill calls = %#v, want none for failed finish", got)
 	}
 }
 
