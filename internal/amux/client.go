@@ -17,6 +17,7 @@ var spawnPanePattern = regexp.MustCompile(`\bpane\s+(\S+)`)
 // Client wraps the amux CLI for daemon code and tests.
 type Client interface {
 	Spawn(ctx context.Context, req SpawnRequest) (Pane, error)
+	PaneExists(ctx context.Context, paneID string) (bool, error)
 	ListPanes(ctx context.Context) ([]Pane, error)
 	SendKeys(ctx context.Context, paneID string, keys ...string) error
 	Capture(ctx context.Context, paneID string) (string, error)
@@ -167,6 +168,21 @@ func (c *CLIClient) Capture(ctx context.Context, paneID string) (string, error) 
 	return strings.Join(pane.Content, "\n"), nil
 }
 
+// PaneExists verifies whether a pane can still be resolved by stable pane ID.
+func (c *CLIClient) PaneExists(ctx context.Context, paneID string) (bool, error) {
+	pane, err := c.rawCapturePane(ctx, paneID)
+	if err != nil {
+		return false, err
+	}
+	if pane.Error == nil {
+		return true, nil
+	}
+	if paneMissing(pane.Error) {
+		return false, nil
+	}
+	return false, paneCaptureError(pane.Error)
+}
+
 // SetMetadata applies the provided metadata on a pane.
 func (c *CLIClient) SetMetadata(ctx context.Context, paneID string, metadata map[string]string) error {
 	if len(metadata) == 0 {
@@ -202,6 +218,17 @@ func (c *CLIClient) WaitIdle(ctx context.Context, paneID string, timeout time.Du
 }
 
 func (c *CLIClient) capturePane(ctx context.Context, paneID string) (capturePane, error) {
+	pane, err := c.rawCapturePane(ctx, paneID)
+	if err != nil {
+		return capturePane{}, err
+	}
+	if pane.Error != nil {
+		return capturePane{}, paneCaptureError(pane.Error)
+	}
+	return pane, nil
+}
+
+func (c *CLIClient) rawCapturePane(ctx context.Context, paneID string) (capturePane, error) {
 	output, err := c.run(ctx, c.session, "capture", "--format", "json", paneID)
 	if err != nil {
 		return capturePane{}, err
@@ -211,16 +238,6 @@ func (c *CLIClient) capturePane(ctx context.Context, paneID string) (capturePane
 	if err := json.Unmarshal(output, &pane); err != nil {
 		return capturePane{}, fmt.Errorf("parse capture json: %w", err)
 	}
-	if pane.Error != nil {
-		if pane.Error.Message != "" {
-			return capturePane{}, fmt.Errorf("capture failed: %s", pane.Error.Message)
-		}
-		if pane.Error.Code != "" {
-			return capturePane{}, fmt.Errorf("capture failed: %s", pane.Error.Code)
-		}
-		return capturePane{}, fmt.Errorf("capture failed")
-	}
-
 	return pane, nil
 }
 
@@ -283,6 +300,30 @@ func commandError(binary string, args []string, output []byte, err error) error 
 		return fmt.Errorf("%s: %w: %s", commandString(binary, args), err, msg)
 	}
 	return fmt.Errorf("%s: %w", commandString(binary, args), err)
+}
+
+func paneCaptureError(errInfo *captureCommandError) error {
+	if errInfo == nil {
+		return fmt.Errorf("capture failed")
+	}
+	if errInfo.Message != "" {
+		return fmt.Errorf("capture failed: %s", errInfo.Message)
+	}
+	if errInfo.Code != "" {
+		return fmt.Errorf("capture failed: %s", errInfo.Code)
+	}
+	return fmt.Errorf("capture failed")
+}
+
+func paneMissing(errInfo *captureCommandError) bool {
+	if errInfo == nil {
+		return false
+	}
+	if strings.EqualFold(errInfo.Code, "not_found") {
+		return true
+	}
+	message := strings.ToLower(strings.TrimSpace(errInfo.Message))
+	return strings.Contains(message, "not found") || strings.Contains(message, "missing")
 }
 
 func parsePaneList(output string) ([]Pane, error) {

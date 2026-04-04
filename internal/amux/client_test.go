@@ -375,6 +375,83 @@ func TestCLIClientListPanesErrorsAndFallbacks(t *testing.T) {
 	}
 }
 
+func TestCLIClientPaneExists(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		output  string
+		runErr  error
+		want    bool
+		wantErr string
+	}{
+		{
+			name:   "returns true for live pane",
+			output: `{"id":1,"name":"worker-LAB-711","cwd":"/tmp/orca01"}`,
+			want:   true,
+		},
+		{
+			name:   "returns false for not_found code",
+			output: `{"error":{"code":"not_found","message":"pane missing"}}`,
+		},
+		{
+			name:   "returns false for missing message",
+			output: `{"error":{"message":"pane not found"}}`,
+		},
+		{
+			name:    "returns capture error for other error payloads",
+			output:  `{"error":{"code":"permission_denied","message":"denied"}}`,
+			wantErr: "capture failed: denied",
+		},
+		{
+			name:    "returns parse errors",
+			output:  `{`,
+			wantErr: "parse capture json",
+		},
+		{
+			name:    "returns command errors",
+			runErr:  errors.New("exit status 1"),
+			wantErr: "exit status 1",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			runner := &fakeRunner{}
+			if tt.runErr != nil {
+				runner.err = tt.runErr
+			} else {
+				runner.output = []byte(tt.output)
+			}
+			client := newTestClient(Config{Session: "orca-dev"}, runner)
+
+			got, err := client.PaneExists(context.Background(), "pane-1")
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("PaneExists() error = %v, want substring %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("PaneExists() error = %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("PaneExists() = %t, want %t", got, tt.want)
+			}
+
+			wantCmds := []recordedCommand{
+				{name: "amux", args: []string{"-s", "orca-dev", "capture", "--format", "json", "pane-1"}},
+			}
+			if !reflect.DeepEqual(runner.calls, wantCmds) {
+				t.Fatalf("PaneExists() commands = %#v, want %#v", runner.calls, wantCmds)
+			}
+		})
+	}
+}
+
 func TestParsePaneList(t *testing.T) {
 	t.Parallel()
 
@@ -770,6 +847,9 @@ func TestMockClientRecordsCalls(t *testing.T) {
 		SpawnFunc: func(_ context.Context, req SpawnRequest) (Pane, error) {
 			return Pane{ID: "20", Name: paneName(req.CWD)}, nil
 		},
+		PaneExistsFunc: func(_ context.Context, paneID string) (bool, error) {
+			return paneID == "20", nil
+		},
 		ListPanesFunc: func(_ context.Context) ([]Pane, error) {
 			return []Pane{{ID: "20", Name: "worker-20", CWD: "/tmp/worker-20"}}, nil
 		},
@@ -788,6 +868,13 @@ func TestMockClientRecordsCalls(t *testing.T) {
 
 	if err := mock.SendKeys(context.Background(), "20", "make test"); err != nil {
 		t.Fatalf("SendKeys() error = %v", err)
+	}
+	exists, err := mock.PaneExists(context.Background(), "20")
+	if err != nil {
+		t.Fatalf("PaneExists() error = %v", err)
+	}
+	if !exists {
+		t.Fatal("PaneExists() = false, want true")
 	}
 	gotPanes, err := mock.ListPanes(context.Background())
 	if err != nil {
@@ -815,6 +902,9 @@ func TestMockClientRecordsCalls(t *testing.T) {
 
 	if !reflect.DeepEqual(mock.SpawnCalls, []SpawnRequest{{CWD: "/tmp/worker-20"}}) {
 		t.Fatalf("SpawnCalls = %#v", mock.SpawnCalls)
+	}
+	if !reflect.DeepEqual(mock.PaneExistsCalls, []string{"20"}) {
+		t.Fatalf("PaneExistsCalls = %#v", mock.PaneExistsCalls)
 	}
 	if got, want := mock.ListPanesCalls, 1; got != want {
 		t.Fatalf("ListPanesCalls = %d, want %d", got, want)
