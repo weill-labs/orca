@@ -12,24 +12,15 @@ func (d *Daemon) reconcileActiveAssignments(ctx context.Context) {
 		return
 	}
 
-	panes, err := d.amux.ListPanes(ctx)
-	if err != nil {
-		return
-	}
-
-	livePaneIDs := make(map[string]struct{}, len(panes))
-	for _, pane := range panes {
-		if pane.ID == "" {
-			continue
-		}
-		livePaneIDs[pane.ID] = struct{}{}
-	}
-
 	for _, active := range assignments {
 		if ctx.Err() != nil {
 			return
 		}
-		if _, ok := livePaneIDs[active.Task.PaneID]; ok {
+		exists, err := d.amux.PaneExists(ctx, active.Task.PaneID)
+		if err != nil {
+			continue
+		}
+		if exists {
 			continue
 		}
 		_ = d.failAssignment(ctx, active, EventTaskFailed, "worker pane missing on daemon startup")

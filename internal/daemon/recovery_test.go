@@ -11,6 +11,7 @@ func TestDaemonStartFailsMissingPaneAssignmentsAndReleasesClone(t *testing.T) {
 
 	deps := newTestDeps(t)
 	seedActiveAssignment(t, deps, "LAB-721", "pane-1")
+	deps.amux.paneExists = map[string]bool{"pane-1": false}
 
 	d := deps.newDaemon(t)
 	ctx := context.Background()
@@ -67,7 +68,6 @@ func TestDaemonStartResumesMonitoringLiveAssignments(t *testing.T) {
 	pollTicker := newFakeTicker()
 	deps.tickers.enqueue(captureTicker, pollTicker)
 	seedActiveAssignment(t, deps, "LAB-722", "pane-1")
-	deps.amux.listPanes = []Pane{{ID: "pane-1", Name: "worker-1"}}
 	deps.amux.captureSequence("pane-1", []string{"updated output"})
 
 	d := deps.newDaemon(t)
@@ -105,6 +105,7 @@ func TestDaemonStartMissingPaneRecoveryIsIdempotentAcrossRestart(t *testing.T) {
 
 	deps := newTestDeps(t)
 	seedActiveAssignment(t, deps, "LAB-723", "pane-1")
+	deps.amux.paneExists = map[string]bool{"pane-1": false}
 
 	first := deps.newDaemon(t)
 	ctx := context.Background()
