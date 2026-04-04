@@ -46,7 +46,7 @@ func (d *Daemon) handlePRReviewPoll(ctx context.Context, active ActiveAssignment
 	}
 
 	feedback := formatBlockingReviewFeedback(active.Task.PRNumber, blocking)
-	if err := d.amux.SendKeys(ctx, active.Task.PaneID, ensureTrailingNewline(feedback)); err != nil {
+	if err := d.sendPromptAndEnter(ctx, active.Task.PaneID, feedback); err != nil {
 		return
 	}
 
@@ -99,7 +99,7 @@ func formatBlockingReviewFeedback(prNumber int, reviews []prReview) string {
 		body := normalizeReviewBody(review.Body)
 		fmt.Fprintf(&builder, "- %s: %s\n", author, body)
 	}
-	builder.WriteString("\nAddress the feedback in the PR review and push an update.\n")
+	builder.WriteString("\nAddress the feedback in the PR review and push an update.")
 	return builder.String()
 }
 

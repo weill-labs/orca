@@ -2,7 +2,9 @@ package daemon
 
 import (
 	"context"
+	"reflect"
 	"testing"
+	"time"
 )
 
 func TestPRReviewPollingNudgesWorkerOncePerNewBlockingReviewBatch(t *testing.T) {
@@ -31,8 +33,8 @@ func TestPRReviewPollingNudgesWorkerOncePerNewBlockingReviewBatch(t *testing.T) 
 		t.Fatalf("Assign() error = %v", err)
 	}
 
-	firstNudge := "New blocking PR review feedback on #42:\n- alice: Please add tests.\n\nAddress the feedback in the PR review and push an update.\n"
-	secondNudge := "New blocking PR review feedback on #42:\n- bob: Handle the nil case too.\n\nAddress the feedback in the PR review and push an update.\n"
+	firstNudge := "New blocking PR review feedback on #42:\n- alice: Please add tests.\n\nAddress the feedback in the PR review and push an update."
+	secondNudge := "New blocking PR review feedback on #42:\n- bob: Handle the nil case too.\n\nAddress the feedback in the PR review and push an update."
 
 	prTicker.tick(deps.clock.Now())
 	waitFor(t, "first review nudge", func() bool {
@@ -65,8 +67,17 @@ func TestPRReviewPollingNudgesWorkerOncePerNewBlockingReviewBatch(t *testing.T) 
 	deps.amux.requireSentKeys(t, "pane-1", []string{
 		"Implement daemon core\n",
 		firstNudge,
+		"\n",
 		secondNudge,
+		"\n",
 	})
+	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
+		{PaneID: "pane-1", Timeout: 30 * time.Second},
+		{PaneID: "pane-1", Timeout: 30 * time.Second},
+		{PaneID: "pane-1", Timeout: 30 * time.Second},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("wait idle calls = %#v, want %#v", got, want)
+	}
 	if got, want := deps.events.countType(EventWorkerNudgedReview), 2; got != want {
 		t.Fatalf("review nudge event count = %d, want %d", got, want)
 	}
@@ -97,7 +108,7 @@ func TestPRReviewPollingAdvancesCountWithoutNudgingForNonBlockingReviews(t *test
 		t.Fatalf("Assign() error = %v", err)
 	}
 
-	firstNudge := "New blocking PR review feedback on #42:\n- alice: Please add tests.\n\nAddress the feedback in the PR review and push an update.\n"
+	firstNudge := "New blocking PR review feedback on #42:\n- alice: Please add tests.\n\nAddress the feedback in the PR review and push an update."
 
 	prTicker.tick(deps.clock.Now())
 	waitFor(t, "initial blocking review nudge", func() bool {
@@ -123,7 +134,14 @@ func TestPRReviewPollingAdvancesCountWithoutNudgingForNonBlockingReviews(t *test
 	deps.amux.requireSentKeys(t, "pane-1", []string{
 		"Implement daemon core\n",
 		firstNudge,
+		"\n",
 	})
+	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
+		{PaneID: "pane-1", Timeout: 30 * time.Second},
+		{PaneID: "pane-1", Timeout: 30 * time.Second},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("wait idle calls = %#v, want %#v", got, want)
+	}
 	if got, want := deps.events.countType(EventWorkerNudgedReview), 1; got != want {
 		t.Fatalf("review nudge event count = %d, want %d", got, want)
 	}
@@ -154,7 +172,7 @@ func TestPRReviewPollingIgnoresEmptyReviewPayload(t *testing.T) {
 		t.Fatalf("Assign() error = %v", err)
 	}
 
-	firstNudge := "New blocking PR review feedback on #42:\n- alice: Please add tests.\n\nAddress the feedback in the PR review and push an update.\n"
+	firstNudge := "New blocking PR review feedback on #42:\n- alice: Please add tests.\n\nAddress the feedback in the PR review and push an update."
 
 	prTicker.tick(deps.clock.Now())
 	waitFor(t, "initial review nudge", func() bool {
@@ -207,8 +225,8 @@ func TestPRReviewPollingResumesFromPersistedWorkerStateAfterRestart(t *testing.T
 		t.Fatalf("Assign() error = %v", err)
 	}
 
-	firstNudge := "New blocking PR review feedback on #42:\n- alice: Please add tests.\n\nAddress the feedback in the PR review and push an update.\n"
-	secondNudge := "New blocking PR review feedback on #42:\n- bob: Handle the nil case too.\n\nAddress the feedback in the PR review and push an update.\n"
+	firstNudge := "New blocking PR review feedback on #42:\n- alice: Please add tests.\n\nAddress the feedback in the PR review and push an update."
+	secondNudge := "New blocking PR review feedback on #42:\n- bob: Handle the nil case too.\n\nAddress the feedback in the PR review and push an update."
 
 	firstPollTicker.tick(deps.clock.Now())
 	waitFor(t, "first persisted review nudge", func() bool {

@@ -132,6 +132,20 @@ func (d *Daemon) emit(ctx context.Context, event Event) {
 	}
 }
 
+func (d *Daemon) sendPromptAndEnter(ctx context.Context, paneID, prompt string) error {
+	trimmed := strings.TrimRight(prompt, "\r\n")
+	if trimmed == "" {
+		return errors.New("prompt is empty")
+	}
+	if err := d.amux.SendKeys(ctx, paneID, trimmed); err != nil {
+		return err
+	}
+	if err := d.amux.WaitIdle(ctx, paneID, defaultAgentHandshakeTimeout); err != nil {
+		return err
+	}
+	return d.amux.SendKeys(ctx, paneID, "Enter")
+}
+
 func ensureTrailingNewline(input string) string {
 	if strings.HasSuffix(input, "\n") {
 		return input

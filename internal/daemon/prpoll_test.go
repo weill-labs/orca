@@ -188,7 +188,6 @@ func TestPRMergePollingSkipsPostmortemTriggerAfterWrapUpError(t *testing.T) {
 
 	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
 		{PaneID: "pane-1", Timeout: 30 * time.Second},
-		{PaneID: "pane-1", Timeout: 2 * time.Minute},
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("wait idle calls = %#v, want %#v", got, want)
 	}
@@ -547,10 +546,19 @@ func TestEnqueueNotifiesWorkerWhenRebaseFailsAndAllowsRequeue(t *testing.T) {
 	}
 
 	pollTicker.tick(deps.clock.Now())
-	conflictNotice := "Merge queue could not rebase PR #42 onto main. Resolve the conflicts, push an update, and re-run `orca enqueue 42` when ready.\n"
+	conflictNotice := "Merge queue could not rebase PR #42 onto main. Resolve the conflicts, push an update, and re-run `orca enqueue 42` when ready."
 	waitFor(t, "merge queue conflict notice", func() bool {
 		return deps.amux.countKey("pane-1", conflictNotice) == 1
 	})
+	if got, want := deps.amux.countKey("pane-1", "\n"), 1; got != want {
+		t.Fatalf("merge queue enter count = %d, want %d", got, want)
+	}
+	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
+		{PaneID: "pane-1", Timeout: 30 * time.Second},
+		{PaneID: "pane-1", Timeout: 30 * time.Second},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("wait idle calls = %#v, want %#v", got, want)
+	}
 
 	if got := deps.commands.countCalls("gh", []string{"pr", "merge", "42", "--squash"}); got != 0 {
 		t.Fatalf("unexpected merge attempt after rebase failure: %d", got)
