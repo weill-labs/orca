@@ -124,6 +124,30 @@ func TestStopReturnsContextErrorWhenPollingCancelled(t *testing.T) {
 	waitForProcessExit(t, pid)
 }
 
+func TestStartReturnsClearErrorWhenRepoConfigIsMissing(t *testing.T) {
+	store := &fakeStore{}
+	projectPath := testProjectPathWithoutConfig(t)
+	controller, pidPath := newTestController(t, store, projectPath, scriptOptions{
+		ignoreTERM: false,
+	})
+	subdir := filepath.Join(projectPath, "internal")
+	if err := os.MkdirAll(subdir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", subdir, err)
+	}
+
+	_, err := controller.Start(context.Background(), StartRequest{
+		Session: "test",
+		Project: subdir,
+	})
+	if err == nil || !strings.Contains(err.Error(), ".orca/config.toml") {
+		t.Fatalf("expected missing config error, got %v", err)
+	}
+
+	if _, statErr := os.Stat(pidPath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("expected daemon process not to start, pid file stat err = %v", statErr)
+	}
+}
+
 type scriptOptions struct {
 	ignoreTERM bool
 }
@@ -238,11 +262,46 @@ func startDirectSleepProcess(t *testing.T, ignoreTERM bool) *exec.Cmd {
 func testProjectPath(t *testing.T) string {
 	t.Helper()
 
-	projectPath, err := filepath.Abs(t.TempDir())
-	if err != nil {
-		t.Fatalf("filepath.Abs() error = %v", err)
+	projectPath := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(filepath.Join(projectPath, ".git"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(.git) error = %v", err)
 	}
-	return projectPath
+	if err := os.MkdirAll(filepath.Join(projectPath, ".orca"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(.orca) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projectPath, ".orca", "config.toml"), []byte(`
+[pool]
+pattern = "/tmp/orca*"
+
+[agents.codex]
+start_command = "codex --yolo"
+stuck_timeout = "5m"
+nudge_command = "Enter"
+max_nudge_retries = 1
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(config.toml) error = %v", err)
+	}
+
+	resolvedProjectPath, err := filepath.EvalSymlinks(projectPath)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(%q) error = %v", projectPath, err)
+	}
+	return resolvedProjectPath
+}
+
+func testProjectPathWithoutConfig(t *testing.T) string {
+	t.Helper()
+
+	projectPath := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(filepath.Join(projectPath, ".git"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(.git) error = %v", err)
+	}
+
+	resolvedProjectPath, err := filepath.EvalSymlinks(projectPath)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(%q) error = %v", projectPath, err)
+	}
+	return resolvedProjectPath
 }
 
 type fakeStore struct {

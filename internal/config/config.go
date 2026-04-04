@@ -9,13 +9,15 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/weill-labs/orca/internal/project"
 )
 
 const (
-	globalConfigPath  = ".config/orca/config.toml"
 	projectConfigDir  = ".orca"
 	projectConfigFile = "config.toml"
 )
+
+var ErrConfigNotFound = errors.New("config: repo-local .orca/config.toml not found")
 
 type Config struct {
 	Daemon DaemonConfig
@@ -45,31 +47,21 @@ type AgentProfile struct {
 }
 
 func Load(projectDir string) (Config, error) {
-	homeDir, err := currentHomeDir()
-	if err != nil {
-		return Config{}, fmt.Errorf("resolve home directory: %w", err)
-	}
-
-	globalPath := filepath.Join(homeDir, globalConfigPath)
-	projectPath := filepath.Join(projectDir, projectConfigDir, projectConfigFile)
-	return LoadFiles(globalPath, projectPath)
-}
-
-func LoadFiles(globalPath, projectPath string) (Config, error) {
-	globalRaw, err := readConfigFile(globalPath)
+	projectRoot, err := project.CanonicalPath(projectDir)
 	if err != nil {
 		return Config{}, err
 	}
 
+	return LoadFile(filepath.Join(projectRoot, projectConfigDir, projectConfigFile))
+}
+
+func LoadFile(projectPath string) (Config, error) {
 	projectRaw, err := readConfigFile(projectPath)
 	if err != nil {
 		return Config{}, err
 	}
 
-	merged := globalRaw
-	merged.merge(projectRaw)
-
-	cfg, err := merged.toConfig()
+	cfg, err := projectRaw.toConfig()
 	if err != nil {
 		return Config{}, err
 	}
@@ -123,7 +115,7 @@ func readConfigFile(path string) (rawConfig, error) {
 	}
 
 	if errors.Is(err, os.ErrNotExist) {
-		return rawConfig{}, nil
+		return rawConfig{}, fmt.Errorf("%w: %s", ErrConfigNotFound, path)
 	}
 
 	return rawConfig{}, fmt.Errorf("read %s: %w", path, err)

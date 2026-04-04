@@ -150,7 +150,9 @@ func (a *App) runStart(ctx context.Context, args []string) error {
 
 func (a *App) runStop(ctx context.Context, args []string) error {
 	fs := newFlagSet("stop")
+	var projectPath string
 	var jsonOutput bool
+	fs.StringVar(&projectPath, "project", "", "project path")
 	fs.BoolVar(&jsonOutput, "json", false, "emit JSON output")
 
 	if err := parseFlags(fs, args); err != nil {
@@ -160,7 +162,7 @@ func (a *App) runStop(ctx context.Context, args []string) error {
 		return fmt.Errorf("stop does not accept positional arguments")
 	}
 
-	projectPath, err := a.resolveProject("")
+	projectPath, err := a.resolveProject(projectPath)
 	if err != nil {
 		return err
 	}
@@ -180,7 +182,9 @@ func (a *App) runStop(ctx context.Context, args []string) error {
 
 func (a *App) runStatus(ctx context.Context, args []string) error {
 	fs := newFlagSet("status")
+	var projectPath string
 	var jsonOutput bool
+	fs.StringVar(&projectPath, "project", "", "project path")
 	fs.BoolVar(&jsonOutput, "json", false, "emit JSON output")
 
 	issue, err := parseOptionalSinglePositional(fs, args)
@@ -188,7 +192,7 @@ func (a *App) runStatus(ctx context.Context, args []string) error {
 		return err
 	}
 
-	projectPath, err := a.resolveProject("")
+	projectPath, err = a.resolveProject(projectPath)
 	if err != nil {
 		return err
 	}
@@ -221,9 +225,11 @@ func (a *App) runAssign(ctx context.Context, args []string) error {
 	fs := newFlagSet("assign")
 	var prompt string
 	var agent string
+	var projectPath string
 	var jsonOutput bool
 	fs.StringVar(&prompt, "prompt", "", "task prompt")
 	fs.StringVar(&agent, "agent", defaultAgent, "agent profile")
+	fs.StringVar(&projectPath, "project", "", "project path")
 	fs.BoolVar(&jsonOutput, "json", false, "emit JSON output")
 
 	issue, err := parseRequiredSinglePositional(fs, args, "assign requires ISSUE")
@@ -234,7 +240,7 @@ func (a *App) runAssign(ctx context.Context, args []string) error {
 		return fmt.Errorf("assign requires --prompt")
 	}
 
-	projectPath, err := a.resolveProject("")
+	projectPath, err = a.resolveProject(projectPath)
 	if err != nil {
 		return err
 	}
@@ -259,7 +265,9 @@ func (a *App) runAssign(ctx context.Context, args []string) error {
 
 func (a *App) runEnqueue(ctx context.Context, args []string) error {
 	fs := newFlagSet("enqueue")
+	var projectPath string
 	var jsonOutput bool
+	fs.StringVar(&projectPath, "project", "", "project path")
 	fs.BoolVar(&jsonOutput, "json", false, "emit JSON output")
 
 	rawPR, err := parseRequiredSinglePositional(fs, args, "enqueue requires PR_NUMBER")
@@ -272,7 +280,7 @@ func (a *App) runEnqueue(ctx context.Context, args []string) error {
 		return fmt.Errorf("enqueue requires numeric PR_NUMBER")
 	}
 
-	projectPath, err := a.resolveProject("")
+	projectPath, err = a.resolveProject(projectPath)
 	if err != nil {
 		return err
 	}
@@ -295,7 +303,9 @@ func (a *App) runEnqueue(ctx context.Context, args []string) error {
 
 func (a *App) runCancel(ctx context.Context, args []string) error {
 	fs := newFlagSet("cancel")
+	var projectPath string
 	var jsonOutput bool
+	fs.StringVar(&projectPath, "project", "", "project path")
 	fs.BoolVar(&jsonOutput, "json", false, "emit JSON output")
 
 	issue, err := parseRequiredSinglePositional(fs, args, "cancel requires ISSUE")
@@ -303,7 +313,7 @@ func (a *App) runCancel(ctx context.Context, args []string) error {
 		return err
 	}
 
-	projectPath, err := a.resolveProject("")
+	projectPath, err = a.resolveProject(projectPath)
 	if err != nil {
 		return err
 	}
@@ -326,7 +336,9 @@ func (a *App) runCancel(ctx context.Context, args []string) error {
 
 func (a *App) runWorkers(ctx context.Context, args []string) error {
 	fs := newFlagSet("workers")
+	var projectPath string
 	var jsonOutput bool
+	fs.StringVar(&projectPath, "project", "", "project path")
 	fs.BoolVar(&jsonOutput, "json", false, "emit JSON output")
 
 	if err := parseFlags(fs, args); err != nil {
@@ -336,7 +348,7 @@ func (a *App) runWorkers(ctx context.Context, args []string) error {
 		return fmt.Errorf("workers does not accept positional arguments")
 	}
 
-	projectPath, err := a.resolveProject("")
+	projectPath, err := a.resolveProject(projectPath)
 	if err != nil {
 		return err
 	}
@@ -353,7 +365,9 @@ func (a *App) runWorkers(ctx context.Context, args []string) error {
 
 func (a *App) runPool(ctx context.Context, args []string) error {
 	fs := newFlagSet("pool")
+	var projectPath string
 	var jsonOutput bool
+	fs.StringVar(&projectPath, "project", "", "project path")
 	fs.BoolVar(&jsonOutput, "json", false, "emit JSON output")
 
 	if err := parseFlags(fs, args); err != nil {
@@ -363,7 +377,7 @@ func (a *App) runPool(ctx context.Context, args []string) error {
 		return fmt.Errorf("pool does not accept positional arguments")
 	}
 
-	projectPath, err := a.resolveProject("")
+	projectPath, err := a.resolveProject(projectPath)
 	if err != nil {
 		return err
 	}
@@ -380,6 +394,8 @@ func (a *App) runPool(ctx context.Context, args []string) error {
 
 func (a *App) runEvents(ctx context.Context, args []string) error {
 	fs := newFlagSet("events")
+	var projectPath string
+	fs.StringVar(&projectPath, "project", "", "project path")
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
@@ -387,7 +403,7 @@ func (a *App) runEvents(ctx context.Context, args []string) error {
 		return fmt.Errorf("events does not accept positional arguments")
 	}
 
-	projectPath, err := a.resolveProject("")
+	projectPath, err := a.resolveProject(projectPath)
 	if err != nil {
 		return err
 	}

@@ -17,6 +17,9 @@ func TestRunProcessAssignAndCancelOverUnixSocket(t *testing.T) {
 	t.Setenv("HOME", home)
 
 	projectDir := filepath.Join(t.TempDir(), "project")
+	if err := os.MkdirAll(filepath.Join(projectDir, ".git"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(.git) error = %v", err)
+	}
 	if err := os.MkdirAll(filepath.Join(projectDir, ".orca"), 0o755); err != nil {
 		t.Fatalf("MkdirAll(.orca) error = %v", err)
 	}

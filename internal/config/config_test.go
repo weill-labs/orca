@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -9,7 +10,9 @@ import (
 	"time"
 )
 
-func TestLoad(t *testing.T) {
+func TestLoadFile(t *testing.T) {
+	t.Parallel()
+
 	type want struct {
 		cfg Config
 		err string
@@ -17,54 +20,33 @@ func TestLoad(t *testing.T) {
 
 	tests := []struct {
 		name        string
-		globalTOML  string
 		projectTOML string
 		want        want
 	}{
 		{
-			name: "missing files returns zero config",
-			want: want{cfg: Config{}},
+			name: "missing repo config returns explicit error",
+			want: want{err: ".orca/config.toml"},
 		},
 		{
-			name: "project overrides global per field",
-			globalTOML: `
+			name: "loads project config",
+			projectTOML: `
 [daemon]
 poll_interval = "30s"
-notification_pane = "pane-1"
+notification_pane = "pane-9"
 
 [pool]
-pattern = "/tmp/global/amux*"
-clone_origin = "git@github.com:weill-labs/amux.git"
+pattern = "/tmp/project/amux*"
+clone_origin = "git@github.com:weill-labs/orca.git"
 
 [agents.codex]
 start_command = "codex --yolo"
 postmortem_enabled = true
 idle_timeout = "30s"
-stuck_timeout = "5m"
-stuck_text_patterns = ["permission prompt"]
-go_based = true
-nudge_command = "Enter"
-max_nudge_retries = 3
-
-[agents.claude]
-start_command = "claude --dangerously-skip-permissions"
-idle_timeout = "45s"
-stuck_timeout = "7m"
-stuck_text_patterns = ["tool denied"]
-nudge_command = "Enter"
-max_nudge_retries = 2
-`,
-			projectTOML: `
-[daemon]
-notification_pane = "pane-9"
-
-[pool]
-clone_origin = "git@github.com:weill-labs/orca.git"
-
-[agents.codex]
 stuck_timeout = "9m"
 stuck_text_patterns = ["tool denied", "approval required"]
 go_based = false
+nudge_command = "Enter"
+max_nudge_retries = 3
 
 [agents.aider]
 start_command = "aider"
@@ -82,7 +64,7 @@ max_nudge_retries = 1
 						NotificationPane: "pane-9",
 					},
 					Pool: PoolConfig{
-						Pattern:     "/tmp/global/amux*",
+						Pattern:     "/tmp/project/amux*",
 						CloneOrigin: "git@github.com:weill-labs/orca.git",
 					},
 					Agents: map[string]AgentProfile{
@@ -94,14 +76,6 @@ max_nudge_retries = 1
 							GoBased:           true,
 							NudgeCommand:      "/run\n",
 							MaxNudgeRetries:   1,
-						},
-						"claude": {
-							StartCommand:      "claude --dangerously-skip-permissions",
-							IdleTimeout:       45 * time.Second,
-							StuckTimeout:      7 * time.Minute,
-							StuckTextPatterns: []string{"tool denied"},
-							NudgeCommand:      "Enter",
-							MaxNudgeRetries:   2,
 						},
 						"codex": {
 							StartCommand:      "codex --yolo",
@@ -119,7 +93,7 @@ max_nudge_retries = 1
 		},
 		{
 			name: "normalizes legacy enter-like nudge commands",
-			globalTOML: `
+			projectTOML: `
 [agents.codex]
 nudge_command = "y\n"
 
@@ -141,11 +115,11 @@ nudge_command = "\n"
 		},
 		{
 			name: "invalid duration returns error",
-			globalTOML: `
+			projectTOML: `
 [daemon]
 poll_interval = "soon"
 `,
-			want: want{err: `parse daemon.poll_interval`},
+			want: want{err: "parse daemon.poll_interval"},
 		},
 	}
 
@@ -154,59 +128,90 @@ poll_interval = "soon"
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			homeDir := t.TempDir()
-			projectDir := filepath.Join(t.TempDir(), "repo")
-			globalPath := filepath.Join(homeDir, ".config", "orca", "config.toml")
-			projectPath := filepath.Join(projectDir, ".orca", "config.toml")
-
-			if tt.globalTOML != "" {
-				writeFile(t, globalPath, tt.globalTOML)
-			}
+			projectPath := filepath.Join(t.TempDir(), ".orca", "config.toml")
 			if tt.projectTOML != "" {
 				writeFile(t, projectPath, tt.projectTOML)
 			}
 
-			cfg, err := LoadFiles(globalPath, projectPath)
+			cfg, err := LoadFile(projectPath)
 			if tt.want.err != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.want.err) {
 					t.Fatalf("expected error containing %q, got %v", tt.want.err, err)
 				}
+				if tt.projectTOML == "" && !errors.Is(err, ErrConfigNotFound) {
+					t.Fatalf("expected ErrConfigNotFound, got %v", err)
+				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("Load() error = %v", err)
+				t.Fatalf("LoadFile() error = %v", err)
 			}
 
 			if !reflect.DeepEqual(cfg, tt.want.cfg) {
-				t.Fatalf("Load() mismatch\nwant: %#v\ngot:  %#v", tt.want.cfg, cfg)
+				t.Fatalf("LoadFile() mismatch\nwant: %#v\ngot:  %#v", tt.want.cfg, cfg)
 			}
 		})
 	}
 }
 
-func TestLoadUsesDefaultPaths(t *testing.T) {
+func TestLoadUsesCanonicalRepoRoot(t *testing.T) {
+	repoRoot := newRepoRoot(t)
+	subdir := filepath.Join(repoRoot, "internal", "pkg")
+	if err := os.MkdirAll(subdir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", subdir, err)
+	}
+
 	homeDir := t.TempDir()
-	projectDir := filepath.Join(t.TempDir(), "repo")
-
-	writeFile(t, filepath.Join(homeDir, ".config", "orca", "config.toml"), `
+	writeFile(t, filepath.Join(repoRoot, ".orca", "config.toml"), `
 [pool]
-pattern = "~/global/*"
+pattern = "~/project/*"
 `)
-	writeFile(t, filepath.Join(projectDir, ".orca", "config.toml"), `
-[pool]
-pattern = "/tmp/project/*"
-`)
-
 	t.Setenv("HOME", homeDir)
 
-	cfg, err := Load(projectDir)
+	cfg, err := Load(subdir)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
 
-	if cfg.Pool.Pattern != "/tmp/project/*" {
-		t.Fatalf("Load() pattern = %q, want %q", cfg.Pool.Pattern, "/tmp/project/*")
+	if got, want := cfg.Pool.Pattern, filepath.Join(homeDir, "project", "*"); got != want {
+		t.Fatalf("Load() pattern = %q, want %q", got, want)
 	}
+}
+
+func TestLoadMissingRepoConfigReturnsCanonicalPath(t *testing.T) {
+	repoRoot := newRepoRoot(t)
+	subdir := filepath.Join(repoRoot, "cmd", "orca")
+	if err := os.MkdirAll(subdir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", subdir, err)
+	}
+
+	_, err := Load(subdir)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !errors.Is(err, ErrConfigNotFound) {
+		t.Fatalf("expected ErrConfigNotFound, got %v", err)
+	}
+
+	wantPath := filepath.Join(repoRoot, ".orca", "config.toml")
+	if !strings.Contains(err.Error(), wantPath) {
+		t.Fatalf("expected error containing %q, got %v", wantPath, err)
+	}
+}
+
+func newRepoRoot(t *testing.T) string {
+	t.Helper()
+
+	root := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(.git): %v", err)
+	}
+
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(%q): %v", root, err)
+	}
+	return resolvedRoot
 }
 
 func writeFile(t *testing.T, path, contents string) {
