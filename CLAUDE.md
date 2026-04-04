@@ -52,7 +52,6 @@ Rebase onto `origin/main` before first push.
 ## Configuration
 
 ```
-~/.config/orca/config.toml    # global: fleet hosts, agent profiles
 ~/.config/orca/state.db       # global: tasks, workers, clones, event log
-.orca/config.toml             # per-project overrides
+.orca/config.toml             # required repo-local config
 ```

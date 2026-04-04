@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/weill-labs/orca/internal/amux"
+	"github.com/weill-labs/orca/internal/config"
 	state "github.com/weill-labs/orca/internal/daemonstate"
 	"github.com/weill-labs/orca/internal/project"
 )
@@ -180,6 +181,9 @@ func (c *LocalController) Start(ctx context.Context, req StartRequest) (StartRes
 	}
 
 	if err := c.preparePIDState(ctx, projectPath); err != nil {
+		return StartResult{}, err
+	}
+	if _, err := config.Load(projectPath); err != nil {
 		return StartResult{}, err
 	}
 

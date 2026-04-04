@@ -9,13 +9,15 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/weill-labs/orca/internal/project"
 )
 
 const (
-	globalConfigPath  = ".config/orca/config.toml"
 	projectConfigDir  = ".orca"
 	projectConfigFile = "config.toml"
 )
+
+var ErrConfigNotFound = errors.New("config: repo-local .orca/config.toml not found")
 
 type Config struct {
 	Daemon DaemonConfig
@@ -45,31 +47,21 @@ type AgentProfile struct {
 }
 
 func Load(projectDir string) (Config, error) {
-	homeDir, err := currentHomeDir()
-	if err != nil {
-		return Config{}, fmt.Errorf("resolve home directory: %w", err)
-	}
-
-	globalPath := filepath.Join(homeDir, globalConfigPath)
-	projectPath := filepath.Join(projectDir, projectConfigDir, projectConfigFile)
-	return LoadFiles(globalPath, projectPath)
-}
-
-func LoadFiles(globalPath, projectPath string) (Config, error) {
-	globalRaw, err := readConfigFile(globalPath)
+	projectRoot, err := project.CanonicalPath(projectDir)
 	if err != nil {
 		return Config{}, err
 	}
 
+	return LoadFile(filepath.Join(projectRoot, projectConfigDir, projectConfigFile))
+}
+
+func LoadFile(projectPath string) (Config, error) {
 	projectRaw, err := readConfigFile(projectPath)
 	if err != nil {
 		return Config{}, err
 	}
 
-	merged := globalRaw
-	merged.merge(projectRaw)
-
-	cfg, err := merged.toConfig()
+	cfg, err := projectRaw.toConfig()
 	if err != nil {
 		return Config{}, err
 	}
@@ -123,83 +115,10 @@ func readConfigFile(path string) (rawConfig, error) {
 	}
 
 	if errors.Is(err, os.ErrNotExist) {
-		return rawConfig{}, nil
+		return rawConfig{}, fmt.Errorf("%w: %s", ErrConfigNotFound, path)
 	}
 
 	return rawConfig{}, fmt.Errorf("read %s: %w", path, err)
-}
-
-func (r *rawConfig) merge(override rawConfig) {
-	if override.Daemon != nil {
-		if r.Daemon == nil {
-			r.Daemon = &rawDaemonConfig{}
-		}
-		r.Daemon.merge(*override.Daemon)
-	}
-
-	if override.Pool != nil {
-		if r.Pool == nil {
-			r.Pool = &rawPoolConfig{}
-		}
-		r.Pool.merge(*override.Pool)
-	}
-
-	if len(override.Agents) > 0 {
-		if r.Agents == nil {
-			r.Agents = make(map[string]rawAgentProfile, len(override.Agents))
-		}
-		for name, profile := range override.Agents {
-			current := r.Agents[name]
-			current.merge(profile)
-			r.Agents[name] = current
-		}
-	}
-}
-
-func (r *rawDaemonConfig) merge(override rawDaemonConfig) {
-	if override.PollInterval != nil {
-		r.PollInterval = override.PollInterval
-	}
-	if override.NotificationPane != nil {
-		r.NotificationPane = override.NotificationPane
-	}
-}
-
-func (r *rawPoolConfig) merge(override rawPoolConfig) {
-	if override.Pattern != nil {
-		r.Pattern = override.Pattern
-	}
-	if override.CloneOrigin != nil {
-		r.CloneOrigin = override.CloneOrigin
-	}
-}
-
-func (r *rawAgentProfile) merge(override rawAgentProfile) {
-	if override.StartCommand != nil {
-		r.StartCommand = override.StartCommand
-	}
-	if override.PostmortemEnabled != nil {
-		r.PostmortemEnabled = override.PostmortemEnabled
-	}
-	if override.IdleTimeout != nil {
-		r.IdleTimeout = override.IdleTimeout
-	}
-	if override.StuckTimeout != nil {
-		r.StuckTimeout = override.StuckTimeout
-	}
-	if override.HasStuckTextPatterns {
-		r.StuckTextPatterns = override.StuckTextPatterns
-		r.HasStuckTextPatterns = true
-	}
-	if override.GoBased != nil {
-		r.GoBased = override.GoBased
-	}
-	if override.NudgeCommand != nil {
-		r.NudgeCommand = override.NudgeCommand
-	}
-	if override.MaxNudgeRetries != nil {
-		r.MaxNudgeRetries = override.MaxNudgeRetries
-	}
 }
 
 func (r rawConfig) toConfig() (Config, error) {

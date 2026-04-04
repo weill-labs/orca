@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -19,15 +21,17 @@ func TestAppRunDispatchesCommands(t *testing.T) {
 
 	tests := []struct {
 		name          string
-		args          []string
+		args          func(repoRoot, otherRepo string) []string
 		prepareDaemon func(*fakeDaemon)
 		prepareState  func(*fakeState)
-		assert        func(t *testing.T, d *fakeDaemon, s *fakeState, stdout, stderr string)
+		assert        func(t *testing.T, d *fakeDaemon, s *fakeState, stdout, stderr string, repoRoot, otherRepo string)
 	}{
 		{
 			name: "start",
-			args: []string{"start", "--session", "alpha", "--project", "/tmp/orca"},
-			assert: func(t *testing.T, d *fakeDaemon, _ *fakeState, stdout, stderr string) {
+			args: func(_, otherRepo string) []string {
+				return []string{"start", "--session", "alpha", "--project", filepath.Join(otherRepo, "cmd")}
+			},
+			assert: func(t *testing.T, d *fakeDaemon, _ *fakeState, stdout, stderr string, _, otherRepo string) {
 				t.Helper()
 				if d.startRequest == nil {
 					t.Fatal("expected start to be called")
@@ -35,8 +39,8 @@ func TestAppRunDispatchesCommands(t *testing.T) {
 				if d.startRequest.Session != "alpha" {
 					t.Fatalf("expected session alpha, got %q", d.startRequest.Session)
 				}
-				if d.startRequest.Project != "/tmp/orca" {
-					t.Fatalf("expected project /tmp/orca, got %q", d.startRequest.Project)
+				if d.startRequest.Project != otherRepo {
+					t.Fatalf("expected project %q, got %q", otherRepo, d.startRequest.Project)
 				}
 				if !strings.Contains(stdout, "started") {
 					t.Fatalf("expected human output, got %q", stdout)
@@ -48,14 +52,14 @@ func TestAppRunDispatchesCommands(t *testing.T) {
 		},
 		{
 			name: "stop",
-			args: []string{"stop"},
-			assert: func(t *testing.T, d *fakeDaemon, _ *fakeState, stdout, _ string) {
+			args: func(_, _ string) []string { return []string{"stop"} },
+			assert: func(t *testing.T, d *fakeDaemon, _ *fakeState, stdout, _ string, repoRoot, _ string) {
 				t.Helper()
 				if d.stopRequest == nil {
 					t.Fatal("expected stop to be called")
 				}
-				if d.stopRequest.Project != "/repo" {
-					t.Fatalf("expected cwd project, got %q", d.stopRequest.Project)
+				if d.stopRequest.Project != repoRoot {
+					t.Fatalf("expected cwd project %q, got %q", repoRoot, d.stopRequest.Project)
 				}
 				if !strings.Contains(stdout, "stopped") {
 					t.Fatalf("expected stop output, got %q", stdout)
@@ -64,10 +68,10 @@ func TestAppRunDispatchesCommands(t *testing.T) {
 		},
 		{
 			name: "status project",
-			args: []string{"status"},
+			args: func(_, _ string) []string { return []string{"status"} },
 			prepareState: func(s *fakeState) {
 				s.projectStatus = state.ProjectStatus{
-					Project: "/repo",
+					Project: "repo",
 					Daemon: &state.DaemonStatus{
 						Session:   "alpha",
 						PID:       42,
@@ -77,10 +81,10 @@ func TestAppRunDispatchesCommands(t *testing.T) {
 					},
 				}
 			},
-			assert: func(t *testing.T, _ *fakeDaemon, s *fakeState, stdout, _ string) {
+			assert: func(t *testing.T, _ *fakeDaemon, s *fakeState, stdout, _ string, repoRoot, _ string) {
 				t.Helper()
-				if s.projectStatusProject != "/repo" {
-					t.Fatalf("expected project status lookup for /repo, got %q", s.projectStatusProject)
+				if s.projectStatusProject != repoRoot {
+					t.Fatalf("expected project status lookup for %q, got %q", repoRoot, s.projectStatusProject)
 				}
 				if !strings.Contains(stdout, "daemon: running") {
 					t.Fatalf("expected daemon summary, got %q", stdout)
@@ -89,7 +93,7 @@ func TestAppRunDispatchesCommands(t *testing.T) {
 		},
 		{
 			name: "status issue json",
-			args: []string{"status", "LAB-690", "--json"},
+			args: func(_, _ string) []string { return []string{"status", "LAB-690", "--json"} },
 			prepareState: func(s *fakeState) {
 				s.taskStatus = state.TaskStatus{
 					Task: state.Task{
@@ -99,10 +103,10 @@ func TestAppRunDispatchesCommands(t *testing.T) {
 					},
 				}
 			},
-			assert: func(t *testing.T, _ *fakeDaemon, s *fakeState, stdout, _ string) {
+			assert: func(t *testing.T, _ *fakeDaemon, s *fakeState, stdout, _ string, repoRoot, _ string) {
 				t.Helper()
-				if s.taskStatusProject != "/repo" || s.taskStatusIssue != "LAB-690" {
-					t.Fatalf("expected task status lookup for /repo/LAB-690, got %q/%q", s.taskStatusProject, s.taskStatusIssue)
+				if s.taskStatusProject != repoRoot || s.taskStatusIssue != "LAB-690" {
+					t.Fatalf("expected task status lookup for %q/LAB-690, got %q/%q", repoRoot, s.taskStatusProject, s.taskStatusIssue)
 				}
 				if !strings.Contains(stdout, "\"issue\":\"LAB-690\"") {
 					t.Fatalf("expected json output, got %q", stdout)
@@ -111,8 +115,8 @@ func TestAppRunDispatchesCommands(t *testing.T) {
 		},
 		{
 			name: "assign default agent",
-			args: []string{"assign", "LAB-690", "--prompt", "Implement CLI wiring"},
-			assert: func(t *testing.T, d *fakeDaemon, _ *fakeState, stdout, _ string) {
+			args: func(_, _ string) []string { return []string{"assign", "LAB-690", "--prompt", "Implement CLI wiring"} },
+			assert: func(t *testing.T, d *fakeDaemon, _ *fakeState, stdout, _ string, _, _ string) {
 				t.Helper()
 				if d.assignRequest == nil {
 					t.Fatal("expected assign to be called")
@@ -133,8 +137,10 @@ func TestAppRunDispatchesCommands(t *testing.T) {
 		},
 		{
 			name: "assign flags before issue",
-			args: []string{"assign", "--prompt", "Implement CLI wiring", "--agent", "claude", "LAB-690"},
-			assert: func(t *testing.T, d *fakeDaemon, _ *fakeState, stdout, _ string) {
+			args: func(_, _ string) []string {
+				return []string{"assign", "--prompt", "Implement CLI wiring", "--agent", "claude", "LAB-690"}
+			},
+			assert: func(t *testing.T, d *fakeDaemon, _ *fakeState, stdout, _ string, _, _ string) {
 				t.Helper()
 				if d.assignRequest == nil {
 					t.Fatal("expected assign to be called")
@@ -152,8 +158,8 @@ func TestAppRunDispatchesCommands(t *testing.T) {
 		},
 		{
 			name: "enqueue",
-			args: []string{"enqueue", "42"},
-			assert: func(t *testing.T, d *fakeDaemon, _ *fakeState, stdout, _ string) {
+			args: func(_, _ string) []string { return []string{"enqueue", "42"} },
+			assert: func(t *testing.T, d *fakeDaemon, _ *fakeState, stdout, _ string, _, _ string) {
 				t.Helper()
 				if d.enqueueRequest == nil {
 					t.Fatal("expected enqueue to be called")
@@ -168,8 +174,8 @@ func TestAppRunDispatchesCommands(t *testing.T) {
 		},
 		{
 			name: "cancel",
-			args: []string{"cancel", "LAB-690"},
-			assert: func(t *testing.T, d *fakeDaemon, _ *fakeState, stdout, _ string) {
+			args: func(_, _ string) []string { return []string{"cancel", "LAB-690"} },
+			assert: func(t *testing.T, d *fakeDaemon, _ *fakeState, stdout, _ string, _, _ string) {
 				t.Helper()
 				if d.cancelRequest == nil {
 					t.Fatal("expected cancel to be called")
@@ -184,16 +190,16 @@ func TestAppRunDispatchesCommands(t *testing.T) {
 		},
 		{
 			name: "workers json",
-			args: []string{"workers", "--json"},
+			args: func(_, _ string) []string { return []string{"workers", "--json"} },
 			prepareState: func(s *fakeState) {
 				s.workers = []state.Worker{
 					{PaneID: "pane-3", Agent: "codex", State: "healthy", Issue: "LAB-690", ClonePath: "/clones/orca01", UpdatedAt: now},
 				}
 			},
-			assert: func(t *testing.T, _ *fakeDaemon, s *fakeState, stdout, _ string) {
+			assert: func(t *testing.T, _ *fakeDaemon, s *fakeState, stdout, _ string, repoRoot, _ string) {
 				t.Helper()
-				if s.workersProject != "/repo" {
-					t.Fatalf("expected workers lookup for /repo, got %q", s.workersProject)
+				if s.workersProject != repoRoot {
+					t.Fatalf("expected workers lookup for %q, got %q", repoRoot, s.workersProject)
 				}
 				if !strings.Contains(stdout, "\"pane_id\":\"pane-3\"") {
 					t.Fatalf("expected json worker output, got %q", stdout)
@@ -202,16 +208,16 @@ func TestAppRunDispatchesCommands(t *testing.T) {
 		},
 		{
 			name: "pool",
-			args: []string{"pool"},
+			args: func(_, _ string) []string { return []string{"pool"} },
 			prepareState: func(s *fakeState) {
 				s.clones = []state.Clone{
 					{Path: "/clones/orca01", Status: "free", Branch: "main", UpdatedAt: now},
 				}
 			},
-			assert: func(t *testing.T, _ *fakeDaemon, s *fakeState, stdout, _ string) {
+			assert: func(t *testing.T, _ *fakeDaemon, s *fakeState, stdout, _ string, repoRoot, _ string) {
 				t.Helper()
-				if s.clonesProject != "/repo" {
-					t.Fatalf("expected pool lookup for /repo, got %q", s.clonesProject)
+				if s.clonesProject != repoRoot {
+					t.Fatalf("expected pool lookup for %q, got %q", repoRoot, s.clonesProject)
 				}
 				if !strings.Contains(stdout, "/clones/orca01") {
 					t.Fatalf("expected human pool output, got %q", stdout)
@@ -220,16 +226,16 @@ func TestAppRunDispatchesCommands(t *testing.T) {
 		},
 		{
 			name: "events",
-			args: []string{"events"},
+			args: func(_, _ string) []string { return []string{"events"} },
 			prepareState: func(s *fakeState) {
 				s.events = []state.Event{
-					{ID: 1, Project: "/repo", Kind: "task.assigned", Issue: "LAB-690", Message: "LAB-690 queued", CreatedAt: now},
+					{ID: 1, Project: "repo", Kind: "task.assigned", Issue: "LAB-690", Message: "LAB-690 queued", CreatedAt: now},
 				}
 			},
-			assert: func(t *testing.T, _ *fakeDaemon, s *fakeState, stdout, _ string) {
+			assert: func(t *testing.T, _ *fakeDaemon, s *fakeState, stdout, _ string, repoRoot, _ string) {
 				t.Helper()
-				if s.eventsProject != "/repo" {
-					t.Fatalf("expected events lookup for /repo, got %q", s.eventsProject)
+				if s.eventsProject != repoRoot {
+					t.Fatalf("expected events lookup for %q, got %q", repoRoot, s.eventsProject)
 				}
 				if !strings.Contains(stdout, "\"kind\":\"task.assigned\"") {
 					t.Fatalf("expected ndjson event output, got %q", stdout)
@@ -238,8 +244,8 @@ func TestAppRunDispatchesCommands(t *testing.T) {
 		},
 		{
 			name: "version",
-			args: []string{"version"},
-			assert: func(t *testing.T, _ *fakeDaemon, _ *fakeState, stdout, _ string) {
+			args: func(_, _ string) []string { return []string{"version"} },
+			assert: func(t *testing.T, _ *fakeDaemon, _ *fakeState, stdout, _ string, _, _ string) {
 				t.Helper()
 				if strings.TrimSpace(stdout) != "orca build-123" {
 					t.Fatalf("expected version output, got %q", stdout)
@@ -253,12 +259,22 @@ func TestAppRunDispatchesCommands(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
+			repoRoot := newRepoRoot(t)
+			cwdPath := filepath.Join(repoRoot, "internal", "cli")
+			if err := os.MkdirAll(cwdPath, 0o755); err != nil {
+				t.Fatalf("MkdirAll(%q): %v", cwdPath, err)
+			}
+			otherRepo := newRepoRoot(t)
+			if err := os.MkdirAll(filepath.Join(otherRepo, "cmd"), 0o755); err != nil {
+				t.Fatalf("MkdirAll(%q): %v", filepath.Join(otherRepo, "cmd"), err)
+			}
+
 			d := &fakeDaemon{
-				startResult:   daemon.StartResult{Project: "/tmp/orca", Session: "alpha", PID: 321, StartedAt: now},
-				stopResult:    daemon.StopResult{Project: "/repo", PID: 321, StoppedAt: now},
-				assignResult:  daemon.TaskActionResult{Project: "/repo", Issue: "LAB-690", Status: "queued", Agent: "codex", UpdatedAt: now},
-				enqueueResult: daemon.MergeQueueActionResult{Project: "/repo", PRNumber: 42, Status: "queued", Position: 1, UpdatedAt: now},
-				cancelResult:  daemon.TaskActionResult{Project: "/repo", Issue: "LAB-690", Status: "cancelled", UpdatedAt: now},
+				startResult:   daemon.StartResult{Project: otherRepo, Session: "alpha", PID: 321, StartedAt: now},
+				stopResult:    daemon.StopResult{Project: repoRoot, PID: 321, StoppedAt: now},
+				assignResult:  daemon.TaskActionResult{Project: repoRoot, Issue: "LAB-690", Status: "queued", Agent: "codex", UpdatedAt: now},
+				enqueueResult: daemon.MergeQueueActionResult{Project: repoRoot, PRNumber: 42, Status: "queued", Position: 1, UpdatedAt: now},
+				cancelResult:  daemon.TaskActionResult{Project: repoRoot, Issue: "LAB-690", Status: "cancelled", UpdatedAt: now},
 			}
 			s := &fakeState{}
 			if tt.prepareDaemon != nil {
@@ -266,6 +282,14 @@ func TestAppRunDispatchesCommands(t *testing.T) {
 			}
 			if tt.prepareState != nil {
 				tt.prepareState(s)
+			}
+			if s.projectStatus.Project != "" {
+				s.projectStatus.Project = repoRoot
+			}
+			for i := range s.events {
+				if s.events[i].Project != "" {
+					s.events[i].Project = repoRoot
+				}
 			}
 
 			var stdout bytes.Buffer
@@ -277,15 +301,15 @@ func TestAppRunDispatchesCommands(t *testing.T) {
 				Stderr:  &stderr,
 				Version: "build-123",
 				Cwd: func() (string, error) {
-					return "/repo", nil
+					return cwdPath, nil
 				},
 			})
 
-			if err := app.Run(context.Background(), tt.args); err != nil {
+			if err := app.Run(context.Background(), tt.args(repoRoot, otherRepo)); err != nil {
 				t.Fatalf("Run() error = %v", err)
 			}
 
-			tt.assert(t, d, s, stdout.String(), stderr.String())
+			tt.assert(t, d, s, stdout.String(), stderr.String(), repoRoot, otherRepo)
 		})
 	}
 }
@@ -322,7 +346,7 @@ func TestAppRunParseErrors(t *testing.T) {
 				Stderr:  &stderr,
 				Version: "build-123",
 				Cwd: func() (string, error) {
-					return "/repo", nil
+					return newRepoRoot(t), nil
 				},
 			})
 
@@ -335,6 +359,151 @@ func TestAppRunParseErrors(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAppCommandsAcceptProjectFlag(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := newRepoRoot(t)
+	cwdPath := filepath.Join(repoRoot, "internal", "cli")
+	if err := os.MkdirAll(cwdPath, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", cwdPath, err)
+	}
+
+	targetRepo := newRepoRoot(t)
+	targetSubdir := filepath.Join(targetRepo, "cmd", "orca")
+	if err := os.MkdirAll(targetSubdir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", targetSubdir, err)
+	}
+
+	tests := []struct {
+		name   string
+		args   []string
+		assert func(t *testing.T, d *fakeDaemon, s *fakeState)
+	}{
+		{
+			name: "stop",
+			args: []string{"stop", "--project", targetSubdir},
+			assert: func(t *testing.T, d *fakeDaemon, _ *fakeState) {
+				if d.stopRequest == nil || d.stopRequest.Project != targetRepo {
+					t.Fatalf("stop project = %#v, want %q", d.stopRequest, targetRepo)
+				}
+			},
+		},
+		{
+			name: "status",
+			args: []string{"status", "--project", targetSubdir},
+			assert: func(t *testing.T, _ *fakeDaemon, s *fakeState) {
+				if s.projectStatusProject != targetRepo {
+					t.Fatalf("status project = %q, want %q", s.projectStatusProject, targetRepo)
+				}
+			},
+		},
+		{
+			name: "assign",
+			args: []string{"assign", "LAB-690", "--project", targetSubdir, "--prompt", "Implement CLI wiring"},
+			assert: func(t *testing.T, d *fakeDaemon, _ *fakeState) {
+				if d.assignRequest == nil || d.assignRequest.Project != targetRepo {
+					t.Fatalf("assign project = %#v, want %q", d.assignRequest, targetRepo)
+				}
+			},
+		},
+		{
+			name: "enqueue",
+			args: []string{"enqueue", "42", "--project", targetSubdir},
+			assert: func(t *testing.T, d *fakeDaemon, _ *fakeState) {
+				if d.enqueueRequest == nil || d.enqueueRequest.Project != targetRepo {
+					t.Fatalf("enqueue project = %#v, want %q", d.enqueueRequest, targetRepo)
+				}
+			},
+		},
+		{
+			name: "cancel",
+			args: []string{"cancel", "LAB-690", "--project", targetSubdir},
+			assert: func(t *testing.T, d *fakeDaemon, _ *fakeState) {
+				if d.cancelRequest == nil || d.cancelRequest.Project != targetRepo {
+					t.Fatalf("cancel project = %#v, want %q", d.cancelRequest, targetRepo)
+				}
+			},
+		},
+		{
+			name: "workers",
+			args: []string{"workers", "--project", targetSubdir},
+			assert: func(t *testing.T, _ *fakeDaemon, s *fakeState) {
+				if s.workersProject != targetRepo {
+					t.Fatalf("workers project = %q, want %q", s.workersProject, targetRepo)
+				}
+			},
+		},
+		{
+			name: "pool",
+			args: []string{"pool", "--project", targetSubdir},
+			assert: func(t *testing.T, _ *fakeDaemon, s *fakeState) {
+				if s.clonesProject != targetRepo {
+					t.Fatalf("pool project = %q, want %q", s.clonesProject, targetRepo)
+				}
+			},
+		},
+		{
+			name: "events",
+			args: []string{"events", "--project", targetSubdir},
+			assert: func(t *testing.T, _ *fakeDaemon, s *fakeState) {
+				if s.eventsProject != targetRepo {
+					t.Fatalf("events project = %q, want %q", s.eventsProject, targetRepo)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			d := &fakeDaemon{
+				stopResult:    daemon.StopResult{Project: targetRepo, PID: 1, StoppedAt: time.Now().UTC()},
+				assignResult:  daemon.TaskActionResult{Project: targetRepo, Issue: "LAB-690", Status: "queued", UpdatedAt: time.Now().UTC()},
+				enqueueResult: daemon.MergeQueueActionResult{Project: targetRepo, PRNumber: 42, Status: "queued", Position: 1, UpdatedAt: time.Now().UTC()},
+				cancelResult:  daemon.TaskActionResult{Project: targetRepo, Issue: "LAB-690", Status: "cancelled", UpdatedAt: time.Now().UTC()},
+			}
+			s := &fakeState{
+				projectStatus: state.ProjectStatus{Project: targetRepo},
+				taskStatus:    state.TaskStatus{Task: state.Task{Issue: "LAB-690"}},
+			}
+
+			app := New(Options{
+				Daemon:  d,
+				State:   s,
+				Stdout:  &bytes.Buffer{},
+				Stderr:  &bytes.Buffer{},
+				Version: "build-123",
+				Cwd: func() (string, error) {
+					return cwdPath, nil
+				},
+			})
+
+			if err := app.Run(context.Background(), tt.args); err != nil {
+				t.Fatalf("Run() error = %v", err)
+			}
+
+			tt.assert(t, d, s)
+		})
+	}
+}
+
+func newRepoRoot(t *testing.T) string {
+	t.Helper()
+
+	root := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(.git): %v", err)
+	}
+
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(%q): %v", root, err)
+	}
+	return resolvedRoot
 }
 
 type fakeDaemon struct {

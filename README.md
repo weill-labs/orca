@@ -32,7 +32,8 @@ make install  # builds to ~/.local/bin/orca
 
 ```bash
 # 1. Configure clone pool and agent profiles
-cat > ~/.config/orca/config.toml << 'EOF'
+mkdir -p ~/sync/github/myproject/myproject/.orca
+cat > ~/sync/github/myproject/myproject/.orca/config.toml << 'EOF'
 [pool]
 pattern = "~/sync/github/myproject/myproject-*"
 
@@ -70,6 +71,8 @@ orca enqueue 123
 orca cancel LAB-123
 orca stop
 ```
+
+All commands accept `--project` to target another checkout explicitly. If you omit it, Orca resolves the current working directory to the canonical git repo root. `orca start` requires `<repo>/.orca/config.toml` and fails clearly when it is missing.
 
 ## Design principles
 

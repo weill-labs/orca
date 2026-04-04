@@ -82,7 +82,8 @@ pane name is display-only metadata.
 
 All state lives in a global SQLite database at `~/.config/orca/state.db`.
 One orca daemon runs per project. All tables are scoped by a `project` column
-(the `--project` path canonicalized). Running two projects simultaneously means
+(the canonical git repo root for the supplied `--project` path or current
+working directory). Running two projects simultaneously means
 two daemon instances sharing the same DB file, each seeing only its own rows.
 
 - **Tasks** — project, issue ID, status (queued/active/done/cancelled), assigned
@@ -261,26 +262,27 @@ Cancellation:
 
 ```bash
 orca start [--session NAME] [--project PATH]   # start daemon
-orca stop                                       # stop daemon
-orca status                                     # daemon health + summary
+orca stop [--project PATH]                      # stop daemon
+orca status [ISSUE] [--project PATH]            # daemon or task status
 ```
 
 ### Tasks
 
 ```bash
-orca assign ISSUE [--prompt "..."] [--agent PROFILE] [--worker PANE]
-                                                # assign issue to a worker
+orca assign ISSUE [--prompt "..."] [--agent PROFILE] [--project PATH]
+                                                 # assign issue to a worker
+orca enqueue PR_NUMBER [--project PATH]          # queue a PR for landing
 orca batch tasks.json                           # queue multiple tasks
-orca cancel ISSUE                               # abort task, clean clone
+orca cancel ISSUE [--project PATH]              # abort task, clean clone
 orca complete ISSUE                             # manual completion trigger
-orca status ISSUE                               # task status + history
+orca status ISSUE [--project PATH]              # task status + history
 orca logs ISSUE                                 # detailed event log for task
 ```
 
 ### Workers
 
 ```bash
-orca workers                                    # list workers + state
+orca workers [--project PATH]                   # list workers + state
 orca spawn [--count N] [--host HOST] [--agent PROFILE]
                                                 # add workers to pool
 orca kill PANE                                  # remove worker from pool
@@ -290,7 +292,7 @@ orca recover PANE                               # attempt to unstick worker
 ### Clone Pool
 
 ```bash
-orca pool                                       # list clones + status
+orca pool [--project PATH]                      # list clones + status
 orca clone --count N                            # create new clones
 ```
 
@@ -305,7 +307,7 @@ orca spawn --host devbox-1 --count 3            # spawn on remote host
 
 ```bash
 orca dash                                       # live TUI dashboard (own pane)
-orca events                                     # NDJSON event stream
+orca events [--project PATH]                    # NDJSON event stream
 ```
 
 `orca events` emits orca-level events as NDJSON: task state transitions
@@ -330,9 +332,8 @@ POOL: 34 free / 36 total    QUEUE: 1    STUCK: 0    MERGED: 12
 ## Configuration
 
 ```
-~/.config/orca/config.toml    # global: fleet hosts, agent profiles
 ~/.config/orca/state.db       # global: tasks, workers, clones, event log
-.orca/config.toml             # per-project overrides (clone pattern, etc.)
+.orca/config.toml             # required repo-local config
 ```
 
 ### Example `config.toml`
@@ -450,7 +451,7 @@ First milestone — enough to replace the shell scripts:
    can expire mid-session. Orca should detect `gh` auth failures (401/403)
    and escalate immediately rather than silently failing to poll.
 
-7. **Repo scope.** `--project` is required on `orca start` and all rows are
-   scoped by project (resolved in the State section). Remaining question: should
-   `orca status` (without `--project`) show all projects or require explicit
-   scoping?
+7. **Repo scope.** `--project` is required on `orca start`; other commands also
+   accept `--project` for cross-repo targeting and otherwise resolve the current
+   working directory to its canonical repo root. All rows are scoped by that
+   canonical repo root (resolved in the State section).
