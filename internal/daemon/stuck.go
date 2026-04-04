@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"context"
-	"fmt"
 	"strings"
 )
 
@@ -54,7 +53,6 @@ func (d *Daemon) nudgeOrEscalate(ctx context.Context, active ActiveAssignment, p
 		Retry:        active.Worker.NudgeCount,
 		Message:      reason,
 	})
-	d.failStuckWorker(ctx, active, profile, reason)
 }
 
 func (d *Daemon) matchesStuckPattern(profile AgentProfile, output string) bool {
@@ -65,19 +63,4 @@ func (d *Daemon) matchesStuckPattern(profile AgentProfile, output string) bool {
 		}
 	}
 	return false
-}
-
-func (d *Daemon) failStuckWorker(ctx context.Context, active ActiveAssignment, profile AgentProfile, reason string) {
-	cleanupCtx := context.WithoutCancel(ctx)
-	logPath, diagnosticsErr := d.captureStuckWorkerDiagnostics(cleanupCtx, active, profile, reason)
-
-	message := fmt.Sprintf("force-killed stuck worker after %s", reason)
-	if logPath != "" {
-		message = fmt.Sprintf("%s; diagnostics saved to %s", message, logPath)
-	}
-	if diagnosticsErr != nil {
-		message = fmt.Sprintf("%s; diagnostics error: %v", message, diagnosticsErr)
-	}
-
-	_ = d.finishAssignmentWithMessage(cleanupCtx, active, TaskStatusFailed, EventTaskFailed, false, message)
 }

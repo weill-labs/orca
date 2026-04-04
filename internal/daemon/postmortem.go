@@ -254,7 +254,7 @@ func (d *Daemon) finishAssignmentWithMessage(ctx context.Context, active ActiveA
 		result = errors.Join(result, d.ensurePostmortem(cleanupCtx, active, result == nil))
 	}
 
-	if !merged || result != nil {
+	if status == TaskStatusCancelled {
 		result = errors.Join(result, d.amux.KillPane(cleanupCtx, active.Task.PaneID))
 	}
 
