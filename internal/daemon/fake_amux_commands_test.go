@@ -146,15 +146,11 @@ func (a *fakeAmux) Capture(ctx context.Context, paneID string) (string, error) {
 		a.captureCalls = make(map[string]int)
 	}
 	a.captureCalls[paneID]++
-	sequence := a.captures[paneID]
-	if len(sequence) == 0 {
+	value, remaining, ok := nextStringCapture(a.captures[paneID])
+	if !ok {
 		return "", nil
 	}
-	if len(sequence) == 1 {
-		return sequence[0], nil
-	}
-	value := sequence[0]
-	a.captures[paneID] = sequence[1:]
+	a.captures[paneID] = remaining
 	return value, nil
 }
 
@@ -170,23 +166,17 @@ func (a *fakeAmux) CapturePane(ctx context.Context, paneID string) (PaneCapture,
 	a.captureCalls[paneID]++
 
 	if sequence := a.paneCaptures[paneID]; len(sequence) > 0 {
-		if len(sequence) == 1 {
-			return clonePaneCapture(sequence[0]), nil
-		}
-		value := clonePaneCapture(sequence[0])
-		a.paneCaptures[paneID] = append([]PaneCapture(nil), sequence[1:]...)
+		value, remaining, _ := nextPaneCapture(sequence)
+		a.paneCaptures[paneID] = remaining
 		return value, nil
 	}
 
-	sequence := a.captures[paneID]
-	if len(sequence) == 0 {
+	output, remaining, ok := nextStringCapture(a.captures[paneID])
+	if !ok {
 		return PaneCapture{}, nil
 	}
-	value := paneCaptureFromOutput(sequence[0])
-	if len(sequence) > 1 {
-		a.captures[paneID] = sequence[1:]
-	}
-	return value, nil
+	a.captures[paneID] = remaining
+	return paneCaptureFromOutput(output), nil
 }
 
 func (a *fakeAmux) CaptureHistory(ctx context.Context, paneID string) (PaneCapture, error) {
@@ -210,15 +200,11 @@ func (a *fakeAmux) CaptureHistory(ctx context.Context, paneID string) (PaneCaptu
 			return PaneCapture{}, err
 		}
 	}
-	sequence := a.historyCaptures[paneID]
-	if len(sequence) == 0 {
+	value, remaining, ok := nextPaneCapture(a.historyCaptures[paneID])
+	if !ok {
 		return PaneCapture{}, nil
 	}
-	if len(sequence) == 1 {
-		return clonePaneCapture(sequence[0]), nil
-	}
-	value := clonePaneCapture(sequence[0])
-	a.historyCaptures[paneID] = append([]PaneCapture(nil), sequence[1:]...)
+	a.historyCaptures[paneID] = remaining
 	return value, nil
 }
 
@@ -367,6 +353,26 @@ func paneCaptureFromOutput(output string) PaneCapture {
 		return PaneCapture{}
 	}
 	return PaneCapture{Content: strings.Split(output, "\n")}
+}
+
+func nextStringCapture(sequence []string) (string, []string, bool) {
+	if len(sequence) == 0 {
+		return "", nil, false
+	}
+	if len(sequence) == 1 {
+		return sequence[0], sequence, true
+	}
+	return sequence[0], append([]string(nil), sequence[1:]...), true
+}
+
+func nextPaneCapture(sequence []PaneCapture) (PaneCapture, []PaneCapture, bool) {
+	if len(sequence) == 0 {
+		return PaneCapture{}, nil, false
+	}
+	if len(sequence) == 1 {
+		return clonePaneCapture(sequence[0]), sequence, true
+	}
+	return clonePaneCapture(sequence[0]), append([]PaneCapture(nil), sequence[1:]...), true
 }
 
 type fakeCommands struct {
