@@ -61,6 +61,54 @@ func TestCanonicalPathRejectsPathsOutsideGitRepos(t *testing.T) {
 	}
 }
 
+func TestCanonicalPathRejectsEmptyPath(t *testing.T) {
+	t.Parallel()
+
+	_, err := CanonicalPath(" \t ")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "project path is required") {
+		t.Fatalf("expected required path error, got %v", err)
+	}
+}
+
+func TestCanonicalPathAcceptsFilePathInsideRepo(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := newRepoRoot(t)
+	filePath := filepath.Join(repoRoot, "internal", "project", "path.go")
+	if err := os.MkdirAll(filepath.Dir(filePath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", filepath.Dir(filePath), err)
+	}
+	if err := os.WriteFile(filePath, []byte("package project\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", filePath, err)
+	}
+
+	got, err := CanonicalPath(filePath)
+	if err != nil {
+		t.Fatalf("CanonicalPath(%q) error = %v", filePath, err)
+	}
+	if got != repoRoot {
+		t.Fatalf("CanonicalPath(%q) = %q, want %q", filePath, got, repoRoot)
+	}
+}
+
+func TestCanonicalPathRejectsMissingPath(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := newRepoRoot(t)
+	missingPath := filepath.Join(repoRoot, "missing")
+
+	_, err := CanonicalPath(missingPath)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "canonicalize project path") {
+		t.Fatalf("expected canonicalization error, got %v", err)
+	}
+}
+
 func newRepoRoot(t *testing.T) string {
 	t.Helper()
 
