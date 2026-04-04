@@ -19,6 +19,8 @@ type fakeAmux struct {
 	sendKeysErr           error
 	sendKeysResults       []error
 	sendKeysHook          func(paneID string, keys []string)
+	setMetadataHook       func(paneID string, metadata map[string]string)
+	killHook              func(paneID string)
 	waitIdleErr           error
 	waitIdleHook          func(paneID string, timeout time.Duration)
 	capturePaneErr        error
@@ -93,6 +95,13 @@ func (a *fakeAmux) PaneExists(ctx context.Context, paneID string) (bool, error) 
 func (a *fakeAmux) SetMetadata(ctx context.Context, paneID string, metadata map[string]string) error {
 	if a.rejectCanceledContext && ctx.Err() != nil {
 		return ctx.Err()
+	}
+	if a.setMetadataHook != nil {
+		copied := make(map[string]string, len(metadata))
+		for key, value := range metadata {
+			copied[key] = value
+		}
+		a.setMetadataHook(paneID, copied)
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -215,6 +224,9 @@ func (a *fakeAmux) CaptureHistory(ctx context.Context, paneID string) (PaneCaptu
 func (a *fakeAmux) KillPane(ctx context.Context, paneID string) error {
 	if a.rejectCanceledContext && ctx.Err() != nil {
 		return ctx.Err()
+	}
+	if a.killHook != nil {
+		a.killHook(paneID)
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()

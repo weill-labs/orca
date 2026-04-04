@@ -356,6 +356,102 @@ func TestFinishAssignmentMergedCleanupSendsEnterBeforePostmortem(t *testing.T) {
 	}
 }
 
+func TestFinishAssignmentMergedCleanupSetsDoneMetadataAfterPostmortem(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	d := deps.newDaemon(t)
+	active := newPostmortemAssignment(deps)
+	active.Task.Status = TaskStatusActive
+	seedFinishAssignmentState(t, deps, active)
+
+	var operations []string
+	deps.amux.sendKeysHook = func(_ string, keys []string) {
+		operations = append(operations, "send:"+strings.Join(keys, "|"))
+		if len(keys) > 0 && keys[0] == postmortemCommand {
+			writeRecentPostmortem(t, d.postmortemDir, deps.clock.Now(), active.Task.ClonePath, active.Task.Issue, active.Task.PaneName)
+		}
+	}
+	deps.amux.waitIdleHook = func(_ string, timeout time.Duration) {
+		operations = append(operations, "wait:"+timeout.String())
+	}
+	deps.amux.setMetadataHook = func(_ string, metadata map[string]string) {
+		operations = append(operations, "metadata:"+metadata["status"])
+	}
+
+	if err := d.finishAssignment(context.Background(), active, TaskStatusDone, EventTaskCompleted, true); err != nil {
+		t.Fatalf("finishAssignment() error = %v", err)
+	}
+
+	if got, want := operations, []string{
+		"send:PR merged, wrap up.",
+		"wait:2m0s",
+		"send:Enter",
+		"send:$postmortem|Enter",
+		"wait:2m0s",
+		"metadata:done",
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("operations = %#v, want %#v", got, want)
+	}
+	deps.amux.requireMetadata(t, active.Task.PaneID, map[string]string{
+		"agent_profile":  "codex",
+		"branch":         "LAB-689",
+		"status":         "done",
+		"task":           "LAB-689",
+		"tracked_issues": `[{"id":"LAB-689","status":"completed"}]`,
+	})
+}
+
+func TestFinishAssignmentCancelledSetsDoneMetadataBeforeKill(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	d := deps.newDaemon(t)
+	active := newPostmortemAssignment(deps)
+	active.Task.Status = TaskStatusActive
+	seedFinishAssignmentState(t, deps, active)
+
+	var operations []string
+	deps.amux.sendKeysHook = func(_ string, keys []string) {
+		operations = append(operations, "send:"+strings.Join(keys, "|"))
+		if len(keys) > 0 && keys[0] == postmortemCommand {
+			writeRecentPostmortem(t, d.postmortemDir, deps.clock.Now(), active.Task.ClonePath, active.Task.Issue, active.Task.PaneName)
+		}
+	}
+	deps.amux.waitIdleHook = func(_ string, timeout time.Duration) {
+		operations = append(operations, "wait:"+timeout.String())
+	}
+	deps.amux.setMetadataHook = func(_ string, metadata map[string]string) {
+		operations = append(operations, "metadata:"+metadata["status"])
+	}
+	deps.amux.killHook = func(paneID string) {
+		operations = append(operations, "kill:"+paneID)
+	}
+
+	if err := d.finishAssignmentWithMessage(context.Background(), active, TaskStatusCancelled, EventTaskCancelled, false, ""); err != nil {
+		t.Fatalf("finishAssignmentWithMessage() error = %v", err)
+	}
+
+	if got, want := operations, []string{
+		"send:$postmortem|Enter",
+		"wait:2m0s",
+		"metadata:done",
+		"kill:pane-1",
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("operations = %#v, want %#v", got, want)
+	}
+	if got, want := deps.amux.killCalls, []string{active.Task.PaneID}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("kill calls = %#v, want %#v", got, want)
+	}
+	deps.amux.requireMetadata(t, active.Task.PaneID, map[string]string{
+		"agent_profile":  "codex",
+		"branch":         "LAB-689",
+		"status":         "done",
+		"task":           "LAB-689",
+		"tracked_issues": `[{"id":"LAB-689","status":"completed"}]`,
+	})
+}
+
 func writeRecentPostmortem(t *testing.T, dir string, now time.Time, clonePath, issue, workerName string) string {
 	t.Helper()
 
@@ -404,6 +500,20 @@ func newPostmortemAssignment(deps *testDeps) ActiveAssignment {
 			ClonePath:    deps.pool.clone.Path,
 			AgentProfile: deps.config.profiles["codex"].Name,
 		},
+	}
+}
+
+func seedFinishAssignmentState(t *testing.T, deps *testDeps, active ActiveAssignment) {
+	t.Helper()
+
+	deps.state.putTaskForTest(active.Task)
+	if err := deps.state.PutWorker(context.Background(), active.Worker); err != nil {
+		t.Fatalf("PutWorker() error = %v", err)
+	}
+	initialMetadata := assignmentMetadata(active.Task.AgentProfile, active.Task.Branch, active.Task.Issue)
+	initialMetadata["tracked_issues"] = `[{"id":"` + active.Task.Issue + `","status":"active"}]`
+	if err := deps.amux.SetMetadata(context.Background(), active.Task.PaneID, initialMetadata); err != nil {
+		t.Fatalf("SetMetadata() error = %v", err)
 	}
 }
 

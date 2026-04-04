@@ -178,6 +178,13 @@ func TestStuckDetectionEscalatesWithoutCleanupOrKill(t *testing.T) {
 	if got, want := active.Worker.Health, WorkerHealthEscalated; got != want {
 		t.Fatalf("worker.Health = %q, want %q", got, want)
 	}
+	deps.amux.requireMetadata(t, "pane-1", map[string]string{
+		"agent_profile":  "codex",
+		"branch":         "LAB-710",
+		"status":         "escalated",
+		"task":           "LAB-710",
+		"tracked_issues": `[{"id":"LAB-710","status":"active"}]`,
+	})
 	if got, want := deps.amux.killCalls, []string(nil); !reflect.DeepEqual(got, want) {
 		t.Fatalf("kill calls = %#v, want none", got)
 	}

@@ -252,6 +252,9 @@ func (d *Daemon) finishAssignmentWithMessage(ctx context.Context, active ActiveA
 
 	if status != TaskStatusFailed {
 		result = errors.Join(result, d.ensurePostmortem(cleanupCtx, active, result == nil))
+		if active.Task.PaneID != "" {
+			result = errors.Join(result, d.setPaneMetadata(cleanupCtx, active.Task.PaneID, taskCompletionMetadata(active.Task.Issue, active.Task.PRNumber, merged)))
+		}
 	}
 
 	if status == TaskStatusCancelled {

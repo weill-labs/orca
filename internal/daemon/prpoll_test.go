@@ -83,6 +83,14 @@ func TestPRMergePollingSendsWrapUpAndCleansClone(t *testing.T) {
 		"$postmortem\n",
 	})
 	deps.events.requireTypes(t, EventDaemonStarted, EventTaskAssigned, EventPRDetected, EventPRMerged, EventWorkerPostmortem, EventTaskCompleted)
+	deps.amux.requireMetadata(t, "pane-1", map[string]string{
+		"agent_profile":  "codex",
+		"branch":         "LAB-689",
+		"status":         "done",
+		"task":           "LAB-689",
+		"tracked_issues": `[{"id":"LAB-689","status":"completed"}]`,
+		"tracked_prs":    `[{"number":42,"status":"completed"}]`,
+	})
 }
 
 func TestPRMergeCleanupContinuesWhenIssueTrackerDoneUpdateFails(t *testing.T) {
@@ -236,11 +244,11 @@ func TestPRDetectionSyncsPaneMetadata(t *testing.T) {
 	})
 
 	deps.amux.requireMetadata(t, "pane-1", map[string]string{
-		"agent_profile": "codex",
-		"branch":        "LAB-689",
-		"issue":         "LAB-689",
-		"pr":            "42",
-		"task":          "LAB-689",
+		"agent_profile":  "codex",
+		"branch":         "LAB-689",
+		"task":           "LAB-689",
+		"tracked_issues": `[{"id":"LAB-689","status":"active"}]`,
+		"tracked_prs":    `[{"number":42,"status":"active"}]`,
 	})
 }
 

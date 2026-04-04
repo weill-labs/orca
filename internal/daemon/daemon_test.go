@@ -118,10 +118,10 @@ func TestAssignAllocatesCloneStartsAgentAndRegistersState(t *testing.T) {
 	}
 
 	deps.amux.requireMetadata(t, "pane-1", map[string]string{
-		"agent_profile": "codex",
-		"branch":        "LAB-689",
-		"issue":         "LAB-689",
-		"task":          "LAB-689",
+		"agent_profile":  "codex",
+		"branch":         "LAB-689",
+		"task":           "LAB-689",
+		"tracked_issues": `[{"id":"LAB-689","status":"active"}]`,
 	})
 	deps.amux.requireSentKeys(t, "pane-1", []string{"Implement daemon core\n"})
 

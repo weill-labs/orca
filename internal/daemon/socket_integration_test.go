@@ -148,10 +148,10 @@ daemonReady:
 	}
 
 	amuxClient.requireMetadata(t, "pane-1", map[string]string{
-		"agent_profile": "claude",
-		"branch":        "LAB-718",
-		"issue":         "LAB-718",
-		"task":          "LAB-718",
+		"agent_profile":  "claude",
+		"branch":         "LAB-718",
+		"task":           "LAB-718",
+		"tracked_issues": `[{"id":"LAB-718","status":"active"}]`,
 	})
 	amuxClient.requireSentKeys(t, "pane-1", []string{"Implement Unix socket IPC.\n"})
 

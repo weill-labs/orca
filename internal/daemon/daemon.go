@@ -276,7 +276,10 @@ func (d *Daemon) Assign(ctx context.Context, issue, prompt, agentProfile string)
 		return fmt.Errorf("spawn pane: %w", err)
 	}
 
-	if err := d.setPaneMetadata(ctx, pane.ID, assignmentMetadata(profile.Name, issue, issue, 0)); err != nil {
+	if err := d.setPaneMetadata(ctx, pane.ID, mergeMetadata(
+		assignmentMetadata(profile.Name, issue, issue),
+		trackedIssueMetadata(issue, trackedStatusActive),
+	)); err != nil {
 		_ = d.rollbackAssignment(ctx, clone, pane, issue)
 		restoreReservation()
 		return fmt.Errorf("set pane metadata: %w", err)

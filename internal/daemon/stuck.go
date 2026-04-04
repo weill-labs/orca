@@ -40,6 +40,9 @@ func (d *Daemon) nudgeOrEscalate(ctx context.Context, active ActiveAssignment, p
 	}
 	active.Worker.Health = WorkerHealthEscalated
 	_ = d.state.PutWorker(ctx, active.Worker)
+	if active.Task.PaneID != "" {
+		_ = d.setPaneMetadata(ctx, active.Task.PaneID, map[string]string{"status": "escalated"})
+	}
 	logPath, diagnosticsErr := d.captureStuckWorkerDiagnostics(context.WithoutCancel(ctx), active, profile, reason)
 	message := stuckWorkerEscalationMessage(reason, logPath, diagnosticsErr)
 
