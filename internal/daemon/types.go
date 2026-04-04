@@ -32,6 +32,7 @@ const (
 	EventTaskAssignFailed     = "task.assign_failed"
 	EventTaskCancelled        = "task.cancelled"
 	EventTaskCompleted        = "task.completed"
+	EventTaskFailed           = "task.failed"
 	EventTaskCompletionFailed = "task.completion_failed"
 	EventWorkerNudged         = "worker.nudged"
 	EventWorkerNudgedCI       = "worker.nudged_ci"
