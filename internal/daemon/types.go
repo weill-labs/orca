@@ -115,6 +115,7 @@ type AmuxClient interface {
 	SetMetadata(ctx context.Context, paneID string, metadata map[string]string) error
 	SendKeys(ctx context.Context, paneID string, keys ...string) error
 	Capture(ctx context.Context, paneID string) (string, error)
+	CapturePane(ctx context.Context, paneID string) (PaneCapture, error)
 	CaptureHistory(ctx context.Context, paneID string) (PaneCapture, error)
 	KillPane(ctx context.Context, paneID string) error
 	WaitIdle(ctx context.Context, paneID string, timeout time.Duration) error

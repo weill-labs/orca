@@ -56,12 +56,18 @@ func (d *Daemon) handleCapture(ctx context.Context, active ActiveAssignment) {
 		return
 	}
 
-	output, err := d.amux.Capture(ctx, active.Task.PaneID)
+	snapshot, err := d.amux.CapturePane(ctx, active.Task.PaneID)
 	if err != nil {
 		return
 	}
 
 	now := d.now()
+	if snapshot.Exited {
+		d.handleExitedPaneCapture(ctx, active, profile, snapshot, now)
+		return
+	}
+
+	output := snapshot.Output()
 	changed := output != active.Worker.LastCapture
 	if changed {
 		wasStuck := active.Worker.Health == WorkerHealthStuck ||

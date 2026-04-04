@@ -398,6 +398,9 @@ func mergePaneCapture(primary, fallback PaneCapture) PaneCapture {
 	if len(primary.ChildPIDs) == 0 {
 		primary.ChildPIDs = append([]int(nil), fallback.ChildPIDs...)
 	}
+	if !primary.Exited {
+		primary.Exited = fallback.Exited
+	}
 	return primary
 }
 
