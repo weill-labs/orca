@@ -211,6 +211,7 @@ func (c *LocalController) Start(ctx context.Context, req StartRequest) (StartRes
 	cmd.Stdin = devNull
 	cmd.Stdout = devNull
 	cmd.Stderr = devNull
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 
 	if err := cmd.Start(); err != nil {
 		return StartResult{}, fmt.Errorf("start daemon process: %w", err)

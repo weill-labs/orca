@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -200,6 +201,28 @@ func TestListenUnixSocketRemovesStaleFile(t *testing.T) {
 	listener, err := listenUnixSocket(socketPath)
 	if err != nil {
 		t.Fatalf("listenUnixSocket() error = %v", err)
+	}
+	defer listener.Close()
+
+	if _, err := os.Stat(socketPath); err != nil {
+		t.Fatalf("Stat(%q) error = %v", socketPath, err)
+	}
+}
+
+func TestSocketFileForProjectFallsBackWhenConfigDirIsTooLong(t *testing.T) {
+	t.Parallel()
+
+	configDir := filepath.Join(t.TempDir(), strings.Repeat("a", 48), strings.Repeat("b", 48))
+	projectPath := filepath.Join(t.TempDir(), "project")
+
+	socketPath := socketFileForProject(configDir, projectPath)
+	if got := len(socketPath); got > unixSocketPathMax {
+		t.Fatalf("socket path length = %d, want <= %d (%q)", got, unixSocketPathMax, socketPath)
+	}
+
+	listener, err := listenUnixSocket(socketPath)
+	if err != nil {
+		t.Fatalf("listenUnixSocket(%q) error = %v", socketPath, err)
 	}
 	defer listener.Close()
 

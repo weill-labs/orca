@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -68,6 +69,39 @@ func TestStartReturnsContextErrorAndKillsProcess(t *testing.T) {
 	err := <-startErr
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context cancellation, got %v", err)
+	}
+
+	waitForProcessExit(t, pid)
+}
+
+func TestStartLaunchesDaemonInOwnProcessGroup(t *testing.T) {
+	store := &fakeStore{}
+	projectPath := testProjectPath(t)
+	controller, pidPath := newTestController(t, store, projectPath, scriptOptions{
+		ignoreTERM: false,
+	})
+	startErr := make(chan error, 1)
+
+	go func() {
+		_, err := controller.Start(context.Background(), StartRequest{
+			Session: "test",
+			Project: projectPath,
+		})
+		startErr <- err
+	}()
+
+	pid := waitForPID(t, pidPath)
+	pgid, err := syscall.Getpgid(pid)
+	if err != nil {
+		t.Fatalf("Getpgid(%d) error = %v", pid, err)
+	}
+	if got, want := pgid, pid; got != want {
+		t.Fatalf("daemon process group = %d, want %d", got, want)
+	}
+
+	err = <-startErr
+	if err == nil || !strings.Contains(err.Error(), "daemon failed to report running state") {
+		t.Fatalf("expected timeout error, got %v", err)
 	}
 
 	waitForProcessExit(t, pid)
