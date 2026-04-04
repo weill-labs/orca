@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 )
@@ -41,6 +42,7 @@ func (d *Daemon) reconcileTaskOnStartup(ctx context.Context, task Task) {
 
 	exists, err := d.amux.PaneExists(ctx, active.Task.PaneID)
 	if err != nil {
+		d.failStartingTaskOnStartupError(ctx, active, "worker pane liveness check failed on daemon startup", err)
 		return
 	}
 	if !exists {
@@ -50,6 +52,7 @@ func (d *Daemon) reconcileTaskOnStartup(ctx context.Context, task Task) {
 
 	snapshot, err := d.amux.CapturePane(ctx, active.Task.PaneID)
 	if err != nil {
+		d.failStartingTaskOnStartupError(ctx, active, "worker pane capture failed on daemon startup", err)
 		return
 	}
 	if snapshot.Exited {
@@ -71,6 +74,13 @@ func (d *Daemon) reconcileTaskOnStartup(ctx context.Context, task Task) {
 		active.Task.UpdatedAt = d.now()
 		_ = d.state.PutTask(ctx, active.Task)
 	}
+}
+
+func (d *Daemon) failStartingTaskOnStartupError(ctx context.Context, active ActiveAssignment, message string, err error) {
+	if active.Task.Status != TaskStatusStarting {
+		return
+	}
+	_ = d.failAssignment(ctx, active, EventTaskFailed, fmt.Sprintf("%s: %v", message, err))
 }
 
 func (d *Daemon) failTaskWithoutWorker(ctx context.Context, task Task, message string) error {

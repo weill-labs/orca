@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"testing"
 )
@@ -15,6 +16,9 @@ func TestDaemonStartReconcilesNonTerminalAssignments(t *testing.T) {
 		paneID            string
 		paneExists        map[string]bool
 		startupSnapshot   []PaneCapture
+		paneExistsErr     error
+		capturePaneErr    error
+		skipWorker        bool
 		wantTaskStatus    string
 		wantWorker        bool
 		wantWorkerHealth  string
@@ -44,6 +48,46 @@ func TestDaemonStartReconcilesNonTerminalAssignments(t *testing.T) {
 			wantCaptureCount: 1,
 		},
 		{
+			name:             "starting worker fails when pane id is missing",
+			taskStatus:       TaskStatusStarting,
+			paneID:           "",
+			wantTaskStatus:   TaskStatusFailed,
+			wantWorker:       false,
+			wantRelease:      true,
+			wantFailedEvents: 1,
+		},
+		{
+			name:             "starting worker fails when persisted worker is missing",
+			taskStatus:       TaskStatusStarting,
+			paneID:           "pane-1",
+			skipWorker:       true,
+			wantTaskStatus:   TaskStatusFailed,
+			wantWorker:       false,
+			wantRelease:      true,
+			wantFailedEvents: 1,
+		},
+		{
+			name:             "starting worker fails when pane liveness check errors",
+			taskStatus:       TaskStatusStarting,
+			paneID:           "pane-1",
+			paneExistsErr:    errors.New("amux unavailable"),
+			wantTaskStatus:   TaskStatusFailed,
+			wantWorker:       false,
+			wantRelease:      true,
+			wantFailedEvents: 1,
+		},
+		{
+			name:             "starting worker fails when pane capture errors",
+			taskStatus:       TaskStatusStarting,
+			paneID:           "pane-1",
+			capturePaneErr:   errors.New("capture failed"),
+			wantTaskStatus:   TaskStatusFailed,
+			wantWorker:       false,
+			wantRelease:      true,
+			wantFailedEvents: 1,
+			wantCaptureCount: 1,
+		},
+		{
 			name:             "starting worker fails when pane is missing",
 			taskStatus:       TaskStatusStarting,
 			paneID:           "pane-1",
@@ -64,6 +108,25 @@ func TestDaemonStartReconcilesNonTerminalAssignments(t *testing.T) {
 			wantEscalateEvent: 1,
 			wantCaptureCount:  1,
 		},
+		{
+			name:             "active worker tolerates pane liveness check error",
+			taskStatus:       TaskStatusActive,
+			paneID:           "pane-1",
+			paneExistsErr:    errors.New("amux unavailable"),
+			wantTaskStatus:   TaskStatusActive,
+			wantWorker:       true,
+			wantWorkerHealth: "healthy",
+		},
+		{
+			name:             "active worker tolerates pane capture error",
+			taskStatus:       TaskStatusActive,
+			paneID:           "pane-1",
+			capturePaneErr:   errors.New("capture failed"),
+			wantTaskStatus:   TaskStatusActive,
+			wantWorker:       true,
+			wantWorkerHealth: "healthy",
+			wantCaptureCount: 1,
+		},
 	}
 
 	for _, tt := range tests {
@@ -73,7 +136,12 @@ func TestDaemonStartReconcilesNonTerminalAssignments(t *testing.T) {
 
 			deps := newTestDeps(t)
 			seedRecoverableAssignment(t, deps, tt.taskStatus, "LAB-740", tt.paneID)
+			if tt.skipWorker && tt.paneID != "" {
+				delete(deps.state.workers, tt.paneID)
+			}
 			deps.amux.paneExists = tt.paneExists
+			deps.amux.paneExistsErr = tt.paneExistsErr
+			deps.amux.capturePaneErr = tt.capturePaneErr
 			if len(tt.startupSnapshot) > 0 {
 				deps.amux.capturePaneSequence(tt.paneID, tt.startupSnapshot)
 			}
