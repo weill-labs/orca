@@ -23,23 +23,25 @@ type MetadataCall struct {
 type MockClient struct {
 	mu sync.Mutex
 
-	SpawnFunc       func(ctx context.Context, req SpawnRequest) (Pane, error)
-	PaneExistsFunc  func(ctx context.Context, paneID string) (bool, error)
-	ListPanesFunc   func(ctx context.Context) ([]Pane, error)
-	SendKeysFunc    func(ctx context.Context, paneID string, keys ...string) error
-	CaptureFunc     func(ctx context.Context, paneID string) (string, error)
-	SetMetadataFunc func(ctx context.Context, paneID string, metadata map[string]string) error
-	KillPaneFunc    func(ctx context.Context, paneID string) error
-	WaitIdleFunc    func(ctx context.Context, paneID string, timeout time.Duration) error
+	SpawnFunc          func(ctx context.Context, req SpawnRequest) (Pane, error)
+	PaneExistsFunc     func(ctx context.Context, paneID string) (bool, error)
+	ListPanesFunc      func(ctx context.Context) ([]Pane, error)
+	SendKeysFunc       func(ctx context.Context, paneID string, keys ...string) error
+	CaptureFunc        func(ctx context.Context, paneID string) (string, error)
+	CaptureHistoryFunc func(ctx context.Context, paneID string) (PaneCapture, error)
+	SetMetadataFunc    func(ctx context.Context, paneID string, metadata map[string]string) error
+	KillPaneFunc       func(ctx context.Context, paneID string) error
+	WaitIdleFunc       func(ctx context.Context, paneID string, timeout time.Duration) error
 
-	SpawnCalls       []SpawnRequest
-	PaneExistsCalls  []string
-	ListPanesCalls   int
-	SendKeysCalls    []SendKeysCall
-	CaptureCalls     []string
-	SetMetadataCalls []MetadataCall
-	KillPaneCalls    []string
-	WaitIdleCalls    []struct {
+	SpawnCalls          []SpawnRequest
+	PaneExistsCalls     []string
+	ListPanesCalls      int
+	SendKeysCalls       []SendKeysCall
+	CaptureCalls        []string
+	CaptureHistoryCalls []string
+	SetMetadataCalls    []MetadataCall
+	KillPaneCalls       []string
+	WaitIdleCalls       []struct {
 		PaneID  string
 		Timeout time.Duration
 	}
@@ -108,6 +110,18 @@ func (m *MockClient) Capture(ctx context.Context, paneID string) (string, error)
 		return fn(ctx, paneID)
 	}
 	return "", nil
+}
+
+func (m *MockClient) CaptureHistory(ctx context.Context, paneID string) (PaneCapture, error) {
+	m.mu.Lock()
+	m.CaptureHistoryCalls = append(m.CaptureHistoryCalls, paneID)
+	fn := m.CaptureHistoryFunc
+	m.mu.Unlock()
+
+	if fn != nil {
+		return fn(ctx, paneID)
+	}
+	return PaneCapture{}, nil
 }
 
 func (m *MockClient) SetMetadata(ctx context.Context, paneID string, metadata map[string]string) error {

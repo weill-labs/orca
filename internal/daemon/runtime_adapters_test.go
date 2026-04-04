@@ -23,6 +23,7 @@ func TestConfigAdapterAgentProfile(t *testing.T) {
 				PostmortemEnabled: true,
 				StuckTimeout:      5 * time.Minute,
 				StuckTextPatterns: []string{"permission prompt"},
+				GoBased:           true,
 				NudgeCommand:      "Enter",
 				MaxNudgeRetries:   3,
 			},
@@ -41,6 +42,9 @@ func TestConfigAdapterAgentProfile(t *testing.T) {
 	}
 	if !profile.PostmortemEnabled {
 		t.Fatal("profile.PostmortemEnabled = false, want true")
+	}
+	if !profile.GoBased {
+		t.Fatal("profile.GoBased = false, want true")
 	}
 	if got, want := profile.NudgeCommand, "Enter"; got != want {
 		t.Fatalf("profile.NudgeCommand = %q, want %q", got, want)

@@ -21,6 +21,7 @@ type Client interface {
 	ListPanes(ctx context.Context) ([]Pane, error)
 	SendKeys(ctx context.Context, paneID string, keys ...string) error
 	Capture(ctx context.Context, paneID string) (string, error)
+	CaptureHistory(ctx context.Context, paneID string) (PaneCapture, error)
 	SetMetadata(ctx context.Context, paneID string, metadata map[string]string) error
 	KillPane(ctx context.Context, paneID string) error
 	WaitIdle(ctx context.Context, paneID string, timeout time.Duration) error
@@ -55,10 +56,12 @@ type captureCommandError struct {
 }
 
 type capturePane struct {
-	Name    string               `json:"name,omitempty"`
-	CWD     string               `json:"cwd,omitempty"`
-	Content []string             `json:"content"`
-	Error   *captureCommandError `json:"error,omitempty"`
+	Name           string               `json:"name,omitempty"`
+	CWD            string               `json:"cwd,omitempty"`
+	Content        []string             `json:"content"`
+	CurrentCommand string               `json:"current_command,omitempty"`
+	ChildPIDs      []int                `json:"child_pids,omitempty"`
+	Error          *captureCommandError `json:"error,omitempty"`
 }
 
 var _ Client = (*CLIClient)(nil)
@@ -138,7 +141,7 @@ func (c *CLIClient) ListPanes(ctx context.Context) ([]Pane, error) {
 	}
 
 	for i := range panes {
-		capture, err := c.capturePane(ctx, panes[i].ID)
+		capture, err := c.capturePaneJSON(ctx, panes[i].ID, false)
 		if err != nil {
 			return nil, fmt.Errorf("capture pane %s: %w", panes[i].ID, err)
 		}
@@ -161,16 +164,25 @@ func (c *CLIClient) SendKeys(ctx context.Context, paneID string, keys ...string)
 
 // Capture returns the visible screen output for one pane.
 func (c *CLIClient) Capture(ctx context.Context, paneID string) (string, error) {
-	pane, err := c.capturePane(ctx, paneID)
+	pane, err := c.capturePaneJSON(ctx, paneID, false)
 	if err != nil {
 		return "", err
 	}
-	return strings.Join(pane.Content, "\n"), nil
+	return pane.toPaneCapture().Output(), nil
+}
+
+// CaptureHistory returns retained pane history and process metadata.
+func (c *CLIClient) CaptureHistory(ctx context.Context, paneID string) (PaneCapture, error) {
+	pane, err := c.capturePaneJSON(ctx, paneID, true)
+	if err != nil {
+		return PaneCapture{}, err
+	}
+	return pane.toPaneCapture(), nil
 }
 
 // PaneExists verifies whether a pane can still be resolved by stable pane ID.
 func (c *CLIClient) PaneExists(ctx context.Context, paneID string) (bool, error) {
-	pane, err := c.rawCapturePane(ctx, paneID)
+	pane, err := c.rawCapturePane(ctx, paneID, false)
 	if err != nil {
 		return false, err
 	}
@@ -218,7 +230,7 @@ func (c *CLIClient) WaitIdle(ctx context.Context, paneID string, timeout time.Du
 }
 
 func (c *CLIClient) capturePane(ctx context.Context, paneID string) (capturePane, error) {
-	pane, err := c.rawCapturePane(ctx, paneID)
+	pane, err := c.rawCapturePane(ctx, paneID, false)
 	if err != nil {
 		return capturePane{}, err
 	}
@@ -228,8 +240,25 @@ func (c *CLIClient) capturePane(ctx context.Context, paneID string) (capturePane
 	return pane, nil
 }
 
-func (c *CLIClient) rawCapturePane(ctx context.Context, paneID string) (capturePane, error) {
-	output, err := c.run(ctx, c.session, "capture", "--format", "json", paneID)
+func (c *CLIClient) capturePaneJSON(ctx context.Context, paneID string, history bool) (capturePane, error) {
+	pane, err := c.rawCapturePane(ctx, paneID, history)
+	if err != nil {
+		return capturePane{}, err
+	}
+	if pane.Error != nil {
+		return capturePane{}, paneCaptureError(pane.Error)
+	}
+	return pane, nil
+}
+
+func (c *CLIClient) rawCapturePane(ctx context.Context, paneID string, history bool) (capturePane, error) {
+	args := []string{}
+	if history {
+		args = append(args, "--history")
+	}
+	args = append(args, "--format", "json", paneID)
+
+	output, err := c.run(ctx, c.session, "capture", args...)
 	if err != nil {
 		return capturePane{}, err
 	}
@@ -239,6 +268,15 @@ func (c *CLIClient) rawCapturePane(ctx context.Context, paneID string) (captureP
 		return capturePane{}, fmt.Errorf("parse capture json: %w", err)
 	}
 	return pane, nil
+}
+
+func (p capturePane) toPaneCapture() PaneCapture {
+	return PaneCapture{
+		Content:        append([]string(nil), p.Content...),
+		CWD:            p.CWD,
+		CurrentCommand: p.CurrentCommand,
+		ChildPIDs:      append([]int(nil), p.ChildPIDs...),
+	}
 }
 
 func (c *CLIClient) run(ctx context.Context, session, subcommand string, extraArgs ...string) ([]byte, error) {

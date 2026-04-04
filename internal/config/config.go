@@ -39,6 +39,7 @@ type AgentProfile struct {
 	IdleTimeout       time.Duration
 	StuckTimeout      time.Duration
 	StuckTextPatterns []string
+	GoBased           bool
 	NudgeCommand      string
 	MaxNudgeRetries   int
 }
@@ -104,6 +105,7 @@ type rawAgentProfile struct {
 	StuckTimeout         *string  `toml:"stuck_timeout"`
 	StuckTextPatterns    []string `toml:"stuck_text_patterns"`
 	HasStuckTextPatterns bool     `toml:"-"`
+	GoBased              *bool    `toml:"go_based"`
 	NudgeCommand         *string  `toml:"nudge_command"`
 	MaxNudgeRetries      *int     `toml:"max_nudge_retries"`
 }
@@ -188,6 +190,9 @@ func (r *rawAgentProfile) merge(override rawAgentProfile) {
 	if override.HasStuckTextPatterns {
 		r.StuckTextPatterns = override.StuckTextPatterns
 		r.HasStuckTextPatterns = true
+	}
+	if override.GoBased != nil {
+		r.GoBased = override.GoBased
 	}
 	if override.NudgeCommand != nil {
 		r.NudgeCommand = override.NudgeCommand
@@ -286,6 +291,9 @@ func (r rawAgentProfile) toConfig(prefix string) (AgentProfile, error) {
 		} else {
 			cfg.StuckTextPatterns = append([]string(nil), r.StuckTextPatterns...)
 		}
+	}
+	if r.GoBased != nil {
+		cfg.GoBased = *r.GoBased
 	}
 
 	if r.NudgeCommand != nil {

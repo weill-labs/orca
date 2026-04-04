@@ -8,12 +8,14 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 )
 
 const (
-	mergedWrapUpPrompt = "PR merged, wrap up.\n"
-	postmortemCommand  = "$postmortem"
+	mergedWrapUpPrompt          = "PR merged, wrap up.\n"
+	postmortemCommand           = "$postmortem"
+	stuckWorkerDiagnosticsDelay = 5 * time.Second
 )
 
 func enforceLifecycleProfile(profile AgentProfile) AgentProfile {
@@ -224,6 +226,10 @@ func postmortemSessionKeys(active ActiveAssignment) []string {
 }
 
 func (d *Daemon) finishAssignment(ctx context.Context, active ActiveAssignment, status, eventType string, merged bool) error {
+	return d.finishAssignmentWithMessage(ctx, active, status, eventType, merged, "")
+}
+
+func (d *Daemon) finishAssignmentWithMessage(ctx context.Context, active ActiveAssignment, status, eventType string, merged bool, message string) error {
 	var result error
 	cleanupCtx := context.WithoutCancel(ctx)
 
@@ -236,7 +242,9 @@ func (d *Daemon) finishAssignment(ctx context.Context, active ActiveAssignment, 
 		}
 	}
 
-	result = errors.Join(result, d.ensurePostmortem(cleanupCtx, active, result == nil))
+	if status != TaskStatusFailed {
+		result = errors.Join(result, d.ensurePostmortem(cleanupCtx, active, result == nil))
+	}
 
 	if !merged || result != nil {
 		result = errors.Join(result, d.amux.KillPane(cleanupCtx, active.Task.PaneID))
@@ -261,10 +269,16 @@ func (d *Daemon) finishAssignment(ctx context.Context, active ActiveAssignment, 
 		}
 	}
 
-	message := "task finished"
-	if status == TaskStatusCancelled {
-		message = "task cancelled"
+	if message == "" {
+		message = "task finished"
+		switch status {
+		case TaskStatusCancelled:
+			message = "task cancelled"
+		case TaskStatusFailed:
+			message = "task failed"
+		}
 	}
+
 	profile, err := d.profileForTask(cleanupCtx, active.Task)
 	if err != nil {
 		profile = AgentProfile{Name: active.Task.AgentProfile}
@@ -284,4 +298,120 @@ func (d *Daemon) finishAssignment(ctx context.Context, active ActiveAssignment, 
 		Message:      message,
 	})
 	return result
+}
+
+func (d *Daemon) captureStuckWorkerDiagnostics(ctx context.Context, active ActiveAssignment, profile AgentProfile, reason string) (string, error) {
+	snapshot, err := d.amux.CaptureHistory(ctx, active.Task.PaneID)
+	if err != nil {
+		return "", fmt.Errorf("capture pane history: %w", err)
+	}
+
+	sigquitPID := 0
+	var result error
+	if profile.GoBased && len(snapshot.ChildPIDs) > 0 {
+		sigquitPID = snapshot.ChildPIDs[0]
+		if err := d.signalProcess(sigquitPID, syscall.SIGQUIT); err != nil {
+			result = errors.Join(result, fmt.Errorf("send SIGQUIT to %d: %w", sigquitPID, err))
+		} else {
+			if err := d.sleep(d.stopContext, stuckWorkerDiagnosticsDelay); err != nil {
+				if !errors.Is(err, context.Canceled) {
+					result = errors.Join(result, fmt.Errorf("wait for goroutine diagnostics: %w", err))
+				}
+			} else {
+				postSignalSnapshot, err := d.amux.CaptureHistory(ctx, active.Task.PaneID)
+				if err != nil {
+					result = errors.Join(result, fmt.Errorf("capture pane history after SIGQUIT: %w", err))
+				} else {
+					snapshot = mergePaneCapture(postSignalSnapshot, snapshot)
+				}
+			}
+		}
+	}
+
+	logPath, err := d.writeStuckWorkerPostmortem(active, profile, reason, snapshot, sigquitPID)
+	return logPath, errors.Join(result, err)
+}
+
+func (d *Daemon) writeStuckWorkerPostmortem(active ActiveAssignment, profile AgentProfile, reason string, snapshot PaneCapture, sigquitPID int) (string, error) {
+	if err := os.MkdirAll(d.postmortemDir, 0o755); err != nil {
+		return "", fmt.Errorf("create postmortem directory: %w", err)
+	}
+
+	timestamp := d.now().UTC()
+	logKind := "pane-output"
+	if profile.GoBased {
+		logKind = "goroutine-dump"
+	}
+	path := filepath.Join(d.postmortemDir, fmt.Sprintf("%s-%s-%s.log", timestamp.Format("20060102T150405Z"), logKind, active.Task.Issue))
+
+	var builder strings.Builder
+	fmt.Fprintf(&builder, "time: %s\n", timestamp.Format(time.RFC3339))
+	fmt.Fprintf(&builder, "project: %s\n", d.project)
+	fmt.Fprintf(&builder, "issue: %s\n", active.Task.Issue)
+	fmt.Fprintf(&builder, "pane_id: %s\n", active.Task.PaneID)
+	fmt.Fprintf(&builder, "pane_name: %s\n", active.Task.PaneName)
+	fmt.Fprintf(&builder, "clone_path: %s\n", active.Task.ClonePath)
+	fmt.Fprintf(&builder, "agent_profile: %s\n", profile.Name)
+	fmt.Fprintf(&builder, "reason: %s\n", reason)
+	fmt.Fprintf(&builder, "go_based: %t\n", profile.GoBased)
+	if sigquitPID > 0 {
+		fmt.Fprintf(&builder, "sigquit_pid: %d\n", sigquitPID)
+	}
+	if snapshot.CurrentCommand != "" {
+		fmt.Fprintf(&builder, "current_command: %s\n", snapshot.CurrentCommand)
+	}
+	if snapshot.CWD != "" {
+		fmt.Fprintf(&builder, "cwd: %s\n", snapshot.CWD)
+	}
+	if len(snapshot.ChildPIDs) > 0 {
+		fmt.Fprintf(&builder, "child_pids: %v\n", snapshot.ChildPIDs)
+	}
+	builder.WriteString("\npane_output:\n")
+	output := snapshot.Output()
+	builder.WriteString(output)
+	if output != "" {
+		builder.WriteString("\n")
+	}
+
+	if err := os.WriteFile(path, []byte(builder.String()), 0o644); err != nil {
+		return "", fmt.Errorf("write postmortem log: %w", err)
+	}
+	return path, nil
+}
+
+func mergePaneCapture(primary, fallback PaneCapture) PaneCapture {
+	primary.Content = mergePaneCaptureContent(primary.Content, fallback.Content)
+	if primary.CWD == "" {
+		primary.CWD = fallback.CWD
+	}
+	if primary.CurrentCommand == "" {
+		primary.CurrentCommand = fallback.CurrentCommand
+	}
+	if len(primary.ChildPIDs) == 0 {
+		primary.ChildPIDs = append([]int(nil), fallback.ChildPIDs...)
+	}
+	return primary
+}
+
+func mergePaneCaptureContent(primary, fallback []string) []string {
+	switch {
+	case len(primary) == 0:
+		return append([]string(nil), fallback...)
+	case len(fallback) == 0:
+		return append([]string(nil), primary...)
+	}
+
+	primaryOutput := strings.Join(primary, "\n")
+	fallbackOutput := strings.Join(fallback, "\n")
+	switch {
+	case strings.Contains(primaryOutput, fallbackOutput):
+		return append([]string(nil), primary...)
+	case strings.Contains(fallbackOutput, primaryOutput):
+		return append([]string(nil), fallback...)
+	default:
+		merged := append([]string(nil), fallback...)
+		merged = append(merged, "")
+		merged = append(merged, primary...)
+		return merged
+	}
 }

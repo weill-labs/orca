@@ -42,6 +42,7 @@ postmortem_enabled = true
 idle_timeout = "30s"
 stuck_timeout = "5m"
 stuck_text_patterns = ["permission prompt"]
+go_based = true
 nudge_command = "Enter"
 max_nudge_retries = 3
 
@@ -63,12 +64,14 @@ clone_origin = "git@github.com:weill-labs/orca.git"
 [agents.codex]
 stuck_timeout = "9m"
 stuck_text_patterns = ["tool denied", "approval required"]
+go_based = false
 
 [agents.aider]
 start_command = "aider"
 idle_timeout = "1m"
 stuck_timeout = "10m"
 stuck_text_patterns = []
+go_based = true
 nudge_command = "/run\n"
 max_nudge_retries = 1
 `,
@@ -88,6 +91,7 @@ max_nudge_retries = 1
 							IdleTimeout:       time.Minute,
 							StuckTimeout:      10 * time.Minute,
 							StuckTextPatterns: []string{},
+							GoBased:           true,
 							NudgeCommand:      "/run\n",
 							MaxNudgeRetries:   1,
 						},
@@ -105,6 +109,7 @@ max_nudge_retries = 1
 							IdleTimeout:       30 * time.Second,
 							StuckTimeout:      9 * time.Minute,
 							StuckTextPatterns: []string{"tool denied", "approval required"},
+							GoBased:           false,
 							NudgeCommand:      "Enter",
 							MaxNudgeRetries:   3,
 						},

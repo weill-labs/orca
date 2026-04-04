@@ -30,6 +30,7 @@ func (a configAdapter) AgentProfile(_ context.Context, name string) (AgentProfil
 		PostmortemEnabled: cfgProfile.PostmortemEnabled,
 		StuckTextPatterns: append([]string(nil), cfgProfile.StuckTextPatterns...),
 		StuckTimeout:      cfgProfile.StuckTimeout,
+		GoBased:           cfgProfile.GoBased,
 		NudgeCommand:      cfgProfile.NudgeCommand,
 		MaxNudgeRetries:   cfgProfile.MaxNudgeRetries,
 	}

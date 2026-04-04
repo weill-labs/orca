@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -329,4 +330,333 @@ func newPostmortemAssignment(deps *testDeps) ActiveAssignment {
 			AgentProfile: deps.config.profiles["codex"].Name,
 		},
 	}
+}
+
+func TestFailStuckWorkerIncludesDiagnosticsErrorInEventMessage(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-710", "Capture diagnostics before kill", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+	active, err := deps.state.ActiveAssignmentByIssue(ctx, d.project, "LAB-710")
+	if err != nil {
+		t.Fatalf("ActiveAssignmentByIssue() error = %v", err)
+	}
+	profile, err := d.profileForTask(ctx, active.Task)
+	if err != nil {
+		t.Fatalf("profileForTask() error = %v", err)
+	}
+	deps.amux.captureHistoryErrors("pane-1", []error{errors.New("history unavailable")})
+
+	d.failStuckWorker(ctx, active, profile, "idle timeout exceeded")
+
+	waitFor(t, "failed task", func() bool {
+		task, ok := deps.state.task("LAB-710")
+		return ok && task.Status == TaskStatusFailed
+	})
+
+	event, ok := deps.events.lastEventOfType(EventTaskFailed)
+	if !ok {
+		t.Fatalf("lastEventOfType(%q) = false, want true", EventTaskFailed)
+	}
+	if !strings.Contains(event.Message, "diagnostics error: capture pane history: history unavailable") {
+		t.Fatalf("event.Message = %q, want diagnostics error context", event.Message)
+	}
+}
+
+func TestFinishAssignmentDefaultsFailedEventMessageWhenEmpty(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-710", "Capture diagnostics before kill", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+	active, err := deps.state.ActiveAssignmentByIssue(ctx, d.project, "LAB-710")
+	if err != nil {
+		t.Fatalf("ActiveAssignmentByIssue() error = %v", err)
+	}
+
+	if err := d.finishAssignmentWithMessage(ctx, active, TaskStatusFailed, EventTaskFailed, false, ""); err != nil {
+		t.Fatalf("finishAssignmentWithMessage() error = %v", err)
+	}
+
+	event, ok := deps.events.lastEventOfType(EventTaskFailed)
+	if !ok {
+		t.Fatalf("lastEventOfType(%q) = false, want true", EventTaskFailed)
+	}
+	if got := event.Message; got != "task failed" {
+		t.Fatalf("event.Message = %q, want %q", got, "task failed")
+	}
+}
+
+func TestCaptureStuckWorkerDiagnosticsErrorPaths(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name              string
+		historySequence   []PaneCapture
+		historyErrors     []error
+		signalErr         error
+		wantErrSubstring  string
+		wantLogPathSuffix string
+	}{
+		{
+			name:             "initial capture failure",
+			historyErrors:    []error{errors.New("history unavailable")},
+			wantErrSubstring: "capture pane history: history unavailable",
+		},
+		{
+			name: "sigquit failure still returns log path",
+			historySequence: []PaneCapture{{
+				Content:        []string{"stuck output"},
+				CWD:            "/tmp/clone-01",
+				CurrentCommand: "codex",
+				ChildPIDs:      []int{4242},
+			}},
+			signalErr:         errors.New("no such process"),
+			wantErrSubstring:  "send SIGQUIT to 4242: no such process",
+			wantLogPathSuffix: "goroutine-dump-LAB-710.log",
+		},
+		{
+			name: "post sigquit capture failure still returns log path",
+			historySequence: []PaneCapture{{
+				Content:        []string{"stuck output"},
+				CWD:            "/tmp/clone-01",
+				CurrentCommand: "codex",
+				ChildPIDs:      []int{4242},
+			}},
+			historyErrors:     []error{nil, errors.New("capture failed after signal")},
+			wantErrSubstring:  "capture pane history after SIGQUIT: capture failed after signal",
+			wantLogPathSuffix: "goroutine-dump-LAB-710.log",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			deps := newTestDeps(t)
+			deps.config.profiles["codex"] = AgentProfile{
+				Name:            "codex",
+				StartCommand:    "codex --yolo",
+				GoBased:         true,
+				StuckTimeout:    time.Hour,
+				NudgeCommand:    "Enter",
+				MaxNudgeRetries: 0,
+			}
+			deps.amux.captureHistorySequence("pane-1", tt.historySequence)
+			deps.amux.captureHistoryErrors("pane-1", tt.historyErrors)
+
+			d := deps.newDaemon(t)
+			if tt.signalErr != nil {
+				d.signalProcess = func(int, syscall.Signal) error {
+					return tt.signalErr
+				}
+			}
+
+			active, profile := testActiveAssignment(t, deps, d, "codex")
+			logPath, err := d.captureStuckWorkerDiagnostics(context.Background(), active, profile, "idle timeout exceeded")
+			if tt.wantErrSubstring != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErrSubstring) {
+					t.Fatalf("captureStuckWorkerDiagnostics() error = %v, want substring %q", err, tt.wantErrSubstring)
+				}
+			} else if err != nil {
+				t.Fatalf("captureStuckWorkerDiagnostics() error = %v", err)
+			}
+			if tt.wantLogPathSuffix == "" {
+				if logPath != "" {
+					t.Fatalf("logPath = %q, want empty", logPath)
+				}
+				return
+			}
+			if !strings.HasSuffix(logPath, tt.wantLogPathSuffix) {
+				t.Fatalf("logPath = %q, want suffix %q", logPath, tt.wantLogPathSuffix)
+			}
+		})
+	}
+}
+
+func TestWriteStuckWorkerPostmortemErrorPaths(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name             string
+		postmortemDir    func(t *testing.T) string
+		issue            string
+		wantErrSubstring string
+	}{
+		{
+			name: "mkdir failure",
+			postmortemDir: func(t *testing.T) string {
+				path := filepath.Join(t.TempDir(), "postmortems-file")
+				if err := os.WriteFile(path, []byte("not a dir"), 0o644); err != nil {
+					t.Fatalf("WriteFile() error = %v", err)
+				}
+				return path
+			},
+			issue:            "LAB-710",
+			wantErrSubstring: "create postmortem directory",
+		},
+		{
+			name: "write failure",
+			postmortemDir: func(t *testing.T) string {
+				return t.TempDir()
+			},
+			issue:            "LAB-710/bad",
+			wantErrSubstring: "write postmortem log",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			deps := newTestDeps(t)
+			d := deps.newDaemon(t)
+			d.postmortemDir = tt.postmortemDir(t)
+
+			active := ActiveAssignment{
+				Task: Task{
+					Issue:     tt.issue,
+					PaneID:    "pane-1",
+					PaneName:  "worker-1",
+					ClonePath: deps.pool.clone.Path,
+				},
+			}
+
+			_, err := d.writeStuckWorkerPostmortem(active, AgentProfile{Name: "codex"}, "idle timeout exceeded", PaneCapture{Content: []string{"stuck output"}}, 0)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErrSubstring) {
+				t.Fatalf("writeStuckWorkerPostmortem() error = %v, want substring %q", err, tt.wantErrSubstring)
+			}
+		})
+	}
+}
+
+func TestMergePaneCaptureFillsMissingMetadata(t *testing.T) {
+	t.Parallel()
+
+	got := mergePaneCapture(
+		PaneCapture{Content: []string{"after"}},
+		PaneCapture{
+			Content:        []string{"before"},
+			CWD:            "/tmp/clone-01",
+			CurrentCommand: "codex",
+			ChildPIDs:      []int{4242},
+		},
+	)
+
+	if got.CWD != "/tmp/clone-01" {
+		t.Fatalf("CWD = %q, want %q", got.CWD, "/tmp/clone-01")
+	}
+	if got.CurrentCommand != "codex" {
+		t.Fatalf("CurrentCommand = %q, want %q", got.CurrentCommand, "codex")
+	}
+	if !reflect.DeepEqual(got.ChildPIDs, []int{4242}) {
+		t.Fatalf("ChildPIDs = %#v, want %#v", got.ChildPIDs, []int{4242})
+	}
+}
+
+func TestMergePaneCaptureContent(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		primary  []string
+		fallback []string
+		want     []string
+	}{
+		{
+			name:     "primary empty",
+			primary:  nil,
+			fallback: []string{"before"},
+			want:     []string{"before"},
+		},
+		{
+			name:     "fallback empty",
+			primary:  []string{"after"},
+			fallback: nil,
+			want:     []string{"after"},
+		},
+		{
+			name:     "primary contains fallback",
+			primary:  []string{"before", "after"},
+			fallback: []string{"before"},
+			want:     []string{"before", "after"},
+		},
+		{
+			name:     "fallback contains primary",
+			primary:  []string{"after"},
+			fallback: []string{"before", "after"},
+			want:     []string{"before", "after"},
+		},
+		{
+			name:     "disjoint content",
+			primary:  []string{"goroutine dump"},
+			fallback: []string{"stuck output"},
+			want:     []string{"stuck output", "", "goroutine dump"},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := mergePaneCaptureContent(tt.primary, tt.fallback); !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("mergePaneCaptureContent() = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+func testActiveAssignment(t *testing.T, deps *testDeps, d *Daemon, profileName string) (ActiveAssignment, AgentProfile) {
+	t.Helper()
+
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-710", "Capture diagnostics before kill", profileName); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	active, err := deps.state.ActiveAssignmentByIssue(ctx, d.project, "LAB-710")
+	if err != nil {
+		t.Fatalf("ActiveAssignmentByIssue() error = %v", err)
+	}
+	profile, err := d.profileForTask(ctx, active.Task)
+	if err != nil {
+		t.Fatalf("profileForTask() error = %v", err)
+	}
+	return active, profile
 }

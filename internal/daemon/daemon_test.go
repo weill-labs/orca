@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -124,4 +126,35 @@ func TestAssignAllocatesCloneStartsAgentAndRegistersState(t *testing.T) {
 	deps.amux.requireSentKeys(t, "pane-1", []string{"Implement daemon core\n"})
 
 	deps.events.requireTypes(t, EventDaemonStarted, EventTaskAssigned)
+}
+
+func TestNewInitializesStuckDiagnosticsDefaults(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	deps := newTestDeps(t)
+	daemon, err := New(Options{
+		Project:  "/tmp/project",
+		Config:   deps.config,
+		State:    deps.state,
+		Pool:     deps.pool,
+		Amux:     deps.amux,
+		Commands: deps.commands,
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	if got, want := daemon.postmortemDir, filepath.Join(home, ".local", "share", "postmortems"); got != want {
+		t.Fatalf("daemon.postmortemDir = %q, want %q", got, want)
+	}
+	if daemon.sleep == nil {
+		t.Fatal("daemon.sleep = nil, want default sleep hook")
+	}
+	if daemon.signalProcess == nil {
+		t.Fatal("daemon.signalProcess = nil, want default signal hook")
+	}
+	if err := daemon.signalProcess(os.Getpid(), syscall.Signal(0)); err != nil {
+		t.Fatalf("daemon.signalProcess(signal 0) error = %v", err)
+	}
 }
