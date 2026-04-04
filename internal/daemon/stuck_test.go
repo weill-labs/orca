@@ -244,8 +244,7 @@ func TestStuckDetectionEscalationCapturesDiagnosticsWithoutCleanupOrKill(t *test
 
 	captureTicker.tick(deps.clock.Now())
 	waitFor(t, "worker escalation with diagnostics", func() bool {
-		active, err := deps.state.ActiveAssignmentByIssue(ctx, d.project, "LAB-710")
-		return err == nil && active.Worker.Health == WorkerHealthEscalated
+		return deps.events.countType(EventWorkerEscalated) == 1
 	})
 
 	task, ok := deps.state.task("LAB-710")
