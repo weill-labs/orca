@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -18,6 +19,7 @@ import (
 )
 
 const defaultAgent = "claude"
+const amuxSessionEnvVar = "AMUX_SESSION"
 
 const usageText = `orca: agent orchestration daemon
 usage: orca <command>
@@ -129,6 +131,10 @@ func (a *App) runStart(ctx context.Context, args []string) error {
 	resolvedProject, err := a.resolveProject(projectPath)
 	if err != nil {
 		return err
+	}
+
+	if strings.TrimSpace(session) == "" {
+		session = strings.TrimSpace(os.Getenv(amuxSessionEnvVar))
 	}
 
 	result, err := a.daemon.Start(ctx, daemon.StartRequest{
