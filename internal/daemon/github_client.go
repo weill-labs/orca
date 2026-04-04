@@ -136,7 +136,7 @@ func (c *gitHubCLIClient) isPRMerged(ctx context.Context, prNumber int) (bool, e
 }
 
 func (c *gitHubCLIClient) lookupPRReviews(ctx context.Context, prNumber int) (prReviewPayload, bool, error) {
-	output, err := c.run(ctx, "pr", "view", fmt.Sprintf("%d", prNumber), "--json", "reviews,reviewDecision")
+	output, err := c.run(ctx, "pr", "view", fmt.Sprintf("%d", prNumber), "--json", "reviews,reviewDecision,comments")
 	if err != nil {
 		return prReviewPayload{}, false, err
 	}

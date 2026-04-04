@@ -172,20 +172,21 @@ type Task struct {
 }
 
 type Worker struct {
-	Project            string    `json:"project,omitempty"`
-	PaneID             string    `json:"pane_id,omitempty"`
-	PaneName           string    `json:"pane_name,omitempty"`
-	Issue              string    `json:"issue,omitempty"`
-	ClonePath          string    `json:"clone_path,omitempty"`
-	AgentProfile       string    `json:"agent_profile,omitempty"`
-	Health             string    `json:"health,omitempty"`
-	LastReviewCount    int       `json:"last_review_count,omitempty"`
-	LastCIState        string    `json:"last_ci_state,omitempty"`
-	LastMergeableState string    `json:"last_mergeable_state,omitempty"`
-	NudgeCount         int       `json:"nudge_count,omitempty"`
-	LastCapture        string    `json:"last_capture,omitempty"`
-	LastActivityAt     time.Time `json:"last_activity_at,omitempty"`
-	UpdatedAt          time.Time `json:"updated_at,omitempty"`
+	Project               string    `json:"project,omitempty"`
+	PaneID                string    `json:"pane_id,omitempty"`
+	PaneName              string    `json:"pane_name,omitempty"`
+	Issue                 string    `json:"issue,omitempty"`
+	ClonePath             string    `json:"clone_path,omitempty"`
+	AgentProfile          string    `json:"agent_profile,omitempty"`
+	Health                string    `json:"health,omitempty"`
+	LastReviewCount       int       `json:"last_review_count,omitempty"`
+	LastIssueCommentCount int       `json:"last_issue_comment_count,omitempty"`
+	LastCIState           string    `json:"last_ci_state,omitempty"`
+	LastMergeableState    string    `json:"last_mergeable_state,omitempty"`
+	NudgeCount            int       `json:"nudge_count,omitempty"`
+	LastCapture           string    `json:"last_capture,omitempty"`
+	LastActivityAt        time.Time `json:"last_activity_at,omitempty"`
+	UpdatedAt             time.Time `json:"updated_at,omitempty"`
 }
 
 type ActiveAssignment struct {

@@ -190,18 +190,19 @@ func (a *sqliteStateAdapter) DeleteTask(ctx context.Context, project, issue stri
 
 func (a *sqliteStateAdapter) PutWorker(ctx context.Context, worker Worker) error {
 	return a.store.UpsertWorker(ctx, worker.Project, state.Worker{
-		PaneID:             worker.PaneID,
-		Agent:              worker.AgentProfile,
-		State:              worker.Health,
-		Issue:              worker.Issue,
-		ClonePath:          worker.ClonePath,
-		LastReviewCount:    worker.LastReviewCount,
-		LastCIState:        worker.LastCIState,
-		LastMergeableState: worker.LastMergeableState,
-		NudgeCount:         worker.NudgeCount,
-		LastCapture:        worker.LastCapture,
-		LastActivityAt:     worker.LastActivityAt,
-		UpdatedAt:          worker.UpdatedAt,
+		PaneID:                worker.PaneID,
+		Agent:                 worker.AgentProfile,
+		State:                 worker.Health,
+		Issue:                 worker.Issue,
+		ClonePath:             worker.ClonePath,
+		LastReviewCount:       worker.LastReviewCount,
+		LastIssueCommentCount: worker.LastIssueCommentCount,
+		LastCIState:           worker.LastCIState,
+		LastMergeableState:    worker.LastMergeableState,
+		NudgeCount:            worker.NudgeCount,
+		LastCapture:           worker.LastCapture,
+		LastActivityAt:        worker.LastActivityAt,
+		UpdatedAt:             worker.UpdatedAt,
 	})
 }
 
@@ -357,20 +358,21 @@ func convertAssignment(project string, assignment state.Assignment) ActiveAssign
 	}
 
 	worker := Worker{
-		Project:            project,
-		PaneID:             assignment.Worker.PaneID,
-		PaneName:           assignment.Worker.PaneID,
-		Issue:              assignment.Worker.Issue,
-		ClonePath:          assignment.Worker.ClonePath,
-		AgentProfile:       assignment.Worker.Agent,
-		Health:             assignment.Worker.State,
-		LastReviewCount:    assignment.Worker.LastReviewCount,
-		LastCIState:        assignment.Worker.LastCIState,
-		LastMergeableState: assignment.Worker.LastMergeableState,
-		NudgeCount:         assignment.Worker.NudgeCount,
-		LastCapture:        assignment.Worker.LastCapture,
-		LastActivityAt:     assignment.Worker.LastActivityAt,
-		UpdatedAt:          assignment.Worker.UpdatedAt,
+		Project:               project,
+		PaneID:                assignment.Worker.PaneID,
+		PaneName:              assignment.Worker.PaneID,
+		Issue:                 assignment.Worker.Issue,
+		ClonePath:             assignment.Worker.ClonePath,
+		AgentProfile:          assignment.Worker.Agent,
+		Health:                assignment.Worker.State,
+		LastReviewCount:       assignment.Worker.LastReviewCount,
+		LastIssueCommentCount: assignment.Worker.LastIssueCommentCount,
+		LastCIState:           assignment.Worker.LastCIState,
+		LastMergeableState:    assignment.Worker.LastMergeableState,
+		NudgeCount:            assignment.Worker.NudgeCount,
+		LastCapture:           assignment.Worker.LastCapture,
+		LastActivityAt:        assignment.Worker.LastActivityAt,
+		UpdatedAt:             assignment.Worker.UpdatedAt,
 	}
 
 	return ActiveAssignment{
@@ -412,7 +414,7 @@ type internalPoolConfig struct {
 	origin  string
 }
 
-func (c internalPoolConfig) PoolDir() string    { return c.poolDir }
+func (c internalPoolConfig) PoolDir() string     { return c.poolDir }
 func (c internalPoolConfig) CloneOrigin() string { return c.origin }
 func (c internalPoolConfig) BaseBranch() string  { return "" }
 
