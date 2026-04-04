@@ -283,7 +283,7 @@ func TestGitHubCLIClientLookupPRReviewsEdgeCases(t *testing.T) {
 				sleep:       noSleep,
 				maxAttempts: 1,
 			})
-			args := []string{"pr", "view", "42", "--json", "reviews,reviewDecision"}
+			args := []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}
 			commands.queue("gh", args, tc.output, nil)
 
 			payload, ok, err := client.lookupPRReviews(context.Background(), 42)
@@ -297,6 +297,37 @@ func TestGitHubCLIClientLookupPRReviewsEdgeCases(t *testing.T) {
 				t.Fatalf("first review body = %q, want %q", payload.Reviews[0].Body, tc.wantBody)
 			}
 		})
+	}
+}
+
+func TestGitHubCLIClientLookupPRReviewsIncludesIssueComments(t *testing.T) {
+	t.Parallel()
+
+	commands := newFakeCommands()
+	client := newGitHubCLIClient(gitHubCLIClientConfig{
+		project:     "/tmp/project",
+		commands:    commands,
+		sleep:       noSleep,
+		maxAttempts: 1,
+	})
+	args := []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}
+	commands.queue("gh", args, `{"reviewDecision":"APPROVED","reviews":[],"comments":[{"author":{"login":"github-actions"},"body":"### Blocking Issues\n\n**1. Add regression coverage**"}]}`, nil)
+
+	payload, ok, err := client.lookupPRReviews(context.Background(), 42)
+	if err != nil {
+		t.Fatalf("lookupPRReviews() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("lookupPRReviews() ok = false, want true")
+	}
+	if got, want := len(payload.Comments), 1; got != want {
+		t.Fatalf("len(payload.Comments) = %d, want %d", got, want)
+	}
+	if got, want := payload.Comments[0].Author.Login, "github-actions"; got != want {
+		t.Fatalf("first comment author = %q, want %q", got, want)
+	}
+	if got, want := payload.Comments[0].Body, "### Blocking Issues\n\n**1. Add regression coverage**"; got != want {
+		t.Fatalf("first comment body = %q, want %q", got, want)
 	}
 }
 
