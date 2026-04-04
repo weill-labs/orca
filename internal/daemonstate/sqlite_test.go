@@ -352,18 +352,19 @@ func TestSQLiteStorePersistsWorkerMonitorStateAndMergeQueue(t *testing.T) {
 	now := time.Date(2026, 4, 3, 9, 30, 0, 0, time.UTC)
 
 	if err := store.UpsertWorker(context.Background(), project, Worker{
-		PaneID:             "pane-1",
-		Agent:              "codex",
-		State:              "escalated",
-		Issue:              "LAB-735",
-		ClonePath:          "/clones/orca01",
-		LastReviewCount:    2,
-		LastCIState:        "fail",
-		LastMergeableState: "blocked",
-		NudgeCount:         3,
-		LastCapture:        "permission prompt",
-		LastActivityAt:     now,
-		UpdatedAt:          now,
+		PaneID:                "pane-1",
+		Agent:                 "codex",
+		State:                 "escalated",
+		Issue:                 "LAB-735",
+		ClonePath:             "/clones/orca01",
+		LastReviewCount:       2,
+		LastIssueCommentCount: 4,
+		LastCIState:           "fail",
+		LastMergeableState:    "blocked",
+		NudgeCount:            3,
+		LastCapture:           "permission prompt",
+		LastActivityAt:        now,
+		UpdatedAt:             now,
 	}); err != nil {
 		t.Fatalf("UpsertWorker() error = %v", err)
 	}
@@ -378,6 +379,9 @@ func TestSQLiteStorePersistsWorkerMonitorStateAndMergeQueue(t *testing.T) {
 	worker := workers[0]
 	if got, want := worker.LastReviewCount, 2; got != want {
 		t.Fatalf("worker.LastReviewCount = %d, want %d", got, want)
+	}
+	if got, want := worker.LastIssueCommentCount, 4; got != want {
+		t.Fatalf("worker.LastIssueCommentCount = %d, want %d", got, want)
 	}
 	if got, want := worker.LastCIState, "fail"; got != want {
 		t.Fatalf("worker.LastCIState = %q, want %q", got, want)

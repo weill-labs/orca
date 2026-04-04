@@ -214,7 +214,7 @@ func TestPRDetectionSyncsPaneMetadata(t *testing.T) {
 	deps.tickers.enqueue(captureTicker, prTicker)
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision"}, ``, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, ``, nil)
 
 	d := deps.newDaemon(t)
 	ctx := context.Background()
@@ -260,10 +260,10 @@ func TestPRMergeablePollingNudgesWorkerOnConflictTransitions(t *testing.T) {
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergeable"}, `{"mergeable":"CONFLICTING"}`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergeable"}, `{"mergeable":"MERGEABLE"}`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergeable"}, `{"mergeable":"CONFLICTING"}`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision"}, ``, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision"}, ``, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision"}, ``, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision"}, ``, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, ``, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, ``, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, ``, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, ``, nil)
 
 	d := deps.newDaemon(t)
 	ctx := context.Background()
@@ -350,8 +350,8 @@ func TestPRMergeablePollingRetriesConflictNudgeAfterWaitIdleFailure(t *testing.T
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergeable"}, `{"mergeable":"CONFLICTING"}`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergeable"}, `{"mergeable":"CONFLICTING"}`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision"}, ``, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision"}, ``, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, ``, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, ``, nil)
 	waitIdleCalls := 0
 	deps.amux.waitIdleHook = func(_ string, _ time.Duration) {
 		waitIdleCalls++

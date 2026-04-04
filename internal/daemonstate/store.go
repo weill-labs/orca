@@ -83,18 +83,19 @@ type Assignment struct {
 }
 
 type Worker struct {
-	PaneID             string    `json:"pane_id"`
-	Agent              string    `json:"agent"`
-	State              string    `json:"state"`
-	Issue              string    `json:"issue,omitempty"`
-	ClonePath          string    `json:"clone_path,omitempty"`
-	LastReviewCount    int       `json:"last_review_count,omitempty"`
-	LastCIState        string    `json:"last_ci_state,omitempty"`
-	LastMergeableState string    `json:"last_mergeable_state,omitempty"`
-	NudgeCount         int       `json:"nudge_count,omitempty"`
-	LastCapture        string    `json:"last_capture,omitempty"`
-	LastActivityAt     time.Time `json:"last_activity_at,omitempty"`
-	UpdatedAt          time.Time `json:"updated_at"`
+	PaneID                string    `json:"pane_id"`
+	Agent                 string    `json:"agent"`
+	State                 string    `json:"state"`
+	Issue                 string    `json:"issue,omitempty"`
+	ClonePath             string    `json:"clone_path,omitempty"`
+	LastReviewCount       int       `json:"last_review_count,omitempty"`
+	LastIssueCommentCount int       `json:"last_issue_comment_count,omitempty"`
+	LastCIState           string    `json:"last_ci_state,omitempty"`
+	LastMergeableState    string    `json:"last_mergeable_state,omitempty"`
+	NudgeCount            int       `json:"nudge_count,omitempty"`
+	LastCapture           string    `json:"last_capture,omitempty"`
+	LastActivityAt        time.Time `json:"last_activity_at,omitempty"`
+	UpdatedAt             time.Time `json:"updated_at"`
 }
 
 type MergeQueueEntry struct {
