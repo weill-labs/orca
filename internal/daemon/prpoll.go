@@ -104,7 +104,7 @@ func (d *Daemon) handlePRPoll(ctx context.Context, active ActiveAssignment) {
 			return
 		}
 		if prNumber > 0 {
-			if err := d.setPaneMetadata(ctx, active.Task.PaneID, assignmentMetadata(profile.Name, active.Task.Branch, active.Task.Issue, prNumber)); err != nil {
+			if err := d.setPaneMetadata(ctx, active.Task.PaneID, trackedPRMetadata(prNumber, trackedStatusActive)); err != nil {
 				return
 			}
 			active.Task.PRNumber = prNumber

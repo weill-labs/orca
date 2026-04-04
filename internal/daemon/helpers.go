@@ -2,12 +2,29 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
-	"fmt"
 	"path/filepath"
 	"strings"
 	"time"
 )
+
+type trackedStatus string
+
+const (
+	trackedStatusActive    trackedStatus = "active"
+	trackedStatusCompleted trackedStatus = "completed"
+)
+
+type trackedIssueRef struct {
+	ID     string        `json:"id"`
+	Status trackedStatus `json:"status,omitempty"`
+}
+
+type trackedPRRef struct {
+	Number int           `json:"number"`
+	Status trackedStatus `json:"status,omitempty"`
+}
 
 func (d *Daemon) rollbackAssignment(ctx context.Context, clone Clone, pane Pane, branch string) error {
 	result := d.amux.KillPane(ctx, pane.ID)
@@ -48,17 +65,71 @@ func taskBlocksAssignment(status string) bool {
 	}
 }
 
-func assignmentMetadata(agentProfile, branch, issue string, prNumber int) map[string]string {
+func assignmentMetadata(agentProfile, branch, task string) map[string]string {
 	metadata := map[string]string{
 		"agent_profile": agentProfile,
 		"branch":        branch,
-		"issue":         issue,
-		"task":          issue,
-	}
-	if prNumber > 0 {
-		metadata["pr"] = fmt.Sprintf("%d", prNumber)
+		"task":          task,
 	}
 	return metadata
+}
+
+func trackedIssueMetadata(issue string, status trackedStatus) map[string]string {
+	issue = strings.TrimSpace(issue)
+	if issue == "" {
+		return nil
+	}
+
+	data, err := json.Marshal([]trackedIssueRef{{
+		ID:     issue,
+		Status: status,
+	}})
+	if err != nil {
+		return nil
+	}
+	return map[string]string{"tracked_issues": string(data)}
+}
+
+func trackedPRMetadata(prNumber int, status trackedStatus) map[string]string {
+	if prNumber <= 0 {
+		return nil
+	}
+
+	data, err := json.Marshal([]trackedPRRef{{
+		Number: prNumber,
+		Status: status,
+	}})
+	if err != nil {
+		return nil
+	}
+	return map[string]string{"tracked_prs": string(data)}
+}
+
+func taskCompletionMetadata(issue string, prNumber int, merged bool) map[string]string {
+	metadata := mergeMetadata(
+		map[string]string{"status": "done"},
+		trackedIssueMetadata(issue, trackedStatusCompleted),
+	)
+	if merged {
+		metadata = mergeMetadata(metadata, trackedPRMetadata(prNumber, trackedStatusCompleted))
+	}
+	return metadata
+}
+
+func mergeMetadata(parts ...map[string]string) map[string]string {
+	var merged map[string]string
+	for _, part := range parts {
+		if len(part) == 0 {
+			continue
+		}
+		if merged == nil {
+			merged = make(map[string]string)
+		}
+		for key, value := range part {
+			merged[key] = value
+		}
+	}
+	return merged
 }
 
 func (d *Daemon) setPaneMetadata(ctx context.Context, paneID string, metadata map[string]string) error {
