@@ -24,6 +24,7 @@ type MockClient struct {
 	mu sync.Mutex
 
 	SpawnFunc       func(ctx context.Context, req SpawnRequest) (Pane, error)
+	PaneExistsFunc  func(ctx context.Context, paneID string) (bool, error)
 	ListPanesFunc   func(ctx context.Context) ([]Pane, error)
 	SendKeysFunc    func(ctx context.Context, paneID string, keys ...string) error
 	CaptureFunc     func(ctx context.Context, paneID string) (string, error)
@@ -32,6 +33,7 @@ type MockClient struct {
 	WaitIdleFunc    func(ctx context.Context, paneID string, timeout time.Duration) error
 
 	SpawnCalls       []SpawnRequest
+	PaneExistsCalls  []string
 	ListPanesCalls   int
 	SendKeysCalls    []SendKeysCall
 	CaptureCalls     []string
@@ -55,6 +57,18 @@ func (m *MockClient) Spawn(ctx context.Context, req SpawnRequest) (Pane, error) 
 		return fn(ctx, req)
 	}
 	return Pane{}, nil
+}
+
+func (m *MockClient) PaneExists(ctx context.Context, paneID string) (bool, error) {
+	m.mu.Lock()
+	m.PaneExistsCalls = append(m.PaneExistsCalls, paneID)
+	fn := m.PaneExistsFunc
+	m.mu.Unlock()
+
+	if fn != nil {
+		return fn(ctx, paneID)
+	}
+	return false, nil
 }
 
 func (m *MockClient) ListPanes(ctx context.Context) ([]Pane, error) {

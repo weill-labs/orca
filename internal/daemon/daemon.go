@@ -163,6 +163,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 	}
 
 	d.stopContext, d.stopCancel = context.WithCancel(context.Background())
+	d.reconcileActiveAssignments(ctx)
 	d.loopDone = make(chan struct{})
 	go d.runLoop(d.stopContext, d.loopDone)
 

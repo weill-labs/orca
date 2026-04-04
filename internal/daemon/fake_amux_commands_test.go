@@ -12,6 +12,8 @@ import (
 type fakeAmux struct {
 	mu                    sync.Mutex
 	spawnPane             Pane
+	paneExists            map[string]bool
+	paneExistsErr         error
 	listPanes             []Pane
 	listPanesErr          error
 	sendKeysErr           error
@@ -24,6 +26,7 @@ type fakeAmux struct {
 	metadata              map[string]map[string]string
 	sentKeys              map[string][]string
 	captures              map[string][]string
+	paneExistsCalls       []string
 	captureCalls          map[string]int
 	killCalls             []string
 	waitIdleCalls         []waitIdleCall
@@ -62,6 +65,24 @@ func (a *fakeAmux) ListPanes(ctx context.Context) ([]Pane, error) {
 	out := make([]Pane, len(a.listPanes))
 	copy(out, a.listPanes)
 	return out, nil
+}
+
+func (a *fakeAmux) PaneExists(ctx context.Context, paneID string) (bool, error) {
+	if a.rejectCanceledContext && ctx.Err() != nil {
+		return false, ctx.Err()
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.paneExistsCalls = append(a.paneExistsCalls, paneID)
+	if a.paneExistsErr != nil {
+		return false, a.paneExistsErr
+	}
+	if a.paneExists != nil {
+		if exists, ok := a.paneExists[paneID]; ok {
+			return exists, nil
+		}
+	}
+	return true, nil
 }
 
 func (a *fakeAmux) SetMetadata(ctx context.Context, paneID string, metadata map[string]string) error {
