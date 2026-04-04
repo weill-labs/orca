@@ -91,7 +91,7 @@ func TestPRPollRetriesCINudgeAfterSendKeysFailure(t *testing.T) {
 	for range 2 {
 		deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
 	}
-	deps.amux.sendKeysResults = []error{nil, errors.New("ci nudge failed"), nil}
+	deps.amux.sendKeysResults = []error{nil, nil, errors.New("ci nudge failed"), nil}
 
 	d := deps.newDaemon(t)
 	ctx := context.Background()

@@ -287,7 +287,15 @@ func (d *Daemon) Assign(ctx context.Context, issue, prompt, agentProfile string)
 		return fmt.Errorf("agent handshake: %w", err)
 	}
 
-	if err := d.amux.SendKeys(ctx, pane.ID, prompt, "Enter"); err != nil {
+	if err := d.amux.SendKeys(ctx, pane.ID, prompt); err != nil {
+		d.failPendingAssignment(ctx, issue, clone, pane, profile, err, restoreReservation)
+		return fmt.Errorf("send prompt: %w", err)
+	}
+	if err := d.amux.WaitIdle(ctx, pane.ID, defaultAgentHandshakeTimeout); err != nil {
+		d.failPendingAssignment(ctx, issue, clone, pane, profile, err, restoreReservation)
+		return fmt.Errorf("send prompt: %w", err)
+	}
+	if err := d.amux.SendKeys(ctx, pane.ID, "Enter"); err != nil {
 		d.failPendingAssignment(ctx, issue, clone, pane, profile, err, restoreReservation)
 		return fmt.Errorf("send prompt: %w", err)
 	}

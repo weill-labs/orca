@@ -132,7 +132,7 @@ func (a *fakeAmux) SendKeys(ctx context.Context, paneID string, keys ...string) 
 	if a.sentKeys == nil {
 		a.sentKeys = make(map[string][]string)
 	}
-	a.sentKeys[paneID] = append(a.sentKeys[paneID], normalizeSentKeys(keys...)...)
+	a.sentKeys[paneID] = appendNormalizedSentKeys(a.sentKeys[paneID], normalizeSentKeys(keys...))
 	return nil
 }
 
@@ -336,6 +336,16 @@ func normalizeSentKeys(keys ...string) []string {
 		normalized = append(normalized, key)
 	}
 	return normalized
+}
+
+func appendNormalizedSentKeys(existing, keys []string) []string {
+	if len(keys) != 1 || keys[0] != "\n" || len(existing) == 0 || strings.HasSuffix(existing[len(existing)-1], "\n") {
+		return append(existing, keys...)
+	}
+
+	merged := append([]string(nil), existing...)
+	merged[len(merged)-1] += "\n"
+	return merged
 }
 
 func clonePaneCapture(capture PaneCapture) PaneCapture {

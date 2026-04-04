@@ -35,25 +35,27 @@ func TestPRReviewPollingNudgesWorkerOncePerNewBlockingReviewBatch(t *testing.T) 
 
 	firstNudge := "New blocking PR review feedback on #42:\n- alice: Please add tests.\n\nAddress the feedback in the PR review and push an update."
 	secondNudge := "New blocking PR review feedback on #42:\n- bob: Handle the nil case too.\n\nAddress the feedback in the PR review and push an update."
+	firstNudgeSent := firstNudge + "\n"
+	secondNudgeSent := secondNudge + "\n"
 
 	prTicker.tick(deps.clock.Now())
 	waitFor(t, "first review nudge", func() bool {
 		worker, ok := deps.state.worker("pane-1")
-		return ok && deps.amux.countKey("pane-1", firstNudge) == 1 && worker.LastReviewCount == 1
+		return ok && deps.amux.countKey("pane-1", firstNudgeSent) == 1 && worker.LastReviewCount == 1
 	})
 
 	prTicker.tick(deps.clock.Now())
 	waitFor(t, "second review poll processed", func() bool {
 		return deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision"}) == 2
 	})
-	if got, want := deps.amux.countKey("pane-1", firstNudge), 1; got != want {
+	if got, want := deps.amux.countKey("pane-1", firstNudgeSent), 1; got != want {
 		t.Fatalf("first review nudge count = %d, want %d", got, want)
 	}
 
 	prTicker.tick(deps.clock.Now())
 	waitFor(t, "second review nudge", func() bool {
 		worker, ok := deps.state.worker("pane-1")
-		return ok && deps.amux.countKey("pane-1", secondNudge) == 1 && worker.LastReviewCount == 2
+		return ok && deps.amux.countKey("pane-1", secondNudgeSent) == 1 && worker.LastReviewCount == 2
 	})
 
 	worker, ok := deps.state.worker("pane-1")
@@ -66,12 +68,11 @@ func TestPRReviewPollingNudgesWorkerOncePerNewBlockingReviewBatch(t *testing.T) 
 
 	deps.amux.requireSentKeys(t, "pane-1", []string{
 		"Implement daemon core\n",
-		firstNudge,
-		"\n",
-		secondNudge,
-		"\n",
+		firstNudgeSent,
+		secondNudgeSent,
 	})
 	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
+		{PaneID: "pane-1", Timeout: 30 * time.Second},
 		{PaneID: "pane-1", Timeout: 30 * time.Second},
 		{PaneID: "pane-1", Timeout: 30 * time.Second},
 		{PaneID: "pane-1", Timeout: 30 * time.Second},
@@ -109,11 +110,12 @@ func TestPRReviewPollingAdvancesCountWithoutNudgingForNonBlockingReviews(t *test
 	}
 
 	firstNudge := "New blocking PR review feedback on #42:\n- alice: Please add tests.\n\nAddress the feedback in the PR review and push an update."
+	firstNudgeSent := firstNudge + "\n"
 
 	prTicker.tick(deps.clock.Now())
 	waitFor(t, "initial blocking review nudge", func() bool {
 		worker, ok := deps.state.worker("pane-1")
-		return ok && deps.amux.countKey("pane-1", firstNudge) == 1 && worker.LastReviewCount == 1
+		return ok && deps.amux.countKey("pane-1", firstNudgeSent) == 1 && worker.LastReviewCount == 1
 	})
 
 	prTicker.tick(deps.clock.Now())
@@ -133,10 +135,10 @@ func TestPRReviewPollingAdvancesCountWithoutNudgingForNonBlockingReviews(t *test
 
 	deps.amux.requireSentKeys(t, "pane-1", []string{
 		"Implement daemon core\n",
-		firstNudge,
-		"\n",
+		firstNudgeSent,
 	})
 	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
+		{PaneID: "pane-1", Timeout: 30 * time.Second},
 		{PaneID: "pane-1", Timeout: 30 * time.Second},
 		{PaneID: "pane-1", Timeout: 30 * time.Second},
 	}; !reflect.DeepEqual(got, want) {
@@ -173,11 +175,12 @@ func TestPRReviewPollingIgnoresEmptyReviewPayload(t *testing.T) {
 	}
 
 	firstNudge := "New blocking PR review feedback on #42:\n- alice: Please add tests.\n\nAddress the feedback in the PR review and push an update."
+	firstNudgeSent := firstNudge + "\n"
 
 	prTicker.tick(deps.clock.Now())
 	waitFor(t, "initial review nudge", func() bool {
 		worker, ok := deps.state.worker("pane-1")
-		return ok && deps.amux.countKey("pane-1", firstNudge) == 1 && worker.LastReviewCount == 1
+		return ok && deps.amux.countKey("pane-1", firstNudgeSent) == 1 && worker.LastReviewCount == 1
 	})
 
 	prTicker.tick(deps.clock.Now())
@@ -227,11 +230,13 @@ func TestPRReviewPollingResumesFromPersistedWorkerStateAfterRestart(t *testing.T
 
 	firstNudge := "New blocking PR review feedback on #42:\n- alice: Please add tests.\n\nAddress the feedback in the PR review and push an update."
 	secondNudge := "New blocking PR review feedback on #42:\n- bob: Handle the nil case too.\n\nAddress the feedback in the PR review and push an update."
+	firstNudgeSent := firstNudge + "\n"
+	secondNudgeSent := secondNudge + "\n"
 
 	firstPollTicker.tick(deps.clock.Now())
 	waitFor(t, "first persisted review nudge", func() bool {
 		worker, ok := deps.state.worker("pane-1")
-		return ok && worker.LastReviewCount == 1 && deps.amux.countKey("pane-1", firstNudge) == 1
+		return ok && worker.LastReviewCount == 1 && deps.amux.countKey("pane-1", firstNudgeSent) == 1
 	})
 
 	if err := first.Stop(context.Background()); err != nil {
@@ -250,13 +255,13 @@ func TestPRReviewPollingResumesFromPersistedWorkerStateAfterRestart(t *testing.T
 	waitFor(t, "restart review poll", func() bool {
 		return deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision"}) >= 2
 	})
-	if got, want := deps.amux.countKey("pane-1", firstNudge), 1; got != want {
+	if got, want := deps.amux.countKey("pane-1", firstNudgeSent), 1; got != want {
 		t.Fatalf("first review nudge count after restart = %d, want %d", got, want)
 	}
 
 	secondPollTicker.tick(deps.clock.Now())
 	waitFor(t, "second persisted review nudge", func() bool {
 		worker, ok := deps.state.worker("pane-1")
-		return ok && worker.LastReviewCount == 2 && deps.amux.countKey("pane-1", secondNudge) == 1
+		return ok && worker.LastReviewCount == 2 && deps.amux.countKey("pane-1", secondNudgeSent) == 1
 	})
 }
