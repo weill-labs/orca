@@ -273,6 +273,23 @@ func (s *SQLiteStore) ListWorkers(ctx context.Context, project string) ([]Worker
 	return workers, nil
 }
 
+func (s *SQLiteStore) WorkerByPane(ctx context.Context, project, paneID string) (Worker, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT pane_id, agent, state, issue, clone_path, last_review_count, last_ci_state, last_mergeable_state, nudge_count, last_capture, last_activity_at, updated_at
+		FROM workers
+		WHERE project = ? AND pane_id = ?
+	`, project, paneID)
+
+	worker, err := scanWorker(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Worker{}, ErrNotFound
+	}
+	if err != nil {
+		return Worker{}, fmt.Errorf("lookup worker by pane: %w", err)
+	}
+	return worker, nil
+}
+
 func (s *SQLiteStore) ListClones(ctx context.Context, project string) ([]Clone, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT path, status, issue, branch, updated_at
@@ -301,6 +318,32 @@ func (s *SQLiteStore) ListClones(ctx context.Context, project string) ([]Clone, 
 	}
 
 	return clones, nil
+}
+
+func (s *SQLiteStore) NonTerminalTasks(ctx context.Context, project string) ([]Task, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT issue, status, agent, prompt, worker_id, clone_path, pr_number, created_at, updated_at
+		FROM tasks
+		WHERE project = ? AND status IN ('starting', 'active')
+		ORDER BY updated_at DESC, issue ASC
+	`, project)
+	if err != nil {
+		return nil, fmt.Errorf("list non-terminal tasks: %w", err)
+	}
+	defer rows.Close()
+
+	tasks := make([]Task, 0)
+	for rows.Next() {
+		task, err := scanTask(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan non-terminal task: %w", err)
+		}
+		tasks = append(tasks, task)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate non-terminal tasks: %w", err)
+	}
+	return tasks, nil
 }
 
 func (s *SQLiteStore) Events(ctx context.Context, project string, afterID int64) (<-chan Event, <-chan error) {
@@ -1045,6 +1088,31 @@ func scanAssignment(scanner rowScanner) (Assignment, error) {
 		Task:   task,
 		Worker: worker,
 	}, nil
+}
+
+func scanWorker(scanner rowScanner) (Worker, error) {
+	var worker Worker
+	var lastActivityAt string
+	var updatedAt string
+	if err := scanner.Scan(
+		&worker.PaneID,
+		&worker.Agent,
+		&worker.State,
+		&worker.Issue,
+		&worker.ClonePath,
+		&worker.LastReviewCount,
+		&worker.LastCIState,
+		&worker.LastMergeableState,
+		&worker.NudgeCount,
+		&worker.LastCapture,
+		&lastActivityAt,
+		&updatedAt,
+	); err != nil {
+		return Worker{}, err
+	}
+	worker.LastActivityAt = parseTime(lastActivityAt)
+	worker.UpdatedAt = parseTime(updatedAt)
+	return worker, nil
 }
 
 func scanMergeQueueEntry(scanner rowScanner) (MergeQueueEntry, error) {

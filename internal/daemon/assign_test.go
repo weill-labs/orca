@@ -155,6 +155,14 @@ func TestAssignRejectsIssueAlreadyActiveInStateBeforeCloneAcquire(t *testing.T) 
 		Branch:       "LAB-689",
 		AgentProfile: "codex",
 	}
+	deps.state.workers["pane-existing"] = Worker{
+		Project:      "/tmp/project",
+		PaneID:       "pane-existing",
+		Issue:        "LAB-689",
+		ClonePath:    "/tmp/existing-clone",
+		AgentProfile: "codex",
+		Health:       WorkerHealthHealthy,
+	}
 
 	if err := d.Start(ctx); err != nil {
 		t.Fatalf("Start() error = %v", err)

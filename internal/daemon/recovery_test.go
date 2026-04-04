@@ -92,7 +92,7 @@ func TestDaemonStartResumesMonitoringLiveAssignments(t *testing.T) {
 	if got, want := task.Status, TaskStatusActive; got != want {
 		t.Fatalf("task.Status = %q, want %q", got, want)
 	}
-	if got, want := deps.amux.captureCount("pane-1"), 1; got != want {
+	if got, want := deps.amux.captureCount("pane-1"), 2; got != want {
 		t.Fatalf("capture count = %d, want %d", got, want)
 	}
 	if got := deps.pool.releasedClones(); len(got) != 0 {
