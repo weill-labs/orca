@@ -933,6 +933,14 @@ func TestMockClientRecordsCalls(t *testing.T) {
 		CaptureFunc: func(_ context.Context, paneID string) (string, error) {
 			return "captured output", nil
 		},
+		CaptureHistoryFunc: func(_ context.Context, paneID string) (PaneCapture, error) {
+			return PaneCapture{
+				Content:        []string{"captured history"},
+				CWD:            "/tmp/worker-20",
+				CurrentCommand: "codex",
+				ChildPIDs:      []int{4242},
+			}, nil
+		},
 	}
 
 	gotPane, err := mock.Spawn(context.Background(), SpawnRequest{CWD: "/tmp/worker-20"})
@@ -967,6 +975,13 @@ func TestMockClientRecordsCalls(t *testing.T) {
 	if gotCapture != "captured output" {
 		t.Fatalf("Capture() output = %q, want %q", gotCapture, "captured output")
 	}
+	gotHistory, err := mock.CaptureHistory(context.Background(), "20")
+	if err != nil {
+		t.Fatalf("CaptureHistory() error = %v", err)
+	}
+	if gotHistory.Output() != "captured history" {
+		t.Fatalf("CaptureHistory() output = %q, want %q", gotHistory.Output(), "captured history")
+	}
 	if err := mock.SetMetadata(context.Background(), "20", map[string]string{"task": "LAB-688"}); err != nil {
 		t.Fatalf("SetMetadata() error = %v", err)
 	}
@@ -991,6 +1006,9 @@ func TestMockClientRecordsCalls(t *testing.T) {
 	}
 	if !reflect.DeepEqual(mock.CaptureCalls, []string{"20"}) {
 		t.Fatalf("CaptureCalls = %#v", mock.CaptureCalls)
+	}
+	if !reflect.DeepEqual(mock.CaptureHistoryCalls, []string{"20"}) {
+		t.Fatalf("CaptureHistoryCalls = %#v", mock.CaptureHistoryCalls)
 	}
 	if !reflect.DeepEqual(mock.SetMetadataCalls, []MetadataCall{{
 		PaneID:   "20",

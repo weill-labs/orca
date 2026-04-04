@@ -135,6 +135,7 @@ func TestStuckDetectionCapturesDiagnosticsBeforeForceKill(t *testing.T) {
 		wantSleepCalls    []time.Duration
 		wantHistoryCalls  int
 		wantLogSubstrings []string
+		wantNoLogStrings  []string
 	}{
 		{
 			name:    "go worker sends sigquit before kill",
@@ -177,6 +178,26 @@ func TestStuckDetectionCapturesDiagnosticsBeforeForceKill(t *testing.T) {
 			wantHistoryCalls: 1,
 			wantLogSubstrings: []string{
 				"stuck output only",
+			},
+		},
+		{
+			name:    "go worker with no child pids skips sigquit",
+			goBased: true,
+			historySequence: []PaneCapture{
+				{
+					Content:        []string{"stuck output without child pids"},
+					CWD:            "/tmp/clone-01",
+					CurrentCommand: "codex",
+				},
+			},
+			wantLogName:      "20260402T090000Z-goroutine-dump-LAB-710.log",
+			wantHistoryCalls: 1,
+			wantLogSubstrings: []string{
+				"stuck output without child pids",
+				"go_based: true",
+			},
+			wantNoLogStrings: []string{
+				"sigquit_pid:",
 			},
 		},
 	}
@@ -263,6 +284,11 @@ func TestStuckDetectionCapturesDiagnosticsBeforeForceKill(t *testing.T) {
 			for _, want := range tt.wantLogSubstrings {
 				if !strings.Contains(string(data), want) {
 					t.Fatalf("postmortem log missing %q in %q", want, string(data))
+				}
+			}
+			for _, unwanted := range tt.wantNoLogStrings {
+				if strings.Contains(string(data), unwanted) {
+					t.Fatalf("postmortem log unexpectedly contained %q in %q", unwanted, string(data))
 				}
 			}
 

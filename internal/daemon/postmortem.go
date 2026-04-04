@@ -369,7 +369,7 @@ func (d *Daemon) writeStuckWorkerPostmortem(active ActiveAssignment, profile Age
 	builder.WriteString("\npane_output:\n")
 	output := snapshot.Output()
 	builder.WriteString(output)
-	if output != "" && !strings.HasSuffix(output, "\n") {
+	if output != "" {
 		builder.WriteString("\n")
 	}
 
