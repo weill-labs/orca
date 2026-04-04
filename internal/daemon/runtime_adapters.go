@@ -8,31 +8,39 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
-	orcacheckconfig "github.com/weill-labs/orca/internal/config"
 	state "github.com/weill-labs/orca/internal/daemonstate"
 	"github.com/weill-labs/orca/internal/linear"
 )
 
-type configAdapter struct {
-	cfg orcacheckconfig.Config
+var builtinProfiles = map[string]AgentProfile{
+	"claude": {
+		Name:              "claude",
+		StartCommand:      "claude",
+		StuckTimeout:      8 * time.Minute,
+		NudgeCommand:      "Enter",
+		StuckTextPatterns: []string{"Do you want to proceed?", "approval required"},
+		MaxNudgeRetries:   3,
+	},
+	"codex": {
+		Name:         "codex",
+		StartCommand: "codex --yolo",
+		StuckTimeout: 9 * time.Minute,
+	},
+	"aider": {
+		Name:         "aider",
+		StartCommand: "aider",
+		StuckTimeout: 10 * time.Minute,
+	},
 }
 
-func (a configAdapter) AgentProfile(_ context.Context, name string) (AgentProfile, error) {
-	cfgProfile, ok := a.cfg.Agents[name]
-	if !ok {
-		return AgentProfile{}, fmt.Errorf("agent profile %q not found", name)
-	}
+type builtinConfigProvider struct{}
 
-	profile := AgentProfile{
-		Name:              name,
-		StartCommand:      cfgProfile.StartCommand,
-		PostmortemEnabled: cfgProfile.PostmortemEnabled,
-		StuckTextPatterns: append([]string(nil), cfgProfile.StuckTextPatterns...),
-		StuckTimeout:      cfgProfile.StuckTimeout,
-		GoBased:           cfgProfile.GoBased,
-		NudgeCommand:      cfgProfile.NudgeCommand,
-		MaxNudgeRetries:   cfgProfile.MaxNudgeRetries,
+func (builtinConfigProvider) AgentProfile(_ context.Context, name string) (AgentProfile, error) {
+	profile, ok := builtinProfiles[strings.ToLower(name)]
+	if !ok {
+		return AgentProfile{}, fmt.Errorf("unknown agent profile %q (available: claude, codex, aider)", name)
 	}
 
 	return applyAgentProfileQuirks(profile), nil
@@ -399,17 +407,14 @@ func newLinearIssueTrackerFromEnv() (IssueTracker, error) {
 	return client, nil
 }
 
-type poolConfigAdapter struct {
-	cfg orcacheckconfig.Config
+type internalPoolConfig struct {
+	poolDir string
+	origin  string
 }
 
-func (a poolConfigAdapter) PoolPattern() string {
-	return a.cfg.Pool.Pattern
-}
-
-func (a poolConfigAdapter) BaseBranch() string {
-	return ""
-}
+func (c internalPoolConfig) PoolDir() string    { return c.poolDir }
+func (c internalPoolConfig) CloneOrigin() string { return c.origin }
+func (c internalPoolConfig) BaseBranch() string  { return "" }
 
 type amuxCWDUsageChecker struct {
 	amux interface {

@@ -17,6 +17,8 @@ import (
 	"github.com/weill-labs/orca/internal/project"
 )
 
+const orcaPoolSubdir = ".orca/pool"
+
 type ServeRequest struct {
 	Session  string
 	Project  string
@@ -26,12 +28,12 @@ type ServeRequest struct {
 }
 
 type serveDeps struct {
-	loadConfig func(projectDir string) (config.Config, error)
-	amux       AmuxClient
-	commands   CommandRunner
-	events     EventSink
-	poolRunner pool.Runner
-	socketPath string
+	detectOrigin func(projectDir string) (string, error)
+	amux         AmuxClient
+	commands     CommandRunner
+	events       EventSink
+	poolRunner   pool.Runner
+	socketPath   string
 }
 
 func RunProcess(ctx context.Context, req ServeRequest) error {
@@ -50,14 +52,19 @@ func runProcess(ctx context.Context, req ServeRequest, deps serveDeps) error {
 	}
 	defer store.Close()
 
-	loadConfig := deps.loadConfig
-	if loadConfig == nil {
-		loadConfig = config.Load
+	detectOrigin := deps.detectOrigin
+	if detectOrigin == nil {
+		detectOrigin = config.DetectOrigin
 	}
 
-	cfg, err := loadConfig(projectPath)
+	origin, err := detectOrigin(projectPath)
 	if err != nil {
-		return fmt.Errorf("load config: %w", err)
+		return fmt.Errorf("detect origin: %w", err)
+	}
+
+	poolDir := filepath.Join(projectPath, orcaPoolSubdir)
+	if err := os.MkdirAll(poolDir, 0o755); err != nil {
+		return fmt.Errorf("create pool directory: %w", err)
 	}
 
 	amuxClient := deps.amux
@@ -73,7 +80,8 @@ func runProcess(ctx context.Context, req ServeRequest, deps serveDeps) error {
 	if deps.poolRunner != nil {
 		managerOptions = append(managerOptions, pool.WithRunner(deps.poolRunner))
 	}
-	manager, err := pool.New(projectPath, poolConfigAdapter{cfg: cfg}, store, managerOptions...)
+	poolCfg := internalPoolConfig{poolDir: poolDir, origin: origin}
+	manager, err := pool.New(projectPath, poolCfg, store, managerOptions...)
 	if err != nil {
 		return fmt.Errorf("create pool manager: %w", err)
 	}
@@ -108,14 +116,13 @@ func runProcess(ctx context.Context, req ServeRequest, deps serveDeps) error {
 		Session:          req.Session,
 		LeadPane:         req.LeadPane,
 		PIDPath:          req.PIDFile,
-		Config:           configAdapter{cfg: cfg},
+		Config:           builtinConfigProvider{},
 		State:            daemonState,
 		Pool:             pool.NewAdapter(manager),
 		Amux:             amuxClient,
 		IssueTracker:     issueTracker,
 		Commands:         commandRunner,
 		Events:           deps.events,
-		PollInterval:     cfg.Daemon.PollInterval,
 		MergeGracePeriod: defaultMergeGracePeriod,
 	})
 	if err != nil {

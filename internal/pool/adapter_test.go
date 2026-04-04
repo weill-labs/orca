@@ -14,11 +14,14 @@ func TestAdapterAcquireReturnsNamedClone(t *testing.T) {
 
 	root := t.TempDir()
 	project := filepath.Join(root, "project")
+	poolDir := filepath.Join(root, "pool")
+	mustMkdir(t, poolDir)
 	origin := newOrigin(t, "main")
-	clonePath := newClone(t, origin, filepath.Join(root, "orca01"))
+	clonePath := newClone(t, origin, filepath.Join(poolDir, "clone-01"))
 	store := newStore(t)
 	manager := newManager(t, project, staticConfig{
-		pattern: filepath.Join(root, "orca*"),
+		poolDir:     poolDir,
+		cloneOrigin: origin,
 	}, store)
 
 	adapter := pool.NewAdapter(manager)
@@ -27,7 +30,7 @@ func TestAdapterAcquireReturnsNamedClone(t *testing.T) {
 		t.Fatalf("Acquire() error = %v", err)
 	}
 
-	if got, want := clone.Name, "orca01"; got != want {
+	if got, want := clone.Name, "clone-01"; got != want {
 		t.Fatalf("clone.Name = %q, want %q", got, want)
 	}
 	if got, want := clone.Path, clonePath; got != want {
@@ -65,11 +68,14 @@ func TestAdapterReleaseUsesCloneBranchInformation(t *testing.T) {
 
 			root := t.TempDir()
 			project := filepath.Join(root, "project")
+			poolDir := filepath.Join(root, "pool")
+			mustMkdir(t, poolDir)
 			origin := newOrigin(t, "main")
-			clonePath := newClone(t, origin, filepath.Join(root, "orca01"))
+			clonePath := newClone(t, origin, filepath.Join(poolDir, "clone-01"))
 			store := newStore(t)
 			manager := newManager(t, project, staticConfig{
-				pattern: filepath.Join(root, "orca*"),
+				poolDir:     poolDir,
+				cloneOrigin: origin,
 			}, store)
 			adapter := pool.NewAdapter(manager)
 
