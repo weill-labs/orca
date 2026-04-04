@@ -18,20 +18,23 @@ var builtinProfiles = map[string]AgentProfile{
 	"claude": {
 		Name:              "claude",
 		StartCommand:      "claude",
+		PostmortemEnabled:  true,
 		StuckTimeout:      8 * time.Minute,
 		NudgeCommand:      "Enter",
 		StuckTextPatterns: []string{"Do you want to proceed?", "approval required"},
 		MaxNudgeRetries:   3,
 	},
 	"codex": {
-		Name:         "codex",
-		StartCommand: "codex --yolo",
-		StuckTimeout: 9 * time.Minute,
+		Name:              "codex",
+		StartCommand:      "codex --yolo",
+		PostmortemEnabled:  true,
+		StuckTimeout:      9 * time.Minute,
 	},
 	"aider": {
-		Name:         "aider",
-		StartCommand: "aider",
-		StuckTimeout: 10 * time.Minute,
+		Name:              "aider",
+		StartCommand:      "aider",
+		PostmortemEnabled:  true,
+		StuckTimeout:      10 * time.Minute,
 	},
 }
 
