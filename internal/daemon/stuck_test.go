@@ -270,3 +270,86 @@ func TestStuckDetectionCapturesDiagnosticsBeforeForceKill(t *testing.T) {
 		})
 	}
 }
+
+func TestStopInterruptsStuckWorkerDiagnosticsWait(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	captureTicker := newFakeTicker()
+	prTicker := newFakeTicker()
+	deps.tickers.enqueue(captureTicker, prTicker)
+	deps.config.profiles["codex"] = AgentProfile{
+		Name:              "codex",
+		StartCommand:      "codex --yolo",
+		StuckTextPatterns: []string{"permission prompt"},
+		StuckTimeout:      time.Hour,
+		GoBased:           true,
+		NudgeCommand:      "Enter",
+		MaxNudgeRetries:   0,
+	}
+	deps.amux.captureSequence("pane-1", []string{"permission prompt"})
+	deps.amux.captureHistorySequence("pane-1", []PaneCapture{{
+		Content:        []string{"stuck output"},
+		CWD:            "/tmp/clone-01",
+		CurrentCommand: "codex",
+		ChildPIDs:      []int{4242},
+	}})
+
+	d := deps.newDaemon(t)
+	sleepStarted := make(chan struct{})
+	d.sleep = func(ctx context.Context, delay time.Duration) error {
+		close(sleepStarted)
+		<-ctx.Done()
+		return ctx.Err()
+	}
+
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	if err := d.Assign(ctx, "LAB-710", "Capture diagnostics before kill", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	captureTicker.tick(deps.clock.Now())
+	select {
+	case <-sleepStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for stuck diagnostics sleep")
+	}
+
+	stopDone := make(chan error, 1)
+	go func() {
+		stopDone <- d.Stop(context.Background())
+	}()
+
+	select {
+	case err := <-stopDone:
+		if err != nil {
+			t.Fatalf("Stop() error = %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Stop() blocked while stuck diagnostics wait was in progress")
+	}
+
+	if got := deps.amux.captureHistoryCount("pane-1"); got != 1 {
+		t.Fatalf("capture history count = %d, want 1", got)
+	}
+
+	task, ok := deps.state.task("LAB-710")
+	if !ok {
+		t.Fatal("task missing after stop")
+	}
+	if got, want := task.Status, TaskStatusFailed; got != want {
+		t.Fatalf("task.Status = %q, want %q", got, want)
+	}
+
+	event, ok := deps.events.lastEventOfType(EventTaskFailed)
+	if !ok {
+		t.Fatalf("lastEventOfType(%q) = false, want true", EventTaskFailed)
+	}
+	if strings.Contains(event.Message, "diagnostics error") {
+		t.Fatalf("event.Message = %q, want no diagnostics error after stop cancellation", event.Message)
+	}
+}
