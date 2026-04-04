@@ -15,13 +15,6 @@ func TestPRMergePollingSendsWrapUpAndCleansClone(t *testing.T) {
 	captureTicker := newFakeTicker()
 	prTicker := newFakeTicker()
 	deps.tickers.enqueue(captureTicker, prTicker)
-	deps.amux.sendKeysHook = func(_ string, keys []string) {
-		for _, key := range keys {
-			if key == "$postmortem" {
-				writePostmortemLog(t, deps.postmortemDir, "LAB-689", deps.clock.Now().Add(time.Minute))
-			}
-		}
-	}
 	deps.amux.rejectCanceledContext = true
 	deps.pool.rejectCanceledContext = true
 	deps.state.rejectCanceledContext = true
@@ -91,6 +84,9 @@ func TestPRMergePollingSendsWrapUpAndCleansClone(t *testing.T) {
 		"tracked_issues": `[{"id":"LAB-689","status":"completed"}]`,
 		"tracked_prs":    `[{"number":42,"status":"completed"}]`,
 	})
+	if got := deps.events.lastMessage(EventWorkerPostmortem); !strings.Contains(got, "sent") {
+		t.Fatalf("postmortem event message = %q, want sent status", got)
+	}
 }
 
 func TestPRMergeCleanupContinuesWhenIssueTrackerDoneUpdateFails(t *testing.T) {
@@ -164,7 +160,7 @@ func TestPRMergeCleanupContinuesWhenIssueTrackerDoneUpdateFails(t *testing.T) {
 	}
 }
 
-func TestPRMergePollingSkipsPostmortemTriggerAfterWrapUpError(t *testing.T) {
+func TestPRMergePollingStillSendsPostmortemAfterWrapUpError(t *testing.T) {
 	deps := newTestDeps(t)
 	captureTicker := newFakeTicker()
 	prTicker := newFakeTicker()
@@ -198,17 +194,18 @@ func TestPRMergePollingSkipsPostmortemTriggerAfterWrapUpError(t *testing.T) {
 		{PaneID: "pane-1", Timeout: 30 * time.Second},
 		{PaneID: "pane-1", Timeout: 30 * time.Second},
 		{PaneID: "pane-1", Timeout: 2 * time.Minute},
+		{PaneID: "pane-1", Timeout: 2 * time.Minute},
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("wait idle calls = %#v, want %#v", got, want)
 	}
 	if got := deps.amux.killCalls; len(got) != 0 {
 		t.Fatalf("kill calls = %#v, want none", got)
 	}
-	if got, want := deps.amux.countKey("pane-1", "$postmortem\n"), 0; got != want {
+	if got, want := deps.amux.countKey("pane-1", "$postmortem\n"), 1; got != want {
 		t.Fatalf("postmortem prompt count = %d, want %d", got, want)
 	}
-	if got := deps.events.lastMessage(EventWorkerPostmortem); !strings.Contains(got, "skipped") {
-		t.Fatalf("postmortem event message = %q, want skipped status", got)
+	if got := deps.events.lastMessage(EventWorkerPostmortem); !strings.Contains(got, "sent") {
+		t.Fatalf("postmortem event message = %q, want sent status", got)
 	}
 	deps.events.requireTypes(t, EventTaskCompletionFailed)
 }

@@ -23,7 +23,6 @@ type testDeps struct {
 	events        *fakeEvents
 	tickers       *fakeTickerFactory
 	pidPath       string
-	postmortemDir string
 
 	mu      sync.Mutex
 	signals []signalCall
@@ -69,7 +68,6 @@ func newTestDeps(t *testing.T) *testDeps {
 		events:        newFakeEvents(),
 		tickers:       &fakeTickerFactory{},
 		pidPath:       filepath.Join(tmp, "orca.pid"),
-		postmortemDir: filepath.Join(tmp, ".local", "share", "postmortems"),
 	}
 }
 
@@ -92,7 +90,6 @@ func (d *testDeps) newDaemon(t *testing.T) *Daemon {
 		CaptureInterval:  5 * time.Second,
 		PollInterval:     30 * time.Second,
 		MergeGracePeriod: 2 * time.Minute,
-		PostmortemDir:    d.postmortemDir,
 		Sleep:            d.recordSleep,
 		SignalProcess:    d.recordSignal,
 	})
