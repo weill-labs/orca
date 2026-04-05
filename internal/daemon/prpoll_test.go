@@ -249,6 +249,51 @@ func TestPRDetectionSyncsPaneMetadata(t *testing.T) {
 	})
 }
 
+func TestPRPollingSkipsDiscoveryWhenAssignmentAlreadyTracksPR(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	captureTicker := newFakeTicker()
+	prTicker := newFakeTicker()
+	deps.tickers.enqueue(captureTicker, prTicker)
+	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--state", "open", "--json", "number"}, `[{"number":42}]`, nil)
+	deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[{"bucket":"pending"}]`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergeable"}, ``, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, ``, nil)
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-689", "Implement daemon core", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	prTicker.tick(deps.clock.Now())
+	waitFor(t, "pr checks poll", func() bool {
+		worker, ok := deps.state.worker("pane-1")
+		return ok && worker.LastCIState == ciStatePending
+	})
+
+	if got, want := deps.commands.countCalls("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}), 0; got != want {
+		t.Fatalf("gh pr discovery calls = %d, want %d", got, want)
+	}
+	if got, want := deps.events.countType(EventPRDetected), 0; got != want {
+		t.Fatalf("PR detected event count = %d, want %d", got, want)
+	}
+	if task, ok := deps.state.task("LAB-689"); !ok {
+		t.Fatal("task not stored in fake state")
+	} else if got, want := task.PRNumber, 42; got != want {
+		t.Fatalf("task.PRNumber = %d, want %d", got, want)
+	}
+}
+
 func TestPRDetectionPreservesTrackedHistoryForReusedPane(t *testing.T) {
 	t.Parallel()
 

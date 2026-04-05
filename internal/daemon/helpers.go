@@ -57,6 +57,19 @@ func (d *Daemon) prepareClone(ctx context.Context, clonePath, branch string) err
 	return nil
 }
 
+func (d *Daemon) prepareAdoptedClone(ctx context.Context, clonePath, branch string) error {
+	commands := [][]string{
+		{"fetch", "origin"},
+		{"checkout", "-B", branch, "origin/" + branch},
+	}
+	for _, args := range commands {
+		if _, err := d.commands.Run(ctx, clonePath, "git", args...); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func taskBlocksAssignment(status string) bool {
 	switch status {
 	case "", TaskStatusDone, TaskStatusCancelled, TaskStatusFailed:
@@ -281,8 +294,14 @@ func (d *Daemon) trackedPaneMetadata(ctx context.Context, paneID, currentIssue s
 	return metadata, nil
 }
 
-func (d *Daemon) assignmentPaneMetadata(ctx context.Context, paneID, agentProfile, branch, issue, task string) (map[string]string, error) {
-	tracked, err := d.trackedPaneMetadata(ctx, paneID, issue, trackedStatusActive, 0, nil)
+func (d *Daemon) assignmentPaneMetadata(ctx context.Context, paneID, agentProfile, branch, issue, task string, prNumber int) (map[string]string, error) {
+	var prStatus *trackedStatus
+	if prNumber > 0 {
+		status := trackedStatusActive
+		prStatus = &status
+	}
+
+	tracked, err := d.trackedPaneMetadata(ctx, paneID, issue, trackedStatusActive, prNumber, prStatus)
 	if err != nil {
 		return nil, err
 	}

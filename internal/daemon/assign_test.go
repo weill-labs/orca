@@ -316,7 +316,7 @@ func TestValidateAssignmentPrompt(t *testing.T) {
 	}
 }
 
-func TestAssignRejectsOpenPRBeforeCloneAcquire(t *testing.T) {
+func TestAssignAdoptsOpenPRAndPrepopulatesTask(t *testing.T) {
 	t.Parallel()
 
 	deps := newTestDeps(t)
@@ -332,21 +332,61 @@ func TestAssignRejectsOpenPRBeforeCloneAcquire(t *testing.T) {
 		_ = d.Stop(context.Background())
 	})
 
-	err := d.Assign(ctx, "LAB-689", "Implement daemon core", "codex")
-	if err == nil {
-		t.Fatal("Assign() succeeded, want open PR error")
+	if err := d.Assign(ctx, "LAB-689", "Implement daemon core", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
 	}
-	if !strings.Contains(err.Error(), "open PR #42") {
-		t.Fatalf("Assign() error = %v, want open PR context", err)
-	}
+
+	waitFor(t, "task registration", func() bool {
+		task, ok := deps.state.task("LAB-689")
+		return ok && task.Status == TaskStatusActive
+	})
+
 	if got, want := deps.commands.countCalls("gh", []string{"pr", "list", "--head", "LAB-689", "--state", "open", "--json", "number"}), 1; got != want {
 		t.Fatalf("gh pr list calls = %d, want %d", got, want)
 	}
-	if got, want := deps.pool.acquireCallCount(), 0; got != want {
+	if got, want := deps.pool.acquireCallCount(), 1; got != want {
 		t.Fatalf("pool acquire calls = %d, want %d", got, want)
 	}
-	if got, want := len(deps.amux.spawnRequests), 0; got != want {
+	if got, want := len(deps.amux.spawnRequests), 1; got != want {
 		t.Fatalf("spawn requests = %d, want %d", got, want)
+	}
+
+	task, ok := deps.state.task("LAB-689")
+	if !ok {
+		t.Fatal("task not stored in fake state")
+	}
+	if got, want := task.Branch, "LAB-689"; got != want {
+		t.Fatalf("task.Branch = %q, want %q", got, want)
+	}
+	if got, want := task.PRNumber, 42; got != want {
+		t.Fatalf("task.PRNumber = %d, want %d", got, want)
+	}
+
+	wantGit := []commandCall{
+		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"fetch", "origin"}},
+		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"checkout", "-B", "LAB-689", "origin/LAB-689"}},
+	}
+	if got := deps.commands.callsByName("git"); !reflect.DeepEqual(got, wantGit) {
+		t.Fatalf("git calls = %#v, want %#v", got, wantGit)
+	}
+
+	deps.amux.requireMetadata(t, "pane-1", map[string]string{
+		"agent_profile":  "codex",
+		"branch":         "LAB-689",
+		"task":           "LAB-689",
+		"tracked_issues": `[{"id":"LAB-689","status":"active"}]`,
+		"tracked_prs":    `[{"number":42,"status":"active"}]`,
+	})
+	if got, want := deps.issueTracker.statuses(), []issueStatusUpdate{
+		{Issue: "LAB-689", State: IssueStateInProgress},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("issue tracker statuses = %#v, want %#v", got, want)
+	}
+
+	if event, ok := deps.events.lastEventOfType(EventTaskAssigned); !ok {
+		t.Fatal("missing task assigned event")
+	} else if got, want := event.PRNumber, 42; got != want {
+		t.Fatalf("assigned event PRNumber = %d, want %d", got, want)
 	}
 }
 
