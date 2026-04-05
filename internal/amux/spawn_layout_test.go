@@ -40,6 +40,31 @@ func TestPlanSpawnPlacement(t *testing.T) {
 			},
 		},
 		{
+			name: "uses the active pane as the implicit lead pane when caller does not pass one",
+			layout: sessionCapture{
+				Panes: []sessionCapturePane{
+					{ID: 1, Name: "caller-pane", Active: true, ColumnIndex: 0, Position: &capturePanePos{X: 0, Y: 0}},
+					{ID: 2, Name: "worker-a", ColumnIndex: 1, Position: &capturePanePos{X: 40, Y: 0}},
+				},
+			},
+			want: spawnPlacement{
+				atPane:     "2",
+				horizontal: true,
+			},
+		},
+		{
+			name: "root-splits from the active pane when the current window has no worker columns yet",
+			layout: sessionCapture{
+				Panes: []sessionCapturePane{
+					{ID: 1, Name: "caller-pane", Active: true, ColumnIndex: 0, Position: &capturePanePos{X: 0, Y: 0}},
+				},
+			},
+			want: spawnPlacement{
+				atPane:    "1",
+				rootLevel: true,
+			},
+		},
+		{
 			name: "fills the first column with room using its bottom pane",
 			layout: sessionCapture{
 				Panes: []sessionCapturePane{
