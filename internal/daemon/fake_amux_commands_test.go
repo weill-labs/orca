@@ -13,6 +13,7 @@ type fakeAmux struct {
 	mu                    sync.Mutex
 	spawnPane             Pane
 	spawnResults          []Pane
+	spawnPanes            []Pane
 	paneExists            map[string]bool
 	paneExistsErr         error
 	listPanes             []Pane
@@ -67,6 +68,15 @@ func (a *fakeAmux) Spawn(ctx context.Context, req SpawnRequest) (Pane, error) {
 	}
 	if a.sentKeys == nil {
 		a.sentKeys = make(map[string][]string)
+	}
+	if len(a.spawnPanes) > 0 {
+		pane := a.spawnPanes[0]
+		if len(a.spawnPanes) == 1 {
+			a.spawnPanes = nil
+		} else {
+			a.spawnPanes = append([]Pane(nil), a.spawnPanes[1:]...)
+		}
+		return pane, nil
 	}
 	if len(a.spawnResults) > 0 {
 		pane := a.spawnResults[0]
@@ -346,6 +356,24 @@ func (a *fakeAmux) captureHistoryCount(paneID string) int {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.historyCaptureCalls[paneID]
+}
+
+func (a *fakeAmux) spawnCount() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return len(a.spawnRequests)
+}
+
+func (a *fakeAmux) waitIdleCount(paneID string) int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	count := 0
+	for _, call := range a.waitIdleCalls {
+		if call.PaneID == paneID {
+			count++
+		}
+	}
+	return count
 }
 
 func (a *fakeAmux) requireMetadata(t *testing.T, paneID string, want map[string]string) {

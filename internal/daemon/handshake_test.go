@@ -3,8 +3,11 @@ package daemon
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -251,5 +254,201 @@ func TestResumeAgentInPaneReturnsWaitContentError(t *testing.T) {
 		{PaneID: "pane-1", Content: "›", Timeout: 30 * time.Second},
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("waitContent calls = %#v, want %#v", got, want)
+	}
+}
+
+func TestAssignEmitsCodexHandshakeDiagnostics(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	deps.amux.captureSequence("pane-1", []string{
+		"Do you trust this folder?",
+		"Codex is ready.",
+	})
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-729", "Fix handshake diagnostics", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	waitFor(t, "handshake diagnostics", func() bool {
+		return len(deps.events.eventsByType(EventWorkerHandshake)) == 6
+	})
+
+	got := deps.events.eventsByType(EventWorkerHandshake)
+	wantMessages := []string{
+		"wait for startup idle",
+		"capture startup output",
+		"trust prompt detected",
+		"sent Enter to confirm trust prompt",
+		"wait for startup idle",
+		"capture startup output",
+	}
+	for i, event := range got {
+		if event.Message != wantMessages[i] {
+			t.Fatalf("event[%d].Message = %q, want %q", i, event.Message, wantMessages[i])
+		}
+		if gotIssue, wantIssue := event.Issue, "LAB-729"; gotIssue != wantIssue {
+			t.Fatalf("event[%d].Issue = %q, want %q", i, gotIssue, wantIssue)
+		}
+		if gotPane, wantPane := event.PaneID, "pane-1"; gotPane != wantPane {
+			t.Fatalf("event[%d].PaneID = %q, want %q", i, gotPane, wantPane)
+		}
+		if gotProfile, wantProfile := event.AgentProfile, "codex"; gotProfile != wantProfile {
+			t.Fatalf("event[%d].AgentProfile = %q, want %q", i, gotProfile, wantProfile)
+		}
+	}
+}
+
+func TestAssignSerializesCodexHandshakeAcrossConcurrentAssigns(t *testing.T) {
+	tests := []struct {
+		name          string
+		pane1Captures []string
+		pane2Captures []string
+		wantPane1Keys []string
+		wantPane2Keys []string
+	}{
+		{
+			name:          "trust prompt on both panes",
+			pane1Captures: []string{"Do you trust this folder?", "Codex is ready."},
+			pane2Captures: []string{"Do you trust this folder?", "Codex is ready."},
+			wantPane1Keys: []string{"Enter", "Implement handshake one", "Enter"},
+			wantPane2Keys: []string{"Enter", "Implement handshake two", "Enter"},
+		},
+		{
+			name:          "second pane waits even without trust prompt",
+			pane1Captures: []string{"Do you trust this folder?", "Codex is ready."},
+			pane2Captures: []string{"Codex is ready."},
+			wantPane1Keys: []string{"Enter", "Implement handshake one", "Enter"},
+			wantPane2Keys: []string{"Implement handshake two", "Enter"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			deps := newTestDeps(t)
+			deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+
+			secondClonePath := filepath.Join(t.TempDir(), "clone-02")
+			if err := os.MkdirAll(secondClonePath, 0o755); err != nil {
+				t.Fatalf("MkdirAll(%q) error = %v", secondClonePath, err)
+			}
+			deps.pool.clones = []Clone{
+				deps.pool.clone,
+				{Name: "clone-02", Path: secondClonePath},
+			}
+			deps.amux.spawnPanes = []Pane{
+				{ID: "pane-1", Name: "worker-1"},
+				{ID: "pane-2", Name: "worker-2"},
+			}
+			deps.amux.captureSequence("pane-1", tt.pane1Captures)
+			deps.amux.captureSequence("pane-2", tt.pane2Captures)
+
+			firstHandshakeEntered := make(chan struct{})
+			releaseFirstHandshake := make(chan struct{})
+			secondHandshakeWait := make(chan struct{}, 1)
+			var firstWait sync.Once
+			var secondWait sync.Once
+			deps.amux.waitIdleHook = func(paneID string, timeout time.Duration) {
+				if timeout != defaultAgentHandshakeTimeout {
+					t.Fatalf("wait idle timeout = %v, want %v", timeout, defaultAgentHandshakeTimeout)
+				}
+				switch paneID {
+				case "pane-1":
+					firstWait.Do(func() {
+						close(firstHandshakeEntered)
+						<-releaseFirstHandshake
+					})
+				case "pane-2":
+					secondWait.Do(func() {
+						secondHandshakeWait <- struct{}{}
+					})
+				}
+			}
+
+			d := deps.newDaemon(t)
+			ctx := context.Background()
+
+			if err := d.Start(ctx); err != nil {
+				t.Fatalf("Start() error = %v", err)
+			}
+			t.Cleanup(func() {
+				_ = d.Stop(context.Background())
+			})
+
+			firstErr := make(chan error, 1)
+			secondErr := make(chan error, 1)
+			go func() {
+				firstErr <- d.Assign(ctx, "LAB-729-1", "Implement handshake one", "codex")
+			}()
+
+			select {
+			case <-firstHandshakeEntered:
+			case <-time.After(2 * time.Second):
+				t.Fatal("timed out waiting for first handshake to start")
+			}
+
+			go func() {
+				secondErr <- d.Assign(ctx, "LAB-729-2", "Implement handshake two", "codex")
+			}()
+
+			waitFor(t, "second spawn", func() bool {
+				return deps.amux.spawnCount() == 2
+			})
+
+			select {
+			case <-secondHandshakeWait:
+				t.Fatal("second handshake reached wait idle before first handshake completed")
+			case <-time.After(150 * time.Millisecond):
+			}
+
+			close(releaseFirstHandshake)
+
+			if err := <-firstErr; err != nil {
+				t.Fatalf("first Assign() error = %v", err)
+			}
+			if err := <-secondErr; err != nil {
+				t.Fatalf("second Assign() error = %v", err)
+			}
+
+			waitFor(t, "second handshake wait idle", func() bool {
+				return deps.amux.waitIdleCount("pane-2") > 0
+			})
+
+			deps.amux.requireSentKeys(t, "pane-1", tt.wantPane1Keys)
+			deps.amux.requireSentKeys(t, "pane-2", tt.wantPane2Keys)
+
+			events := deps.events.eventsByType(EventWorkerHandshake)
+			firstPane2 := -1
+			lastPane1 := -1
+			for i, event := range events {
+				switch event.PaneID {
+				case "pane-1":
+					lastPane1 = i
+				case "pane-2":
+					if firstPane2 == -1 {
+						firstPane2 = i
+					}
+				}
+			}
+			if firstPane2 == -1 {
+				t.Fatal("missing pane-2 handshake events")
+			}
+			if lastPane1 == -1 {
+				t.Fatal("missing pane-1 handshake events")
+			}
+			if firstPane2 <= lastPane1 {
+				t.Fatalf("pane-2 handshake started before pane-1 completed: events=%#v", events)
+			}
+		})
 	}
 }
