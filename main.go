@@ -26,6 +26,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, cli.UsageText())
 		return 1
 	}
+	if usage, ok := cli.HelpText(args); ok {
+		fmt.Fprintln(stdout, usage)
+		return 0
+	}
 
 	if args[0] == "__daemon-serve" {
 		if err := runDaemonProcess(args[1:]); err != nil {
