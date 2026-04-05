@@ -1057,3 +1057,31 @@ func TestMockClientRecordsCalls(t *testing.T) {
 		t.Fatalf("WaitContentCalls count = %d, want 1", got)
 	}
 }
+
+func TestMockClientWaitContentUsesFunc(t *testing.T) {
+	t.Parallel()
+
+	mock := &MockClient{
+		WaitContentFunc: func(_ context.Context, paneID, content string, timeout time.Duration) error {
+			if got, want := paneID, "20"; got != want {
+				t.Fatalf("paneID = %q, want %q", got, want)
+			}
+			if got, want := content, "›"; got != want {
+				t.Fatalf("content = %q, want %q", got, want)
+			}
+			if got, want := timeout, 10*time.Second; got != want {
+				t.Fatalf("timeout = %v, want %v", got, want)
+			}
+			return errors.New("wait content failed")
+		},
+	}
+
+	err := mock.WaitContent(context.Background(), "20", "›", 10*time.Second)
+	if err == nil || !strings.Contains(err.Error(), "wait content failed") {
+		t.Fatalf("WaitContent() error = %v, want wait content failure", err)
+	}
+
+	if got, want := len(mock.WaitContentCalls), 1; got != want {
+		t.Fatalf("WaitContentCalls count = %d, want %d", got, want)
+	}
+}
