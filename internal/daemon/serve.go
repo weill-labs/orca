@@ -228,18 +228,11 @@ func dispatchRPCRequest(ctx context.Context, request rpcRequest, instance *Daemo
 			return rpcFailure(request.ID, -32000, err)
 		}
 
-		taskStatus, err := store.TaskStatus(ctx, projectPath, params.Issue)
+		result, err := taskActionResultForIssue(ctx, store, projectPath, params.Issue)
 		if err != nil {
 			return rpcFailure(request.ID, -32000, err)
 		}
-
-		return rpcSuccess(request.ID, TaskActionResult{
-			Project:   projectPath,
-			Issue:     taskStatus.Task.Issue,
-			Status:    taskStatus.Task.Status,
-			Agent:     taskStatus.Task.Agent,
-			UpdatedAt: taskStatus.Task.UpdatedAt,
-		})
+		return rpcSuccess(request.ID, result)
 	case "cancel":
 		var params cancelRPCParams
 		if err := decodeRPCParams(request.Params, &params); err != nil {
@@ -249,18 +242,11 @@ func dispatchRPCRequest(ctx context.Context, request rpcRequest, instance *Daemo
 			return rpcFailure(request.ID, -32000, err)
 		}
 
-		taskStatus, err := store.TaskStatus(ctx, projectPath, params.Issue)
+		result, err := taskActionResultForIssue(ctx, store, projectPath, params.Issue)
 		if err != nil {
 			return rpcFailure(request.ID, -32000, err)
 		}
-
-		return rpcSuccess(request.ID, TaskActionResult{
-			Project:   projectPath,
-			Issue:     taskStatus.Task.Issue,
-			Status:    taskStatus.Task.Status,
-			Agent:     taskStatus.Task.Agent,
-			UpdatedAt: taskStatus.Task.UpdatedAt,
-		})
+		return rpcSuccess(request.ID, result)
 	case "resume":
 		var params resumeRPCParams
 		if err := decodeRPCParams(request.Params, &params); err != nil {
@@ -270,18 +256,11 @@ func dispatchRPCRequest(ctx context.Context, request rpcRequest, instance *Daemo
 			return rpcFailure(request.ID, -32000, err)
 		}
 
-		taskStatus, err := store.TaskStatus(ctx, projectPath, params.Issue)
+		result, err := taskActionResultForIssue(ctx, store, projectPath, params.Issue)
 		if err != nil {
 			return rpcFailure(request.ID, -32000, err)
 		}
-
-		return rpcSuccess(request.ID, TaskActionResult{
-			Project:   projectPath,
-			Issue:     taskStatus.Task.Issue,
-			Status:    taskStatus.Task.Status,
-			Agent:     taskStatus.Task.Agent,
-			UpdatedAt: taskStatus.Task.UpdatedAt,
-		})
+		return rpcSuccess(request.ID, result)
 	case "enqueue":
 		var params enqueueRPCParams
 		if err := decodeRPCParams(request.Params, &params); err != nil {
@@ -315,4 +294,19 @@ func dispatchRPCRequest(ctx context.Context, request rpcRequest, instance *Daemo
 	default:
 		return rpcFailure(request.ID, -32601, fmt.Errorf("unknown method %q", request.Method))
 	}
+}
+
+func taskActionResultForIssue(ctx context.Context, store *state.SQLiteStore, projectPath, issue string) (TaskActionResult, error) {
+	taskStatus, err := store.TaskStatus(ctx, projectPath, issue)
+	if err != nil {
+		return TaskActionResult{}, err
+	}
+
+	return TaskActionResult{
+		Project:   projectPath,
+		Issue:     taskStatus.Task.Issue,
+		Status:    taskStatus.Task.Status,
+		Agent:     taskStatus.Task.Agent,
+		UpdatedAt: taskStatus.Task.UpdatedAt,
+	}, nil
 }
