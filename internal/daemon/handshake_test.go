@@ -286,12 +286,12 @@ func TestAssignEmitsCodexHandshakeDiagnostics(t *testing.T) {
 
 	got := deps.events.eventsByType(EventWorkerHandshake)
 	wantMessages := []string{
-		"wait for startup idle",
-		"capture startup output",
-		"trust prompt detected",
-		"sent Enter to confirm trust prompt",
-		"wait for startup idle",
-		"capture startup output",
+		handshakeStepWait,
+		handshakeStepCapture,
+		handshakeStepTrustDetected,
+		handshakeStepTrustEnter,
+		handshakeStepWait,
+		handshakeStepCapture,
 	}
 	for i, event := range got {
 		if event.Message != wantMessages[i] {

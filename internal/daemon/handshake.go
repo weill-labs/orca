@@ -6,11 +6,18 @@ import (
 	"strings"
 )
 
+const (
+	handshakeStepWait          = "wait for startup idle"
+	handshakeStepCapture       = "capture startup output"
+	handshakeStepTrustDetected = "trust prompt detected"
+	handshakeStepTrustEnter    = "sent Enter to confirm trust prompt"
+)
+
 func (d *Daemon) agentHandshake(ctx context.Context, paneID string, profile AgentProfile) error {
 	d.handshakeMu.Lock()
 	defer d.handshakeMu.Unlock()
 
-	d.emitHandshakeEvent(ctx, paneID, profile, "wait for startup idle")
+	d.emitHandshakeEvent(ctx, paneID, profile, handshakeStepWait)
 	if err := d.amux.WaitIdle(ctx, paneID, defaultAgentHandshakeTimeout); err != nil {
 		return fmt.Errorf("wait for startup idle: %w", err)
 	}
@@ -23,15 +30,15 @@ func (d *Daemon) agentHandshake(ctx context.Context, paneID string, profile Agen
 		if err != nil {
 			return fmt.Errorf("capture startup output: %w", err)
 		}
-		d.emitHandshakeEvent(ctx, paneID, profile, "capture startup output")
+		d.emitHandshakeEvent(ctx, paneID, profile, handshakeStepCapture)
 
 		switch {
 		case !trustConfirmed && hasTrustPrompt(profile, output):
-			d.emitHandshakeEvent(ctx, paneID, profile, "trust prompt detected")
+			d.emitHandshakeEvent(ctx, paneID, profile, handshakeStepTrustDetected)
 			if err := d.amux.SendKeys(ctx, paneID, "Enter"); err != nil {
 				return fmt.Errorf("confirm trust prompt: %w", err)
 			}
-			d.emitHandshakeEvent(ctx, paneID, profile, "sent Enter to confirm trust prompt")
+			d.emitHandshakeEvent(ctx, paneID, profile, handshakeStepTrustEnter)
 			trustConfirmed = true
 		case !resumed && hasResumePrompt(profile, output):
 			if err := d.resumeAgentInPane(ctx, paneID, profile); err != nil {
@@ -42,7 +49,7 @@ func (d *Daemon) agentHandshake(ctx context.Context, paneID string, profile Agen
 			return nil
 		}
 
-		d.emitHandshakeEvent(ctx, paneID, profile, "wait for startup idle")
+		d.emitHandshakeEvent(ctx, paneID, profile, handshakeStepWait)
 		if err := d.amux.WaitIdle(ctx, paneID, defaultAgentHandshakeTimeout); err != nil {
 			return fmt.Errorf("wait for post-startup action idle: %w", err)
 		}
