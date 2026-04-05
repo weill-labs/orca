@@ -364,7 +364,7 @@ func TestAssignAdoptsOpenPRAndPrepopulatesTask(t *testing.T) {
 
 	wantGit := []commandCall{
 		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"fetch", "origin"}},
-		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"checkout", "LAB-689"}},
+		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"checkout", "-B", "LAB-689", "origin/LAB-689"}},
 	}
 	if got := deps.commands.callsByName("git"); !reflect.DeepEqual(got, wantGit) {
 		t.Fatalf("git calls = %#v, want %#v", got, wantGit)

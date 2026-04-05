@@ -60,7 +60,7 @@ func (d *Daemon) prepareClone(ctx context.Context, clonePath, branch string) err
 func (d *Daemon) prepareAdoptedClone(ctx context.Context, clonePath, branch string) error {
 	commands := [][]string{
 		{"fetch", "origin"},
-		{"checkout", branch},
+		{"checkout", "-B", branch, "origin/" + branch},
 	}
 	for _, args := range commands {
 		if _, err := d.commands.Run(ctx, clonePath, "git", args...); err != nil {
