@@ -140,7 +140,7 @@ func TestNewOmitsLegacyPostmortemFields(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 
-	daemonType := reflect.TypeOf(*daemon)
+	daemonType := reflect.TypeOf(daemon).Elem()
 	for _, fieldName := range []string{"postmortemDir", "postmortemWindow", "postmortemTimeout"} {
 		if _, ok := daemonType.FieldByName(fieldName); ok {
 			t.Fatalf("Daemon unexpectedly contains field %q", fieldName)
