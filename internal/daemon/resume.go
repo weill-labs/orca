@@ -201,9 +201,9 @@ func (d *Daemon) storeResumedTask(ctx context.Context, task Task, worker Worker,
 	resumedWorker.Issue = task.Issue
 	resumedWorker.ClonePath = task.ClonePath
 	resumedWorker.AgentProfile = task.AgentProfile
-	if resumedWorker.Health == "" {
-		resumedWorker.Health = WorkerHealthHealthy
-	}
+	resumedWorker.Health = WorkerHealthHealthy
+	resumedWorker.NudgeCount = 0
+	resumedWorker.LastCapture = ""
 	resumedWorker.LastActivityAt = now
 	resumedWorker.UpdatedAt = now
 

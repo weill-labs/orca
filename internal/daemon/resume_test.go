@@ -79,6 +79,19 @@ func TestResumeRestartsExistingWorkerInPlace(t *testing.T) {
 	if got, want := task.Status, TaskStatusActive; got != want {
 		t.Fatalf("task.Status = %q, want %q", got, want)
 	}
+	worker, ok = deps.state.worker("pane-1")
+	if !ok {
+		t.Fatal("worker missing after resume")
+	}
+	if got, want := worker.Health, WorkerHealthHealthy; got != want {
+		t.Fatalf("worker.Health = %q, want %q", got, want)
+	}
+	if got, want := worker.NudgeCount, 0; got != want {
+		t.Fatalf("worker.NudgeCount = %d, want %d", got, want)
+	}
+	if got, want := worker.LastCapture, ""; got != want {
+		t.Fatalf("worker.LastCapture = %q, want %q", got, want)
+	}
 }
 
 func TestResumeRestartsExistingWorkerInPlaceAndSendsPrompt(t *testing.T) {
