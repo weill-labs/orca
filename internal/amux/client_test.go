@@ -118,43 +118,43 @@ func TestCLIClientSpawn(t *testing.T) {
 				{name: "amux", args: []string{"-s", "default", "wait", "idle", "12", "--timeout", "5s"}},
 				{name: "amux", args: []string{"-s", "default", "send-keys", "12", "--delay-final", "250ms", "claude --dangerously-skip-permissions"}},
 				{name: "amux", args: []string{"-s", "default", "send-keys", "12", "--delay-final", "250ms", "Enter"}},
-				},
-				wantPane: Pane{ID: "12", Name: "worker-2"},
 			},
-			{
-				name: "uses the active pane in the current window when lead pane is unset",
-				config: Config{
-					Session: "default",
-				},
-				req: SpawnRequest{
-					CWD:     "/tmp/worker-implicit",
-					Command: "claude --dangerously-skip-permissions",
-				},
-				queue: []runnerResult{
-					{output: []byte(testSessionCaptureJSON(t, sessionCapture{
-						Panes: []sessionCapturePane{
-							{ID: 1, Name: "caller-pane", Active: true, ColumnIndex: 0, Position: &capturePanePos{X: 0, Y: 0, Width: 40, Height: 24}},
-							{ID: 2, Name: "worker-LAB-700", ColumnIndex: 1, Position: &capturePanePos{X: 41, Y: 0, Width: 39, Height: 24}},
-						},
-					}))},
-					{output: []byte("Spawned worker-implicit in pane 14\n")},
-				},
-				wantCmds: []recordedCommand{
-					{name: "amux", args: []string{"-s", "default", "capture", "--format", "json"}},
-					{name: "amux", args: []string{"-s", "default", "spawn", "--at", "2", "--horizontal", "--name", "worker-implicit"}},
-					{name: "amux", args: []string{"-s", "default", "send-keys", "14", "--delay-final", "250ms", "cd '/tmp/worker-implicit'"}},
-					{name: "amux", args: []string{"-s", "default", "send-keys", "14", "--delay-final", "250ms", "Enter"}},
-					{name: "amux", args: []string{"-s", "default", "wait", "idle", "14", "--timeout", "5s"}},
-					{name: "amux", args: []string{"-s", "default", "send-keys", "14", "--delay-final", "250ms", "claude --dangerously-skip-permissions"}},
-					{name: "amux", args: []string{"-s", "default", "send-keys", "14", "--delay-final", "250ms", "Enter"}},
-				},
-				wantPane: Pane{ID: "14", Name: "worker-implicit"},
+			wantPane: Pane{ID: "12", Name: "worker-2"},
+		},
+		{
+			name: "uses the active pane in the current window when lead pane is unset",
+			config: Config{
+				Session: "default",
 			},
-			{
-				name: "creates a new worker column when all existing columns are full",
-				config: Config{
-					Session: "main",
-				},
+			req: SpawnRequest{
+				CWD:     "/tmp/worker-implicit",
+				Command: "claude --dangerously-skip-permissions",
+			},
+			queue: []runnerResult{
+				{output: []byte(testSessionCaptureJSON(t, sessionCapture{
+					Panes: []sessionCapturePane{
+						{ID: 1, Name: "caller-pane", Active: true, ColumnIndex: 0, Position: &capturePanePos{X: 0, Y: 0, Width: 40, Height: 24}},
+						{ID: 2, Name: "worker-LAB-700", ColumnIndex: 1, Position: &capturePanePos{X: 41, Y: 0, Width: 39, Height: 24}},
+					},
+				}))},
+				{output: []byte("Spawned worker-implicit in pane 14\n")},
+			},
+			wantCmds: []recordedCommand{
+				{name: "amux", args: []string{"-s", "default", "capture", "--format", "json"}},
+				{name: "amux", args: []string{"-s", "default", "spawn", "--at", "2", "--horizontal", "--name", "worker-implicit"}},
+				{name: "amux", args: []string{"-s", "default", "send-keys", "14", "--delay-final", "250ms", "cd '/tmp/worker-implicit'"}},
+				{name: "amux", args: []string{"-s", "default", "send-keys", "14", "--delay-final", "250ms", "Enter"}},
+				{name: "amux", args: []string{"-s", "default", "wait", "idle", "14", "--timeout", "5s"}},
+				{name: "amux", args: []string{"-s", "default", "send-keys", "14", "--delay-final", "250ms", "claude --dangerously-skip-permissions"}},
+				{name: "amux", args: []string{"-s", "default", "send-keys", "14", "--delay-final", "250ms", "Enter"}},
+			},
+			wantPane: Pane{ID: "14", Name: "worker-implicit"},
+		},
+		{
+			name: "creates a new worker column when all existing columns are full",
+			config: Config{
+				Session: "main",
+			},
 			req: SpawnRequest{
 				AtPane:  "lead-pane",
 				Name:    "worker-LAB-99",

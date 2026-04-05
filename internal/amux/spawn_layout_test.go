@@ -36,6 +36,7 @@ func TestPlanSpawnPlacement(t *testing.T) {
 				},
 			},
 			want: spawnPlacement{
+				atPane:    "1",
 				rootLevel: true,
 			},
 		},
