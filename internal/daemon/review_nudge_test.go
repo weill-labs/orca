@@ -6,8 +6,6 @@ import (
 	"testing"
 )
 
-const eventWorkerReviewEscalated = "worker.review_escalated"
-
 func TestPRReviewPollingSkipsNudgesForApprovalOrLGTM(t *testing.T) {
 	t.Parallel()
 
@@ -167,7 +165,7 @@ func TestPRReviewPollingEscalatesAfterThreeNudgesAndResetsAfterApprovalCycle(t *
 			worker, ok := deps.state.worker("pane-1")
 			return ok &&
 				worker.LastReviewCount == 4 &&
-				deps.events.countType(eventWorkerReviewEscalated) == 1
+				deps.events.countType(EventWorkerReviewEscalated) == 1
 		})
 	if got := deps.amux.countKey("pane-1", daveNudge); got != 0 {
 		t.Fatalf("fourth review nudge count = %d, want 0", got)
@@ -189,7 +187,7 @@ func TestPRReviewPollingEscalatesAfterThreeNudgesAndResetsAfterApprovalCycle(t *
 	if got, want := deps.events.countType(EventWorkerNudgedReview), 4; got != want {
 		t.Fatalf("review nudge event count = %d, want %d", got, want)
 	}
-	if got, want := deps.events.countType(eventWorkerReviewEscalated), 1; got != want {
+	if got, want := deps.events.countType(EventWorkerReviewEscalated), 1; got != want {
 		t.Fatalf("review escalation event count = %d, want %d", got, want)
 	}
 	deps.amux.requireSentKeys(t, "pane-1", []string{

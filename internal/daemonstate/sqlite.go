@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS workers (
 	clone_path TEXT NOT NULL DEFAULT '',
 	last_review_count INTEGER NOT NULL DEFAULT 0,
 	last_issue_comment_count INTEGER NOT NULL DEFAULT 0,
+	review_nudge_count INTEGER NOT NULL DEFAULT 0,
 	last_ci_state TEXT NOT NULL DEFAULT '',
 	last_mergeable_state TEXT NOT NULL DEFAULT '',
 	nudge_count INTEGER NOT NULL DEFAULT 0,
@@ -231,7 +232,7 @@ func (s *SQLiteStore) TaskStatus(ctx context.Context, project, issue string) (Ta
 
 func (s *SQLiteStore) ListWorkers(ctx context.Context, project string) ([]Worker, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT pane_id, agent, state, issue, clone_path, last_review_count, last_issue_comment_count, last_ci_state, last_mergeable_state, nudge_count, last_capture, last_activity_at, updated_at
+		SELECT pane_id, agent, state, issue, clone_path, last_review_count, last_issue_comment_count, review_nudge_count, last_ci_state, last_mergeable_state, nudge_count, last_capture, last_activity_at, updated_at
 		FROM workers
 		WHERE project = ?
 		ORDER BY updated_at DESC, pane_id ASC
@@ -254,6 +255,7 @@ func (s *SQLiteStore) ListWorkers(ctx context.Context, project string) ([]Worker
 			&worker.ClonePath,
 			&worker.LastReviewCount,
 			&worker.LastIssueCommentCount,
+			&worker.ReviewNudgeCount,
 			&worker.LastCIState,
 			&worker.LastMergeableState,
 			&worker.NudgeCount,
@@ -277,7 +279,7 @@ func (s *SQLiteStore) ListWorkers(ctx context.Context, project string) ([]Worker
 
 func (s *SQLiteStore) WorkerByPane(ctx context.Context, project, paneID string) (Worker, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT pane_id, agent, state, issue, clone_path, last_review_count, last_ci_state, last_mergeable_state, nudge_count, last_capture, last_activity_at, updated_at
+		SELECT pane_id, agent, state, issue, clone_path, last_review_count, last_issue_comment_count, review_nudge_count, last_ci_state, last_mergeable_state, nudge_count, last_capture, last_activity_at, updated_at
 		FROM workers
 		WHERE project = ? AND pane_id = ?
 	`, project, paneID)
@@ -473,8 +475,8 @@ func (s *SQLiteStore) UpsertWorker(ctx context.Context, project string, worker W
 	}
 
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO workers(project, pane_id, agent, state, issue, clone_path, last_review_count, last_issue_comment_count, last_ci_state, last_mergeable_state, nudge_count, last_capture, last_activity_at, updated_at)
-		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO workers(project, pane_id, agent, state, issue, clone_path, last_review_count, last_issue_comment_count, review_nudge_count, last_ci_state, last_mergeable_state, nudge_count, last_capture, last_activity_at, updated_at)
+		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(project, pane_id) DO UPDATE SET
 			agent = excluded.agent,
 			state = excluded.state,
@@ -482,13 +484,14 @@ func (s *SQLiteStore) UpsertWorker(ctx context.Context, project string, worker W
 			clone_path = excluded.clone_path,
 			last_review_count = excluded.last_review_count,
 			last_issue_comment_count = excluded.last_issue_comment_count,
+			review_nudge_count = excluded.review_nudge_count,
 			last_ci_state = excluded.last_ci_state,
 			last_mergeable_state = excluded.last_mergeable_state,
 			nudge_count = excluded.nudge_count,
 			last_capture = excluded.last_capture,
 			last_activity_at = excluded.last_activity_at,
 			updated_at = excluded.updated_at
-	`, project, worker.PaneID, worker.Agent, worker.State, worker.Issue, worker.ClonePath, worker.LastReviewCount, worker.LastIssueCommentCount, worker.LastCIState, worker.LastMergeableState, worker.NudgeCount, worker.LastCapture, formatTime(worker.LastActivityAt), formatTime(worker.UpdatedAt))
+	`, project, worker.PaneID, worker.Agent, worker.State, worker.Issue, worker.ClonePath, worker.LastReviewCount, worker.LastIssueCommentCount, worker.ReviewNudgeCount, worker.LastCIState, worker.LastMergeableState, worker.NudgeCount, worker.LastCapture, formatTime(worker.LastActivityAt), formatTime(worker.UpdatedAt))
 	if err != nil {
 		return fmt.Errorf("upsert worker: %w", err)
 	}
@@ -599,7 +602,7 @@ func (s *SQLiteStore) ActiveAssignments(ctx context.Context, project string) ([]
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT
 			t.issue, t.status, t.agent, t.prompt, t.worker_id, t.clone_path, t.pr_number, t.created_at, t.updated_at,
-			w.pane_id, w.agent, w.state, w.issue, w.clone_path, w.last_review_count, w.last_issue_comment_count, w.last_ci_state, w.last_mergeable_state, w.nudge_count, w.last_capture, w.last_activity_at, w.updated_at
+			w.pane_id, w.agent, w.state, w.issue, w.clone_path, w.last_review_count, w.last_issue_comment_count, w.review_nudge_count, w.last_ci_state, w.last_mergeable_state, w.nudge_count, w.last_capture, w.last_activity_at, w.updated_at
 		FROM tasks t
 		INNER JOIN workers w
 			ON w.project = t.project
@@ -630,7 +633,7 @@ func (s *SQLiteStore) ActiveAssignmentByIssue(ctx context.Context, project, issu
 	row := s.db.QueryRowContext(ctx, `
 		SELECT
 			t.issue, t.status, t.agent, t.prompt, t.worker_id, t.clone_path, t.pr_number, t.created_at, t.updated_at,
-			w.pane_id, w.agent, w.state, w.issue, w.clone_path, w.last_review_count, w.last_issue_comment_count, w.last_ci_state, w.last_mergeable_state, w.nudge_count, w.last_capture, w.last_activity_at, w.updated_at
+			w.pane_id, w.agent, w.state, w.issue, w.clone_path, w.last_review_count, w.last_issue_comment_count, w.review_nudge_count, w.last_ci_state, w.last_mergeable_state, w.nudge_count, w.last_capture, w.last_activity_at, w.updated_at
 		FROM tasks t
 		INNER JOIN workers w
 			ON w.project = t.project
@@ -652,7 +655,7 @@ func (s *SQLiteStore) ActiveAssignmentByPRNumber(ctx context.Context, project st
 	row := s.db.QueryRowContext(ctx, `
 		SELECT
 			t.issue, t.status, t.agent, t.prompt, t.worker_id, t.clone_path, t.pr_number, t.created_at, t.updated_at,
-			w.pane_id, w.agent, w.state, w.issue, w.clone_path, w.last_review_count, w.last_issue_comment_count, w.last_ci_state, w.last_mergeable_state, w.nudge_count, w.last_capture, w.last_activity_at, w.updated_at
+			w.pane_id, w.agent, w.state, w.issue, w.clone_path, w.last_review_count, w.last_issue_comment_count, w.review_nudge_count, w.last_ci_state, w.last_mergeable_state, w.nudge_count, w.last_capture, w.last_activity_at, w.updated_at
 		FROM tasks t
 		INNER JOIN workers w
 			ON w.project = t.project
@@ -1098,6 +1101,7 @@ func scanAssignment(scanner rowScanner) (Assignment, error) {
 		&worker.ClonePath,
 		&worker.LastReviewCount,
 		&worker.LastIssueCommentCount,
+		&worker.ReviewNudgeCount,
 		&worker.LastCIState,
 		&worker.LastMergeableState,
 		&worker.NudgeCount,
@@ -1133,6 +1137,8 @@ func scanWorker(scanner rowScanner) (Worker, error) {
 		&worker.Issue,
 		&worker.ClonePath,
 		&worker.LastReviewCount,
+		&worker.LastIssueCommentCount,
+		&worker.ReviewNudgeCount,
 		&worker.LastCIState,
 		&worker.LastMergeableState,
 		&worker.NudgeCount,
@@ -1177,6 +1183,7 @@ func (s *SQLiteStore) ensureWorkersColumns(ctx context.Context) error {
 	specs := []columnSpec{
 		{name: "last_review_count", definition: "INTEGER NOT NULL DEFAULT 0"},
 		{name: "last_issue_comment_count", definition: "INTEGER NOT NULL DEFAULT 0"},
+		{name: "review_nudge_count", definition: "INTEGER NOT NULL DEFAULT 0"},
 		{name: "last_ci_state", definition: "TEXT NOT NULL DEFAULT ''"},
 		{name: "last_mergeable_state", definition: "TEXT NOT NULL DEFAULT ''"},
 		{name: "nudge_count", definition: "INTEGER NOT NULL DEFAULT 0"},

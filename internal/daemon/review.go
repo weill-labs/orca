@@ -9,6 +9,8 @@ import (
 
 var markdownHeadingPattern = regexp.MustCompile(`^(#{1,6})\s+(.+?)\s*$`)
 
+const maxReviewNudges = 3
+
 type prReviewPayload struct {
 	ReviewDecision string      `json:"reviewDecision"`
 	Reviews        []prReview  `json:"reviews"`
@@ -45,14 +47,23 @@ func (d *Daemon) handlePRReviewPoll(ctx context.Context, active ActiveAssignment
 	commentCount := len(payload.Comments)
 	previousReviewCount := active.Worker.LastReviewCount
 	previousCommentCount := active.Worker.LastIssueCommentCount
+	resetReviewNudgeCount := payload.ReviewDecision != "CHANGES_REQUESTED" && active.Worker.ReviewNudgeCount != 0
+	if resetReviewNudgeCount {
+		active.Worker.ReviewNudgeCount = 0
+	}
 	if previousReviewCount > reviewCount || previousCommentCount > commentCount {
-		active.Worker.LastReviewCount = reviewCount
-		active.Worker.LastIssueCommentCount = commentCount
-		active.Worker.UpdatedAt = d.now()
-		_ = d.state.PutWorker(ctx, active.Worker)
+		d.persistReviewWorkerState(ctx, &active.Worker, reviewCount, commentCount)
 		return
 	}
 	if previousReviewCount == reviewCount && previousCommentCount == commentCount {
+		if resetReviewNudgeCount {
+			active.Worker.UpdatedAt = d.now()
+			_ = d.state.PutWorker(ctx, active.Worker)
+		}
+		return
+	}
+	if payload.ReviewDecision == "APPROVED" || latestReviewContainsLGTM(payload.Reviews) {
+		d.persistReviewWorkerState(ctx, &active.Worker, reviewCount, commentCount)
 		return
 	}
 
@@ -60,10 +71,26 @@ func (d *Daemon) handlePRReviewPoll(ctx context.Context, active ActiveAssignment
 	newComments := payload.Comments[previousCommentCount:]
 	blocking := blockingReviewFeedback(payload.ReviewDecision, newReviews, newComments)
 	if len(blocking) == 0 {
-		active.Worker.LastReviewCount = reviewCount
-		active.Worker.LastIssueCommentCount = commentCount
-		active.Worker.UpdatedAt = d.now()
-		_ = d.state.PutWorker(ctx, active.Worker)
+		d.persistReviewWorkerState(ctx, &active.Worker, reviewCount, commentCount)
+		return
+	}
+	if active.Worker.ReviewNudgeCount >= maxReviewNudges {
+		d.persistReviewWorkerState(ctx, &active.Worker, reviewCount, commentCount)
+		d.emit(ctx, Event{
+			Time:         d.now(),
+			Type:         EventWorkerReviewEscalated,
+			Project:      d.project,
+			Issue:        active.Task.Issue,
+			PaneID:       active.Task.PaneID,
+			PaneName:     active.Task.PaneName,
+			CloneName:    active.Task.CloneName,
+			ClonePath:    active.Task.ClonePath,
+			Branch:       active.Task.Branch,
+			AgentProfile: profile.Name,
+			PRNumber:     active.Task.PRNumber,
+			Retry:        active.Worker.ReviewNudgeCount,
+			Message:      fmt.Sprintf("review nudges exhausted after %d attempts; lead intervention required", active.Worker.ReviewNudgeCount),
+		})
 		return
 	}
 
@@ -72,10 +99,8 @@ func (d *Daemon) handlePRReviewPoll(ctx context.Context, active ActiveAssignment
 		return
 	}
 
-	active.Worker.LastReviewCount = reviewCount
-	active.Worker.LastIssueCommentCount = commentCount
-	active.Worker.UpdatedAt = d.now()
-	_ = d.state.PutWorker(ctx, active.Worker)
+	active.Worker.ReviewNudgeCount++
+	d.persistReviewWorkerState(ctx, &active.Worker, reviewCount, commentCount)
 
 	d.emit(ctx, Event{
 		Time:         d.now(),
@@ -91,6 +116,13 @@ func (d *Daemon) handlePRReviewPoll(ctx context.Context, active ActiveAssignment
 		PRNumber:     active.Task.PRNumber,
 		Message:      fmt.Sprintf("sent %d new blocking review(s) to worker", len(blocking)),
 	})
+}
+
+func (d *Daemon) persistReviewWorkerState(ctx context.Context, worker *Worker, reviewCount, commentCount int) {
+	worker.LastReviewCount = reviewCount
+	worker.LastIssueCommentCount = commentCount
+	worker.UpdatedAt = d.now()
+	_ = d.state.PutWorker(ctx, *worker)
 }
 
 func (d *Daemon) lookupPRReviews(ctx context.Context, prNumber int) (prReviewPayload, bool, error) {
@@ -120,6 +152,23 @@ func blockingReviewFeedback(reviewDecision string, reviews []prReview, comments 
 		})
 	}
 	return blocking
+}
+
+func latestReviewContainsLGTM(reviews []prReview) bool {
+	if len(reviews) == 0 {
+		return false
+	}
+	return bodyContainsStandaloneLGTM(reviews[len(reviews)-1].Body)
+}
+
+func bodyContainsStandaloneLGTM(body string) bool {
+	lines := strings.Split(strings.ReplaceAll(body, "\r\n", "\n"), "\n")
+	for _, line := range lines {
+		if strings.EqualFold(strings.TrimSpace(line), "LGTM") {
+			return true
+		}
+	}
+	return false
 }
 
 func formatBlockingReviewFeedback(prNumber int, feedback []prFeedback) string {
