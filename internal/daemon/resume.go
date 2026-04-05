@@ -110,6 +110,7 @@ func (d *Daemon) resumeExistingPane(ctx context.Context, task Task, worker Worke
 }
 
 func (d *Daemon) resumeWithFreshPane(ctx context.Context, task Task, worker Worker, hasWorker bool, profile AgentProfile, prompt string) error {
+	// Resume reuses the recorded clone path instead of re-acquiring from the pool so the task continues in its existing checkout.
 	clonePath := strings.TrimSpace(task.ClonePath)
 	if clonePath == "" {
 		return fmt.Errorf("task %s has no clone path", task.Issue)
