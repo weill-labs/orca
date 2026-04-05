@@ -189,6 +189,22 @@ func TestAppRunDispatchesCommands(t *testing.T) {
 			},
 		},
 		{
+			name: "resume",
+			args: func(_, _ string) []string { return []string{"resume", "LAB-690"} },
+			assert: func(t *testing.T, d *fakeDaemon, _ *fakeState, stdout, _ string, _, _ string) {
+				t.Helper()
+				if d.resumeRequest == nil {
+					t.Fatal("expected resume to be called")
+				}
+				if d.resumeRequest.Issue != "LAB-690" {
+					t.Fatalf("expected issue LAB-690, got %q", d.resumeRequest.Issue)
+				}
+				if !strings.Contains(stdout, "resumed") {
+					t.Fatalf("expected resume output, got %q", stdout)
+				}
+			},
+		},
+		{
 			name: "workers json",
 			args: func(_, _ string) []string { return []string{"workers", "--json"} },
 			prepareState: func(s *fakeState) {
@@ -275,6 +291,7 @@ func TestAppRunDispatchesCommands(t *testing.T) {
 				assignResult:  daemon.TaskActionResult{Project: repoRoot, Issue: "LAB-690", Status: "queued", Agent: "codex", UpdatedAt: now},
 				enqueueResult: daemon.MergeQueueActionResult{Project: repoRoot, PRNumber: 42, Status: "queued", Position: 1, UpdatedAt: now},
 				cancelResult:  daemon.TaskActionResult{Project: repoRoot, Issue: "LAB-690", Status: "cancelled", UpdatedAt: now},
+				resumeResult:  daemon.TaskActionResult{Project: repoRoot, Issue: "LAB-690", Status: "active", Agent: "codex", UpdatedAt: now},
 			}
 			s := &fakeState{}
 			if tt.prepareDaemon != nil {
@@ -381,6 +398,7 @@ func TestAppRunParseErrors(t *testing.T) {
 		{name: "assign missing prompt", args: []string{"assign", "LAB-690"}, wantErr: "assign requires --prompt"},
 		{name: "enqueue missing pr number", args: []string{"enqueue"}, wantErr: "enqueue requires PR_NUMBER"},
 		{name: "cancel missing issue", args: []string{"cancel"}, wantErr: "cancel requires ISSUE"},
+		{name: "resume missing issue", args: []string{"resume"}, wantErr: "resume requires ISSUE"},
 		{name: "workers extra arg", args: []string{"workers", "extra"}, wantErr: "workers does not accept positional arguments"},
 	}
 
@@ -479,6 +497,15 @@ func TestAppCommandsAcceptProjectFlag(t *testing.T) {
 			},
 		},
 		{
+			name: "resume",
+			args: []string{"resume", "LAB-690", "--project", targetSubdir},
+			assert: func(t *testing.T, d *fakeDaemon, _ *fakeState) {
+				if d.resumeRequest == nil || d.resumeRequest.Project != targetRepo {
+					t.Fatalf("resume project = %#v, want %q", d.resumeRequest, targetRepo)
+				}
+			},
+		},
+		{
 			name: "workers",
 			args: []string{"workers", "--project", targetSubdir},
 			assert: func(t *testing.T, _ *fakeDaemon, s *fakeState) {
@@ -517,6 +544,7 @@ func TestAppCommandsAcceptProjectFlag(t *testing.T) {
 				assignResult:  daemon.TaskActionResult{Project: targetRepo, Issue: "LAB-690", Status: "queued", UpdatedAt: time.Now().UTC()},
 				enqueueResult: daemon.MergeQueueActionResult{Project: targetRepo, PRNumber: 42, Status: "queued", Position: 1, UpdatedAt: time.Now().UTC()},
 				cancelResult:  daemon.TaskActionResult{Project: targetRepo, Issue: "LAB-690", Status: "cancelled", UpdatedAt: time.Now().UTC()},
+				resumeResult:  daemon.TaskActionResult{Project: targetRepo, Issue: "LAB-690", Status: "active", UpdatedAt: time.Now().UTC()},
 			}
 			s := &fakeState{
 				projectStatus: state.ProjectStatus{Project: targetRepo},
@@ -564,12 +592,14 @@ type fakeDaemon struct {
 	assignRequest  *daemon.AssignRequest
 	enqueueRequest *daemon.EnqueueRequest
 	cancelRequest  *daemon.CancelRequest
+	resumeRequest  *daemon.ResumeRequest
 
 	startResult   daemon.StartResult
 	stopResult    daemon.StopResult
 	assignResult  daemon.TaskActionResult
 	enqueueResult daemon.MergeQueueActionResult
 	cancelResult  daemon.TaskActionResult
+	resumeResult  daemon.TaskActionResult
 
 	err error
 }
@@ -612,6 +642,14 @@ func (f *fakeDaemon) Cancel(_ context.Context, req daemon.CancelRequest) (daemon
 	}
 	f.cancelRequest = &req
 	return f.cancelResult, nil
+}
+
+func (f *fakeDaemon) Resume(_ context.Context, req daemon.ResumeRequest) (daemon.TaskActionResult, error) {
+	if f.err != nil {
+		return daemon.TaskActionResult{}, f.err
+	}
+	f.resumeRequest = &req
+	return f.resumeResult, nil
 }
 
 type fakeState struct {
@@ -689,6 +727,14 @@ func (f *fakeState) Events(_ context.Context, project string, _ int64) (<-chan s
 
 var _ daemon.Controller = (*fakeDaemon)(nil)
 var _ state.Reader = (*fakeState)(nil)
+
+func TestUsageTextIncludesResumeCommand(t *testing.T) {
+	t.Parallel()
+
+	if !strings.Contains(UsageText(), "resume") {
+		t.Fatalf("UsageText() = %q, want resume command", UsageText())
+	}
+}
 
 func TestNewRejectsNilDependencies(t *testing.T) {
 	t.Parallel()

@@ -12,7 +12,7 @@ import (
 	"github.com/weill-labs/orca/internal/project"
 )
 
-func TestRunProcessAssignAndCancelOverUnixSocket(t *testing.T) {
+func TestRunProcessAssignResumeAndCancelOverUnixSocket(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
@@ -145,7 +145,29 @@ daemonReady:
 		"task":           "LAB-718",
 		"tracked_issues": `[{"id":"LAB-718","status":"active"}]`,
 	})
-	amuxClient.requireSentKeys(t, "pane-1", []string{"Implement Unix socket IPC.\n"})
+
+	resumer, ok := any(controller).(interface {
+		Resume(context.Context, ResumeRequest) (TaskActionResult, error)
+	})
+	if !ok {
+		t.Fatal("LocalController does not implement Resume")
+	}
+
+	resumeResult, err := resumer.Resume(context.Background(), ResumeRequest{
+		Project: projectPath,
+		Issue:   "LAB-718",
+	})
+	if err != nil {
+		t.Fatalf("Resume() error = %v", err)
+	}
+	if got, want := resumeResult.Status, TaskStatusActive; got != want {
+		t.Fatalf("resumeResult.Status = %q, want %q", got, want)
+	}
+
+	if got, want := amuxClient.paneExistsCalls, []string{"pane-1"}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("paneExistsCalls = %#v, want %#v", got, want)
+	}
+	amuxClient.requireSentKeys(t, "pane-1", []string{"Implement Unix socket IPC.\n", "claude\n"})
 
 	cancelResult, err := controller.Cancel(context.Background(), CancelRequest{
 		Project: projectPath,
