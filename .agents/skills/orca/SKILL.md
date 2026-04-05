@@ -1,7 +1,7 @@
 ---
 name: orca
 description: >
-  Use orca to delegate coding tasks to worker agents (Claude Code, Codex, Aider).
+  Use orca to delegate coding tasks to worker agents (Claude Code, Codex).
   Trigger when the user asks to delegate work, assign issues, spawn workers, check worker
   status, cancel tasks, resume tasks, batch-assign issues, queue PRs for merge, or manage
   the orca daemon. Also trigger when the user mentions orca commands, worker health, clone
@@ -214,4 +214,4 @@ This shows the last 40 lines of the worker's terminal output.
 | `events` | `orca events` | Stream orchestration events as NDJSON |
 | `version` | `orca version` | Print version |
 
-All commands accept `--project PATH` to target a specific project and `--json` for JSON output.
+Most commands accept `--project PATH` to target a specific project and `--json` for machine-readable output. Exceptions: `batch` and `events` do not support `--json`; `version` accepts no flags.
