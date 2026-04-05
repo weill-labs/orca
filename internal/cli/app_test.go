@@ -455,6 +455,81 @@ func TestAppRunParseErrors(t *testing.T) {
 	}
 }
 
+func TestAppRunHelp(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		args            []string
+		wantInStdout    []string
+		wantEmptyStderr bool
+	}{
+		{
+			name:            "root long flag",
+			args:            []string{"--help"},
+			wantInStdout:    []string{"usage: orca <command>", "commands:"},
+			wantEmptyStderr: true,
+		},
+		{
+			name:            "root short flag",
+			args:            []string{"-h"},
+			wantInStdout:    []string{"usage: orca <command>", "commands:"},
+			wantEmptyStderr: true,
+		},
+		{
+			name:            "subcommand long flag",
+			args:            []string{"assign", "--help"},
+			wantInStdout:    []string{"usage: orca assign ISSUE", "--prompt"},
+			wantEmptyStderr: true,
+		},
+		{
+			name:            "subcommand short flag",
+			args:            []string{"assign", "-h"},
+			wantInStdout:    []string{"usage: orca assign ISSUE", "--prompt"},
+			wantEmptyStderr: true,
+		},
+		{
+			name:            "help command",
+			args:            []string{"help", "assign"},
+			wantInStdout:    []string{"usage: orca assign ISSUE", "--prompt"},
+			wantEmptyStderr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			app := New(Options{
+				Daemon:  &fakeDaemon{},
+				State:   &fakeState{},
+				Stdout:  &stdout,
+				Stderr:  &stderr,
+				Version: "build-123",
+				Cwd: func() (string, error) {
+					return newRepoRoot(t), nil
+				},
+			})
+
+			if err := app.Run(context.Background(), tt.args); err != nil {
+				t.Fatalf("Run(%q) error = %v", tt.args, err)
+			}
+
+			for _, want := range tt.wantInStdout {
+				if !strings.Contains(stdout.String(), want) {
+					t.Fatalf("stdout = %q, want substring %q", stdout.String(), want)
+				}
+			}
+			if tt.wantEmptyStderr && stderr.Len() != 0 {
+				t.Fatalf("stderr = %q, want empty", stderr.String())
+			}
+		})
+	}
+}
+
 func TestAppCommandsAcceptProjectFlag(t *testing.T) {
 	t.Parallel()
 
