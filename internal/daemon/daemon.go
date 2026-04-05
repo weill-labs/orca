@@ -19,7 +19,13 @@ const (
 	defaultMergeGracePeriod      = 10 * time.Minute
 )
 
-var autonomousBacklogPromptPattern = regexp.MustCompile(`(?i)\bpick up\b.*\b(?:work|issue|task|ticket)\b|\bfrom\b.*\b(?:backlog|queue)\b|\bnew work\b|\bnext\s+(?:issue|task|ticket)\b|\bfind\b.*\b(?:issue|task|work)\b.*\bbacklog\b`)
+var autonomousBacklogPromptPattern = regexp.MustCompile(strings.Join([]string{
+	`(?i)\bpick up\b.*\b(?:work|issue|task|ticket)\b`,
+	`\bfrom\b.*\b(?:backlog|queue)\b`,
+	`\bnew work\b`,
+	`\bnext\s+(?:issue|task|ticket)\b`,
+	`\bfind\b.*\b(?:issue|task|work)\b.*\bbacklog\b`,
+}, "|"))
 
 type Daemon struct {
 	project          string
