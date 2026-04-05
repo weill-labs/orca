@@ -107,7 +107,11 @@ func TestAssignResumesCodexBeforeSendingPrompt(t *testing.T) {
 
 	deps := newTestDeps(t)
 	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
-	deps.amux.waitContentErr = amuxapi.ErrWaitContentTimeout
+	deps.amux.waitContentResults = []error{
+		amuxapi.ErrWaitContentTimeout,
+		nil,
+		amuxapi.ErrWaitContentTimeout,
+	}
 	deps.amux.captureSequence("pane-1", []string{"Resume your previous session"})
 	d := deps.newDaemon(t)
 	ctx := context.Background()
@@ -134,7 +138,9 @@ func TestAssignResumesCodexBeforeSendingPrompt(t *testing.T) {
 		"Implement resume flow\n",
 	})
 	if got, want := deps.amux.waitContentCalls, []waitContentCall{
-		{PaneID: "pane-1", Substring: "›", Timeout: 30 * time.Second},
+		{PaneID: "pane-1", Substring: "do you trust", Timeout: defaultTrustPromptTimeout},
+		{PaneID: "pane-1", Substring: "›", Timeout: defaultAgentHandshakeTimeout},
+		{PaneID: "pane-1", Substring: "do you trust", Timeout: defaultTrustPromptTimeout},
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("waitContent calls = %#v, want %#v", got, want)
 	}
@@ -270,7 +276,7 @@ func TestResumeAgentInPaneReturnsWaitContentError(t *testing.T) {
 
 	deps.amux.requireSentKeys(t, "pane-1", []string{"codex --yolo resume\n"})
 	if got, want := deps.amux.waitContentCalls, []waitContentCall{
-		{PaneID: "pane-1", Substring: "›", Timeout: 30 * time.Second},
+		{PaneID: "pane-1", Substring: "›", Timeout: defaultAgentHandshakeTimeout},
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("waitContent calls = %#v, want %#v", got, want)
 	}
