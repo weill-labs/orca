@@ -235,6 +235,8 @@ func TestResumeRespawnsCancelledTaskInExistingClone(t *testing.T) {
 
 func TestResumeRejectsInvalidStatesAndMissingTasks(t *testing.T) {
 	t.Run("not started", func(t *testing.T) {
+		t.Parallel()
+
 		deps := newTestDeps(t)
 		d := deps.newDaemon(t)
 
@@ -245,6 +247,8 @@ func TestResumeRejectsInvalidStatesAndMissingTasks(t *testing.T) {
 	})
 
 	t.Run("missing task", func(t *testing.T) {
+		t.Parallel()
+
 		deps := newTestDeps(t)
 		deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
 		d := deps.newDaemon(t)
@@ -260,6 +264,8 @@ func TestResumeRejectsInvalidStatesAndMissingTasks(t *testing.T) {
 	})
 
 	t.Run("done task", func(t *testing.T) {
+		t.Parallel()
+
 		deps := newTestDeps(t)
 		deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
 		now := deps.clock.Now()
@@ -285,6 +291,8 @@ func TestResumeRejectsInvalidStatesAndMissingTasks(t *testing.T) {
 	})
 
 	t.Run("missing profile", func(t *testing.T) {
+		t.Parallel()
+
 		deps := newTestDeps(t)
 		deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
 		now := deps.clock.Now()
@@ -313,6 +321,8 @@ func TestResumeRejectsInvalidStatesAndMissingTasks(t *testing.T) {
 
 func TestResumeHandlesWorkerLookupAndPaneErrors(t *testing.T) {
 	t.Run("worker lookup error", func(t *testing.T) {
+		t.Parallel()
+
 		deps := newTestDeps(t)
 		deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
 		seedActiveAssignment(t, deps, "LAB-757", "pane-1")
@@ -334,6 +344,8 @@ func TestResumeHandlesWorkerLookupAndPaneErrors(t *testing.T) {
 	})
 
 	t.Run("pane exists error", func(t *testing.T) {
+		t.Parallel()
+
 		deps := newTestDeps(t)
 		deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
 		seedActiveAssignment(t, deps, "LAB-757", "pane-1")
@@ -353,6 +365,8 @@ func TestResumeHandlesWorkerLookupAndPaneErrors(t *testing.T) {
 }
 
 func TestResumeResumesCancelledTaskInLivePaneUsingSavedPrompt(t *testing.T) {
+	t.Parallel()
+
 	deps := newTestDeps(t)
 	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
 	seedActiveAssignment(t, deps, "LAB-757", "pane-1")
@@ -389,6 +403,8 @@ func TestResumeResumesCancelledTaskInLivePaneUsingSavedPrompt(t *testing.T) {
 }
 
 func TestResumeWorkerHandlesNoPaneAndLookupErrors(t *testing.T) {
+	t.Parallel()
+
 	deps := newTestDeps(t)
 	d := deps.newDaemon(t)
 
@@ -412,7 +428,11 @@ func TestResumeWorkerHandlesNoPaneAndLookupErrors(t *testing.T) {
 }
 
 func TestResumeExistingPaneErrorPaths(t *testing.T) {
+	t.Parallel()
+
 	t.Run("missing pane id", func(t *testing.T) {
+		t.Parallel()
+
 		deps := newTestDeps(t)
 		d := deps.newDaemon(t)
 
@@ -423,6 +443,8 @@ func TestResumeExistingPaneErrorPaths(t *testing.T) {
 	})
 
 	t.Run("restart agent error", func(t *testing.T) {
+		t.Parallel()
+
 		deps := newTestDeps(t)
 		deps.amux.sendKeysErr = errors.New("restart failed")
 		d := deps.newDaemon(t)
@@ -439,6 +461,8 @@ func TestResumeExistingPaneErrorPaths(t *testing.T) {
 	})
 
 	t.Run("set metadata error", func(t *testing.T) {
+		t.Parallel()
+
 		deps := newTestDeps(t)
 		amux := &resumeAmuxStub{
 			fakeAmux:       deps.amux,
@@ -460,6 +484,8 @@ func TestResumeExistingPaneErrorPaths(t *testing.T) {
 	})
 
 	t.Run("build metadata error", func(t *testing.T) {
+		t.Parallel()
+
 		deps := newTestDeps(t)
 		state := &resumeStateStub{
 			fakeState:      deps.state,
@@ -481,6 +507,8 @@ func TestResumeExistingPaneErrorPaths(t *testing.T) {
 	})
 
 	t.Run("send prompt error", func(t *testing.T) {
+		t.Parallel()
+
 		deps := newTestDeps(t)
 		deps.amux.sendKeysResults = []error{nil, errors.New("prompt failed")}
 		d := deps.newDaemon(t)
@@ -499,6 +527,8 @@ func TestResumeExistingPaneErrorPaths(t *testing.T) {
 	})
 
 	t.Run("issue status error", func(t *testing.T) {
+		t.Parallel()
+
 		deps := newTestDeps(t)
 		deps.issueTracker.errors = map[string]error{IssueStateInProgress: errors.New("linear unavailable")}
 		d := deps.newDaemon(t)
@@ -519,7 +549,11 @@ func TestResumeExistingPaneErrorPaths(t *testing.T) {
 }
 
 func TestResumeWithFreshPaneErrorPaths(t *testing.T) {
+	t.Parallel()
+
 	t.Run("missing clone path", func(t *testing.T) {
+		t.Parallel()
+
 		deps := newTestDeps(t)
 		d := deps.newDaemon(t)
 
@@ -530,6 +564,8 @@ func TestResumeWithFreshPaneErrorPaths(t *testing.T) {
 	})
 
 	t.Run("spawn error", func(t *testing.T) {
+		t.Parallel()
+
 		deps := newTestDeps(t)
 		amux := &resumeAmuxStub{
 			fakeAmux: deps.amux,
@@ -549,6 +585,8 @@ func TestResumeWithFreshPaneErrorPaths(t *testing.T) {
 	})
 
 	t.Run("metadata build error kills spawned pane", func(t *testing.T) {
+		t.Parallel()
+
 		deps := newTestDeps(t)
 		state := &resumeStateStub{
 			fakeState:      deps.state,
@@ -571,6 +609,8 @@ func TestResumeWithFreshPaneErrorPaths(t *testing.T) {
 	})
 
 	t.Run("handshake error kills spawned pane", func(t *testing.T) {
+		t.Parallel()
+
 		deps := newTestDeps(t)
 		deps.amux.waitIdleErr = errors.New("idle timeout")
 		d := deps.newDaemon(t)
@@ -590,6 +630,8 @@ func TestResumeWithFreshPaneErrorPaths(t *testing.T) {
 	})
 
 	t.Run("set metadata error kills spawned pane", func(t *testing.T) {
+		t.Parallel()
+
 		deps := newTestDeps(t)
 		amux := &resumeAmuxStub{
 			fakeAmux:       deps.amux,
@@ -612,6 +654,8 @@ func TestResumeWithFreshPaneErrorPaths(t *testing.T) {
 	})
 
 	t.Run("send prompt error kills spawned pane", func(t *testing.T) {
+		t.Parallel()
+
 		deps := newTestDeps(t)
 		deps.amux.sendKeysErr = errors.New("prompt failed")
 		d := deps.newDaemon(t)
@@ -632,6 +676,8 @@ func TestResumeWithFreshPaneErrorPaths(t *testing.T) {
 	})
 
 	t.Run("saved prompt fallback and issue status error kill spawned pane", func(t *testing.T) {
+		t.Parallel()
+
 		deps := newTestDeps(t)
 		deps.issueTracker.errors = map[string]error{IssueStateInProgress: errors.New("linear unavailable")}
 		d := deps.newDaemon(t)
@@ -653,6 +699,8 @@ func TestResumeWithFreshPaneErrorPaths(t *testing.T) {
 	})
 
 	t.Run("store resumed task error kills spawned pane", func(t *testing.T) {
+		t.Parallel()
+
 		deps := newTestDeps(t)
 		state := &resumeStateStub{
 			fakeState:    deps.state,
@@ -676,7 +724,11 @@ func TestResumeWithFreshPaneErrorPaths(t *testing.T) {
 }
 
 func TestStoreResumedTaskCoversFallbacksAndWriteErrors(t *testing.T) {
+	t.Parallel()
+
 	t.Run("fills pane name clone name and worker health", func(t *testing.T) {
+		t.Parallel()
+
 		deps := newTestDeps(t)
 		d := deps.newDaemon(t)
 		oldWorker := Worker{Project: "/tmp/project", PaneID: "old-pane", AgentProfile: "codex"}
@@ -723,6 +775,8 @@ func TestStoreResumedTaskCoversFallbacksAndWriteErrors(t *testing.T) {
 	})
 
 	t.Run("delete old worker error", func(t *testing.T) {
+		t.Parallel()
+
 		deps := newTestDeps(t)
 		state := &resumeStateStub{
 			fakeState:       deps.state,
@@ -743,6 +797,8 @@ func TestStoreResumedTaskCoversFallbacksAndWriteErrors(t *testing.T) {
 	})
 
 	t.Run("store worker error", func(t *testing.T) {
+		t.Parallel()
+
 		deps := newTestDeps(t)
 		state := &resumeStateStub{
 			fakeState:    deps.state,
@@ -762,6 +818,8 @@ func TestStoreResumedTaskCoversFallbacksAndWriteErrors(t *testing.T) {
 	})
 
 	t.Run("store task error", func(t *testing.T) {
+		t.Parallel()
+
 		deps := newTestDeps(t)
 		state := &resumeStateStub{
 			fakeState:  deps.state,
