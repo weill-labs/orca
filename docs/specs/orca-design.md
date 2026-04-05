@@ -37,7 +37,7 @@ Code (the lieutenant) or the worker agents in panes.
    issues to assign, what prompts to send, how to handle escalations, and when to
    intervene. Orca is its reliable execution layer.
 4. **Agent-agnostic with profiles.** Orca works with any coding agent (Codex,
-   Claude Code, Aider, etc.) via pluggable profiles that encode agent-specific
+   Claude Code, etc.) via pluggable profiles that encode agent-specific
    quirks (start commands, idle signals, stuck patterns, nudge commands).
 
 ## System Relationship
@@ -160,14 +160,6 @@ stuck_timeout = "5m"
 nudge_command = "Enter"
 max_nudge_retries = 3
 
-[agents.aider]
-start_command = "aider"
-idle_signal = "screen_quiet"
-idle_timeout = "30s"
-stuck_text_patterns = []
-stuck_timeout = "5m"
-nudge_command = "/run\n"
-max_nudge_retries = 2
 ```
 
 Stuck detection uses two independent mechanisms:

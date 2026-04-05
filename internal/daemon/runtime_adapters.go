@@ -30,12 +30,6 @@ var builtinProfiles = map[string]AgentProfile{
 		PostmortemEnabled: true,
 		StuckTimeout:      9 * time.Minute,
 	},
-	"aider": {
-		Name:              "aider",
-		StartCommand:      "aider",
-		PostmortemEnabled: true,
-		StuckTimeout:      10 * time.Minute,
-	},
 }
 
 type builtinConfigProvider struct{}
@@ -43,7 +37,7 @@ type builtinConfigProvider struct{}
 func (builtinConfigProvider) AgentProfile(_ context.Context, name string) (AgentProfile, error) {
 	profile, ok := builtinProfiles[strings.ToLower(name)]
 	if !ok {
-		return AgentProfile{}, fmt.Errorf("unknown agent profile %q (available: claude, codex, aider)", name)
+		return AgentProfile{}, fmt.Errorf("unknown agent profile %q (available: claude, codex)", name)
 	}
 
 	return applyAgentProfileQuirks(profile), nil
