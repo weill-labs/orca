@@ -98,6 +98,7 @@ type CancelRequest struct {
 type ResumeRequest struct {
 	Project string
 	Issue   string
+	Prompt  string
 }
 
 type EnqueueRequest struct {
@@ -432,7 +433,8 @@ func (c *LocalController) Resume(ctx context.Context, req ResumeRequest) (TaskAc
 
 	var result TaskActionResult
 	err = callRPC(callCtx, c.paths.socketFile(projectPath), "resume", resumeRPCParams{
-		Issue: strings.TrimSpace(req.Issue),
+		Issue:  strings.TrimSpace(req.Issue),
+		Prompt: strings.TrimSpace(req.Prompt),
 	}, &result)
 	if err != nil {
 		return TaskActionResult{}, err
