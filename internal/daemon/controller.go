@@ -25,6 +25,7 @@ type Controller interface {
 	Start(ctx context.Context, req StartRequest) (StartResult, error)
 	Stop(ctx context.Context, req StopRequest) (StopResult, error)
 	Assign(ctx context.Context, req AssignRequest) (TaskActionResult, error)
+	Batch(ctx context.Context, req BatchRequest) (BatchResult, error)
 	Enqueue(ctx context.Context, req EnqueueRequest) (MergeQueueActionResult, error)
 	Cancel(ctx context.Context, req CancelRequest) (TaskActionResult, error)
 	Resume(ctx context.Context, req ResumeRequest) (TaskActionResult, error)
@@ -76,6 +77,19 @@ type AssignRequest struct {
 	Title   string
 }
 
+type BatchEntry struct {
+	Issue  string `json:"issue"`
+	Agent  string `json:"agent"`
+	Prompt string `json:"prompt"`
+	Title  string `json:"title,omitempty"`
+}
+
+type BatchRequest struct {
+	Project string
+	Entries []BatchEntry
+	Delay   time.Duration
+}
+
 type CancelRequest struct {
 	Project string
 	Issue   string
@@ -97,6 +111,11 @@ type TaskActionResult struct {
 	Status    string    `json:"status"`
 	Agent     string    `json:"agent,omitempty"`
 	UpdatedAt time.Time `json:"updated_at"`
+}
+
+type BatchResult struct {
+	Project string             `json:"project"`
+	Results []TaskActionResult `json:"results"`
 }
 
 type MergeQueueActionResult struct {
@@ -310,7 +329,7 @@ func (c *LocalController) Assign(ctx context.Context, req AssignRequest) (TaskAc
 		return TaskActionResult{}, err
 	}
 
-	callCtx, cancel := contextWithOptionalTimeout(ctx, 30*time.Second)
+	callCtx, cancel := contextWithOptionalTimeout(ctx, 0)
 	defer cancel()
 
 	var result TaskActionResult
@@ -322,6 +341,35 @@ func (c *LocalController) Assign(ctx context.Context, req AssignRequest) (TaskAc
 	}, &result)
 	if err != nil {
 		return TaskActionResult{}, err
+	}
+	return result, nil
+}
+
+func (c *LocalController) Batch(ctx context.Context, req BatchRequest) (BatchResult, error) {
+	projectPath, err := project.CanonicalPath(req.Project)
+	if err != nil {
+		return BatchResult{}, err
+	}
+	if err := ValidateBatchEntries(req.Entries); err != nil {
+		return BatchResult{}, err
+	}
+	if req.Delay < 0 {
+		return BatchResult{}, errors.New("batch delay must be non-negative")
+	}
+	if err := c.requireRunning(ctx, projectPath); err != nil {
+		return BatchResult{}, err
+	}
+
+	callCtx, cancel := contextWithOptionalTimeout(ctx, 0)
+	defer cancel()
+
+	var result BatchResult
+	err = callRPC(callCtx, c.paths.socketFile(projectPath), "batch", batchRPCParams{
+		Entries: normalizeBatchEntries(req.Entries),
+		Delay:   req.Delay.String(),
+	}, &result)
+	if err != nil {
+		return BatchResult{}, err
 	}
 	return result, nil
 }

@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/weill-labs/orca/internal/amux"
@@ -229,6 +230,28 @@ func dispatchRPCRequest(ctx context.Context, request rpcRequest, instance *Daemo
 		}
 
 		result, err := taskActionResultForIssue(ctx, store, projectPath, params.Issue)
+		if err != nil {
+			return rpcFailure(request.ID, -32000, err)
+		}
+		return rpcSuccess(request.ID, result)
+	case "batch":
+		var params batchRPCParams
+		if err := decodeRPCParams(request.Params, &params); err != nil {
+			return rpcFailure(request.ID, -32602, fmt.Errorf("decode batch params: %w", err))
+		}
+		delay := time.Duration(0)
+		if raw := strings.TrimSpace(params.Delay); raw != "" {
+			parsedDelay, err := time.ParseDuration(raw)
+			if err != nil {
+				return rpcFailure(request.ID, -32602, fmt.Errorf("parse batch delay: %w", err))
+			}
+			delay = parsedDelay
+		}
+
+		result, err := instance.Batch(ctx, BatchRequest{
+			Entries: params.Entries,
+			Delay:   delay,
+		})
 		if err != nil {
 			return rpcFailure(request.ID, -32000, err)
 		}

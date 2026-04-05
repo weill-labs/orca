@@ -70,6 +70,7 @@ type Options struct {
 	Events           EventSink
 	Now              func() time.Time
 	NewTicker        func(time.Duration) Ticker
+	Sleep            func(context.Context, time.Duration) error
 	CaptureInterval  time.Duration
 	PollInterval     time.Duration
 	MergeGracePeriod time.Duration

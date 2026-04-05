@@ -49,6 +49,11 @@ type assignRPCParams struct {
 	Title  string `json:"title"`
 }
 
+type batchRPCParams struct {
+	Entries []BatchEntry `json:"entries"`
+	Delay   string       `json:"delay"`
+}
+
 type cancelRPCParams struct {
 	Issue string `json:"issue"`
 }

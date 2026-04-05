@@ -419,6 +419,7 @@ func TestAppRunParseErrors(t *testing.T) {
 		{name: "status too many args", args: []string{"status", "LAB-690", "extra"}, wantErr: "status accepts at most one issue"},
 		{name: "assign missing issue", args: []string{"assign", "--prompt", "x"}, wantErr: "assign requires ISSUE"},
 		{name: "assign missing prompt", args: []string{"assign", "LAB-690"}, wantErr: "assign requires --prompt"},
+		{name: "batch missing manifest", args: []string{"batch"}, wantErr: "batch requires MANIFEST"},
 		{name: "enqueue missing pr number", args: []string{"enqueue"}, wantErr: "enqueue requires PR_NUMBER"},
 		{name: "cancel missing issue", args: []string{"cancel"}, wantErr: "cancel requires ISSUE"},
 		{name: "resume missing issue", args: []string{"resume"}, wantErr: "resume requires ISSUE"},
@@ -502,6 +503,15 @@ func TestAppCommandsAcceptProjectFlag(t *testing.T) {
 			},
 		},
 		{
+			name: "batch",
+			args: []string{"batch", "--project", targetSubdir, filepath.Join(targetRepo, "tasks.json")},
+			assert: func(t *testing.T, d *fakeDaemon, _ *fakeState) {
+				if d.batchRequest == nil || d.batchRequest.Project != targetRepo {
+					t.Fatalf("batch project = %#v, want %q", d.batchRequest, targetRepo)
+				}
+			},
+		},
+		{
 			name: "enqueue",
 			args: []string{"enqueue", "42", "--project", targetSubdir},
 			assert: func(t *testing.T, d *fakeDaemon, _ *fakeState) {
@@ -565,6 +575,7 @@ func TestAppCommandsAcceptProjectFlag(t *testing.T) {
 			d := &fakeDaemon{
 				stopResult:    daemon.StopResult{Project: targetRepo, PID: 1, StoppedAt: time.Now().UTC()},
 				assignResult:  daemon.TaskActionResult{Project: targetRepo, Issue: "LAB-690", Status: "queued", UpdatedAt: time.Now().UTC()},
+				batchResult:   daemon.BatchResult{Project: targetRepo, Results: []daemon.TaskActionResult{{Project: targetRepo, Issue: "LAB-690", Status: "queued", UpdatedAt: time.Now().UTC()}}},
 				enqueueResult: daemon.MergeQueueActionResult{Project: targetRepo, PRNumber: 42, Status: "queued", Position: 1, UpdatedAt: time.Now().UTC()},
 				cancelResult:  daemon.TaskActionResult{Project: targetRepo, Issue: "LAB-690", Status: "cancelled", UpdatedAt: time.Now().UTC()},
 				resumeResult:  daemon.TaskActionResult{Project: targetRepo, Issue: "LAB-690", Status: "active", UpdatedAt: time.Now().UTC()},
@@ -584,6 +595,13 @@ func TestAppCommandsAcceptProjectFlag(t *testing.T) {
 					return cwdPath, nil
 				},
 			})
+
+			if tt.name == "batch" {
+				manifestPath := filepath.Join(targetRepo, "tasks.json")
+				if err := os.WriteFile(manifestPath, []byte(`[{"issue":"LAB-690","agent":"claude","prompt":"Implement CLI wiring"}]`), 0o644); err != nil {
+					t.Fatalf("WriteFile(%q) error = %v", manifestPath, err)
+				}
+			}
 
 			if err := app.Run(context.Background(), tt.args); err != nil {
 				t.Fatalf("Run() error = %v", err)
@@ -613,6 +631,7 @@ type fakeDaemon struct {
 	startRequest   *daemon.StartRequest
 	stopRequest    *daemon.StopRequest
 	assignRequest  *daemon.AssignRequest
+	batchRequest   *daemon.BatchRequest
 	enqueueRequest *daemon.EnqueueRequest
 	cancelRequest  *daemon.CancelRequest
 	resumeRequest  *daemon.ResumeRequest
@@ -620,6 +639,7 @@ type fakeDaemon struct {
 	startResult   daemon.StartResult
 	stopResult    daemon.StopResult
 	assignResult  daemon.TaskActionResult
+	batchResult   daemon.BatchResult
 	enqueueResult daemon.MergeQueueActionResult
 	cancelResult  daemon.TaskActionResult
 	resumeResult  daemon.TaskActionResult
@@ -649,6 +669,14 @@ func (f *fakeDaemon) Assign(_ context.Context, req daemon.AssignRequest) (daemon
 	}
 	f.assignRequest = &req
 	return f.assignResult, nil
+}
+
+func (f *fakeDaemon) Batch(_ context.Context, req daemon.BatchRequest) (daemon.BatchResult, error) {
+	if f.err != nil {
+		return daemon.BatchResult{}, f.err
+	}
+	f.batchRequest = &req
+	return f.batchResult, nil
 }
 
 func (f *fakeDaemon) Enqueue(_ context.Context, req daemon.EnqueueRequest) (daemon.MergeQueueActionResult, error) {
@@ -756,6 +784,9 @@ func TestUsageTextIncludesResumeCommand(t *testing.T) {
 
 	if !strings.Contains(UsageText(), "resume") {
 		t.Fatalf("UsageText() = %q, want resume command", UsageText())
+	}
+	if !strings.Contains(UsageText(), "batch") {
+		t.Fatalf("UsageText() = %q, want batch command", UsageText())
 	}
 }
 
