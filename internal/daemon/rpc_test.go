@@ -212,6 +212,18 @@ func TestHandleRPCConnAndDispatchStatusBranches(t *testing.T) {
 		t.Fatalf("dispatch bad batch params response = %#v", badBatchParams)
 	}
 
+	badBatchDelay := dispatchRPCRequest(context.Background(), rpcRequest{
+		ID:     json.RawMessage(`1`),
+		Method: "batch",
+		Params: mustJSON(t, batchRPCParams{
+			Entries: []BatchEntry{{Issue: "LAB-718", Agent: "codex", Prompt: "Implement batch IPC."}},
+			Delay:   "not-a-duration",
+		}),
+	}, &Daemon{}, store, project)
+	if badBatchDelay.Error == nil || badBatchDelay.Error.Code != -32602 {
+		t.Fatalf("dispatch bad batch delay response = %#v", badBatchDelay)
+	}
+
 	enqueueErr := dispatchRPCRequest(context.Background(), rpcRequest{
 		ID:     json.RawMessage(`1`),
 		Method: "enqueue",

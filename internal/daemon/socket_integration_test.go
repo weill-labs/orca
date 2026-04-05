@@ -106,13 +106,13 @@ daemonReady:
 		t.Fatalf("NewLocalController() error = %v", err)
 	}
 
-	var assignResult TaskActionResult
-	err = callRPC(context.Background(), socketPath, "assign", map[string]any{
-		"issue":  "LAB-718",
-		"prompt": "Implement Unix socket IPC.",
-		"agent":  "claude",
-		"title":  "Unix socket IPC title",
-	}, &assignResult)
+	assignResult, err := controller.Assign(context.Background(), AssignRequest{
+		Project: projectPath,
+		Issue:   "LAB-718",
+		Prompt:  "Implement Unix socket IPC.",
+		Agent:   "claude",
+		Title:   "Unix socket IPC title",
+	})
 	if err != nil {
 		t.Fatalf("Assign() error = %v", err)
 	}

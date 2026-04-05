@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -157,4 +158,199 @@ func TestAppRunBatchRejectsInvalidManifest(t *testing.T) {
 	if d.batchRequest != nil {
 		t.Fatal("expected batch not to be called")
 	}
+}
+
+func TestAppRunBatchRejectsNegativeDelay(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := newRepoRoot(t)
+	cwdPath := filepath.Join(repoRoot, "internal", "cli")
+	if err := os.MkdirAll(cwdPath, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", cwdPath, err)
+	}
+
+	manifestPath := filepath.Join(repoRoot, "tasks.json")
+	if err := os.WriteFile(manifestPath, []byte(`[{"issue":"LAB-690","agent":"codex","prompt":"Implement CLI wiring"}]`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", manifestPath, err)
+	}
+
+	app := New(Options{
+		Daemon:  &fakeDaemon{},
+		State:   &fakeState{},
+		Stdout:  &bytes.Buffer{},
+		Stderr:  &bytes.Buffer{},
+		Version: "build-123",
+		Cwd: func() (string, error) {
+			return cwdPath, nil
+		},
+	})
+
+	err := app.Run(context.Background(), []string{"batch", "--delay", "-1s", manifestPath})
+	if err == nil || !strings.Contains(err.Error(), "batch delay must be non-negative") {
+		t.Fatalf("Run() error = %v, want negative delay validation", err)
+	}
+}
+
+func TestAppRunBatchPropagatesManifestReadAndDecodeErrors(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := newRepoRoot(t)
+	cwdPath := filepath.Join(repoRoot, "internal", "cli")
+	if err := os.MkdirAll(cwdPath, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", cwdPath, err)
+	}
+
+	tests := []struct {
+		name     string
+		manifest string
+		prepare  func(path string)
+		wantErr  string
+	}{
+		{
+			name:     "read error",
+			manifest: filepath.Join(repoRoot, "missing.json"),
+			wantErr:  "read batch manifest",
+		},
+		{
+			name:     "decode error",
+			manifest: filepath.Join(repoRoot, "broken.json"),
+			prepare: func(path string) {
+				if err := os.WriteFile(path, []byte(`{"issue":`), 0o644); err != nil {
+					t.Fatalf("WriteFile(%q) error = %v", path, err)
+				}
+			},
+			wantErr: "decode batch manifest",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if tt.prepare != nil {
+				tt.prepare(tt.manifest)
+			}
+
+			d := &fakeDaemon{}
+			app := New(Options{
+				Daemon:  d,
+				State:   &fakeState{},
+				Stdout:  &bytes.Buffer{},
+				Stderr:  &bytes.Buffer{},
+				Version: "build-123",
+				Cwd: func() (string, error) {
+					return cwdPath, nil
+				},
+			})
+
+			err := app.Run(context.Background(), []string{"batch", tt.manifest})
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("Run() error = %v, want %q", err, tt.wantErr)
+			}
+			if d.batchRequest != nil {
+				t.Fatal("expected batch not to be called")
+			}
+		})
+	}
+}
+
+func TestAppRunBatchPropagatesResolveProjectAndDaemonErrors(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := newRepoRoot(t)
+	cwdPath := filepath.Join(repoRoot, "internal", "cli")
+	if err := os.MkdirAll(cwdPath, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", cwdPath, err)
+	}
+
+	manifestPath := filepath.Join(repoRoot, "tasks.json")
+	if err := os.WriteFile(manifestPath, []byte(`[{"issue":"LAB-690","agent":"codex","prompt":"Implement CLI wiring"}]`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", manifestPath, err)
+	}
+
+	t.Run("resolve project", func(t *testing.T) {
+		t.Parallel()
+
+		app := New(Options{
+			Daemon:  &fakeDaemon{},
+			State:   &fakeState{},
+			Stdout:  &bytes.Buffer{},
+			Stderr:  &bytes.Buffer{},
+			Version: "build-123",
+			Cwd: func() (string, error) {
+				return cwdPath, nil
+			},
+		})
+
+		err := app.Run(context.Background(), []string{"batch", "--project", t.TempDir(), manifestPath})
+		if err == nil || !strings.Contains(err.Error(), "not inside a git repository") {
+			t.Fatalf("Run() error = %v, want project resolution error", err)
+		}
+	})
+
+	t.Run("daemon error", func(t *testing.T) {
+		t.Parallel()
+
+		d := &fakeDaemon{err: errors.New("daemon unavailable")}
+		app := New(Options{
+			Daemon:  d,
+			State:   &fakeState{},
+			Stdout:  &bytes.Buffer{},
+			Stderr:  &bytes.Buffer{},
+			Version: "build-123",
+			Cwd: func() (string, error) {
+				return cwdPath, nil
+			},
+		})
+
+		err := app.Run(context.Background(), []string{"batch", manifestPath})
+		if err == nil || !strings.Contains(err.Error(), "daemon unavailable") {
+			t.Fatalf("Run() error = %v, want daemon error", err)
+		}
+	})
+}
+
+func TestAppRunBatchPropagatesStdoutWriteError(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := newRepoRoot(t)
+	cwdPath := filepath.Join(repoRoot, "internal", "cli")
+	if err := os.MkdirAll(cwdPath, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", cwdPath, err)
+	}
+
+	manifestPath := filepath.Join(repoRoot, "tasks.json")
+	if err := os.WriteFile(manifestPath, []byte(`[{"issue":"LAB-690","agent":"codex","prompt":"Implement CLI wiring"}]`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", manifestPath, err)
+	}
+
+	d := &fakeDaemon{
+		batchResult: daemon.BatchResult{
+			Project: repoRoot,
+			Results: []daemon.TaskActionResult{{Project: repoRoot, Issue: "LAB-690", Status: "active", Agent: "codex", UpdatedAt: time.Now().UTC()}},
+		},
+	}
+
+	app := New(Options{
+		Daemon:  d,
+		State:   &fakeState{},
+		Stdout:  errWriter{},
+		Stderr:  &bytes.Buffer{},
+		Version: "build-123",
+		Cwd: func() (string, error) {
+			return cwdPath, nil
+		},
+	})
+
+	err := app.Run(context.Background(), []string{"batch", manifestPath})
+	if err == nil || !strings.Contains(err.Error(), "write failed") {
+		t.Fatalf("Run() error = %v, want stdout write error", err)
+	}
+}
+
+type errWriter struct{}
+
+func (errWriter) Write([]byte) (int, error) {
+	return 0, errors.New("write failed")
 }

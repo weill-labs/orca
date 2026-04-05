@@ -360,7 +360,7 @@ func (c *LocalController) Batch(ctx context.Context, req BatchRequest) (BatchRes
 		return BatchResult{}, err
 	}
 
-	callCtx, cancel := contextWithOptionalTimeout(ctx, 30*time.Second)
+	callCtx, cancel := contextWithOptionalTimeout(ctx, 0)
 	defer cancel()
 
 	var result BatchResult
