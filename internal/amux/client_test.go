@@ -55,26 +55,34 @@ func TestCLIClientSpawn(t *testing.T) {
 		name     string
 		config   Config
 		req      SpawnRequest
-		output   string
-		runErr   error
+		queue    []runnerResult
 		wantCmds []recordedCommand
 		wantPane Pane
 		wantErr  string
 	}{
 		{
-			name: "spawns pane then sends cd and command via send-keys",
+			name: "creates first worker column by root-splitting from the lead pane",
 			config: Config{
 				Binary:  "/usr/local/bin/amux",
 				Session: "orca-dev",
 			},
 			req: SpawnRequest{
 				Session: "override-session",
+				AtPane:  "lead-pane",
 				CWD:     "/tmp/clone-01",
 				Command: "codex --yolo",
 			},
-			output: "Spawned clone-01 in pane 7\n",
+			queue: []runnerResult{
+				{output: []byte(testSessionCaptureJSON(t, sessionCapture{
+					Panes: []sessionCapturePane{
+						{ID: 1, Name: "lead-pane", ColumnIndex: 0, Position: &capturePanePos{X: 0, Y: 0, Width: 80, Height: 24}},
+					},
+				}))},
+				{output: []byte("Spawned clone-01 in pane 7\n")},
+			},
 			wantCmds: []recordedCommand{
-				{name: "/usr/local/bin/amux", args: []string{"-s", "override-session", "spawn", "--name", "clone-01", "--root", "--horizontal"}},
+				{name: "/usr/local/bin/amux", args: []string{"-s", "override-session", "capture", "--format", "json"}},
+				{name: "/usr/local/bin/amux", args: []string{"-s", "override-session", "spawn", "--at", "lead-pane", "--root", "--vertical", "--name", "clone-01"}},
 				{name: "/usr/local/bin/amux", args: []string{"-s", "orca-dev", "send-keys", "7", "--delay-final", "250ms", "cd '/tmp/clone-01'"}},
 				{name: "/usr/local/bin/amux", args: []string{"-s", "orca-dev", "send-keys", "7", "--delay-final", "250ms", "Enter"}},
 				{name: "/usr/local/bin/amux", args: []string{"-s", "orca-dev", "wait", "idle", "7", "--timeout", "5s"}},
@@ -84,17 +92,27 @@ func TestCLIClientSpawn(t *testing.T) {
 			wantPane: Pane{ID: "7", Name: "clone-01"},
 		},
 		{
-			name: "defaults binary name and session",
+			name: "fills an existing worker column before creating a new one",
 			config: Config{
 				Session: "default",
 			},
 			req: SpawnRequest{
+				AtPane:  "lead-pane",
 				CWD:     "/tmp/worker-2",
 				Command: "claude --dangerously-skip-permissions",
 			},
-			output: "Spawned worker-2 in pane 12\n",
+			queue: []runnerResult{
+				{output: []byte(testSessionCaptureJSON(t, sessionCapture{
+					Panes: []sessionCapturePane{
+						{ID: 1, Name: "lead-pane", ColumnIndex: 0, Position: &capturePanePos{X: 0, Y: 0, Width: 40, Height: 24}},
+						{ID: 2, Name: "worker-LAB-700", ColumnIndex: 1, Position: &capturePanePos{X: 41, Y: 0, Width: 39, Height: 24}},
+					},
+				}))},
+				{output: []byte("Spawned worker-2 in pane 12\n")},
+			},
 			wantCmds: []recordedCommand{
-				{name: "amux", args: []string{"-s", "default", "spawn", "--name", "worker-2", "--root", "--horizontal"}},
+				{name: "amux", args: []string{"-s", "default", "capture", "--format", "json"}},
+				{name: "amux", args: []string{"-s", "default", "spawn", "--at", "2", "--horizontal", "--name", "worker-2"}},
 				{name: "amux", args: []string{"-s", "default", "send-keys", "12", "--delay-final", "250ms", "cd '/tmp/worker-2'"}},
 				{name: "amux", args: []string{"-s", "default", "send-keys", "12", "--delay-final", "250ms", "Enter"}},
 				{name: "amux", args: []string{"-s", "default", "wait", "idle", "12", "--timeout", "5s"}},
@@ -104,7 +122,7 @@ func TestCLIClientSpawn(t *testing.T) {
 			wantPane: Pane{ID: "12", Name: "worker-2"},
 		},
 		{
-			name: "ignores AtPane and uses root horizontal worker spawn",
+			name: "creates a new worker column when all existing columns are full",
 			config: Config{
 				Session: "main",
 			},
@@ -114,9 +132,19 @@ func TestCLIClientSpawn(t *testing.T) {
 				CWD:     "/tmp/clone-5",
 				Command: "codex --yolo",
 			},
-			output: "Split horizontal: new pane worker-LAB-99\n",
+			queue: []runnerResult{
+				{output: []byte(testSessionCaptureJSON(t, sessionCapture{
+					Panes: []sessionCapturePane{
+						{ID: 1, Name: "lead-pane", ColumnIndex: 0, Position: &capturePanePos{X: 0, Y: 0, Width: 26, Height: 24}},
+						{ID: 7, Name: "worker-LAB-97", ColumnIndex: 1, Position: &capturePanePos{X: 27, Y: 0, Width: 26, Height: 11}},
+						{ID: 8, Name: "worker-LAB-98", ColumnIndex: 1, Position: &capturePanePos{X: 27, Y: 12, Width: 26, Height: 12}},
+					},
+				}))},
+				{output: []byte("Split vertical: new pane worker-LAB-99\n")},
+			},
 			wantCmds: []recordedCommand{
-				{name: "amux", args: []string{"-s", "main", "spawn", "--name", "worker-LAB-99", "--root", "--horizontal"}},
+				{name: "amux", args: []string{"-s", "main", "capture", "--format", "json"}},
+				{name: "amux", args: []string{"-s", "main", "spawn", "--at", "8", "--root", "--vertical", "--name", "worker-LAB-99"}},
 				{name: "amux", args: []string{"-s", "main", "send-keys", "worker-LAB-99", "--delay-final", "250ms", "cd '/tmp/clone-5'"}},
 				{name: "amux", args: []string{"-s", "main", "send-keys", "worker-LAB-99", "--delay-final", "250ms", "Enter"}},
 				{name: "amux", args: []string{"-s", "main", "wait", "idle", "worker-LAB-99", "--timeout", "5s"}},
@@ -131,11 +159,21 @@ func TestCLIClientSpawn(t *testing.T) {
 				Session: "default",
 			},
 			req: SpawnRequest{
-				CWD: "/tmp/worker-3",
+				AtPane: "lead-pane",
+				CWD:    "/tmp/worker-3",
 			},
-			runErr: errors.New("exit status 1"),
+			queue: []runnerResult{
+				{output: []byte(testSessionCaptureJSON(t, sessionCapture{
+					Panes: []sessionCapturePane{
+						{ID: 1, Name: "lead-pane", ColumnIndex: 0, Position: &capturePanePos{X: 0, Y: 0, Width: 40, Height: 24}},
+						{ID: 2, Name: "worker-LAB-700", ColumnIndex: 1, Position: &capturePanePos{X: 41, Y: 0, Width: 39, Height: 24}},
+					},
+				}))},
+				{err: errors.New("exit status 1")},
+			},
 			wantCmds: []recordedCommand{
-				{name: "amux", args: []string{"-s", "default", "spawn", "--name", "worker-3", "--root", "--horizontal"}},
+				{name: "amux", args: []string{"-s", "default", "capture", "--format", "json"}},
+				{name: "amux", args: []string{"-s", "default", "spawn", "--at", "2", "--horizontal", "--name", "worker-3"}},
 			},
 			wantErr: "exit status 1",
 		},
@@ -145,11 +183,21 @@ func TestCLIClientSpawn(t *testing.T) {
 				Session: "default",
 			},
 			req: SpawnRequest{
-				CWD: "/tmp/worker-4",
+				AtPane: "lead-pane",
+				CWD:    "/tmp/worker-4",
 			},
-			output: "Spawned worker-4\n",
+			queue: []runnerResult{
+				{output: []byte(testSessionCaptureJSON(t, sessionCapture{
+					Panes: []sessionCapturePane{
+						{ID: 1, Name: "lead-pane", ColumnIndex: 0, Position: &capturePanePos{X: 0, Y: 0, Width: 40, Height: 24}},
+						{ID: 2, Name: "worker-LAB-700", ColumnIndex: 1, Position: &capturePanePos{X: 41, Y: 0, Width: 39, Height: 24}},
+					},
+				}))},
+				{output: []byte("Spawned worker-4\n")},
+			},
 			wantCmds: []recordedCommand{
-				{name: "amux", args: []string{"-s", "default", "spawn", "--name", "worker-4", "--root", "--horizontal"}},
+				{name: "amux", args: []string{"-s", "default", "capture", "--format", "json"}},
+				{name: "amux", args: []string{"-s", "default", "spawn", "--at", "2", "--horizontal", "--name", "worker-4"}},
 			},
 			wantErr: "parse pane id",
 		},
@@ -160,10 +208,7 @@ func TestCLIClientSpawn(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			runner := &fakeRunner{
-				output: []byte(tt.output),
-				err:    tt.runErr,
-			}
+			runner := &fakeRunner{queue: append([]runnerResult(nil), tt.queue...)}
 			client := newTestClient(tt.config, runner)
 
 			gotPane, err := client.Spawn(context.Background(), tt.req)
@@ -183,6 +228,32 @@ func TestCLIClientSpawn(t *testing.T) {
 				t.Fatalf("Spawn() pane = %#v, want %#v", gotPane, tt.wantPane)
 			}
 		})
+	}
+}
+
+func TestCLIClientSpawnReturnsLayoutCaptureErrors(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeRunner{
+		queue: []runnerResult{
+			{output: []byte("not-json")},
+		},
+	}
+	client := newTestClient(Config{Session: "orca-dev"}, runner)
+
+	_, err := client.Spawn(context.Background(), SpawnRequest{
+		AtPane: "lead-pane",
+		CWD:    "/tmp/clone-01",
+	})
+	if err == nil || !strings.Contains(err.Error(), "plan spawn placement: parse session capture json") {
+		t.Fatalf("Spawn() error = %v, want layout capture parse error", err)
+	}
+
+	wantCmds := []recordedCommand{
+		{name: "amux", args: []string{"-s", "orca-dev", "capture", "--format", "json"}},
+	}
+	if !reflect.DeepEqual(runner.calls, wantCmds) {
+		t.Fatalf("Spawn() commands = %#v, want %#v", runner.calls, wantCmds)
 	}
 }
 
