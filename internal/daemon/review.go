@@ -194,7 +194,7 @@ func isBlockingIssueComment(comment prComment) bool {
 		return false
 	}
 
-	return blockingIssueSection(comment.Body) != ""
+	return !bodyContainsStandaloneLGTM(comment.Body)
 }
 
 func summarizeBlockingIssueComment(body string) string {
