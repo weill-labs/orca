@@ -82,6 +82,29 @@ func newSQLiteStateAdapter(store *state.SQLiteStore) *sqliteStateAdapter {
 	return &sqliteStateAdapter{store: store}
 }
 
+func convertStateTask(project string, task state.Task) Task {
+	out := Task{
+		Project:      project,
+		Issue:        task.Issue,
+		Status:       task.Status,
+		Prompt:       task.Prompt,
+		PaneID:       task.WorkerID,
+		PaneName:     task.WorkerID,
+		ClonePath:    task.ClonePath,
+		Branch:       task.Issue,
+		AgentProfile: task.Agent,
+		CreatedAt:    task.CreatedAt,
+		UpdatedAt:    task.UpdatedAt,
+	}
+	if task.ClonePath != "" {
+		out.CloneName = filepath.Base(task.ClonePath)
+	}
+	if task.PRNumber != nil {
+		out.PRNumber = *task.PRNumber
+	}
+	return out
+}
+
 func (a *sqliteStateAdapter) PutTask(ctx context.Context, task Task) error {
 	var prNumber *int
 	if task.PRNumber > 0 {
@@ -111,27 +134,7 @@ func (a *sqliteStateAdapter) TaskByIssue(ctx context.Context, project, issue str
 		return Task{}, err
 	}
 
-	task := status.Task
-	out := Task{
-		Project:      project,
-		Issue:        task.Issue,
-		Status:       task.Status,
-		Prompt:       task.Prompt,
-		PaneID:       task.WorkerID,
-		PaneName:     task.WorkerID,
-		ClonePath:    task.ClonePath,
-		Branch:       task.Issue,
-		AgentProfile: task.Agent,
-		CreatedAt:    task.CreatedAt,
-		UpdatedAt:    task.UpdatedAt,
-	}
-	if task.ClonePath != "" {
-		out.CloneName = filepath.Base(task.ClonePath)
-	}
-	if task.PRNumber != nil {
-		out.PRNumber = *task.PRNumber
-	}
-	return out, nil
+	return convertStateTask(project, status.Task), nil
 }
 
 func (a *sqliteStateAdapter) ClaimTask(ctx context.Context, task Task) (*Task, error) {
@@ -159,20 +162,7 @@ func (a *sqliteStateAdapter) ClaimTask(ctx context.Context, task Task) (*Task, e
 		return nil, nil
 	}
 
-	previous := Task{
-		Project:      task.Project,
-		Issue:        claimed.Issue,
-		Status:       claimed.Status,
-		Prompt:       claimed.Prompt,
-		PaneID:       claimed.WorkerID,
-		ClonePath:    claimed.ClonePath,
-		AgentProfile: claimed.Agent,
-		CreatedAt:    claimed.CreatedAt,
-		UpdatedAt:    claimed.UpdatedAt,
-	}
-	if claimed.PRNumber != nil {
-		previous.PRNumber = *claimed.PRNumber
-	}
+	previous := convertStateTask(task.Project, *claimed)
 	return &previous, nil
 }
 
@@ -199,26 +189,7 @@ func (a *sqliteStateAdapter) NonTerminalTasks(ctx context.Context, project strin
 
 	out := make([]Task, 0, len(tasks))
 	for _, task := range tasks {
-		converted := Task{
-			Project:      project,
-			Issue:        task.Issue,
-			Status:       task.Status,
-			Prompt:       task.Prompt,
-			PaneID:       task.WorkerID,
-			PaneName:     task.WorkerID,
-			ClonePath:    task.ClonePath,
-			Branch:       task.Issue,
-			AgentProfile: task.Agent,
-			CreatedAt:    task.CreatedAt,
-			UpdatedAt:    task.UpdatedAt,
-		}
-		if task.ClonePath != "" {
-			converted.CloneName = filepath.Base(task.ClonePath)
-		}
-		if task.PRNumber != nil {
-			converted.PRNumber = *task.PRNumber
-		}
-		out = append(out, converted)
+		out = append(out, convertStateTask(project, task))
 	}
 	return out, nil
 }
@@ -231,26 +202,7 @@ func (a *sqliteStateAdapter) TasksByPane(ctx context.Context, project, paneID st
 
 	out := make([]Task, 0, len(tasks))
 	for _, task := range tasks {
-		converted := Task{
-			Project:      project,
-			Issue:        task.Issue,
-			Status:       task.Status,
-			Prompt:       task.Prompt,
-			PaneID:       task.WorkerID,
-			PaneName:     task.WorkerID,
-			ClonePath:    task.ClonePath,
-			Branch:       task.Issue,
-			AgentProfile: task.Agent,
-			CreatedAt:    task.CreatedAt,
-			UpdatedAt:    task.UpdatedAt,
-		}
-		if task.ClonePath != "" {
-			converted.CloneName = filepath.Base(task.ClonePath)
-		}
-		if task.PRNumber != nil {
-			converted.PRNumber = *task.PRNumber
-		}
-		out = append(out, converted)
+		out = append(out, convertStateTask(project, task))
 	}
 	return out, nil
 }
