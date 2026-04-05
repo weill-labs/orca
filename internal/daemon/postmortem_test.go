@@ -261,6 +261,51 @@ func TestFinishAssignmentCancelledSetsDoneMetadataBeforeKill(t *testing.T) {
 	})
 }
 
+func TestFinishAssignmentCancelledIgnoresMissingPaneKill(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	d := deps.newDaemon(t)
+	active := newPostmortemAssignment(deps)
+	active.Task.Status = TaskStatusActive
+	seedFinishAssignmentState(t, deps, active)
+
+	deps.amux.killErr = errors.New("amux kill pane-1: exit status 1: pane not found")
+
+	if err := d.finishAssignmentWithMessage(context.Background(), active, TaskStatusCancelled, EventTaskCancelled, false, ""); err != nil {
+		t.Fatalf("finishAssignmentWithMessage() error = %v, want nil", err)
+	}
+
+	task, err := deps.state.TaskByIssue(context.Background(), d.project, active.Task.Issue)
+	if err != nil {
+		t.Fatalf("TaskByIssue() error = %v", err)
+	}
+	if got := task.Status; got != TaskStatusCancelled {
+		t.Fatalf("task status = %q, want %q", got, TaskStatusCancelled)
+	}
+
+	if _, err := deps.state.WorkerByPane(context.Background(), d.project, active.Task.PaneID); !errors.Is(err, ErrWorkerNotFound) {
+		t.Fatalf("WorkerByPane() error = %v, want ErrWorkerNotFound", err)
+	}
+
+	if got, want := deps.pool.releasedClones(), []Clone{{
+		Name:          active.Task.CloneName,
+		Path:          active.Task.ClonePath,
+		CurrentBranch: active.Task.Branch,
+		AssignedTask:  active.Task.Branch,
+	}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("released clones = %#v, want %#v", got, want)
+	}
+
+	event, ok := deps.events.lastEventOfType(EventTaskCancelled)
+	if !ok {
+		t.Fatalf("lastEventOfType(%q) = false, want true", EventTaskCancelled)
+	}
+	if got := event.Message; got != "task cancelled" {
+		t.Fatalf("event.Message = %q, want %q", got, "task cancelled")
+	}
+}
+
 func TestFinishAssignmentPreservesHistoricalTrackedMetadata(t *testing.T) {
 	t.Parallel()
 

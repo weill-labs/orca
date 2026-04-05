@@ -20,6 +20,7 @@ type fakeAmux struct {
 	sendKeysResults       []error
 	sendKeysHook          func(paneID string, keys []string)
 	setMetadataHook       func(paneID string, metadata map[string]string)
+	killErr               error
 	killHook              func(paneID string)
 	waitIdleErr           error
 	waitIdleHook          func(paneID string, timeout time.Duration)
@@ -231,7 +232,7 @@ func (a *fakeAmux) KillPane(ctx context.Context, paneID string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.killCalls = append(a.killCalls, paneID)
-	return nil
+	return a.killErr
 }
 
 func (a *fakeAmux) WaitIdle(ctx context.Context, paneID string, timeout time.Duration) error {
