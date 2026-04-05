@@ -13,6 +13,7 @@ import (
 
 	"github.com/weill-labs/orca/internal/amux"
 	state "github.com/weill-labs/orca/internal/daemonstate"
+	"github.com/weill-labs/orca/internal/pool"
 	"github.com/weill-labs/orca/internal/project"
 )
 
@@ -26,6 +27,7 @@ type Controller interface {
 	Stop(ctx context.Context, req StopRequest) (StopResult, error)
 	Assign(ctx context.Context, req AssignRequest) (TaskActionResult, error)
 	Batch(ctx context.Context, req BatchRequest) (BatchResult, error)
+	Spawn(ctx context.Context, req SpawnPaneRequest) (SpawnPaneResult, error)
 	Enqueue(ctx context.Context, req EnqueueRequest) (MergeQueueActionResult, error)
 	Cancel(ctx context.Context, req CancelRequest) (TaskActionResult, error)
 	Resume(ctx context.Context, req ResumeRequest) (TaskActionResult, error)
@@ -44,6 +46,9 @@ type ControllerOptions struct {
 	Now          func() time.Time
 	StartTimeout time.Duration
 	StopTimeout  time.Duration
+	DetectOrigin func(string) (string, error)
+	Amux         amux.Client
+	PoolRunner   pool.Runner
 }
 
 type StartRequest struct {
@@ -118,6 +123,20 @@ type BatchResult struct {
 	Results []TaskActionResult `json:"results"`
 }
 
+type SpawnPaneRequest struct {
+	Project  string
+	Session  string
+	LeadPane string
+	Title    string
+}
+
+type SpawnPaneResult struct {
+	Project   string `json:"project"`
+	PaneID    string `json:"pane_id"`
+	PaneName  string `json:"pane_name,omitempty"`
+	ClonePath string `json:"clone_path"`
+}
+
 type MergeQueueActionResult struct {
 	Project   string    `json:"project"`
 	PRNumber  int       `json:"pr_number"`
@@ -133,6 +152,9 @@ type LocalController struct {
 	now          func() time.Time
 	startTimeout time.Duration
 	stopTimeout  time.Duration
+	detectOrigin func(string) (string, error)
+	amux         amux.Client
+	poolRunner   pool.Runner
 }
 
 func ResolvePaths() (Paths, error) {
@@ -191,6 +213,9 @@ func NewLocalController(options ControllerOptions) (*LocalController, error) {
 		now:          now,
 		startTimeout: startTimeout,
 		stopTimeout:  stopTimeout,
+		detectOrigin: options.DetectOrigin,
+		amux:         options.Amux,
+		poolRunner:   options.PoolRunner,
 	}, nil
 }
 

@@ -331,7 +331,7 @@ func TestAppRunDispatchesCommands(t *testing.T) {
 				startResult:   daemon.StartResult{Project: otherRepo, Session: "alpha", PID: 321, StartedAt: now},
 				stopResult:    daemon.StopResult{Project: repoRoot, PID: 321, StoppedAt: now},
 				assignResult:  daemon.TaskActionResult{Project: repoRoot, Issue: "LAB-690", Status: "queued", Agent: "codex", UpdatedAt: now},
-				spawnResult:   daemon.SpawnResult{Project: repoRoot, PaneID: "pane-7", PaneName: "Scratch pane", ClonePath: "/clones/orca01"},
+				spawnResult:   daemon.SpawnPaneResult{Project: repoRoot, PaneID: "pane-7", PaneName: "Scratch pane", ClonePath: "/clones/orca01"},
 				enqueueResult: daemon.MergeQueueActionResult{Project: repoRoot, PRNumber: 42, Status: "queued", Position: 1, UpdatedAt: now},
 				cancelResult:  daemon.TaskActionResult{Project: repoRoot, Issue: "LAB-690", Status: "cancelled", UpdatedAt: now},
 				resumeResult:  daemon.TaskActionResult{Project: repoRoot, Issue: "LAB-690", Status: "active", Agent: "codex", UpdatedAt: now},
@@ -662,7 +662,7 @@ type fakeDaemon struct {
 	stopRequest    *daemon.StopRequest
 	assignRequest  *daemon.AssignRequest
 	batchRequest   *daemon.BatchRequest
-	spawnRequest   *daemon.SpawnRequest
+	spawnRequest   *daemon.SpawnPaneRequest
 	enqueueRequest *daemon.EnqueueRequest
 	cancelRequest  *daemon.CancelRequest
 	resumeRequest  *daemon.ResumeRequest
@@ -671,7 +671,7 @@ type fakeDaemon struct {
 	stopResult    daemon.StopResult
 	assignResult  daemon.TaskActionResult
 	batchResult   daemon.BatchResult
-	spawnResult   daemon.SpawnResult
+	spawnResult   daemon.SpawnPaneResult
 	enqueueResult daemon.MergeQueueActionResult
 	cancelResult  daemon.TaskActionResult
 	resumeResult  daemon.TaskActionResult
@@ -711,9 +711,9 @@ func (f *fakeDaemon) Batch(_ context.Context, req daemon.BatchRequest) (daemon.B
 	return f.batchResult, nil
 }
 
-func (f *fakeDaemon) Spawn(_ context.Context, req daemon.SpawnRequest) (daemon.SpawnResult, error) {
+func (f *fakeDaemon) Spawn(_ context.Context, req daemon.SpawnPaneRequest) (daemon.SpawnPaneResult, error) {
 	if f.err != nil {
-		return daemon.SpawnResult{}, f.err
+		return daemon.SpawnPaneResult{}, f.err
 	}
 	f.spawnRequest = &req
 	return f.spawnResult, nil
