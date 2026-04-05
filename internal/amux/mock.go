@@ -186,3 +186,11 @@ func (m *MockClient) WaitIdle(ctx context.Context, paneID string, timeout time.D
 	}
 	return nil
 }
+
+func (m *MockClient) WaitIdleSettle(ctx context.Context, paneID string, _, timeout time.Duration) error {
+	return m.WaitIdle(ctx, paneID, timeout)
+}
+
+func (m *MockClient) WaitContent(_ context.Context, _, _ string, _ time.Duration) error {
+	return nil
+}

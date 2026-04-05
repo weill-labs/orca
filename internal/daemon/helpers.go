@@ -405,6 +405,34 @@ func (d *Daemon) startAgentInPane(ctx context.Context, paneID string, profile Ag
 	return nil
 }
 
+func (d *Daemon) resumeAgentInPane(ctx context.Context, paneID string, profile AgentProfile) error {
+	if len(profile.ResumeSequence) == 0 {
+		return d.startAgentInPane(ctx, paneID, profile)
+	}
+
+	// Step 1: Send the resume command (e.g. "codex --yolo resume")
+	if err := d.amux.SendKeys(ctx, paneID, profile.ResumeSequence[0], "Enter"); err != nil {
+		return fmt.Errorf("send resume command: %w", err)
+	}
+
+	// Step 2: Wait for session picker to render
+	if err := d.amux.WaitContent(ctx, paneID, "enter to resume", defaultAgentHandshakeTimeout); err != nil {
+		return fmt.Errorf("wait for session picker: %w", err)
+	}
+
+	// Step 3: Send remaining keys (Enter to select, then "." to continue)
+	for _, key := range profile.ResumeSequence[1:] {
+		if err := d.amux.SendKeys(ctx, paneID, key); err != nil {
+			return fmt.Errorf("resume step: %w", err)
+		}
+		if err := d.amux.WaitIdleSettle(ctx, paneID, 3*time.Second, defaultAgentHandshakeTimeout); err != nil {
+			return fmt.Errorf("wait for resume step: %w", err)
+		}
+	}
+
+	return nil
+}
+
 func ensureTrailingNewline(input string) string {
 	if strings.HasSuffix(input, "\n") {
 		return input

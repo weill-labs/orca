@@ -53,14 +53,9 @@ func TestResumeRestartsExistingWorkerInPlace(t *testing.T) {
 	if got, want := deps.amux.paneExistsCalls, []string{"pane-1"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("pane exists calls = %#v, want %#v", got, want)
 	}
-	deps.amux.requireSentKeys(t, "pane-1", []string{"codex --yolo\n"})
-	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
-		{PaneID: "pane-1", Timeout: defaultAgentHandshakeTimeout},
-	}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("waitIdle calls = %#v, want %#v", got, want)
-	}
-	if got, want := deps.amux.captureCount("pane-1"), 1; got != want {
-		t.Fatalf("capture count = %d, want %d", got, want)
+	deps.amux.requireSentKeys(t, "pane-1", []string{"codex --yolo resume\n", "\n", "."})
+	if got, want := len(deps.amux.waitIdleCalls), 2; got != want {
+		t.Fatalf("waitIdle call count = %d, want %d", got, want)
 	}
 	if got, want := len(deps.amux.spawnRequests), 0; got != want {
 		t.Fatalf("spawn requests = %d, want %d", got, want)

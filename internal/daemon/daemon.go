@@ -424,7 +424,7 @@ func (d *Daemon) Resume(ctx context.Context, issue string) error {
 		return fmt.Errorf("load agent profile %q: %w", active.Task.AgentProfile, err)
 	}
 
-	if err := d.startAgentInPane(ctx, paneID, profile); err != nil {
+	if err := d.resumeAgentInPane(ctx, paneID, profile); err != nil {
 		return err
 	}
 

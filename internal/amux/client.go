@@ -26,6 +26,8 @@ type Client interface {
 	SetMetadata(ctx context.Context, paneID string, metadata map[string]string) error
 	KillPane(ctx context.Context, paneID string) error
 	WaitIdle(ctx context.Context, paneID string, timeout time.Duration) error
+	WaitIdleSettle(ctx context.Context, paneID string, settle, timeout time.Duration) error
+	WaitContent(ctx context.Context, paneID, substring string, timeout time.Duration) error
 }
 
 // Config configures the CLI-backed amux client.
@@ -237,6 +239,18 @@ func (c *CLIClient) KillPane(ctx context.Context, paneID string) error {
 // WaitIdle waits for a pane to become idle before returning.
 func (c *CLIClient) WaitIdle(ctx context.Context, paneID string, timeout time.Duration) error {
 	_, err := c.run(ctx, c.session, "wait", "idle", paneID, "--timeout", timeout.String())
+	return err
+}
+
+// WaitIdleSettle waits for a pane to become idle with a custom settle duration.
+func (c *CLIClient) WaitIdleSettle(ctx context.Context, paneID string, settle, timeout time.Duration) error {
+	_, err := c.run(ctx, c.session, "wait", "idle", paneID, "--settle", settle.String(), "--timeout", timeout.String())
+	return err
+}
+
+// WaitContent waits until a substring appears in the pane's visible output.
+func (c *CLIClient) WaitContent(ctx context.Context, paneID, substring string, timeout time.Duration) error {
+	_, err := c.run(ctx, c.session, "wait", "content", paneID, substring, "--timeout", timeout.String())
 	return err
 }
 

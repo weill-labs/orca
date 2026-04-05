@@ -247,6 +247,14 @@ func (a *fakeAmux) WaitIdle(ctx context.Context, paneID string, timeout time.Dur
 	return a.waitIdleErr
 }
 
+func (a *fakeAmux) WaitIdleSettle(ctx context.Context, paneID string, _, timeout time.Duration) error {
+	return a.WaitIdle(ctx, paneID, timeout)
+}
+
+func (a *fakeAmux) WaitContent(_ context.Context, _, _ string, _ time.Duration) error {
+	return nil
+}
+
 func (a *fakeAmux) captureSequence(paneID string, sequence []string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
