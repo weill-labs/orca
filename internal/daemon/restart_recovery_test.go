@@ -26,6 +26,8 @@ func TestDaemonStartReconcilesNonTerminalAssignments(t *testing.T) {
 		wantFailedEvents  int
 		wantEscalateEvent int
 		wantCaptureCount  int
+		wantEventType     string
+		wantEventMessage  string
 	}{
 		{
 			name:             "active worker stays active when pane is live",
@@ -75,6 +77,8 @@ func TestDaemonStartReconcilesNonTerminalAssignments(t *testing.T) {
 			wantWorker:       false,
 			wantRelease:      true,
 			wantFailedEvents: 1,
+			wantEventType:    EventTaskFailed,
+			wantEventMessage: "worker pane liveness check failed on daemon startup: amux unavailable",
 		},
 		{
 			name:             "starting worker fails when pane capture errors",
@@ -86,6 +90,8 @@ func TestDaemonStartReconcilesNonTerminalAssignments(t *testing.T) {
 			wantRelease:      true,
 			wantFailedEvents: 1,
 			wantCaptureCount: 1,
+			wantEventType:    EventTaskFailed,
+			wantEventMessage: "worker pane capture failed on daemon startup: capture failed",
 		},
 		{
 			name:             "starting worker fails when pane is missing",
@@ -109,23 +115,29 @@ func TestDaemonStartReconcilesNonTerminalAssignments(t *testing.T) {
 			wantCaptureCount:  1,
 		},
 		{
-			name:             "active worker tolerates pane liveness check error",
-			taskStatus:       TaskStatusActive,
-			paneID:           "pane-1",
-			paneExistsErr:    errors.New("amux unavailable"),
-			wantTaskStatus:   TaskStatusActive,
-			wantWorker:       true,
-			wantWorkerHealth: "healthy",
+			name:              "active worker escalates when pane liveness check errors",
+			taskStatus:        TaskStatusActive,
+			paneID:            "pane-1",
+			paneExistsErr:     errors.New("amux unavailable"),
+			wantTaskStatus:    TaskStatusActive,
+			wantWorker:        true,
+			wantWorkerHealth:  WorkerHealthEscalated,
+			wantEscalateEvent: 1,
+			wantEventType:     EventWorkerEscalated,
+			wantEventMessage:  "worker pane liveness check failed on daemon startup: amux unavailable",
 		},
 		{
-			name:             "active worker tolerates pane capture error",
-			taskStatus:       TaskStatusActive,
-			paneID:           "pane-1",
-			capturePaneErr:   errors.New("capture failed"),
-			wantTaskStatus:   TaskStatusActive,
-			wantWorker:       true,
-			wantWorkerHealth: "healthy",
-			wantCaptureCount: 1,
+			name:              "active worker escalates when pane capture errors",
+			taskStatus:        TaskStatusActive,
+			paneID:            "pane-1",
+			capturePaneErr:    errors.New("capture failed"),
+			wantTaskStatus:    TaskStatusActive,
+			wantWorker:        true,
+			wantWorkerHealth:  WorkerHealthEscalated,
+			wantEscalateEvent: 1,
+			wantCaptureCount:  1,
+			wantEventType:     EventWorkerEscalated,
+			wantEventMessage:  "worker pane capture failed on daemon startup: capture failed",
 		},
 	}
 
@@ -195,6 +207,15 @@ func TestDaemonStartReconcilesNonTerminalAssignments(t *testing.T) {
 			}
 			if got, want := deps.events.countType(EventWorkerEscalated), tt.wantEscalateEvent; got != want {
 				t.Fatalf("worker escalated events = %d, want %d", got, want)
+			}
+			if tt.wantEventType != "" {
+				event, ok := deps.events.lastEventOfType(tt.wantEventType)
+				if !ok {
+					t.Fatalf("lastEventOfType(%q) = false, want true", tt.wantEventType)
+				}
+				if got, want := event.Message, tt.wantEventMessage; got != want {
+					t.Fatalf("event.Message = %q, want %q", got, want)
+				}
 			}
 			if got, want := deps.amux.captureCount(tt.paneID), tt.wantCaptureCount; got != want {
 				t.Fatalf("capture count = %d, want %d", got, want)
