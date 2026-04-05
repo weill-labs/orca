@@ -36,7 +36,55 @@ commands:
   workers  List workers and their state
   pool     List clone pool status
   events   Stream orchestration events as NDJSON
+  help     Show help for a command
   version  Print version`
+
+// Keep these summaries aligned with the per-command FlagSet definitions below.
+var commandUsage = map[string]string{
+	"start": `usage: orca start [--session SESSION] [--project PATH] [--lead-pane PANE] [--json]
+
+Start the orca daemon.`,
+	"stop": `usage: orca stop [--project PATH] [--json]
+
+Stop the orca daemon.`,
+	"status": `usage: orca status [ISSUE] [--project PATH] [--json]
+
+Show daemon and task status.`,
+	"assign": `usage: orca assign ISSUE --prompt TEXT [--agent NAME] [--project PATH] [--title TEXT] [--json]
+
+Assign an issue to a worker.
+
+Flags:
+  --prompt  Task prompt
+  --agent   Agent profile
+  --project Project path
+  --title   Pane task title
+  --json    Emit JSON output`,
+	"batch": `usage: orca batch MANIFEST [--project PATH] [--delay DURATION]
+
+Assign multiple issues from a manifest.`,
+	"enqueue": `usage: orca enqueue PR_NUMBER [--project PATH] [--json]
+
+Queue a PR for serialized landing.`,
+	"cancel": `usage: orca cancel ISSUE [--project PATH] [--json]
+
+Cancel a task.`,
+	"resume": `usage: orca resume ISSUE [--project PATH] [--json]
+
+Resume a task in its existing pane.`,
+	"workers": `usage: orca workers [--project PATH] [--json]
+
+List workers and their state.`,
+	"pool": `usage: orca pool [--project PATH] [--json]
+
+List clone pool status.`,
+	"events": `usage: orca events [--project PATH]
+
+Stream orchestration events as NDJSON.`,
+	"version": `usage: orca version
+
+Print version.`,
+}
 
 var errInvalidOptions = errors.New("cli: invalid options")
 
@@ -59,6 +107,44 @@ type App struct {
 
 func UsageText() string {
 	return usageText
+}
+
+func WriteHelp(w io.Writer, args []string) (bool, error) {
+	usage, ok := HelpText(args)
+	if !ok {
+		return false, nil
+	}
+
+	_, err := fmt.Fprintln(w, usage)
+	return true, err
+}
+
+func HelpText(args []string) (string, bool) {
+	if len(args) == 0 {
+		return "", false
+	}
+
+	if args[0] == "help" {
+		if len(args) == 1 {
+			return usageText, true
+		}
+		if usage, ok := commandUsage[args[1]]; ok {
+			return usage, true
+		}
+		return "", false
+	}
+
+	if isHelpToken(args[0]) {
+		return usageText, true
+	}
+
+	if len(args) >= 2 && isHelpToken(args[1]) {
+		if usage, ok := commandUsage[args[0]]; ok {
+			return usage, true
+		}
+	}
+
+	return "", false
 }
 
 func New(options Options) *App {
@@ -84,8 +170,13 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	if len(args) == 0 {
 		return errors.New(usageText)
 	}
+	if handled, err := WriteHelp(a.stdout, args); handled {
+		return err
+	}
 
 	switch args[0] {
+	case "help":
+		return fmt.Errorf("unknown help topic %q", args[1])
 	case "start":
 		return a.runStart(ctx, args[1:])
 	case "stop":
@@ -619,6 +710,11 @@ func stripLeadingPositional(args []string) (string, []string) {
 	}
 
 	return args[0], args[1:]
+}
+
+func isHelpToken(arg string) bool {
+	// Support `orca help <cmd>` and the shorthand `orca <cmd> help`.
+	return arg == "--help" || arg == "-h" || arg == "help"
 }
 
 func writeJSON(w io.Writer, value any) error {

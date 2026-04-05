@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
 	"strings"
@@ -42,4 +43,38 @@ func TestUsageHelper(t *testing.T) {
 	}
 	os.Args = []string{"orca"}
 	main()
+}
+
+func TestRunHelpFlags(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{name: "long flag", args: []string{"--help"}},
+		{name: "short flag", args: []string{"-h"}},
+		{name: "help command", args: []string{"help"}},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+
+			exitCode := run(tt.args, &stdout, &stderr)
+			if exitCode != 0 {
+				t.Fatalf("run(%q) exit code = %d, want 0", tt.args, exitCode)
+			}
+			if !strings.Contains(stdout.String(), "usage: orca <command>") {
+				t.Fatalf("stdout = %q, want root usage", stdout.String())
+			}
+			if stderr.Len() != 0 {
+				t.Fatalf("stderr = %q, want empty", stderr.String())
+			}
+		})
+	}
 }

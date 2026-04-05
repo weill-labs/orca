@@ -434,6 +434,8 @@ func TestAppRunParseErrors(t *testing.T) {
 	}{
 		{name: "missing command", args: nil, wantErr: "usage: orca <command>"},
 		{name: "unknown command", args: []string{"bogus"}, wantErr: "unknown command"},
+		{name: "help unknown command", args: []string{"help", "bogus"}, wantErr: "unknown help topic \"bogus\""},
+		{name: "unknown command help flag", args: []string{"bogus", "--help"}, wantErr: "unknown command"},
 		{name: "status too many args", args: []string{"status", "LAB-690", "extra"}, wantErr: "status accepts at most one issue"},
 		{name: "assign missing issue", args: []string{"assign", "--prompt", "x"}, wantErr: "assign requires ISSUE"},
 		{name: "assign missing prompt", args: []string{"assign", "LAB-690"}, wantErr: "assign requires --prompt"},
@@ -468,6 +470,81 @@ func TestAppRunParseErrors(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), tt.wantErr) {
 				t.Fatalf("expected error containing %q, got %v", tt.wantErr, err)
+			}
+		})
+	}
+}
+
+func TestAppRunHelp(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		args            []string
+		wantInStdout    []string
+		wantEmptyStderr bool
+	}{
+		{
+			name:            "root long flag",
+			args:            []string{"--help"},
+			wantInStdout:    []string{"usage: orca <command>", "commands:"},
+			wantEmptyStderr: true,
+		},
+		{
+			name:            "root short flag",
+			args:            []string{"-h"},
+			wantInStdout:    []string{"usage: orca <command>", "commands:"},
+			wantEmptyStderr: true,
+		},
+		{
+			name:            "subcommand long flag",
+			args:            []string{"assign", "--help"},
+			wantInStdout:    []string{"usage: orca assign ISSUE", "--prompt"},
+			wantEmptyStderr: true,
+		},
+		{
+			name:            "subcommand short flag",
+			args:            []string{"assign", "-h"},
+			wantInStdout:    []string{"usage: orca assign ISSUE", "--prompt"},
+			wantEmptyStderr: true,
+		},
+		{
+			name:            "help command",
+			args:            []string{"help", "assign"},
+			wantInStdout:    []string{"usage: orca assign ISSUE", "--prompt"},
+			wantEmptyStderr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			app := New(Options{
+				Daemon:  &fakeDaemon{},
+				State:   &fakeState{},
+				Stdout:  &stdout,
+				Stderr:  &stderr,
+				Version: "build-123",
+				Cwd: func() (string, error) {
+					return newRepoRoot(t), nil
+				},
+			})
+
+			if err := app.Run(context.Background(), tt.args); err != nil {
+				t.Fatalf("Run(%q) error = %v", tt.args, err)
+			}
+
+			for _, want := range tt.wantInStdout {
+				if !strings.Contains(stdout.String(), want) {
+					t.Fatalf("stdout = %q, want substring %q", stdout.String(), want)
+				}
+			}
+			if tt.wantEmptyStderr && stderr.Len() != 0 {
+				t.Fatalf("stderr = %q, want empty", stderr.String())
 			}
 		})
 	}
@@ -805,6 +882,9 @@ func TestUsageTextIncludesResumeCommand(t *testing.T) {
 	}
 	if !strings.Contains(UsageText(), "batch") {
 		t.Fatalf("UsageText() = %q, want batch command", UsageText())
+	}
+	if !strings.Contains(UsageText(), "help") {
+		t.Fatalf("UsageText() = %q, want help command", UsageText())
 	}
 }
 
