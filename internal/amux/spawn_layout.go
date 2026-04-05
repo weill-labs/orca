@@ -122,27 +122,21 @@ func planSpawnPlacement(layout sessionCapture, leadPane string) spawnPlacement {
 }
 
 func spawnAnchorPane(panes []sessionCapturePane, leadPane string) (sessionCapturePane, bool) {
-	if leadPane != "" {
-		for _, pane := range panes {
-			if paneMatchesRef(pane, leadPane) {
-				return pane, true
-			}
-		}
+	if pane, ok := findSessionPane(panes, func(pane sessionCapturePane) bool {
+		return paneMatchesRef(pane, leadPane)
+	}); ok {
+		return pane, true
 	}
 
-	for _, pane := range panes {
-		if pane.Lead {
-			return pane, true
-		}
+	if pane, ok := findSessionPane(panes, func(pane sessionCapturePane) bool {
+		return pane.Lead
+	}); ok {
+		return pane, true
 	}
 
-	for _, pane := range panes {
-		if pane.Active {
-			return pane, true
-		}
-	}
-
-	return sessionCapturePane{}, false
+	return findSessionPane(panes, func(pane sessionCapturePane) bool {
+		return pane.Active
+	})
 }
 
 func paneExcludedFromWorkerColumns(pane, anchorPane sessionCapturePane, hasAnchorPane bool) bool {
@@ -157,6 +151,15 @@ func panesMatch(left, right sessionCapturePane) bool {
 		return left.ID == right.ID
 	}
 	return left.Name != "" && left.Name == right.Name
+}
+
+func findSessionPane(panes []sessionCapturePane, matches func(sessionCapturePane) bool) (sessionCapturePane, bool) {
+	for _, pane := range panes {
+		if matches(pane) {
+			return pane, true
+		}
+	}
+	return sessionCapturePane{}, false
 }
 
 func paneMatchesRef(pane sessionCapturePane, ref string) bool {
