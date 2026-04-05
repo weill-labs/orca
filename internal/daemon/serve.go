@@ -275,7 +275,7 @@ func dispatchRPCRequest(ctx context.Context, request rpcRequest, instance *Daemo
 		if err := decodeRPCParams(request.Params, &params); err != nil {
 			return rpcFailure(request.ID, -32602, fmt.Errorf("decode resume params: %w", err))
 		}
-		if err := instance.Resume(ctx, params.Issue); err != nil {
+		if err := instance.Resume(ctx, params.Issue, params.Prompt); err != nil {
 			return rpcFailure(request.ID, -32000, err)
 		}
 

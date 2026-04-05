@@ -32,7 +32,7 @@ commands:
   batch    Assign multiple issues from a manifest
   enqueue  Queue a PR for serialized landing
   cancel   Cancel a task
-  resume   Resume a task in its existing pane
+  resume   Resume a task, recreating its pane if needed
   workers  List workers and their state
   pool     List clone pool status
   events   Stream orchestration events as NDJSON
@@ -410,8 +410,10 @@ func (a *App) runCancel(ctx context.Context, args []string) error {
 func (a *App) runResume(ctx context.Context, args []string) error {
 	fs := newFlagSet("resume")
 	var projectPath string
+	var prompt string
 	var jsonOutput bool
 	fs.StringVar(&projectPath, "project", "", "project path")
+	fs.StringVar(&prompt, "prompt", "", "instructions to send after resuming")
 	fs.BoolVar(&jsonOutput, "json", false, "emit JSON output")
 
 	issue, err := parseRequiredSinglePositional(fs, args, "resume requires ISSUE")
@@ -427,6 +429,7 @@ func (a *App) runResume(ctx context.Context, args []string) error {
 	result, err := a.daemon.Resume(ctx, daemon.ResumeRequest{
 		Project: projectPath,
 		Issue:   issue,
+		Prompt:  strings.TrimSpace(prompt),
 	})
 	if err != nil {
 		return err
