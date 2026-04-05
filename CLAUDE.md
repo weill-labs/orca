@@ -42,7 +42,7 @@ All development follows red-green-refactor with **separate commits** for each ph
 
 ### Test Philosophy
 
-Tests should read like specs. Minimize logic in assertions so a human can read the test and immediately understand what behavior is expected. Use table-driven tests for unit tests with multiple cases -- define a `tests` slice of structs, iterate with `t.Run(tt.name, ...)`, and call `t.Parallel()` in each subtest.
+Tests should read like specs. Minimize logic in assertions so a human can read the test and immediately understand what behavior is expected. Use table-driven tests for unit tests with multiple cases -- define a `tests` slice of structs, iterate with `t.Run(tt.name, ...)`, and call `t.Parallel()` in each subtest. Write integration tests for daemon lifecycle and amux interaction. Use golden files for CLI output where applicable.
 
 When a change adds a new test or modifies an existing test, run that targeted test slice with `-count=100` before calling the work done. Treat any failure in those repeated runs as a flake to investigate, not as an acceptable one-off.
 
