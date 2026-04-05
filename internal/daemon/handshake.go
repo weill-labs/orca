@@ -2,30 +2,38 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
+
+	amuxapi "github.com/weill-labs/orca/internal/amux"
 )
 
 const (
-	handshakeStepWait          = "wait for startup idle"
-	handshakeStepCapture       = "capture startup output"
-	handshakeStepTrustDetected = "trust prompt detected"
-	handshakeStepTrustEnter    = "sent Enter to confirm trust prompt"
+	handshakeStepWait             = "wait for startup idle"
+	handshakeStepWaitTrustContent = "wait for trust prompt content"
+	handshakeStepCapture          = "capture startup output"
+	handshakeStepTrustDetected    = "trust prompt detected"
+	handshakeStepTrustEnter       = "sent Enter to confirm trust prompt"
 )
 
 func (d *Daemon) agentHandshake(ctx context.Context, paneID string, profile AgentProfile) error {
-	d.handshakeMu.Lock()
-	defer d.handshakeMu.Unlock()
-
 	d.emitHandshakeEvent(ctx, paneID, profile, handshakeStepWait)
 	if err := d.amux.WaitIdle(ctx, paneID, defaultAgentHandshakeTimeout); err != nil {
 		return fmt.Errorf("wait for startup idle: %w", err)
 	}
 
-	trustConfirmed := false
 	resumed := false
 
 	for {
+		trustConfirmed, err := d.confirmTrustPromptIfPresent(ctx, paneID, profile)
+		if err != nil {
+			return err
+		}
+		if trustConfirmed {
+			continue
+		}
+
 		output, err := d.amux.Capture(ctx, paneID)
 		if err != nil {
 			return fmt.Errorf("capture startup output: %w", err)
@@ -33,13 +41,6 @@ func (d *Daemon) agentHandshake(ctx context.Context, paneID string, profile Agen
 		d.emitHandshakeEvent(ctx, paneID, profile, handshakeStepCapture)
 
 		switch {
-		case !trustConfirmed && hasTrustPrompt(profile, output):
-			d.emitHandshakeEvent(ctx, paneID, profile, handshakeStepTrustDetected)
-			if err := d.amux.SendKeys(ctx, paneID, "Enter"); err != nil {
-				return fmt.Errorf("confirm trust prompt: %w", err)
-			}
-			d.emitHandshakeEvent(ctx, paneID, profile, handshakeStepTrustEnter)
-			trustConfirmed = true
 		case !resumed && hasResumePrompt(profile, output):
 			if err := d.resumeAgentInPane(ctx, paneID, profile); err != nil {
 				return fmt.Errorf("resume prior session: %w", err)
@@ -54,6 +55,32 @@ func (d *Daemon) agentHandshake(ctx context.Context, paneID string, profile Agen
 			return fmt.Errorf("wait for post-startup action idle: %w", err)
 		}
 	}
+}
+
+func (d *Daemon) confirmTrustPromptIfPresent(ctx context.Context, paneID string, profile AgentProfile) (bool, error) {
+	prompt, ok := trustPromptText(profile)
+	if !ok {
+		return false, nil
+	}
+
+	d.emitHandshakeEvent(ctx, paneID, profile, handshakeStepWaitTrustContent)
+	if err := d.amux.WaitContent(ctx, paneID, prompt, defaultTrustPromptTimeout); err != nil {
+		if errors.Is(err, amuxapi.ErrWaitContentTimeout) {
+			return false, nil
+		}
+		return false, fmt.Errorf("wait for trust prompt: %w", err)
+	}
+
+	d.emitHandshakeEvent(ctx, paneID, profile, handshakeStepTrustDetected)
+	if err := d.amux.SendKeys(ctx, paneID, "Enter"); err != nil {
+		return false, fmt.Errorf("confirm trust prompt: %w", err)
+	}
+	d.emitHandshakeEvent(ctx, paneID, profile, handshakeStepTrustEnter)
+	d.emitHandshakeEvent(ctx, paneID, profile, handshakeStepWait)
+	if err := d.amux.WaitIdle(ctx, paneID, defaultAgentHandshakeTimeout); err != nil {
+		return false, fmt.Errorf("wait for post-startup action idle: %w", err)
+	}
+	return true, nil
 }
 
 func (d *Daemon) emitHandshakeEvent(ctx context.Context, paneID string, profile AgentProfile, message string) {
@@ -94,12 +121,8 @@ func (d *Daemon) emitHandshakeEvent(ctx context.Context, paneID string, profile 
 }
 
 func hasTrustPrompt(profile AgentProfile, output string) bool {
-	switch normalizedProfileName(profile) {
-	case "codex":
-		return containsFold(output, "do you trust")
-	default:
-		return false
-	}
+	prompt, ok := trustPromptText(profile)
+	return ok && containsFold(output, prompt)
 }
 
 func hasResumePrompt(profile AgentProfile, output string) bool {
@@ -121,4 +144,13 @@ func normalizedProfileName(profile AgentProfile) string {
 
 func containsFold(input, needle string) bool {
 	return strings.Contains(strings.ToLower(input), needle)
+}
+
+func trustPromptText(profile AgentProfile) (string, bool) {
+	switch normalizedProfileName(profile) {
+	case "codex":
+		return "do you trust", true
+	default:
+		return "", false
+	}
 }

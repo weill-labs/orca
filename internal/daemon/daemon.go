@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -16,6 +15,7 @@ import (
 const (
 	defaultCaptureInterval       = 5 * time.Second
 	defaultAgentHandshakeTimeout = 30 * time.Second
+	defaultTrustPromptTimeout    = 2 * time.Second
 	defaultPollInterval          = 30 * time.Second
 	defaultMergeGracePeriod      = 10 * time.Minute
 )
@@ -47,7 +47,6 @@ type Daemon struct {
 	captureInterval  time.Duration
 	pollInterval     time.Duration
 	mergeGracePeriod time.Duration
-	handshakeMu      sync.Mutex
 
 	started     atomic.Bool
 	stopContext context.Context

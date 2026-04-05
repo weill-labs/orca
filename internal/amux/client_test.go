@@ -1022,26 +1022,70 @@ func TestCLIClientWaitIdle(t *testing.T) {
 func TestCLIClientWaitContent(t *testing.T) {
 	t.Parallel()
 
-	runner := &fakeRunner{}
-	client := newTestClient(Config{Session: "orca-dev"}, runner)
-
-	if err := client.WaitContent(context.Background(), "pane-17", "›", 45*time.Second); err != nil {
-		t.Fatalf("WaitContent() error = %v", err)
+	tests := []struct {
+		name    string
+		output  string
+		runErr  error
+		wantErr error
+		wantCmd recordedCommand
+	}{
+		{
+			name: "waits for pane content",
+			wantCmd: recordedCommand{
+				name: "amux",
+				args: []string{
+					"-s", "orca-dev",
+					"wait",
+					"content",
+					"pane-17",
+					"Do you trust",
+					"--timeout", "45s",
+				},
+			},
+		},
+		{
+			name:    "classifies timeout",
+			output:  `amux wait: timeout waiting for "Do you trust" in pane-17`,
+			runErr:  errors.New("exit status 1"),
+			wantErr: ErrWaitContentTimeout,
+			wantCmd: recordedCommand{
+				name: "amux",
+				args: []string{
+					"-s", "orca-dev",
+					"wait",
+					"content",
+					"pane-17",
+					"Do you trust",
+					"--timeout", "45s",
+				},
+			},
+		},
 	}
 
-	want := []recordedCommand{{
-		name: "amux",
-		args: []string{
-			"-s", "orca-dev",
-			"wait",
-			"content",
-			"pane-17",
-			"›",
-			"--timeout", "45s",
-		},
-	}}
-	if !reflect.DeepEqual(runner.calls, want) {
-		t.Fatalf("WaitContent() commands = %#v, want %#v", runner.calls, want)
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			runner := &fakeRunner{
+				output: []byte(tt.output),
+				err:    tt.runErr,
+			}
+			client := newTestClient(Config{Session: "orca-dev"}, runner)
+
+			err := client.WaitContent(context.Background(), "pane-17", "Do you trust", 45*time.Second)
+			if tt.wantErr != nil {
+				if !errors.Is(err, tt.wantErr) {
+					t.Fatalf("WaitContent() error = %v, want %v", err, tt.wantErr)
+				}
+			} else if err != nil {
+				t.Fatalf("WaitContent() error = %v", err)
+			}
+
+			if !reflect.DeepEqual(runner.calls, []recordedCommand{tt.wantCmd}) {
+				t.Fatalf("WaitContent() commands = %#v, want %#v", runner.calls, []recordedCommand{tt.wantCmd})
+			}
+		})
 	}
 }
 
@@ -1119,7 +1163,7 @@ func TestMockClientRecordsCalls(t *testing.T) {
 	if err := mock.WaitIdle(context.Background(), "20", 10*time.Second); err != nil {
 		t.Fatalf("WaitIdle() error = %v", err)
 	}
-	if err := mock.WaitContent(context.Background(), "20", "›", 10*time.Second); err != nil {
+	if err := mock.WaitContent(context.Background(), "20", "Do you trust", 10*time.Second); err != nil {
 		t.Fatalf("WaitContent() error = %v", err)
 	}
 
@@ -1153,8 +1197,8 @@ func TestMockClientRecordsCalls(t *testing.T) {
 	if got := len(mock.WaitIdleCalls); got != 1 {
 		t.Fatalf("WaitIdleCalls count = %d, want 1", got)
 	}
-	if got := len(mock.WaitContentCalls); got != 1 {
-		t.Fatalf("WaitContentCalls count = %d, want 1", got)
+	if got, want := len(mock.WaitContentCalls), 1; got != want {
+		t.Fatalf("WaitContentCalls count = %d, want %d", got, want)
 	}
 }
 
@@ -1162,12 +1206,12 @@ func TestMockClientWaitContentUsesFunc(t *testing.T) {
 	t.Parallel()
 
 	mock := &MockClient{
-		WaitContentFunc: func(_ context.Context, paneID, content string, timeout time.Duration) error {
+		WaitContentFunc: func(_ context.Context, paneID, substring string, timeout time.Duration) error {
 			if got, want := paneID, "20"; got != want {
 				t.Fatalf("paneID = %q, want %q", got, want)
 			}
-			if got, want := content, "›"; got != want {
-				t.Fatalf("content = %q, want %q", got, want)
+			if got, want := substring, "Do you trust"; got != want {
+				t.Fatalf("substring = %q, want %q", got, want)
 			}
 			if got, want := timeout, 10*time.Second; got != want {
 				t.Fatalf("timeout = %v, want %v", got, want)
@@ -1176,7 +1220,7 @@ func TestMockClientWaitContentUsesFunc(t *testing.T) {
 		},
 	}
 
-	err := mock.WaitContent(context.Background(), "20", "›", 10*time.Second)
+	err := mock.WaitContent(context.Background(), "20", "Do you trust", 10*time.Second)
 	if err == nil || !strings.Contains(err.Error(), "wait content failed") {
 		t.Fatalf("WaitContent() error = %v, want wait content failure", err)
 	}

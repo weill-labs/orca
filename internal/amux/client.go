@@ -3,6 +3,7 @@ package amux
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +14,8 @@ import (
 )
 
 var spawnPanePattern = regexp.MustCompile(`\bpane\s+(\S+)`)
+
+var ErrWaitContentTimeout = errors.New("amux wait content timeout")
 
 // Client wraps the amux CLI for daemon code and tests.
 type Client interface {
@@ -26,7 +29,7 @@ type Client interface {
 	SetMetadata(ctx context.Context, paneID string, metadata map[string]string) error
 	KillPane(ctx context.Context, paneID string) error
 	WaitIdle(ctx context.Context, paneID string, timeout time.Duration) error
-	WaitContent(ctx context.Context, paneID, content string, timeout time.Duration) error
+	WaitContent(ctx context.Context, paneID, substring string, timeout time.Duration) error
 }
 
 // Config configures the CLI-backed amux client.
@@ -246,10 +249,19 @@ func (c *CLIClient) WaitIdle(ctx context.Context, paneID string, timeout time.Du
 	return err
 }
 
-// WaitContent waits for a pane to show the requested substring before returning.
-func (c *CLIClient) WaitContent(ctx context.Context, paneID, content string, timeout time.Duration) error {
-	_, err := c.run(ctx, c.session, "wait", "content", paneID, content, "--timeout", timeout.String())
-	return err
+// WaitContent waits for pane output to include a substring.
+func (c *CLIClient) WaitContent(ctx context.Context, paneID, substring string, timeout time.Duration) error {
+	args := c.commandArgs(c.session, "wait", "content", paneID, substring, "--timeout", timeout.String())
+	output, err := c.runner.Run(ctx, c.binary, args)
+	if err == nil {
+		return nil
+	}
+
+	commandErr := commandError(c.binary, args, output, err)
+	if waitContentTimedOut(output) {
+		return fmt.Errorf("%w: %v", ErrWaitContentTimeout, commandErr)
+	}
+	return commandErr
 }
 
 func (c *CLIClient) capturePane(ctx context.Context, paneID string) (capturePane, error) {
@@ -386,6 +398,11 @@ func paneMissing(errInfo *captureCommandError) bool {
 	}
 	message := strings.ToLower(strings.TrimSpace(errInfo.Message))
 	return strings.Contains(message, "not found") || strings.Contains(message, "missing")
+}
+
+func waitContentTimedOut(output []byte) bool {
+	message := strings.ToLower(strings.TrimSpace(string(output)))
+	return strings.Contains(message, "timeout waiting for")
 }
 
 func parsePaneList(output string) ([]Pane, error) {

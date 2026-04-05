@@ -26,28 +26,28 @@ const (
 	MergeQueueStatusQueued         = "queued"
 	MergeQueueStatusAwaitingChecks = "awaiting_checks"
 
-	EventDaemonStarted        = "daemon.started"
-	EventDaemonStopped        = "daemon.stopped"
-	EventTaskAssigned         = "task.assigned"
-	EventTaskAssignFailed     = "task.assign_failed"
-	EventTaskCancelled        = "task.cancelled"
-	EventTaskCompleted        = "task.completed"
-	EventTaskFailed           = "task.failed"
-	EventTaskCompletionFailed = "task.completion_failed"
-	EventWorkerHandshake      = "worker.handshake"
-	EventWorkerNudged         = "worker.nudged"
-	EventWorkerNudgedCI       = "worker.nudged_ci"
-	EventWorkerNudgedConflict = "worker.nudged_conflict"
-	EventWorkerNudgedReview   = "worker.nudged_review"
+	EventDaemonStarted         = "daemon.started"
+	EventDaemonStopped         = "daemon.stopped"
+	EventTaskAssigned          = "task.assigned"
+	EventTaskAssignFailed      = "task.assign_failed"
+	EventTaskCancelled         = "task.cancelled"
+	EventTaskCompleted         = "task.completed"
+	EventTaskFailed            = "task.failed"
+	EventTaskCompletionFailed  = "task.completion_failed"
+	EventWorkerHandshake       = "worker.handshake"
+	EventWorkerNudged          = "worker.nudged"
+	EventWorkerNudgedCI        = "worker.nudged_ci"
+	EventWorkerNudgedConflict  = "worker.nudged_conflict"
+	EventWorkerNudgedReview    = "worker.nudged_review"
 	EventWorkerReviewEscalated = "worker.review_escalated"
-	EventWorkerEscalated      = "worker.escalated"
-	EventWorkerRecovered      = "worker.recovered"
-	EventWorkerPostmortem     = "worker.postmortem"
-	EventPRDetected           = "pr.detected"
-	EventPREnqueued           = "pr.enqueued"
-	EventPRLandingStarted     = "pr.landing_started"
-	EventPRLandingFailed      = "pr.landing_failed"
-	EventPRMerged             = "pr.merged"
+	EventWorkerEscalated       = "worker.escalated"
+	EventWorkerRecovered       = "worker.recovered"
+	EventWorkerPostmortem      = "worker.postmortem"
+	EventPRDetected            = "pr.detected"
+	EventPREnqueued            = "pr.enqueued"
+	EventPRLandingStarted      = "pr.landing_started"
+	EventPRLandingFailed       = "pr.landing_failed"
+	EventPRMerged              = "pr.merged"
 )
 
 var (
@@ -119,7 +119,7 @@ type AmuxClient interface {
 	CaptureHistory(ctx context.Context, paneID string) (PaneCapture, error)
 	KillPane(ctx context.Context, paneID string) error
 	WaitIdle(ctx context.Context, paneID string, timeout time.Duration) error
-	WaitContent(ctx context.Context, paneID, content string, timeout time.Duration) error
+	WaitContent(ctx context.Context, paneID, substring string, timeout time.Duration) error
 }
 
 type IssueTracker interface {
