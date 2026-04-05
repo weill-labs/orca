@@ -3,7 +3,6 @@ package daemon
 import (
 	"context"
 	"errors"
-	"syscall"
 	"time"
 
 	"github.com/weill-labs/orca/internal/amux"
@@ -57,27 +56,22 @@ var (
 )
 
 type Options struct {
-	Project           string
-	Session           string
-	LeadPane          string
-	PIDPath           string
-	Config            ConfigProvider
-	State             StateStore
-	Pool              Pool
-	Amux              AmuxClient
-	IssueTracker      IssueTracker
-	Commands          CommandRunner
-	Events            EventSink
-	Now               func() time.Time
-	NewTicker         func(time.Duration) Ticker
-	CaptureInterval   time.Duration
-	PollInterval      time.Duration
-	MergeGracePeriod  time.Duration
-	PostmortemDir     string
-	PostmortemWindow  time.Duration
-	PostmortemTimeout time.Duration
-	Sleep             func(context.Context, time.Duration) error
-	SignalProcess     func(int, syscall.Signal) error
+	Project          string
+	Session          string
+	LeadPane         string
+	PIDPath          string
+	Config           ConfigProvider
+	State            StateStore
+	Pool             Pool
+	Amux             AmuxClient
+	IssueTracker     IssueTracker
+	Commands         CommandRunner
+	Events           EventSink
+	Now              func() time.Time
+	NewTicker        func(time.Duration) Ticker
+	CaptureInterval  time.Duration
+	PollInterval     time.Duration
+	MergeGracePeriod time.Duration
 }
 
 type ConfigProvider interface {

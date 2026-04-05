@@ -2,11 +2,8 @@ package daemon
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"reflect"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -218,21 +215,6 @@ func TestStuckDetectionEscalationCapturesDiagnosticsWithoutCleanupOrKill(t *test
 		MaxNudgeRetries:   0,
 	}
 	deps.amux.captureSequence("pane-1", []string{"permission prompt"})
-	deps.amux.captureHistorySequence("pane-1", []PaneCapture{
-		{
-			Content:        []string{"stuck output"},
-			CWD:            "/tmp/clone-01",
-			CurrentCommand: "codex",
-			ChildPIDs:      []int{4242},
-		},
-		{
-			Content:        []string{"goroutine dump"},
-			CWD:            "/tmp/clone-01",
-			CurrentCommand: "codex",
-			ChildPIDs:      []int{4242},
-		},
-	})
-
 	d := deps.newDaemon(t)
 	ctx := context.Background()
 	if err := d.Start(ctx); err != nil {
@@ -250,7 +232,7 @@ func TestStuckDetectionEscalationCapturesDiagnosticsWithoutCleanupOrKill(t *test
 	deps.amux.killCalls = nil
 
 	captureTicker.tick(deps.clock.Now())
-	waitFor(t, "worker escalation with diagnostics", func() bool {
+	waitFor(t, "worker escalation", func() bool {
 		return deps.events.countType(EventWorkerEscalated) == 1
 	})
 
@@ -269,14 +251,8 @@ func TestStuckDetectionEscalationCapturesDiagnosticsWithoutCleanupOrKill(t *test
 	if got, want := active.Worker.Health, WorkerHealthEscalated; got != want {
 		t.Fatalf("worker.Health = %q, want %q", got, want)
 	}
-	if got := deps.amux.captureHistoryCount("pane-1"); got != 2 {
-		t.Fatalf("capture history count = %d, want %d", got, 2)
-	}
-	if got, want := deps.signalCalls(), []signalCall{{PID: 4242, Signal: syscall.SIGQUIT}}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("signal calls = %#v, want %#v", got, want)
-	}
-	if got, want := deps.sleepCalls(), []time.Duration{5 * time.Second}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("sleep calls = %#v, want %#v", got, want)
+	if got := deps.amux.captureHistoryCount("pane-1"); got != 0 {
+		t.Fatalf("capture history count = %d, want 0", got)
 	}
 	if got, want := deps.amux.killCalls, []string(nil); !reflect.DeepEqual(got, want) {
 		t.Fatalf("kill calls = %#v, want none", got)
@@ -291,24 +267,12 @@ func TestStuckDetectionEscalationCapturesDiagnosticsWithoutCleanupOrKill(t *test
 		t.Fatalf("task failed event count = %d, want 0", got)
 	}
 
-	logPath := filepath.Join(deps.postmortemDir, "20260402T090000Z-goroutine-dump-LAB-710.log")
-	content, err := os.ReadFile(logPath)
-	if err != nil {
-		t.Fatalf("ReadFile(%q) error = %v", logPath, err)
-	}
-	text := string(content)
-	for _, want := range []string{"stuck output", "sigquit_pid: 4242", "goroutine dump"} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("diagnostics log missing %q in %q", want, text)
-		}
-	}
-
 	event, ok := deps.events.lastEventOfType(EventWorkerEscalated)
 	if !ok {
 		t.Fatal("worker escalation event missing")
 	}
-	if !strings.Contains(event.Message, logPath) {
-		t.Fatalf("event.Message = %q, want to contain log path %q", event.Message, logPath)
+	if strings.Contains(event.Message, "diagnostics") {
+		t.Fatalf("event.Message = %q, want no diagnostics suffix", event.Message)
 	}
 
 	deps.events.requireTypes(t, EventDaemonStarted, EventTaskAssigned, EventWorkerEscalated)
@@ -330,13 +294,6 @@ func TestCancelKillsPaneAfterStuckEscalation(t *testing.T) {
 		MaxNudgeRetries:   0,
 	}
 	deps.amux.captureSequence("pane-1", []string{"permission prompt"})
-	deps.amux.sendKeysHook = func(_ string, keys []string) {
-		for _, key := range keys {
-			if key == "$postmortem" {
-				writePostmortemLog(t, deps.postmortemDir, "LAB-710", deps.clock.Now().Add(time.Minute))
-			}
-		}
-	}
 
 	d := deps.newDaemon(t)
 	ctx := context.Background()

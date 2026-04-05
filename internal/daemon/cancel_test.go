@@ -11,13 +11,6 @@ import (
 func TestCancelKillsAgentCleansCloneAndFreesResources(t *testing.T) {
 	deps := newTestDeps(t)
 	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
-	deps.amux.sendKeysHook = func(_ string, keys []string) {
-		for _, key := range keys {
-			if key == "$postmortem" {
-				writePostmortemLog(t, deps.postmortemDir, "LAB-689", deps.clock.Now().Add(time.Minute))
-			}
-		}
-	}
 	d := deps.newDaemon(t)
 	ctx := context.Background()
 
@@ -66,23 +59,16 @@ func TestCancelKillsAgentCleansCloneAndFreesResources(t *testing.T) {
 	if got := deps.commands.callsByName("git"); len(got) != 0 {
 		t.Fatalf("git calls = %#v, want none during daemon cleanup", got)
 	}
-	if got := deps.events.lastMessage(EventWorkerPostmortem); !strings.Contains(got, "triggered") {
-		t.Fatalf("postmortem event message = %q, want triggered status", got)
+	if got := deps.events.lastMessage(EventWorkerPostmortem); !strings.Contains(got, "sent") {
+		t.Fatalf("postmortem event message = %q, want sent status", got)
 	}
 
 	deps.events.requireTypes(t, EventDaemonStarted, EventTaskAssigned, EventWorkerPostmortem, EventTaskCancelled)
 }
 
-func TestCancelRequiresVerifiedPostmortemBeforeCleanup(t *testing.T) {
+func TestCancelSendsPostmortemBeforeCleanup(t *testing.T) {
 	deps := newTestDeps(t)
 	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
-	deps.amux.sendKeysHook = func(_ string, keys []string) {
-		for _, key := range keys {
-			if key == "$postmortem" {
-				writePostmortemLog(t, deps.postmortemDir, "LAB-689", deps.clock.Now().Add(time.Minute))
-			}
-		}
-	}
 
 	d := deps.newDaemon(t)
 	ctx := context.Background()
@@ -123,52 +109,8 @@ func TestCancelRequiresVerifiedPostmortemBeforeCleanup(t *testing.T) {
 	if got := deps.commands.callsByName("git"); len(got) != 0 {
 		t.Fatalf("git calls = %#v, want none during daemon cleanup", got)
 	}
-	if got := deps.events.lastMessage(EventWorkerPostmortem); !strings.Contains(got, "triggered") {
-		t.Fatalf("postmortem event message = %q, want triggered status", got)
-	}
-}
-
-func TestCancelSkipsPostmortemPromptWhenRecentSummaryExists(t *testing.T) {
-	deps := newTestDeps(t)
-	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
-	d := deps.newDaemon(t)
-	ctx := context.Background()
-
-	if err := d.Start(ctx); err != nil {
-		t.Fatalf("Start() error = %v", err)
-	}
-	t.Cleanup(func() {
-		_ = d.Stop(context.Background())
-	})
-
-	if err := d.Assign(ctx, "LAB-689", "Implement daemon core", "codex"); err != nil {
-		t.Fatalf("Assign() error = %v", err)
-	}
-
-	writePostmortemLog(t, deps.postmortemDir, "LAB-689", deps.clock.Now().Add(time.Minute))
-
-	deps.commands.reset()
-	deps.amux.waitIdleCalls = nil
-	deps.amux.killCalls = nil
-
-	if err := d.Cancel(ctx, "LAB-689"); err != nil {
-		t.Fatalf("Cancel() error = %v", err)
-	}
-
-	waitFor(t, "task cancellation", func() bool {
-		task, ok := deps.state.task("LAB-689")
-		return ok && task.Status == TaskStatusCancelled
-	})
-
-	deps.amux.requireSentKeys(t, "pane-1", []string{"Implement daemon core", "Enter"})
-	if got := deps.amux.waitIdleCalls; len(got) != 0 {
-		t.Fatalf("waitIdle calls = %#v, want none", got)
-	}
-	if got := deps.commands.callsByName("git"); len(got) != 0 {
-		t.Fatalf("git calls = %#v, want none during daemon cleanup", got)
-	}
-	if got := deps.events.lastMessage(EventWorkerPostmortem); !strings.Contains(got, "found") {
-		t.Fatalf("postmortem event message = %q, want found status", got)
+	if got := deps.events.lastMessage(EventWorkerPostmortem); !strings.Contains(got, "sent") {
+		t.Fatalf("postmortem event message = %q, want sent status", got)
 	}
 }
 

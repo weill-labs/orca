@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"context"
-	"fmt"
 	"strings"
 )
 
@@ -43,9 +42,6 @@ func (d *Daemon) nudgeOrEscalate(ctx context.Context, active ActiveAssignment, p
 	if active.Task.PaneID != "" {
 		_ = d.setPaneMetadata(ctx, active.Task.PaneID, map[string]string{"status": "escalated"})
 	}
-	logPath, diagnosticsErr := d.captureStuckWorkerDiagnostics(context.WithoutCancel(ctx), active, profile, reason)
-	message := stuckWorkerEscalationMessage(reason, logPath, diagnosticsErr)
-
 	d.emit(ctx, Event{
 		Time:         now,
 		Type:         EventWorkerEscalated,
@@ -58,19 +54,8 @@ func (d *Daemon) nudgeOrEscalate(ctx context.Context, active ActiveAssignment, p
 		Branch:       active.Task.Branch,
 		AgentProfile: profile.Name,
 		Retry:        active.Worker.NudgeCount,
-		Message:      message,
+		Message:      reason,
 	})
-}
-
-func stuckWorkerEscalationMessage(reason, logPath string, diagnosticsErr error) string {
-	message := reason
-	if logPath != "" {
-		message = fmt.Sprintf("%s; diagnostics saved to %s", message, logPath)
-	}
-	if diagnosticsErr != nil {
-		message = fmt.Sprintf("%s; diagnostics error: %v", message, diagnosticsErr)
-	}
-	return message
 }
 
 func (d *Daemon) matchesStuckPattern(profile AgentProfile, output string) bool {

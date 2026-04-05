@@ -4,11 +4,9 @@ import (
 	"context"
 	"errors"
 	"os"
-	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 )
 
@@ -128,10 +126,7 @@ func TestAssignAllocatesCloneStartsAgentAndRegistersState(t *testing.T) {
 	deps.events.requireTypes(t, EventDaemonStarted, EventTaskAssigned)
 }
 
-func TestNewInitializesStuckDiagnosticsDefaults(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-
+func TestNewOmitsLegacyPostmortemFields(t *testing.T) {
 	deps := newTestDeps(t)
 	daemon, err := New(Options{
 		Project:  "/tmp/project",
@@ -145,16 +140,17 @@ func TestNewInitializesStuckDiagnosticsDefaults(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 
-	if got, want := daemon.postmortemDir, filepath.Join(home, ".local", "share", "postmortems"); got != want {
-		t.Fatalf("daemon.postmortemDir = %q, want %q", got, want)
+	daemonType := reflect.TypeOf(daemon).Elem()
+	for _, fieldName := range []string{"postmortemDir", "postmortemWindow", "postmortemTimeout"} {
+		if _, ok := daemonType.FieldByName(fieldName); ok {
+			t.Fatalf("Daemon unexpectedly contains field %q", fieldName)
+		}
 	}
-	if daemon.sleep == nil {
-		t.Fatal("daemon.sleep = nil, want default sleep hook")
-	}
-	if daemon.signalProcess == nil {
-		t.Fatal("daemon.signalProcess = nil, want default signal hook")
-	}
-	if err := daemon.signalProcess(os.Getpid(), syscall.Signal(0)); err != nil {
-		t.Fatalf("daemon.signalProcess(signal 0) error = %v", err)
+
+	optionsType := reflect.TypeOf(Options{})
+	for _, fieldName := range []string{"PostmortemDir", "PostmortemWindow", "PostmortemTimeout"} {
+		if _, ok := optionsType.FieldByName(fieldName); ok {
+			t.Fatalf("Options unexpectedly contains field %q", fieldName)
+		}
 	}
 }
