@@ -359,6 +359,7 @@ func TestSQLiteStorePersistsWorkerMonitorStateAndMergeQueue(t *testing.T) {
 		ClonePath:             "/clones/orca01",
 		LastReviewCount:       2,
 		LastIssueCommentCount: 4,
+		ReviewNudgeCount:      3,
 		LastCIState:           "fail",
 		LastMergeableState:    "blocked",
 		NudgeCount:            3,
@@ -382,6 +383,9 @@ func TestSQLiteStorePersistsWorkerMonitorStateAndMergeQueue(t *testing.T) {
 	}
 	if got, want := worker.LastIssueCommentCount, 4; got != want {
 		t.Fatalf("worker.LastIssueCommentCount = %d, want %d", got, want)
+	}
+	if got, want := worker.ReviewNudgeCount, 3; got != want {
+		t.Fatalf("worker.ReviewNudgeCount = %d, want %d", got, want)
 	}
 	if got, want := worker.LastCIState, "fail"; got != want {
 		t.Fatalf("worker.LastCIState = %q, want %q", got, want)
@@ -504,18 +508,20 @@ func TestSQLiteStoreWorkerByPaneAndNonTerminalTasks(t *testing.T) {
 	}
 
 	if err := store.UpsertWorker(context.Background(), project, Worker{
-		PaneID:             "pane-2",
-		Agent:              "codex",
-		State:              "escalated",
-		Issue:              "LAB-741",
-		ClonePath:          "/clones/clone-02",
-		LastReviewCount:    2,
-		LastCIState:        "fail",
-		LastMergeableState: "CONFLICTING",
-		NudgeCount:         3,
-		LastCapture:        "permission prompt",
-		LastActivityAt:     now,
-		UpdatedAt:          now.Add(time.Minute),
+		PaneID:                "pane-2",
+		Agent:                 "codex",
+		State:                 "escalated",
+		Issue:                 "LAB-741",
+		ClonePath:             "/clones/clone-02",
+		LastReviewCount:       2,
+		LastIssueCommentCount: 4,
+		ReviewNudgeCount:      3,
+		LastCIState:           "fail",
+		LastMergeableState:    "CONFLICTING",
+		NudgeCount:            3,
+		LastCapture:           "permission prompt",
+		LastActivityAt:        now,
+		UpdatedAt:             now.Add(time.Minute),
 	}); err != nil {
 		t.Fatalf("UpsertWorker() error = %v", err)
 	}
@@ -557,6 +563,12 @@ func TestSQLiteStoreWorkerByPaneAndNonTerminalTasks(t *testing.T) {
 	}
 	if got, want := worker.LastReviewCount, 2; got != want {
 		t.Fatalf("worker.LastReviewCount = %d, want %d", got, want)
+	}
+	if got, want := worker.LastIssueCommentCount, 4; got != want {
+		t.Fatalf("worker.LastIssueCommentCount = %d, want %d", got, want)
+	}
+	if got, want := worker.ReviewNudgeCount, 3; got != want {
+		t.Fatalf("worker.ReviewNudgeCount = %d, want %d", got, want)
 	}
 	if got, want := worker.LastCIState, "fail"; got != want {
 		t.Fatalf("worker.LastCIState = %q, want %q", got, want)
