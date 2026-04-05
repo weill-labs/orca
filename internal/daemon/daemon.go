@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -46,6 +47,7 @@ type Daemon struct {
 	captureInterval  time.Duration
 	pollInterval     time.Duration
 	mergeGracePeriod time.Duration
+	handshakeMu      sync.Mutex
 
 	started     atomic.Bool
 	stopContext context.Context
