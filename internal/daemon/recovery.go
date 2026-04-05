@@ -42,7 +42,7 @@ func (d *Daemon) reconcileTaskOnStartup(ctx context.Context, task Task) {
 
 	exists, err := d.amux.PaneExists(ctx, active.Task.PaneID)
 	if err != nil {
-		d.failStartingTaskOnStartupError(ctx, active, "worker pane liveness check failed on daemon startup", err)
+		d.handleTaskStartupPaneError(ctx, active, "worker pane liveness check failed on daemon startup", err)
 		return
 	}
 	if !exists {
@@ -52,7 +52,7 @@ func (d *Daemon) reconcileTaskOnStartup(ctx context.Context, task Task) {
 
 	snapshot, err := d.amux.CapturePane(ctx, active.Task.PaneID)
 	if err != nil {
-		d.failStartingTaskOnStartupError(ctx, active, "worker pane capture failed on daemon startup", err)
+		d.handleTaskStartupPaneError(ctx, active, "worker pane capture failed on daemon startup", err)
 		return
 	}
 	if snapshot.Exited {
@@ -76,11 +76,48 @@ func (d *Daemon) reconcileTaskOnStartup(ctx context.Context, task Task) {
 	}
 }
 
-func (d *Daemon) failStartingTaskOnStartupError(ctx context.Context, active ActiveAssignment, message string, err error) {
-	if active.Task.Status != TaskStatusStarting {
+func (d *Daemon) handleTaskStartupPaneError(ctx context.Context, active ActiveAssignment, message string, err error) {
+	detail := fmt.Sprintf("%s: %v", message, err)
+	if active.Task.Status == TaskStatusStarting {
+		_ = d.failAssignment(ctx, active, EventTaskFailed, detail)
 		return
 	}
-	_ = d.failAssignment(ctx, active, EventTaskFailed, fmt.Sprintf("%s: %v", message, err))
+
+	d.escalateAssignmentOnStartupError(ctx, active, detail)
+}
+
+func (d *Daemon) escalateAssignmentOnStartupError(ctx context.Context, active ActiveAssignment, message string) {
+	if active.Worker.Health == WorkerHealthEscalated {
+		return
+	}
+
+	now := d.now()
+	active.Worker.Health = WorkerHealthEscalated
+	active.Worker.UpdatedAt = now
+	active.Task.UpdatedAt = now
+
+	_ = d.state.PutWorker(ctx, active.Worker)
+	_ = d.state.PutTask(ctx, active.Task)
+
+	profile, err := d.profileForTask(ctx, active.Task)
+	if err != nil {
+		profile = AgentProfile{Name: active.Task.AgentProfile}
+	}
+
+	d.emit(ctx, Event{
+		Time:         now,
+		Type:         EventWorkerEscalated,
+		Project:      d.project,
+		Issue:        active.Task.Issue,
+		PaneID:       active.Task.PaneID,
+		PaneName:     active.Task.PaneName,
+		CloneName:    active.Task.CloneName,
+		ClonePath:    active.Task.ClonePath,
+		Branch:       active.Task.Branch,
+		AgentProfile: profile.Name,
+		Retry:        active.Worker.NudgeCount,
+		Message:      message,
+	})
 }
 
 func (d *Daemon) failTaskWithoutWorker(ctx context.Context, task Task, message string) error {
