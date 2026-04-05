@@ -99,6 +99,7 @@ func (d *Daemon) handlePRReviewPoll(ctx context.Context, active ActiveAssignment
 	}
 
 	feedback := formatBlockingReviewFeedback(active.Task.PRNumber, blocking)
+	// A fresh capture can update LastCapture/LastActivityAt before we decide whether to defer.
 	if !d.workerAppearsIdleForReviewNudge(ctx, &active, profile) {
 		return
 	}
@@ -133,8 +134,7 @@ func (d *Daemon) persistReviewWorkerState(ctx context.Context, worker *Worker, r
 }
 
 func (d *Daemon) workerAppearsIdleForReviewNudge(ctx context.Context, active *ActiveAssignment, profile AgentProfile) bool {
-	now := d.now()
-	if d.workerHadRecentOutput(active.Worker, now) {
+	if d.workerHadRecentOutput(active.Worker, d.now()) {
 		return false
 	}
 
@@ -145,7 +145,7 @@ func (d *Daemon) workerAppearsIdleForReviewNudge(ctx context.Context, active *Ac
 	if snapshot.Exited {
 		return false
 	}
-	if d.recordWorkerOutput(ctx, active, profile, snapshot.Output(), now) {
+	if d.recordWorkerOutput(ctx, active, profile, snapshot.Output(), d.now()) {
 		return false
 	}
 	return true
