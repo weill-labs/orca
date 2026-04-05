@@ -20,41 +20,9 @@ func (c *LocalController) Spawn(ctx context.Context, req SpawnPaneRequest) (Spaw
 		return SpawnPaneResult{}, err
 	}
 
-	poolStore, ok := c.store.(pool.Store)
-	if !ok {
-		return SpawnPaneResult{}, fmt.Errorf("spawn requires clone-capable state store")
-	}
-
-	detectOrigin := c.detectOrigin
-	if detectOrigin == nil {
-		detectOrigin = config.DetectOrigin
-	}
-
-	origin, err := detectOrigin(projectPath)
+	manager, amuxClient, err := c.spawnRuntime(projectPath, req.Session)
 	if err != nil {
-		return SpawnPaneResult{}, fmt.Errorf("detect origin: %w", err)
-	}
-
-	poolDir := filepath.Join(projectPath, orcaPoolSubdir)
-	if err := os.MkdirAll(poolDir, 0o755); err != nil {
-		return SpawnPaneResult{}, fmt.Errorf("create pool directory: %w", err)
-	}
-
-	amuxClient := c.amux
-	if amuxClient == nil {
-		amuxClient = amux.NewClient(amux.Config{Session: req.Session})
-	}
-
-	managerOptions := []pool.Option{
-		pool.WithCWDUsageChecker(amuxCWDUsageChecker{amux: amuxClient}),
-	}
-	if c.poolRunner != nil {
-		managerOptions = append(managerOptions, pool.WithRunner(c.poolRunner))
-	}
-
-	manager, err := pool.New(projectPath, internalPoolConfig{poolDir: poolDir, origin: origin}, poolStore, managerOptions...)
-	if err != nil {
-		return SpawnPaneResult{}, fmt.Errorf("create pool manager: %w", err)
+		return SpawnPaneResult{}, err
 	}
 
 	manualRef := manualSpawnRef(c.now())
@@ -87,4 +55,44 @@ func (c *LocalController) Spawn(ctx context.Context, req SpawnPaneRequest) (Spaw
 
 func manualSpawnRef(at time.Time) string {
 	return fmt.Sprintf("spawn-%d", at.UTC().UnixNano())
+}
+
+func (c *LocalController) spawnRuntime(projectPath, session string) (*pool.Manager, amux.Client, error) {
+	poolStore, ok := c.store.(pool.Store)
+	if !ok {
+		return nil, nil, fmt.Errorf("spawn requires clone-capable state store")
+	}
+
+	detectOrigin := c.detectOrigin
+	if detectOrigin == nil {
+		detectOrigin = config.DetectOrigin
+	}
+
+	origin, err := detectOrigin(projectPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("detect origin: %w", err)
+	}
+
+	poolDir := filepath.Join(projectPath, orcaPoolSubdir)
+	if err := os.MkdirAll(poolDir, 0o755); err != nil {
+		return nil, nil, fmt.Errorf("create pool directory: %w", err)
+	}
+
+	amuxClient := c.amux
+	if amuxClient == nil {
+		amuxClient = amux.NewClient(amux.Config{Session: session})
+	}
+
+	managerOptions := []pool.Option{
+		pool.WithCWDUsageChecker(amuxCWDUsageChecker{amux: amuxClient}),
+	}
+	if c.poolRunner != nil {
+		managerOptions = append(managerOptions, pool.WithRunner(c.poolRunner))
+	}
+
+	manager, err := pool.New(projectPath, internalPoolConfig{poolDir: poolDir, origin: origin}, poolStore, managerOptions...)
+	if err != nil {
+		return nil, nil, fmt.Errorf("create pool manager: %w", err)
+	}
+	return manager, amuxClient, nil
 }

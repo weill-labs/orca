@@ -20,7 +20,9 @@ func TestLocalControllerSpawn(t *testing.T) {
 	tests := []struct {
 		name    string
 		amux    *fakeSpawnAmux
-		assert  func(t *testing.T, store *state.SQLiteStore, result SpawnPaneResult, amuxClient *fakeSpawnAmux, project string)
+		store   func(t *testing.T) state.Store
+		detect  func(string) (string, error)
+		assert  func(t *testing.T, store state.Store, result SpawnPaneResult, amuxClient *fakeSpawnAmux, project string)
 		wantErr string
 	}{
 		{
@@ -28,8 +30,15 @@ func TestLocalControllerSpawn(t *testing.T) {
 			amux: &fakeSpawnAmux{
 				spawnPane: amux.Pane{ID: "pane-7", Name: "Scratch pane"},
 			},
-			assert: func(t *testing.T, store *state.SQLiteStore, result SpawnPaneResult, amuxClient *fakeSpawnAmux, project string) {
+			assert: func(t *testing.T, store state.Store, result SpawnPaneResult, amuxClient *fakeSpawnAmux, project string) {
 				t.Helper()
+				queryableStore, ok := store.(interface {
+					NonTerminalTasks(context.Context, string) ([]state.Task, error)
+					ListClones(context.Context, string) ([]state.Clone, error)
+				})
+				if !ok {
+					t.Fatal("store does not support spawn assertions")
+				}
 
 				if got, want := result.Project, project; got != want {
 					t.Fatalf("result.Project = %q, want %q", got, want)
@@ -58,7 +67,7 @@ func TestLocalControllerSpawn(t *testing.T) {
 					t.Fatalf("spawn cwd = %q, want %q", got, want)
 				}
 
-				tasks, err := store.NonTerminalTasks(context.Background(), project)
+				tasks, err := queryableStore.NonTerminalTasks(context.Background(), project)
 				if err != nil {
 					t.Fatalf("NonTerminalTasks() error = %v", err)
 				}
@@ -66,7 +75,7 @@ func TestLocalControllerSpawn(t *testing.T) {
 					t.Fatalf("NonTerminalTasks() = %#v, want no tasks", tasks)
 				}
 
-				clones, err := store.ListClones(context.Background(), project)
+				clones, err := queryableStore.ListClones(context.Background(), project)
 				if err != nil {
 					t.Fatalf("ListClones() error = %v", err)
 				}
@@ -87,14 +96,20 @@ func TestLocalControllerSpawn(t *testing.T) {
 				spawnErr: errors.New("amux unavailable"),
 			},
 			wantErr: "spawn pane: amux unavailable",
-			assert: func(t *testing.T, store *state.SQLiteStore, _ SpawnPaneResult, amuxClient *fakeSpawnAmux, project string) {
+			assert: func(t *testing.T, store state.Store, _ SpawnPaneResult, amuxClient *fakeSpawnAmux, project string) {
 				t.Helper()
+				queryableStore, ok := store.(interface {
+					ListClones(context.Context, string) ([]state.Clone, error)
+				})
+				if !ok {
+					t.Fatal("store does not support clone assertions")
+				}
 
 				if got, want := len(amuxClient.spawnRequests), 1; got != want {
 					t.Fatalf("len(spawnRequests) = %d, want %d", got, want)
 				}
 
-				clones, err := store.ListClones(context.Background(), project)
+				clones, err := queryableStore.ListClones(context.Background(), project)
 				if err != nil {
 					t.Fatalf("ListClones() error = %v", err)
 				}
@@ -109,21 +124,58 @@ func TestLocalControllerSpawn(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "returns detect origin errors before touching amux",
+			amux: &fakeSpawnAmux{},
+			detect: func(string) (string, error) {
+				return "", errors.New("origin lookup failed")
+			},
+			wantErr: "detect origin: origin lookup failed",
+			assert: func(t *testing.T, _ state.Store, _ SpawnPaneResult, amuxClient *fakeSpawnAmux, _ string) {
+				t.Helper()
+				if got := len(amuxClient.spawnRequests); got != 0 {
+					t.Fatalf("len(spawnRequests) = %d, want 0", got)
+				}
+			},
+		},
+		{
+			name: "rejects stores that cannot track clone occupancy",
+			amux: &fakeSpawnAmux{},
+			store: func(t *testing.T) state.Store {
+				t.Helper()
+				return &fakeStore{}
+			},
+			wantErr: "spawn requires clone-capable state store",
+			assert: func(t *testing.T, _ state.Store, _ SpawnPaneResult, amuxClient *fakeSpawnAmux, _ string) {
+				t.Helper()
+				if got := len(amuxClient.spawnRequests); got != 0 {
+					t.Fatalf("len(spawnRequests) = %d, want 0", got)
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {
 		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
 
-			project, origin := newSpawnProject(t)
-			store := newSpawnStore(t)
+				project, origin := newSpawnProject(t)
+				store := newSpawnStore(t)
+				if tt.store != nil {
+					store = tt.store(t)
+				}
 
-			controller, err := NewLocalController(ControllerOptions{
+				detectOrigin := tt.detect
+				if detectOrigin == nil {
+					detectOrigin = func(string) (string, error) { return origin, nil }
+				}
+
+				controller, err := NewLocalController(ControllerOptions{
 				Store:        store,
 				Paths:        Paths{StateDB: filepath.Join(t.TempDir(), "state.db"), PIDDir: filepath.Join(t.TempDir(), "pids")},
 				Now:          func() time.Time { return time.Date(2026, 4, 5, 12, 0, 0, 123, time.UTC) },
-				DetectOrigin: func(string) (string, error) { return origin, nil },
+				DetectOrigin: detectOrigin,
 				Amux:         tt.amux,
 			})
 			if err != nil {
@@ -192,7 +244,7 @@ func newSpawnProject(t *testing.T) (string, string) {
 	return project, origin
 }
 
-func newSpawnStore(t *testing.T) *state.SQLiteStore {
+func newSpawnStore(t *testing.T) state.Store {
 	t.Helper()
 
 	store, err := state.OpenSQLite(filepath.Join(t.TempDir(), "state.db"))
