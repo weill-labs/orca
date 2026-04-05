@@ -270,6 +270,52 @@ func TestAssignRejectsAutonomousBacklogPickingPromptBeforePRLookupOrCloneAcquire
 	}
 }
 
+func TestValidateAssignmentPrompt(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		prompt  string
+		wantErr bool
+	}{
+		{
+			name:    "rejects autonomous backlog pickup",
+			prompt:  "Pick up the next issue from the backlog and start working.",
+			wantErr: true,
+		},
+		{
+			name:    "rejects standalone new work phrasing",
+			prompt:  "After you land the fix, pick up new work from the queue.",
+			wantErr: true,
+		},
+		{
+			name:    "allows mentioning the linear issue as context",
+			prompt:  "Follow up from CHANGES_REQUESTED. See the Linear issue for context.",
+			wantErr: false,
+		},
+		{
+			name:    "allows mentioning the new worker",
+			prompt:  "Fix the new worker startup flow so it resumes cleanly after restart.",
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := validateAssignmentPrompt(tt.prompt)
+			if tt.wantErr && err == nil {
+				t.Fatalf("validateAssignmentPrompt(%q) error = nil, want error", tt.prompt)
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("validateAssignmentPrompt(%q) error = %v, want nil", tt.prompt, err)
+			}
+		})
+	}
+}
+
 func TestAssignRejectsOpenPRBeforeCloneAcquire(t *testing.T) {
 	t.Parallel()
 
