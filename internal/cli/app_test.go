@@ -228,6 +228,24 @@ func TestAppRunDispatchesCommands(t *testing.T) {
 			},
 		},
 		{
+			name: "resume with prompt",
+			args: func(_, _ string) []string {
+				return []string{"resume", "LAB-690", "--prompt", "Continue from the latest review feedback"}
+			},
+			assert: func(t *testing.T, d *fakeDaemon, _ *fakeState, stdout, _ string, _, _ string) {
+				t.Helper()
+				if d.resumeRequest == nil {
+					t.Fatal("expected resume to be called")
+				}
+				if got, want := d.resumeRequest.Prompt, "Continue from the latest review feedback"; got != want {
+					t.Fatalf("resume prompt = %q, want %q", got, want)
+				}
+				if !strings.Contains(stdout, "resumed") {
+					t.Fatalf("expected resume output, got %q", stdout)
+				}
+			},
+		},
+		{
 			name: "workers json",
 			args: func(_, _ string) []string { return []string{"workers", "--json"} },
 			prepareState: func(s *fakeState) {

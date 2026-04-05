@@ -157,6 +157,7 @@ daemonReady:
 	resumeResult, err := resumer.Resume(context.Background(), ResumeRequest{
 		Project: projectPath,
 		Issue:   "LAB-718",
+		Prompt:  "Pick up from the latest review feedback.",
 	})
 	if err != nil {
 		t.Fatalf("Resume() error = %v", err)
@@ -168,7 +169,11 @@ daemonReady:
 	if got, want := amuxClient.paneExistsCalls, []string{"pane-1"}; len(got) != len(want) || got[0] != want[0] {
 		t.Fatalf("paneExistsCalls = %#v, want %#v", got, want)
 	}
-	amuxClient.requireSentKeys(t, "pane-1", []string{"Implement Unix socket IPC.\n", "claude\n"})
+	amuxClient.requireSentKeys(t, "pane-1", []string{
+		"Implement Unix socket IPC.\n",
+		"claude\n",
+		"Pick up from the latest review feedback.\n",
+	})
 
 	cancelResult, err := controller.Cancel(context.Background(), CancelRequest{
 		Project: projectPath,

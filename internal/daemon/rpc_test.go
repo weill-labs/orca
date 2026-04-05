@@ -98,6 +98,26 @@ func TestAssignTypesIncludeTitleField(t *testing.T) {
 	}
 }
 
+func TestResumeTypesIncludePromptField(t *testing.T) {
+	t.Parallel()
+
+	resumeRequestField, ok := reflect.TypeOf(ResumeRequest{}).FieldByName("Prompt")
+	if !ok {
+		t.Fatal("ResumeRequest missing Prompt field")
+	}
+	if got, want := resumeRequestField.Type.Kind(), reflect.String; got != want {
+		t.Fatalf("ResumeRequest.Prompt kind = %v, want %v", got, want)
+	}
+
+	resumeRPCField, ok := reflect.TypeOf(resumeRPCParams{}).FieldByName("Prompt")
+	if !ok {
+		t.Fatal("resumeRPCParams missing Prompt field")
+	}
+	if got, want := resumeRPCField.Tag.Get("json"), "prompt"; got != want {
+		t.Fatalf("resumeRPCParams.Prompt json tag = %q, want %q", got, want)
+	}
+}
+
 func TestBatchTypesIncludeEntriesAndDelayFields(t *testing.T) {
 	t.Parallel()
 
