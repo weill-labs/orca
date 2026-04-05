@@ -867,6 +867,34 @@ func (s *SQLiteStore) UpdateTaskStatus(ctx context.Context, project, issue, stat
 	return s.lookupTask(ctx, project, issue)
 }
 
+func (s *SQLiteStore) TasksByPane(ctx context.Context, project, paneID string) ([]Task, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT issue, status, agent, prompt, worker_id, clone_path, pr_number, created_at, updated_at
+		FROM tasks
+		WHERE project = ? AND worker_id = ?
+		ORDER BY created_at ASC, updated_at ASC, issue ASC
+	`, project, paneID)
+	if err != nil {
+		return nil, fmt.Errorf("list tasks by pane: %w", err)
+	}
+	defer rows.Close()
+
+	tasks := make([]Task, 0)
+	for rows.Next() {
+		task, err := scanTask(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan task by pane: %w", err)
+		}
+		tasks = append(tasks, task)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate tasks by pane: %w", err)
+	}
+
+	return tasks, nil
+}
+
 func (s *SQLiteStore) AppendEvent(ctx context.Context, event Event) (Event, error) {
 	if event.CreatedAt.IsZero() {
 		event.CreatedAt = s.now()

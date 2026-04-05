@@ -72,6 +72,7 @@ type AssignRequest struct {
 	Issue   string
 	Prompt  string
 	Agent   string
+	Title   string
 }
 
 type CancelRequest struct {
@@ -311,6 +312,7 @@ func (c *LocalController) Assign(ctx context.Context, req AssignRequest) (TaskAc
 		Issue:  strings.TrimSpace(req.Issue),
 		Prompt: req.Prompt,
 		Agent:  strings.TrimSpace(req.Agent),
+		Title:  strings.TrimSpace(req.Title),
 	}, &result)
 	if err != nil {
 		return TaskActionResult{}, err

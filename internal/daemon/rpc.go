@@ -46,6 +46,7 @@ type assignRPCParams struct {
 	Issue  string `json:"issue"`
 	Prompt string `json:"prompt"`
 	Agent  string `json:"agent"`
+	Title  string `json:"title"`
 }
 
 type cancelRPCParams struct {

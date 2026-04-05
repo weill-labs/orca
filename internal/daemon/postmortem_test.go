@@ -261,6 +261,45 @@ func TestFinishAssignmentCancelledSetsDoneMetadataBeforeKill(t *testing.T) {
 	})
 }
 
+func TestFinishAssignmentPreservesHistoricalTrackedMetadata(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	d := deps.newDaemon(t)
+	active := newPostmortemAssignment(deps)
+	active.Task.Status = TaskStatusActive
+	active.Task.PRNumber = 42
+
+	deps.state.tasks["LAB-688"] = Task{
+		Project:      d.project,
+		Issue:        "LAB-688",
+		Status:       TaskStatusDone,
+		PaneID:       active.Task.PaneID,
+		ClonePath:    deps.pool.clone.Path,
+		Branch:       "LAB-688",
+		AgentProfile: "codex",
+		PRNumber:     41,
+		CreatedAt:    deps.clock.Now().Add(-2 * time.Hour),
+		UpdatedAt:    deps.clock.Now().Add(-time.Hour),
+	}
+	seedFinishAssignmentState(t, deps, active)
+	deps.amux.metadata[active.Task.PaneID]["tracked_issues"] = `[{"id":"LAB-688","status":"completed"},{"id":"LAB-689","status":"active"}]`
+	deps.amux.metadata[active.Task.PaneID]["tracked_prs"] = `[{"number":41,"status":"completed"},{"number":42,"status":"active"}]`
+
+	if err := d.finishAssignment(context.Background(), active, TaskStatusDone, EventTaskCompleted, true); err != nil {
+		t.Fatalf("finishAssignment() error = %v", err)
+	}
+
+	deps.amux.requireMetadata(t, active.Task.PaneID, map[string]string{
+		"agent_profile":  "codex",
+		"branch":         "LAB-689",
+		"status":         "done",
+		"task":           "LAB-689",
+		"tracked_issues": `[{"id":"LAB-688","status":"completed"},{"id":"LAB-689","status":"completed"}]`,
+		"tracked_prs":    `[{"number":41,"status":"completed"},{"number":42,"status":"completed"}]`,
+	})
+}
+
 func newPostmortemAssignment(deps *testDeps) ActiveAssignment {
 	return ActiveAssignment{
 		Task: Task{

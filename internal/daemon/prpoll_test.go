@@ -249,6 +249,58 @@ func TestPRDetectionSyncsPaneMetadata(t *testing.T) {
 	})
 }
 
+func TestPRDetectionPreservesTrackedHistoryForReusedPane(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	captureTicker := newFakeTicker()
+	prTicker := newFakeTicker()
+	deps.tickers.enqueue(captureTicker, prTicker)
+	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, ``, nil)
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+	deps.state.tasks["LAB-688"] = Task{
+		Project:      d.project,
+		Issue:        "LAB-688",
+		Status:       TaskStatusDone,
+		PaneID:       deps.amux.spawnPane.ID,
+		ClonePath:    deps.pool.clone.Path,
+		Branch:       "LAB-688",
+		AgentProfile: "codex",
+		PRNumber:     41,
+		CreatedAt:    deps.clock.Now().Add(-2 * time.Hour),
+		UpdatedAt:    deps.clock.Now().Add(-time.Hour),
+	}
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-689", "Implement daemon core", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	prTicker.tick(deps.clock.Now())
+	waitFor(t, "pr metadata sync", func() bool {
+		task, ok := deps.state.task("LAB-689")
+		return ok && task.PRNumber == 42
+	})
+
+	deps.amux.requireMetadata(t, "pane-1", map[string]string{
+		"agent_profile":  "codex",
+		"branch":         "LAB-689",
+		"task":           "LAB-689",
+		"tracked_issues": `[{"id":"LAB-688","status":"completed"},{"id":"LAB-689","status":"active"}]`,
+		"tracked_prs":    `[{"number":41,"status":"completed"},{"number":42,"status":"active"}]`,
+	})
+}
+
 func TestPRMergeablePollingNudgesWorkerOnConflictTransitions(t *testing.T) {
 	t.Parallel()
 

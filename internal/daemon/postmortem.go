@@ -105,7 +105,12 @@ func (d *Daemon) finishAssignmentWithMessage(ctx context.Context, active ActiveA
 	if status != TaskStatusFailed {
 		result = errors.Join(result, d.ensurePostmortem(cleanupCtx, active))
 		if active.Task.PaneID != "" {
-			result = errors.Join(result, d.setPaneMetadata(cleanupCtx, active.Task.PaneID, taskCompletionMetadata(active.Task.Issue, active.Task.PRNumber, merged)))
+			metadata, err := d.completionPaneMetadata(cleanupCtx, active, merged)
+			if err != nil {
+				result = errors.Join(result, err)
+			} else {
+				result = errors.Join(result, d.setPaneMetadata(cleanupCtx, active.Task.PaneID, metadata))
+			}
 		}
 	}
 

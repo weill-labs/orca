@@ -106,12 +106,13 @@ daemonReady:
 		t.Fatalf("NewLocalController() error = %v", err)
 	}
 
-	assignResult, err := controller.Assign(context.Background(), AssignRequest{
-		Project: projectPath,
-		Issue:   "LAB-718",
-		Prompt:  "Implement Unix socket IPC.",
-		Agent:   "claude",
-	})
+	var assignResult TaskActionResult
+	err = callRPC(context.Background(), socketPath, "assign", map[string]any{
+		"issue":  "LAB-718",
+		"prompt": "Implement Unix socket IPC.",
+		"agent":  "claude",
+		"title":  "Unix socket IPC title",
+	}, &assignResult)
 	if err != nil {
 		t.Fatalf("Assign() error = %v", err)
 	}
@@ -142,7 +143,7 @@ daemonReady:
 	amuxClient.requireMetadata(t, "pane-1", map[string]string{
 		"agent_profile":  "claude",
 		"branch":         "LAB-718",
-		"task":           "LAB-718",
+		"task":           "Unix socket IPC title",
 		"tracked_issues": `[{"id":"LAB-718","status":"active"}]`,
 	})
 	amuxClient.requireSentKeys(t, "pane-1", []string{"Implement Unix socket IPC.\n"})

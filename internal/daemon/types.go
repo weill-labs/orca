@@ -84,6 +84,7 @@ type StateStore interface {
 	PutTask(ctx context.Context, task Task) error
 	DeleteTask(ctx context.Context, project, issue string) error
 	TaskByIssue(ctx context.Context, project, issue string) (Task, error)
+	TasksByPane(ctx context.Context, project, paneID string) ([]Task, error)
 	NonTerminalTasks(ctx context.Context, project string) ([]Task, error)
 	PutWorker(ctx context.Context, worker Worker) error
 	WorkerByPane(ctx context.Context, project, paneID string) (Worker, error)

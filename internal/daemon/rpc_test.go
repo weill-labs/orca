@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -74,6 +75,26 @@ func TestCallRPCAndHelpers(t *testing.T) {
 	response := rpcFailure(json.RawMessage(`1`), -32000, errors.New("boom"))
 	if response.Error == nil || response.Error.Message != "boom" {
 		t.Fatalf("rpcFailure() = %#v", response)
+	}
+}
+
+func TestAssignTypesIncludeTitleField(t *testing.T) {
+	t.Parallel()
+
+	assignRequestField, ok := reflect.TypeOf(AssignRequest{}).FieldByName("Title")
+	if !ok {
+		t.Fatal("AssignRequest missing Title field")
+	}
+	if got, want := assignRequestField.Type.Kind(), reflect.String; got != want {
+		t.Fatalf("AssignRequest.Title kind = %v, want %v", got, want)
+	}
+
+	assignRPCField, ok := reflect.TypeOf(assignRPCParams{}).FieldByName("Title")
+	if !ok {
+		t.Fatal("assignRPCParams missing Title field")
+	}
+	if got, want := assignRPCField.Tag.Get("json"), "title"; got != want {
+		t.Fatalf("assignRPCParams.Title json tag = %q, want %q", got, want)
 	}
 }
 

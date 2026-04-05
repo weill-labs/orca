@@ -336,3 +336,49 @@ func TestAssignAllowsReassigningInactiveStoredIssueWhenNoOpenPRExists(t *testing
 		t.Fatalf("gh pr list calls = %d, want %d", got, want)
 	}
 }
+
+func TestAssignPreservesTrackedHistoryForReusedPane(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+
+	deps.state.tasks["LAB-688"] = Task{
+		Project:      d.project,
+		Issue:        "LAB-688",
+		Status:       TaskStatusDone,
+		PaneID:       deps.amux.spawnPane.ID,
+		ClonePath:    deps.pool.clone.Path,
+		Branch:       "LAB-688",
+		AgentProfile: "codex",
+		PRNumber:     41,
+		CreatedAt:    deps.clock.Now().Add(-2 * time.Hour),
+		UpdatedAt:    deps.clock.Now().Add(-time.Hour),
+	}
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-689", "Implement daemon core", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	waitFor(t, "task registration", func() bool {
+		task, ok := deps.state.task("LAB-689")
+		return ok && task.Status == TaskStatusActive
+	})
+
+	deps.amux.requireMetadata(t, "pane-1", map[string]string{
+		"agent_profile":  "codex",
+		"branch":         "LAB-689",
+		"task":           "LAB-689",
+		"tracked_issues": `[{"id":"LAB-688","status":"completed"},{"id":"LAB-689","status":"active"}]`,
+		"tracked_prs":    `[{"number":41,"status":"completed"}]`,
+	})
+}
