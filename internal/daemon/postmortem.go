@@ -115,7 +115,9 @@ func (d *Daemon) finishAssignmentWithMessage(ctx context.Context, active ActiveA
 	}
 
 	if status == TaskStatusCancelled {
-		result = errors.Join(result, d.amux.KillPane(cleanupCtx, active.Task.PaneID))
+		if err := d.amux.KillPane(cleanupCtx, active.Task.PaneID); err != nil && !paneAlreadyGone(err) {
+			result = errors.Join(result, err)
+		}
 	}
 
 	clone := Clone{
@@ -166,4 +168,13 @@ func (d *Daemon) finishAssignmentWithMessage(ctx context.Context, active ActiveA
 		Message:      message,
 	})
 	return result
+}
+
+func paneAlreadyGone(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	message := strings.ToLower(strings.TrimSpace(err.Error()))
+	return strings.Contains(message, "pane") && (strings.Contains(message, "not found") || strings.Contains(message, "missing"))
 }

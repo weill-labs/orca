@@ -36,6 +36,33 @@ func TestEnsureFlag(t *testing.T) {
 	}
 }
 
+func TestPaneAlreadyGone(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "nil", err: nil, want: false},
+		{name: "pane not found", err: errors.New("amux kill pane-1: exit status 1: pane not found"), want: true},
+		{name: "pane missing", err: errors.New("amux kill pane-1: exit status 1: pane missing"), want: true},
+		{name: "different error", err: errors.New("amux kill pane-1: exit status 1: permission denied"), want: false},
+		{name: "missing without pane context", err: errors.New("session missing"), want: false},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := paneAlreadyGone(tt.err); got != tt.want {
+				t.Fatalf("paneAlreadyGone(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestPostmortemStatusSendsOrSkips(t *testing.T) {
 	t.Parallel()
 
