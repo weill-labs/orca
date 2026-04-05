@@ -111,6 +111,11 @@ func TestAssignResumesCodexBeforeSendingPrompt(t *testing.T) {
 		".",
 		"Implement resume flow\n",
 	})
+	if got, want := deps.amux.waitContentCalls, []waitContentCall{
+		{PaneID: "pane-1", Content: "›", Timeout: 30 * time.Second},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("waitContent calls = %#v, want %#v", got, want)
+	}
 	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
 		{PaneID: "pane-1", Timeout: 30 * time.Second},
 		{PaneID: "pane-1", Timeout: 30 * time.Second},
@@ -164,4 +169,87 @@ func TestAssignRollsBackOnAgentHandshakeFailure(t *testing.T) {
 	}
 
 	deps.events.requireTypes(t, EventDaemonStarted, EventTaskAssignFailed)
+}
+
+func TestResumeAgentInPaneReturnsNilWithoutResumeSequence(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	d := deps.newDaemon(t)
+
+	err := d.resumeAgentInPane(context.Background(), "pane-1", AgentProfile{Name: "codex"})
+	if err != nil {
+		t.Fatalf("resumeAgentInPane() error = %v", err)
+	}
+
+	deps.amux.requireSentKeys(t, "pane-1", nil)
+	if got, want := len(deps.amux.waitContentCalls), 0; got != want {
+		t.Fatalf("waitContent calls = %d, want %d", got, want)
+	}
+}
+
+func TestResumeAgentInPaneFallsBackToDirectSendForNonCodex(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	d := deps.newDaemon(t)
+	profile := AgentProfile{
+		Name:           "claude",
+		ResumeSequence: []string{"claude --resume", "Enter"},
+	}
+
+	err := d.resumeAgentInPane(context.Background(), "pane-1", profile)
+	if err != nil {
+		t.Fatalf("resumeAgentInPane() error = %v", err)
+	}
+
+	deps.amux.requireSentKeys(t, "pane-1", []string{"claude --resume\n"})
+	if got, want := len(deps.amux.waitContentCalls), 0; got != want {
+		t.Fatalf("waitContent calls = %d, want %d", got, want)
+	}
+}
+
+func TestResumeAgentInPaneReturnsInitialSendError(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.amux.sendKeysResults = []error{errors.New("send failed")}
+	d := deps.newDaemon(t)
+	profile := AgentProfile{
+		Name:           "codex",
+		ResumeSequence: []string{"codex --yolo resume", "Enter", "."},
+	}
+
+	err := d.resumeAgentInPane(context.Background(), "pane-1", profile)
+	if err == nil || !strings.Contains(err.Error(), "send failed") {
+		t.Fatalf("resumeAgentInPane() error = %v, want send failure", err)
+	}
+
+	if got, want := len(deps.amux.waitContentCalls), 0; got != want {
+		t.Fatalf("waitContent calls = %d, want %d", got, want)
+	}
+}
+
+func TestResumeAgentInPaneReturnsWaitContentError(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.amux.waitContentErr = errors.New("prompt not ready")
+	d := deps.newDaemon(t)
+	profile := AgentProfile{
+		Name:           "codex",
+		ResumeSequence: []string{"codex --yolo resume", "Enter", "."},
+	}
+
+	err := d.resumeAgentInPane(context.Background(), "pane-1", profile)
+	if err == nil || !strings.Contains(err.Error(), "prompt not ready") {
+		t.Fatalf("resumeAgentInPane() error = %v, want wait content failure", err)
+	}
+
+	deps.amux.requireSentKeys(t, "pane-1", []string{"codex --yolo resume\n"})
+	if got, want := deps.amux.waitContentCalls, []waitContentCall{
+		{PaneID: "pane-1", Content: "›", Timeout: 30 * time.Second},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("waitContent calls = %#v, want %#v", got, want)
+	}
 }

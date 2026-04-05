@@ -405,6 +405,24 @@ func (d *Daemon) startAgentInPane(ctx context.Context, paneID string, profile Ag
 	return nil
 }
 
+func (d *Daemon) resumeAgentInPane(ctx context.Context, paneID string, profile AgentProfile) error {
+	if len(profile.ResumeSequence) == 0 {
+		return nil
+	}
+
+	if !strings.EqualFold(profile.Name, "codex") || len(profile.ResumeSequence) < 3 {
+		return d.amux.SendKeys(ctx, paneID, profile.ResumeSequence...)
+	}
+
+	if err := d.amux.SendKeys(ctx, paneID, profile.ResumeSequence[:2]...); err != nil {
+		return err
+	}
+	if err := d.amux.WaitContent(ctx, paneID, "›", defaultAgentHandshakeTimeout); err != nil {
+		return err
+	}
+	return d.amux.SendKeys(ctx, paneID, profile.ResumeSequence[2:]...)
+}
+
 func ensureTrailingNewline(input string) string {
 	if strings.HasSuffix(input, "\n") {
 		return input
