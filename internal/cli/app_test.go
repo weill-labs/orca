@@ -416,7 +416,7 @@ func TestAppRunParseErrors(t *testing.T) {
 	}{
 		{name: "missing command", args: nil, wantErr: "usage: orca <command>"},
 		{name: "unknown command", args: []string{"bogus"}, wantErr: "unknown command"},
-		{name: "help unknown command", args: []string{"help", "bogus"}, wantErr: "unknown command"},
+		{name: "help unknown command", args: []string{"help", "bogus"}, wantErr: "unknown help topic \"bogus\""},
 		{name: "unknown command help flag", args: []string{"bogus", "--help"}, wantErr: "unknown command"},
 		{name: "status too many args", args: []string{"status", "LAB-690", "extra"}, wantErr: "status accepts at most one issue"},
 		{name: "assign missing issue", args: []string{"assign", "--prompt", "x"}, wantErr: "assign requires ISSUE"},
@@ -864,6 +864,9 @@ func TestUsageTextIncludesResumeCommand(t *testing.T) {
 	}
 	if !strings.Contains(UsageText(), "batch") {
 		t.Fatalf("UsageText() = %q, want batch command", UsageText())
+	}
+	if !strings.Contains(UsageText(), "help") {
+		t.Fatalf("UsageText() = %q, want help command", UsageText())
 	}
 }
 

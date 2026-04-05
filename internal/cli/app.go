@@ -36,8 +36,10 @@ commands:
   workers  List workers and their state
   pool     List clone pool status
   events   Stream orchestration events as NDJSON
+  help     Show help for a command
   version  Print version`
 
+// Keep these summaries aligned with the per-command FlagSet definitions below.
 var commandUsage = map[string]string{
 	"start": `usage: orca start [--session SESSION] [--project PATH] [--lead-pane PANE] [--json]
 
@@ -173,6 +175,8 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	}
 
 	switch args[0] {
+	case "help":
+		return fmt.Errorf("unknown help topic %q", args[1])
 	case "start":
 		return a.runStart(ctx, args[1:])
 	case "stop":
@@ -706,6 +710,7 @@ func stripLeadingPositional(args []string) (string, []string) {
 }
 
 func isHelpToken(arg string) bool {
+	// Support `orca help <cmd>` and the shorthand `orca <cmd> help`.
 	return arg == "--help" || arg == "-h" || arg == "help"
 }
 
