@@ -537,6 +537,20 @@ func TestSQLiteStoreWorkerByPaneAndNonTerminalTasks(t *testing.T) {
 		t.Fatalf("tasks[1].Issue = %q, want %q", got, want)
 	}
 
+	paneTasks, err := store.TasksByPane(context.Background(), project, "pane-2")
+	if err != nil {
+		t.Fatalf("TasksByPane() error = %v", err)
+	}
+	if got, want := len(paneTasks), 1; got != want {
+		t.Fatalf("len(paneTasks) = %d, want %d", got, want)
+	}
+	if got, want := paneTasks[0].Issue, "LAB-741"; got != want {
+		t.Fatalf("paneTasks[0].Issue = %q, want %q", got, want)
+	}
+	if paneTasks[0].PRNumber == nil || *paneTasks[0].PRNumber != 42 {
+		t.Fatalf("paneTasks[0].PRNumber = %#v, want 42", paneTasks[0].PRNumber)
+	}
+
 	worker, err := store.WorkerByPane(context.Background(), project, "pane-2")
 	if err != nil {
 		t.Fatalf("WorkerByPane() error = %v", err)

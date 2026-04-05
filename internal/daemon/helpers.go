@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"time"
@@ -74,6 +75,21 @@ func assignmentMetadata(agentProfile, branch, task string) map[string]string {
 	return metadata
 }
 
+func resolveTaskTitle(issue, title string) string {
+	title = strings.TrimSpace(title)
+	if title != "" {
+		return title
+	}
+	return strings.TrimSpace(issue)
+}
+
+func firstTitle(values []string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	return values[0]
+}
+
 func trackedIssueMetadata(issue string, status trackedStatus) map[string]string {
 	issue = strings.TrimSpace(issue)
 	if issue == "" {
@@ -130,6 +146,168 @@ func mergeMetadata(parts ...map[string]string) map[string]string {
 		}
 	}
 	return merged
+}
+
+func encodeTrackedIssues(refs []trackedIssueRef) (string, error) {
+	data, err := json.Marshal(refs)
+	if err != nil {
+		return "", fmt.Errorf("marshal tracked issues: %w", err)
+	}
+	return string(data), nil
+}
+
+func encodeTrackedPRs(refs []trackedPRRef) (string, error) {
+	data, err := json.Marshal(refs)
+	if err != nil {
+		return "", fmt.Errorf("marshal tracked prs: %w", err)
+	}
+	return string(data), nil
+}
+
+func trackedIssueStatusForTask(task Task) trackedStatus {
+	switch task.Status {
+	case "", TaskStatusDone, TaskStatusCancelled, TaskStatusFailed:
+		return trackedStatusCompleted
+	default:
+		return trackedStatusActive
+	}
+}
+
+func trackedPRStatusForTask(task Task) (trackedStatus, bool) {
+	if task.PRNumber <= 0 {
+		return "", false
+	}
+
+	switch task.Status {
+	case TaskStatusDone:
+		return trackedStatusCompleted, true
+	case "", TaskStatusCancelled, TaskStatusFailed:
+		return "", false
+	default:
+		return trackedStatusActive, true
+	}
+}
+
+func trackedIssuesForPane(tasks []Task, currentIssue string, currentStatus trackedStatus) []trackedIssueRef {
+	refs := make([]trackedIssueRef, 0, len(tasks)+1)
+	currentIssue = strings.TrimSpace(currentIssue)
+	foundCurrent := false
+
+	for _, task := range tasks {
+		issue := strings.TrimSpace(task.Issue)
+		if issue == "" {
+			continue
+		}
+
+		status := trackedIssueStatusForTask(task)
+		if issue == currentIssue {
+			status = currentStatus
+			foundCurrent = true
+		}
+
+		refs = append(refs, trackedIssueRef{ID: issue, Status: status})
+	}
+
+	if !foundCurrent && currentIssue != "" {
+		refs = append(refs, trackedIssueRef{ID: currentIssue, Status: currentStatus})
+	}
+
+	return refs
+}
+
+func trackedPRsForPane(tasks []Task, currentIssue string, currentPR int, currentStatus *trackedStatus) ([]trackedPRRef, bool) {
+	refs := make([]trackedPRRef, 0, len(tasks)+1)
+	currentIssue = strings.TrimSpace(currentIssue)
+	includeKey := false
+	foundCurrent := false
+
+	for _, task := range tasks {
+		if task.PRNumber <= 0 {
+			continue
+		}
+
+		if strings.TrimSpace(task.Issue) == currentIssue {
+			includeKey = true
+			if currentPR > 0 && currentStatus != nil {
+				refs = append(refs, trackedPRRef{Number: currentPR, Status: *currentStatus})
+				foundCurrent = true
+			}
+			continue
+		}
+
+		status, ok := trackedPRStatusForTask(task)
+		if !ok {
+			continue
+		}
+
+		refs = append(refs, trackedPRRef{Number: task.PRNumber, Status: status})
+		includeKey = true
+	}
+
+	if !foundCurrent && currentPR > 0 && currentStatus != nil {
+		refs = append(refs, trackedPRRef{Number: currentPR, Status: *currentStatus})
+		includeKey = true
+	}
+
+	return refs, includeKey
+}
+
+func (d *Daemon) trackedPaneMetadata(ctx context.Context, paneID, currentIssue string, currentIssueStatus trackedStatus, currentPR int, currentPRStatus *trackedStatus) (map[string]string, error) {
+	tasks, err := d.state.TasksByPane(ctx, d.project, paneID)
+	if err != nil {
+		return nil, fmt.Errorf("load pane task history: %w", err)
+	}
+
+	metadata := make(map[string]string)
+
+	issueRefs := trackedIssuesForPane(tasks, currentIssue, currentIssueStatus)
+	if len(issueRefs) > 0 {
+		encoded, err := encodeTrackedIssues(issueRefs)
+		if err != nil {
+			return nil, err
+		}
+		metadata["tracked_issues"] = encoded
+	}
+
+	prRefs, includePRs := trackedPRsForPane(tasks, currentIssue, currentPR, currentPRStatus)
+	if includePRs {
+		encoded, err := encodeTrackedPRs(prRefs)
+		if err != nil {
+			return nil, err
+		}
+		metadata["tracked_prs"] = encoded
+	}
+
+	return metadata, nil
+}
+
+func (d *Daemon) assignmentPaneMetadata(ctx context.Context, paneID, agentProfile, branch, issue, task string) (map[string]string, error) {
+	tracked, err := d.trackedPaneMetadata(ctx, paneID, issue, trackedStatusActive, 0, nil)
+	if err != nil {
+		return nil, err
+	}
+	return mergeMetadata(assignmentMetadata(agentProfile, branch, task), tracked), nil
+}
+
+func (d *Daemon) prPaneMetadata(ctx context.Context, active ActiveAssignment, prNumber int) (map[string]string, error) {
+	status := trackedStatusActive
+	return d.trackedPaneMetadata(ctx, active.Task.PaneID, active.Task.Issue, trackedStatusActive, prNumber, &status)
+}
+
+func (d *Daemon) completionPaneMetadata(ctx context.Context, active ActiveAssignment, merged bool) (map[string]string, error) {
+	var prStatus *trackedStatus
+	prNumber := 0
+	if merged && active.Task.PRNumber > 0 {
+		status := trackedStatusCompleted
+		prStatus = &status
+		prNumber = active.Task.PRNumber
+	}
+
+	tracked, err := d.trackedPaneMetadata(ctx, active.Task.PaneID, active.Task.Issue, trackedStatusCompleted, prNumber, prStatus)
+	if err != nil {
+		return nil, err
+	}
+	return mergeMetadata(map[string]string{"status": "done"}, tracked), nil
 }
 
 func (d *Daemon) setPaneMetadata(ctx context.Context, paneID string, metadata map[string]string) error {

@@ -18,7 +18,7 @@ var builtinProfiles = map[string]AgentProfile{
 	"claude": {
 		Name:              "claude",
 		StartCommand:      "claude",
-		PostmortemEnabled:  true,
+		PostmortemEnabled: true,
 		StuckTimeout:      8 * time.Minute,
 		NudgeCommand:      "Enter",
 		StuckTextPatterns: []string{"Do you want to proceed?", "approval required"},
@@ -27,13 +27,13 @@ var builtinProfiles = map[string]AgentProfile{
 	"codex": {
 		Name:              "codex",
 		StartCommand:      "codex --yolo",
-		PostmortemEnabled:  true,
+		PostmortemEnabled: true,
 		StuckTimeout:      9 * time.Minute,
 	},
 	"aider": {
 		Name:              "aider",
 		StartCommand:      "aider",
-		PostmortemEnabled:  true,
+		PostmortemEnabled: true,
 		StuckTimeout:      10 * time.Minute,
 	},
 }
@@ -193,6 +193,38 @@ func (a *sqliteStateAdapter) DeleteTask(ctx context.Context, project, issue stri
 
 func (a *sqliteStateAdapter) NonTerminalTasks(ctx context.Context, project string) ([]Task, error) {
 	tasks, err := a.store.NonTerminalTasks(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]Task, 0, len(tasks))
+	for _, task := range tasks {
+		converted := Task{
+			Project:      project,
+			Issue:        task.Issue,
+			Status:       task.Status,
+			Prompt:       task.Prompt,
+			PaneID:       task.WorkerID,
+			PaneName:     task.WorkerID,
+			ClonePath:    task.ClonePath,
+			Branch:       task.Issue,
+			AgentProfile: task.Agent,
+			CreatedAt:    task.CreatedAt,
+			UpdatedAt:    task.UpdatedAt,
+		}
+		if task.ClonePath != "" {
+			converted.CloneName = filepath.Base(task.ClonePath)
+		}
+		if task.PRNumber != nil {
+			converted.PRNumber = *task.PRNumber
+		}
+		out = append(out, converted)
+	}
+	return out, nil
+}
+
+func (a *sqliteStateAdapter) TasksByPane(ctx context.Context, project, paneID string) ([]Task, error) {
+	tasks, err := a.store.TasksByPane(ctx, project, paneID)
 	if err != nil {
 		return nil, err
 	}

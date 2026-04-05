@@ -224,7 +224,7 @@ func dispatchRPCRequest(ctx context.Context, request rpcRequest, instance *Daemo
 		if err := decodeRPCParams(request.Params, &params); err != nil {
 			return rpcFailure(request.ID, -32602, fmt.Errorf("decode assign params: %w", err))
 		}
-		if err := instance.Assign(ctx, params.Issue, params.Prompt, params.Agent); err != nil {
+		if err := instance.Assign(ctx, params.Issue, params.Prompt, params.Agent, params.Title); err != nil {
 			return rpcFailure(request.ID, -32000, err)
 		}
 

@@ -180,7 +180,7 @@ func (d *Daemon) Stop(ctx context.Context) error {
 	return nil
 }
 
-func (d *Daemon) Assign(ctx context.Context, issue, prompt, agentProfile string) error {
+func (d *Daemon) Assign(ctx context.Context, issue, prompt, agentProfile string, title ...string) error {
 	if err := d.requireStarted(); err != nil {
 		return err
 	}
@@ -244,10 +244,14 @@ func (d *Daemon) Assign(ctx context.Context, issue, prompt, agentProfile string)
 		return fmt.Errorf("spawn pane: %w", err)
 	}
 
-	if err := d.setPaneMetadata(ctx, pane.ID, mergeMetadata(
-		assignmentMetadata(profile.Name, issue, issue),
-		trackedIssueMetadata(issue, trackedStatusActive),
-	)); err != nil {
+	metadata, err := d.assignmentPaneMetadata(ctx, pane.ID, profile.Name, issue, issue, resolveTaskTitle(issue, firstTitle(title)))
+	if err != nil {
+		_ = d.rollbackAssignment(ctx, clone, pane, issue)
+		restoreReservation()
+		return fmt.Errorf("build pane metadata: %w", err)
+	}
+
+	if err := d.setPaneMetadata(ctx, pane.ID, metadata); err != nil {
 		_ = d.rollbackAssignment(ctx, clone, pane, issue)
 		restoreReservation()
 		return fmt.Errorf("set pane metadata: %w", err)

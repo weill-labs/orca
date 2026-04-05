@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"sort"
 	"sync"
 )
 
@@ -149,6 +150,37 @@ func (s *fakeState) NonTerminalTasks(ctx context.Context, project string) ([]Tas
 			tasks = append(tasks, task)
 		}
 	}
+	return tasks, nil
+}
+
+func (s *fakeState) TasksByPane(ctx context.Context, project, paneID string) ([]Task, error) {
+	if s.rejectCanceledContext && ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	tasks := make([]Task, 0)
+	for _, task := range s.tasks {
+		if task.Project != "" && task.Project != project {
+			continue
+		}
+		if task.PaneID != paneID {
+			continue
+		}
+		tasks = append(tasks, task)
+	}
+
+	sort.Slice(tasks, func(i, j int) bool {
+		if !tasks[i].CreatedAt.Equal(tasks[j].CreatedAt) {
+			return tasks[i].CreatedAt.Before(tasks[j].CreatedAt)
+		}
+		if !tasks[i].UpdatedAt.Equal(tasks[j].UpdatedAt) {
+			return tasks[i].UpdatedAt.Before(tasks[j].UpdatedAt)
+		}
+		return tasks[i].Issue < tasks[j].Issue
+	})
+
 	return tasks, nil
 }
 
