@@ -235,7 +235,7 @@ func (d *Daemon) Assign(ctx context.Context, issue, prompt, agentProfile string,
 	pane, err := d.amux.Spawn(ctx, SpawnRequest{
 		Session: d.session,
 		AtPane:  d.leadPane,
-		Name:    "worker-" + issue,
+		Name:    issue,
 		CWD:     clone.Path,
 		Command: profile.StartCommand,
 	})
