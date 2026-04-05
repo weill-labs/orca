@@ -111,6 +111,11 @@ func TestAssignResumesCodexBeforeSendingPrompt(t *testing.T) {
 		".",
 		"Implement resume flow\n",
 	})
+	if got, want := deps.amux.waitContentCalls, []waitContentCall{
+		{PaneID: "pane-1", Content: "›", Timeout: 30 * time.Second},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("waitContent calls = %#v, want %#v", got, want)
+	}
 	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
 		{PaneID: "pane-1", Timeout: 30 * time.Second},
 		{PaneID: "pane-1", Timeout: 30 * time.Second},

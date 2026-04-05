@@ -919,6 +919,32 @@ func TestCLIClientWaitIdle(t *testing.T) {
 	}
 }
 
+func TestCLIClientWaitContent(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeRunner{}
+	client := newTestClient(Config{Session: "orca-dev"}, runner)
+
+	if err := client.WaitContent(context.Background(), "pane-17", "›", 45*time.Second); err != nil {
+		t.Fatalf("WaitContent() error = %v", err)
+	}
+
+	want := []recordedCommand{{
+		name: "amux",
+		args: []string{
+			"-s", "orca-dev",
+			"wait",
+			"content",
+			"pane-17",
+			"›",
+			"--timeout", "45s",
+		},
+	}}
+	if !reflect.DeepEqual(runner.calls, want) {
+		t.Fatalf("WaitContent() commands = %#v, want %#v", runner.calls, want)
+	}
+}
+
 func TestMockClientRecordsCalls(t *testing.T) {
 	t.Parallel()
 
@@ -993,6 +1019,9 @@ func TestMockClientRecordsCalls(t *testing.T) {
 	if err := mock.WaitIdle(context.Background(), "20", 10*time.Second); err != nil {
 		t.Fatalf("WaitIdle() error = %v", err)
 	}
+	if err := mock.WaitContent(context.Background(), "20", "›", 10*time.Second); err != nil {
+		t.Fatalf("WaitContent() error = %v", err)
+	}
 
 	if !reflect.DeepEqual(mock.SpawnCalls, []SpawnRequest{{CWD: "/tmp/worker-20"}}) {
 		t.Fatalf("SpawnCalls = %#v", mock.SpawnCalls)
@@ -1023,5 +1052,8 @@ func TestMockClientRecordsCalls(t *testing.T) {
 	}
 	if got := len(mock.WaitIdleCalls); got != 1 {
 		t.Fatalf("WaitIdleCalls count = %d, want 1", got)
+	}
+	if got := len(mock.WaitContentCalls); got != 1 {
+		t.Fatalf("WaitContentCalls count = %d, want 1", got)
 	}
 }

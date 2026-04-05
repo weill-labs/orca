@@ -23,6 +23,8 @@ type fakeAmux struct {
 	killHook              func(paneID string)
 	waitIdleErr           error
 	waitIdleHook          func(paneID string, timeout time.Duration)
+	waitContentErr        error
+	waitContentHook       func(paneID, content string, timeout time.Duration)
 	capturePaneErr        error
 	rejectCanceledContext bool
 	spawnRequests         []SpawnRequest
@@ -37,10 +39,17 @@ type fakeAmux struct {
 	historyCaptureErrors  map[string][]error
 	killCalls             []string
 	waitIdleCalls         []waitIdleCall
+	waitContentCalls      []waitContentCall
 }
 
 type waitIdleCall struct {
 	PaneID  string
+	Timeout time.Duration
+}
+
+type waitContentCall struct {
+	PaneID  string
+	Content string
 	Timeout time.Duration
 }
 
@@ -245,6 +254,23 @@ func (a *fakeAmux) WaitIdle(ctx context.Context, paneID string, timeout time.Dur
 	defer a.mu.Unlock()
 	a.waitIdleCalls = append(a.waitIdleCalls, waitIdleCall{PaneID: paneID, Timeout: timeout})
 	return a.waitIdleErr
+}
+
+func (a *fakeAmux) WaitContent(ctx context.Context, paneID, content string, timeout time.Duration) error {
+	if a.rejectCanceledContext && ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if a.waitContentHook != nil {
+		a.waitContentHook(paneID, content, timeout)
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.waitContentCalls = append(a.waitContentCalls, waitContentCall{
+		PaneID:  paneID,
+		Content: content,
+		Timeout: timeout,
+	})
+	return a.waitContentErr
 }
 
 func (a *fakeAmux) captureSequence(paneID string, sequence []string) {
