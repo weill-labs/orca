@@ -31,6 +31,7 @@ commands:
   assign   Assign an issue to a worker
   enqueue  Queue a PR for serialized landing
   cancel   Cancel a task
+  resume   Resume a task in its existing pane
   workers  List workers and their state
   pool     List clone pool status
   events   Stream orchestration events as NDJSON
@@ -96,6 +97,8 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.runEnqueue(ctx, args[1:])
 	case "cancel":
 		return a.runCancel(ctx, args[1:])
+	case "resume":
+		return a.runResume(ctx, args[1:])
 	case "workers":
 		return a.runWorkers(ctx, args[1:])
 	case "pool":
@@ -340,6 +343,39 @@ func (a *App) runCancel(ctx context.Context, args []string) error {
 	}
 
 	_, err = fmt.Fprintf(a.stdout, "%s cancelled\n", result.Issue)
+	return err
+}
+
+func (a *App) runResume(ctx context.Context, args []string) error {
+	fs := newFlagSet("resume")
+	var projectPath string
+	var jsonOutput bool
+	fs.StringVar(&projectPath, "project", "", "project path")
+	fs.BoolVar(&jsonOutput, "json", false, "emit JSON output")
+
+	issue, err := parseRequiredSinglePositional(fs, args, "resume requires ISSUE")
+	if err != nil {
+		return err
+	}
+
+	projectPath, err = a.resolveProject(projectPath)
+	if err != nil {
+		return err
+	}
+
+	result, err := a.daemon.Resume(ctx, daemon.ResumeRequest{
+		Project: projectPath,
+		Issue:   issue,
+	})
+	if err != nil {
+		return err
+	}
+
+	if jsonOutput {
+		return writeJSON(a.stdout, result)
+	}
+
+	_, err = fmt.Fprintf(a.stdout, "%s resumed\n", result.Issue)
 	return err
 }
 
