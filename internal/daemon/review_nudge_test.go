@@ -18,12 +18,23 @@ func TestPRReviewPollingSkipsNudgesForApprovalOrLGTM(t *testing.T) {
 
 	tests := []testCase{
 		{
-			name: "approved review decision skips blocking issue comments",
+			name: "approved review decision skips github-actions comments without lgtm",
 			payload: marshalReviewPayload(t,
 				"APPROVED",
 				nil,
 				[]prComment{
-					testIssueComment("github-actions", "### PR Review\n\n### Blocking Issues\n\n**1. Add regression coverage**"),
+					testIssueComment("github-actions", "Potential bug: add regression coverage."),
+				},
+			),
+			wantIssueCommentCount: 1,
+		},
+		{
+			name: "github-actions lgtm skips issue comments with blocking headings",
+			payload: marshalReviewPayload(t,
+				"CHANGES_REQUESTED",
+				nil,
+				[]prComment{
+					testIssueComment("github-actions", "### PR Review\n\n### Blocking Issues\n\n**1. Add regression coverage**\n\nLGTM"),
 				},
 			),
 			wantIssueCommentCount: 1,
@@ -162,11 +173,11 @@ func TestPRReviewPollingEscalatesAfterThreeNudgesAndResetsAfterApprovalCycle(t *
 
 	prTicker.tick(deps.clock.Now())
 	waitFor(t, "review escalation", func() bool {
-			worker, ok := deps.state.worker("pane-1")
-			return ok &&
-				worker.LastReviewCount == 4 &&
-				deps.events.countType(EventWorkerReviewEscalated) == 1
-		})
+		worker, ok := deps.state.worker("pane-1")
+		return ok &&
+			worker.LastReviewCount == 4 &&
+			deps.events.countType(EventWorkerReviewEscalated) == 1
+	})
 	if got := deps.amux.countKey("pane-1", daveNudge); got != 0 {
 		t.Fatalf("fourth review nudge count = %d, want 0", got)
 	}

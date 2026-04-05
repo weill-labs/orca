@@ -200,7 +200,7 @@ func TestPRReviewPollingIgnoresEmptyReviewPayload(t *testing.T) {
 	}
 }
 
-func TestPRReviewPollingNudgesWorkerForBlockingGitHubActionsIssueComments(t *testing.T) {
+func TestPRReviewPollingNudgesWorkerForGitHubActionsIssueCommentsWithoutLGTM(t *testing.T) {
 	t.Parallel()
 
 	deps := newTestDeps(t)
@@ -209,8 +209,8 @@ func TestPRReviewPollingNudgesWorkerForBlockingGitHubActionsIssueComments(t *tes
 	deps.tickers.enqueue(captureTicker, prTicker)
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--state", "open", "--json", "number"}, `[]`, nil)
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, `{"reviewDecision":"CHANGES_REQUESTED","reviews":[],"comments":[{"author":{"login":"github-actions"},"body":"### PR Review\n\n### Blocking Issues\n\n**1. Add regression coverage for issue comments**"}]}`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, `{"reviewDecision":"CHANGES_REQUESTED","reviews":[],"comments":[{"author":{"login":"github-actions"},"body":"### PR Review\n\n### Blocking Issues\n\n**1. Add regression coverage for issue comments**"},{"author":{"login":"cweill"},"body":"Thanks, taking a look."}]}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, `{"reviewDecision":"CHANGES_REQUESTED","reviews":[],"comments":[{"author":{"login":"github-actions"},"body":"Potential bug: stale local branch in prepareAdoptedClone."}]}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, `{"reviewDecision":"CHANGES_REQUESTED","reviews":[],"comments":[{"author":{"login":"github-actions"},"body":"Potential bug: stale local branch in prepareAdoptedClone."},{"author":{"login":"cweill"},"body":"Thanks, taking a look."}]}`, nil)
 
 	d := deps.newDaemon(t)
 	ctx := context.Background()
@@ -225,7 +225,7 @@ func TestPRReviewPollingNudgesWorkerForBlockingGitHubActionsIssueComments(t *tes
 		t.Fatalf("Assign() error = %v", err)
 	}
 
-	firstNudge := "New blocking PR review feedback on #42:\n- github-actions: Add regression coverage for issue comments\n\nAddress the feedback in the PR review and push an update."
+	firstNudge := "New blocking PR review feedback on #42:\n- github-actions: Potential bug: stale local branch in prepareAdoptedClone.\n\nAddress the feedback in the PR review and push an update."
 	firstNudgeSent := firstNudge + "\n"
 
 	prTicker.tick(deps.clock.Now())
