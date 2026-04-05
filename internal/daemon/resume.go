@@ -79,7 +79,7 @@ func (d *Daemon) resumeExistingPane(ctx context.Context, task Task, worker Worke
 		return err
 	}
 
-	metadata, err := d.assignmentPaneMetadata(ctx, paneID, profile.Name, task.Branch, task.Issue, resolveTaskTitle(task.Issue, task.Issue))
+	metadata, err := d.assignmentPaneMetadata(ctx, paneID, profile.Name, task.Branch, task.Issue, resolveTaskTitle(task.Issue, task.Issue), task.PRNumber)
 	if err != nil {
 		return fmt.Errorf("build pane metadata: %w", err)
 	}
@@ -135,7 +135,7 @@ func (d *Daemon) resumeWithFreshPane(ctx context.Context, task Task, worker Work
 		}
 	}()
 
-	metadata, err := d.assignmentPaneMetadata(ctx, pane.ID, profile.Name, task.Branch, task.Issue, resolveTaskTitle(task.Issue, task.Issue))
+	metadata, err := d.assignmentPaneMetadata(ctx, pane.ID, profile.Name, task.Branch, task.Issue, resolveTaskTitle(task.Issue, task.Issue), task.PRNumber)
 	if err != nil {
 		return fmt.Errorf("build pane metadata: %w", err)
 	}
