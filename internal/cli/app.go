@@ -107,6 +107,16 @@ func UsageText() string {
 	return usageText
 }
 
+func WriteHelp(w io.Writer, args []string) (bool, error) {
+	usage, ok := HelpText(args)
+	if !ok {
+		return false, nil
+	}
+
+	_, err := fmt.Fprintln(w, usage)
+	return true, err
+}
+
 func HelpText(args []string) (string, bool) {
 	if len(args) == 0 {
 		return "", false
@@ -158,8 +168,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	if len(args) == 0 {
 		return errors.New(usageText)
 	}
-	if usage, ok := HelpText(args); ok {
-		_, err := fmt.Fprintln(a.stdout, usage)
+	if handled, err := WriteHelp(a.stdout, args); handled {
 		return err
 	}
 

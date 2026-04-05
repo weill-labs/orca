@@ -26,8 +26,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, cli.UsageText())
 		return 1
 	}
-	if usage, ok := cli.HelpText(args); ok {
-		fmt.Fprintln(stdout, usage)
+	if handled, err := cli.WriteHelp(stdout, args); handled {
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
 		return 0
 	}
 
