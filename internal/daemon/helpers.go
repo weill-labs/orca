@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"time"
@@ -215,6 +216,16 @@ func (d *Daemon) sendPromptAndEnter(ctx context.Context, paneID, prompt string) 
 		return err
 	}
 	return d.amux.SendKeys(ctx, paneID, "Enter")
+}
+
+func (d *Daemon) startAgentInPane(ctx context.Context, paneID string, profile AgentProfile) error {
+	if err := d.amux.SendKeys(ctx, paneID, profile.StartCommand, "Enter"); err != nil {
+		return fmt.Errorf("restart agent in pane %s: %w", paneID, err)
+	}
+	if err := d.agentHandshake(ctx, paneID, profile); err != nil {
+		return fmt.Errorf("agent handshake: %w", err)
+	}
+	return nil
 }
 
 func ensureTrailingNewline(input string) string {

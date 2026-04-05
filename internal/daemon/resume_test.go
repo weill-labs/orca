@@ -36,6 +36,10 @@ func TestResumeRestartsExistingWorkerInPlace(t *testing.T) {
 	t.Cleanup(func() {
 		_ = d.Stop(context.Background())
 	})
+	deps.amux.mu.Lock()
+	deps.amux.paneExistsCalls = nil
+	deps.amux.captureCalls = nil
+	deps.amux.mu.Unlock()
 
 	resumer, ok := any(d).(daemonResumer)
 	if !ok {
@@ -80,7 +84,6 @@ func TestResumeRejectsMissingPane(t *testing.T) {
 	deps := newTestDeps(t)
 	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
 	seedActiveAssignment(t, deps, "LAB-757", "pane-1")
-	deps.amux.paneExists = map[string]bool{"pane-1": false}
 
 	d := deps.newDaemon(t)
 	ctx := context.Background()
@@ -90,6 +93,10 @@ func TestResumeRejectsMissingPane(t *testing.T) {
 	t.Cleanup(func() {
 		_ = d.Stop(context.Background())
 	})
+	deps.amux.mu.Lock()
+	deps.amux.paneExistsCalls = nil
+	deps.amux.paneExists = map[string]bool{"pane-1": false}
+	deps.amux.mu.Unlock()
 
 	resumer, ok := any(d).(daemonResumer)
 	if !ok {

@@ -52,6 +52,10 @@ type cancelRPCParams struct {
 	Issue string `json:"issue"`
 }
 
+type resumeRPCParams struct {
+	Issue string `json:"issue"`
+}
+
 type enqueueRPCParams struct {
 	PRNumber int `json:"pr_number"`
 }

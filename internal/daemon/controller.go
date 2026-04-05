@@ -27,6 +27,7 @@ type Controller interface {
 	Assign(ctx context.Context, req AssignRequest) (TaskActionResult, error)
 	Enqueue(ctx context.Context, req EnqueueRequest) (MergeQueueActionResult, error)
 	Cancel(ctx context.Context, req CancelRequest) (TaskActionResult, error)
+	Resume(ctx context.Context, req ResumeRequest) (TaskActionResult, error)
 }
 
 type Paths struct {
@@ -75,6 +76,11 @@ type AssignRequest struct {
 }
 
 type CancelRequest struct {
+	Project string
+	Issue   string
+}
+
+type ResumeRequest struct {
 	Project string
 	Issue   string
 }
@@ -354,6 +360,28 @@ func (c *LocalController) Cancel(ctx context.Context, req CancelRequest) (TaskAc
 
 	var result TaskActionResult
 	err = callRPC(callCtx, c.paths.socketFile(projectPath), "cancel", cancelRPCParams{
+		Issue: strings.TrimSpace(req.Issue),
+	}, &result)
+	if err != nil {
+		return TaskActionResult{}, err
+	}
+	return result, nil
+}
+
+func (c *LocalController) Resume(ctx context.Context, req ResumeRequest) (TaskActionResult, error) {
+	projectPath, err := project.CanonicalPath(req.Project)
+	if err != nil {
+		return TaskActionResult{}, err
+	}
+	if err := c.requireRunning(ctx, projectPath); err != nil {
+		return TaskActionResult{}, err
+	}
+
+	callCtx, cancel := contextWithOptionalTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	var result TaskActionResult
+	err = callRPC(callCtx, c.paths.socketFile(projectPath), "resume", resumeRPCParams{
 		Issue: strings.TrimSpace(req.Issue),
 	}, &result)
 	if err != nil {
