@@ -68,36 +68,7 @@ func (d *Daemon) handleCapture(ctx context.Context, active ActiveAssignment) {
 	}
 
 	output := snapshot.Output()
-	changed := output != active.Worker.LastCapture
-	if changed {
-		wasStuck := active.Worker.Health == WorkerHealthStuck ||
-			active.Worker.Health == WorkerHealthEscalated ||
-			active.Worker.NudgeCount > 0
-		active.Worker.LastCapture = output
-		active.Worker.LastActivityAt = now
-		active.Worker.Health = WorkerHealthHealthy
-		active.Worker.NudgeCount = 0
-		active.Worker.UpdatedAt = now
-		active.Task.UpdatedAt = now
-		_ = d.state.PutWorker(ctx, active.Worker)
-		_ = d.state.PutTask(ctx, active.Task)
-
-		if wasStuck {
-			d.emit(ctx, Event{
-				Time:         now,
-				Type:         EventWorkerRecovered,
-				Project:      d.project,
-				Issue:        active.Task.Issue,
-				PaneID:       active.Task.PaneID,
-				PaneName:     active.Task.PaneName,
-				CloneName:    active.Task.CloneName,
-				ClonePath:    active.Task.ClonePath,
-				Branch:       active.Task.Branch,
-				AgentProfile: profile.Name,
-				Message:      "worker output changed",
-			})
-		}
-	}
+	d.recordWorkerOutput(ctx, &active, profile, output, now)
 
 	if d.matchesStuckPattern(profile, output) {
 		d.nudgeOrEscalate(ctx, active, profile, "matched stuck text pattern")

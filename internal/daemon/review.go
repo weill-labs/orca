@@ -5,11 +5,15 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 )
 
 var markdownHeadingPattern = regexp.MustCompile(`^(#{1,6})\s+(.+?)\s*$`)
 
-const maxReviewNudges = 3
+const (
+	maxReviewNudges                 = 3
+	reviewNudgeIdleWindowMultiplier = 2
+)
 
 type prReviewPayload struct {
 	ReviewDecision string      `json:"reviewDecision"`
@@ -95,6 +99,10 @@ func (d *Daemon) handlePRReviewPoll(ctx context.Context, active ActiveAssignment
 	}
 
 	feedback := formatBlockingReviewFeedback(active.Task.PRNumber, blocking)
+	// A fresh capture can update LastCapture/LastActivityAt before we decide whether to defer.
+	if !d.workerAppearsIdleForReviewNudge(ctx, &active, profile) {
+		return
+	}
 	if err := d.sendPromptAndEnter(ctx, active.Task.PaneID, feedback); err != nil {
 		return
 	}
@@ -123,6 +131,74 @@ func (d *Daemon) persistReviewWorkerState(ctx context.Context, worker *Worker, r
 	worker.LastIssueCommentCount = commentCount
 	worker.UpdatedAt = d.now()
 	_ = d.state.PutWorker(ctx, *worker)
+}
+
+func (d *Daemon) workerAppearsIdleForReviewNudge(ctx context.Context, active *ActiveAssignment, profile AgentProfile) bool {
+	if d.workerHadRecentOutput(active.Worker, d.now()) {
+		return false
+	}
+
+	snapshot, err := d.amux.CapturePane(ctx, active.Task.PaneID)
+	if err != nil {
+		return true
+	}
+	if snapshot.Exited {
+		return false
+	}
+	if d.recordWorkerOutput(ctx, active, profile, snapshot.Output(), d.now()) {
+		return false
+	}
+	return true
+}
+
+func (d *Daemon) workerHadRecentOutput(worker Worker, now time.Time) bool {
+	threshold := d.reviewNudgeIdleThreshold()
+	if threshold <= 0 || worker.LastActivityAt.IsZero() {
+		return false
+	}
+	return now.Sub(worker.LastActivityAt) <= threshold
+}
+
+func (d *Daemon) reviewNudgeIdleThreshold() time.Duration {
+	if d.captureInterval <= 0 {
+		return 0
+	}
+	return reviewNudgeIdleWindowMultiplier * d.captureInterval
+}
+
+func (d *Daemon) recordWorkerOutput(ctx context.Context, active *ActiveAssignment, profile AgentProfile, output string, now time.Time) bool {
+	if output == active.Worker.LastCapture {
+		return false
+	}
+
+	wasStuck := active.Worker.Health == WorkerHealthStuck ||
+		active.Worker.Health == WorkerHealthEscalated ||
+		active.Worker.NudgeCount > 0
+	active.Worker.LastCapture = output
+	active.Worker.LastActivityAt = now
+	active.Worker.Health = WorkerHealthHealthy
+	active.Worker.NudgeCount = 0
+	active.Worker.UpdatedAt = now
+	active.Task.UpdatedAt = now
+	_ = d.state.PutWorker(ctx, active.Worker)
+	_ = d.state.PutTask(ctx, active.Task)
+
+	if wasStuck {
+		d.emit(ctx, Event{
+			Time:         now,
+			Type:         EventWorkerRecovered,
+			Project:      d.project,
+			Issue:        active.Task.Issue,
+			PaneID:       active.Task.PaneID,
+			PaneName:     active.Task.PaneName,
+			CloneName:    active.Task.CloneName,
+			ClonePath:    active.Task.ClonePath,
+			Branch:       active.Task.Branch,
+			AgentProfile: profile.Name,
+			Message:      "worker output changed",
+		})
+	}
+	return true
 }
 
 func (d *Daemon) lookupPRReviews(ctx context.Context, prNumber int) (prReviewPayload, bool, error) {

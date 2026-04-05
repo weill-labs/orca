@@ -149,6 +149,7 @@ func TestPRReviewPollingEscalatesAfterThreeNudgesAndResetsAfterApprovalCycle(t *
 	if err := d.Assign(ctx, "LAB-689", "Implement daemon core", "codex"); err != nil {
 		t.Fatalf("Assign() error = %v", err)
 	}
+	makeWorkerIdleForReviewNudge(deps)
 
 	aliceNudge := "New blocking PR review feedback on #42:\n- alice: Please add tests.\n\nAddress the feedback in the PR review and push an update.\n"
 	bobNudge := "New blocking PR review feedback on #42:\n- bob: Handle the nil case too.\n\nAddress the feedback in the PR review and push an update.\n"
