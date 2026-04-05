@@ -208,6 +208,161 @@ daemonReady:
 	}
 }
 
+func TestRunProcessBatchOverUnixSocket(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	projectDir := filepath.Join(t.TempDir(), "project")
+	if err := os.MkdirAll(filepath.Join(projectDir, ".git"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(.git) error = %v", err)
+	}
+
+	poolDir := filepath.Join(projectDir, ".orca", "pool")
+	initPoolClone(t, poolDir, "clone-01")
+	initPoolClone(t, poolDir, "clone-02")
+
+	projectPath, err := project.CanonicalPath(projectDir)
+	if err != nil {
+		t.Fatalf("CanonicalPath(%q) error = %v", projectDir, err)
+	}
+
+	configDir, err := os.MkdirTemp("/tmp", "orca-it-")
+	if err != nil {
+		t.Fatalf("MkdirTemp(/tmp) error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.RemoveAll(configDir)
+	})
+	paths := Paths{
+		ConfigDir: configDir,
+		StateDB:   filepath.Join(configDir, "state.db"),
+		PIDDir:    filepath.Join(configDir, "pids"),
+	}
+	stateDB := filepath.Join(configDir, "state.db")
+	pidFile := paths.pidFile(projectPath)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	amuxClient := &fakeAmux{
+		spawnPane:    Pane{ID: "pane-1", Name: "worker-1"},
+		spawnResults: []Pane{{ID: "pane-1", Name: "worker-1"}, {ID: "pane-2", Name: "worker-2"}},
+		captures:     make(map[string][]string),
+	}
+	commandRunner := newFakeCommands()
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- runProcess(ctx, ServeRequest{
+			Session: "test-session",
+			Project: projectDir,
+			StateDB: stateDB,
+			PIDFile: pidFile,
+		}, serveDeps{
+			detectOrigin: func(_ string) (string, error) {
+				return "git@github.com:weill-labs/orca.git", nil
+			},
+			amux:       amuxClient,
+			commands:   commandRunner,
+			poolRunner: stubPoolRunner{},
+		})
+	}()
+
+	store, err := state.OpenSQLite(stateDB)
+	if err != nil {
+		t.Fatalf("OpenSQLite(%q) error = %v", stateDB, err)
+	}
+	defer store.Close()
+
+	socketPath := paths.socketFile(projectPath)
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case err := <-errCh:
+			t.Fatalf("runProcess() returned early: %v", err)
+		default:
+		}
+
+		if _, err := os.Stat(socketPath); err != nil {
+			waitForDuration(t, 25*time.Millisecond)
+			continue
+		}
+		status, err := store.ProjectStatus(context.Background(), projectPath)
+		if err == nil && status.Daemon != nil && status.Daemon.Status == "running" {
+			goto daemonReady
+		}
+		waitForDuration(t, 25*time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for daemon socket %s", socketPath)
+
+daemonReady:
+
+	controller, err := NewLocalController(ControllerOptions{
+		Store: store,
+		Paths: paths,
+	})
+	if err != nil {
+		t.Fatalf("NewLocalController() error = %v", err)
+	}
+
+	result, err := controller.Batch(context.Background(), BatchRequest{
+		Project: projectPath,
+		Entries: []BatchEntry{
+			{Issue: "LAB-718", Agent: "claude", Prompt: "Implement Unix socket IPC.", Title: "Unix socket IPC title"},
+			{Issue: "LAB-719", Agent: "claude", Prompt: "Add batch IPC."},
+		},
+		Delay: time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("Batch() error = %v", err)
+	}
+	if got, want := len(result.Results), 2; got != want {
+		t.Fatalf("result count = %d, want %d", got, want)
+	}
+
+	waitFor(t, "batch task state", func() bool {
+		status, err := store.ProjectStatus(context.Background(), projectPath)
+		if err != nil {
+			return false
+		}
+		return status.Summary.Active == 2 && status.Summary.Workers == 2 && status.Summary.FreeClones == 0
+	})
+
+	firstStatus, err := store.TaskStatus(context.Background(), projectPath, "LAB-718")
+	if err != nil {
+		t.Fatalf("TaskStatus(LAB-718) error = %v", err)
+	}
+	if got, want := firstStatus.Task.Status, TaskStatusActive; got != want {
+		t.Fatalf("first task status = %q, want %q", got, want)
+	}
+
+	secondStatus, err := store.TaskStatus(context.Background(), projectPath, "LAB-719")
+	if err != nil {
+		t.Fatalf("TaskStatus(LAB-719) error = %v", err)
+	}
+	if got, want := secondStatus.Task.Status, TaskStatusActive; got != want {
+		t.Fatalf("second task status = %q, want %q", got, want)
+	}
+
+	amuxClient.requireMetadata(t, "pane-2", map[string]string{
+		"agent_profile":  "claude",
+		"branch":         "LAB-719",
+		"task":           "LAB-719",
+		"tracked_issues": `[{"id":"LAB-719","status":"active"}]`,
+	})
+	amuxClient.requireSentKeys(t, "pane-1", []string{"Implement Unix socket IPC.\n"})
+	amuxClient.requireSentKeys(t, "pane-2", []string{"Add batch IPC.\n"})
+
+	cancel()
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("runProcess() error = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for runProcess to exit")
+	}
+}
+
 type stubPoolRunner struct{}
 
 func (stubPoolRunner) Run(context.Context, string, string, ...string) error {

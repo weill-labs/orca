@@ -29,6 +29,7 @@ commands:
   stop     Stop the orca daemon
   status   Show daemon and task status
   assign   Assign an issue to a worker
+  batch    Assign multiple issues from a manifest
   enqueue  Queue a PR for serialized landing
   cancel   Cancel a task
   resume   Resume a task in its existing pane
@@ -93,6 +94,8 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.runStatus(ctx, args[1:])
 	case "assign":
 		return a.runAssign(ctx, args[1:])
+	case "batch":
+		return a.runBatch(ctx, args[1:])
 	case "enqueue":
 		return a.runEnqueue(ctx, args[1:])
 	case "cancel":
@@ -275,6 +278,51 @@ func (a *App) runAssign(ctx context.Context, args []string) error {
 	return err
 }
 
+func (a *App) runBatch(ctx context.Context, args []string) error {
+	fs := newFlagSet("batch")
+	var projectPath string
+	var delay time.Duration
+	fs.StringVar(&projectPath, "project", "", "project path")
+	fs.DurationVar(&delay, "delay", 5*time.Second, "delay between assigns")
+
+	manifestPath, err := parseRequiredSinglePositional(fs, args, "batch requires MANIFEST")
+	if err != nil {
+		return err
+	}
+	if delay < 0 {
+		return fmt.Errorf("batch delay must be non-negative")
+	}
+
+	entries, err := readBatchManifest(manifestPath)
+	if err != nil {
+		return err
+	}
+	if err := daemon.ValidateBatchEntries(entries); err != nil {
+		return err
+	}
+
+	projectPath, err = a.resolveProject(projectPath)
+	if err != nil {
+		return err
+	}
+
+	result, err := a.daemon.Batch(ctx, daemon.BatchRequest{
+		Project: projectPath,
+		Entries: entries,
+		Delay:   delay,
+	})
+	if err != nil {
+		return err
+	}
+
+	for _, task := range result.Results {
+		if _, err := fmt.Fprintf(a.stdout, "%s assigned to %s\n", task.Issue, task.Agent); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (a *App) runEnqueue(ctx context.Context, args []string) error {
 	fs := newFlagSet("enqueue")
 	var projectPath string
@@ -311,6 +359,19 @@ func (a *App) runEnqueue(ctx context.Context, args []string) error {
 
 	_, err = fmt.Fprintf(a.stdout, "queued PR #%d for landing at position %d\n", result.PRNumber, result.Position)
 	return err
+}
+
+func readBatchManifest(path string) ([]daemon.BatchEntry, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read batch manifest: %w", err)
+	}
+
+	var entries []daemon.BatchEntry
+	if err := json.Unmarshal(data, &entries); err != nil {
+		return nil, fmt.Errorf("decode batch manifest: %w", err)
+	}
+	return entries, nil
 }
 
 func (a *App) runCancel(ctx context.Context, args []string) error {

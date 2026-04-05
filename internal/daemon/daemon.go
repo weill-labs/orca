@@ -36,6 +36,7 @@ type Daemon struct {
 	events           EventSink
 	now              func() time.Time
 	newTicker        func(time.Duration) Ticker
+	sleep            func(context.Context, time.Duration) error
 	captureInterval  time.Duration
 	pollInterval     time.Duration
 	mergeGracePeriod time.Duration
@@ -81,6 +82,9 @@ func New(opts Options) (*Daemon, error) {
 			return realTicker{Ticker: time.NewTicker(interval)}
 		}
 	}
+	if opts.Sleep == nil {
+		opts.Sleep = sleepContext
+	}
 	if opts.CaptureInterval <= 0 {
 		opts.CaptureInterval = defaultCaptureInterval
 	}
@@ -116,6 +120,7 @@ func New(opts Options) (*Daemon, error) {
 		events:           opts.Events,
 		now:              opts.Now,
 		newTicker:        opts.NewTicker,
+		sleep:            opts.Sleep,
 		captureInterval:  opts.CaptureInterval,
 		pollInterval:     opts.PollInterval,
 		mergeGracePeriod: opts.MergeGracePeriod,
