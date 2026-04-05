@@ -32,6 +32,7 @@ func TestPRReviewPollingNudgesWorkerOncePerNewBlockingReviewBatch(t *testing.T) 
 	if err := d.Assign(ctx, "LAB-689", "Implement daemon core", "codex"); err != nil {
 		t.Fatalf("Assign() error = %v", err)
 	}
+	makeWorkerIdleForReviewNudge(deps)
 
 	firstNudge := "New blocking PR review feedback on #42:\n- alice: Please add tests.\n\nAddress the feedback in the PR review and push an update."
 	secondNudge := "New blocking PR review feedback on #42:\n- bob: Handle the nil case too.\n\nAddress the feedback in the PR review and push an update."
@@ -108,6 +109,7 @@ func TestPRReviewPollingAdvancesCountWithoutNudgingForNonBlockingReviews(t *test
 	if err := d.Assign(ctx, "LAB-689", "Implement daemon core", "codex"); err != nil {
 		t.Fatalf("Assign() error = %v", err)
 	}
+	makeWorkerIdleForReviewNudge(deps)
 
 	firstNudge := "New blocking PR review feedback on #42:\n- alice: Please add tests.\n\nAddress the feedback in the PR review and push an update."
 	firstNudgeSent := firstNudge + "\n"
@@ -173,6 +175,7 @@ func TestPRReviewPollingIgnoresEmptyReviewPayload(t *testing.T) {
 	if err := d.Assign(ctx, "LAB-689", "Implement daemon core", "codex"); err != nil {
 		t.Fatalf("Assign() error = %v", err)
 	}
+	makeWorkerIdleForReviewNudge(deps)
 
 	firstNudge := "New blocking PR review feedback on #42:\n- alice: Please add tests.\n\nAddress the feedback in the PR review and push an update."
 	firstNudgeSent := firstNudge + "\n"
@@ -224,6 +227,7 @@ func TestPRReviewPollingNudgesWorkerForGitHubActionsIssueCommentsWithoutLGTM(t *
 	if err := d.Assign(ctx, "LAB-689", "Implement daemon core", "codex"); err != nil {
 		t.Fatalf("Assign() error = %v", err)
 	}
+	makeWorkerIdleForReviewNudge(deps)
 
 	firstNudge := "New blocking PR review feedback on #42:\n- github-actions: Potential bug: stale local branch in prepareAdoptedClone.\n\nAddress the feedback in the PR review and push an update."
 	firstNudgeSent := firstNudge + "\n"
@@ -289,6 +293,7 @@ func TestPRReviewPollingResumesFromPersistedWorkerStateAfterRestart(t *testing.T
 	if err := first.Assign(ctx, "LAB-689", "Implement daemon core", "codex"); err != nil {
 		t.Fatalf("Assign() error = %v", err)
 	}
+	makeWorkerIdleForReviewNudge(deps)
 
 	firstNudge := "New blocking PR review feedback on #42:\n- alice: Please add tests.\n\nAddress the feedback in the PR review and push an update."
 	secondNudge := "New blocking PR review feedback on #42:\n- bob: Handle the nil case too.\n\nAddress the feedback in the PR review and push an update."
@@ -355,6 +360,7 @@ func TestPRReviewPollingResumesIssueCommentCursorAfterRestart(t *testing.T) {
 	if err := first.Assign(ctx, "LAB-689", "Implement daemon core", "codex"); err != nil {
 		t.Fatalf("Assign() error = %v", err)
 	}
+	makeWorkerIdleForReviewNudge(deps)
 
 	firstNudge := "New blocking PR review feedback on #42:\n- github-actions: Add regression coverage for issue comments\n\nAddress the feedback in the PR review and push an update."
 	secondNudge := "New blocking PR review feedback on #42:\n- github-actions: Persist the issue comment cursor across restarts\n\nAddress the feedback in the PR review and push an update."
@@ -392,4 +398,117 @@ func TestPRReviewPollingResumesIssueCommentCursorAfterRestart(t *testing.T) {
 		worker, ok := deps.state.worker("pane-1")
 		return ok && worker.LastIssueCommentCount == 2 && deps.amux.countKey("pane-1", secondNudgeSent) == 1
 	})
+}
+
+func TestPRReviewPollingDefersBlockingReviewNudgeUntilWorkerIsIdle(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	captureTicker := newFakeTicker()
+	prTicker := newFakeTicker()
+	deps.tickers.enqueue(captureTicker, prTicker)
+	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--state", "open", "--json", "number"}, `[]`, nil)
+	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
+	payload := `{"reviewDecision":"CHANGES_REQUESTED","reviews":[{"author":{"login":"alice"},"state":"CHANGES_REQUESTED","body":"Please add tests."}]}`
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, payload, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, payload, nil)
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-689", "Implement daemon core", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	nudge := "New blocking PR review feedback on #42:\n- alice: Please add tests.\n\nAddress the feedback in the PR review and push an update."
+	nudgeSent := nudge + "\n"
+
+	prTicker.tick(deps.clock.Now())
+	waitFor(t, "busy worker review poll", func() bool {
+		return deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}) == 1
+	})
+
+	worker, ok := deps.state.worker("pane-1")
+	if !ok {
+		t.Fatal("worker not found after deferred review poll")
+	}
+	if got, want := worker.LastReviewCount, 0; got != want {
+		t.Fatalf("worker.LastReviewCount after deferred poll = %d, want %d", got, want)
+	}
+	if got := deps.amux.countKey("pane-1", nudgeSent); got != 0 {
+		t.Fatalf("review nudge count while worker active = %d, want 0", got)
+	}
+
+	makeWorkerIdleForReviewNudge(deps)
+	prTicker.tick(deps.clock.Now())
+	waitFor(t, "deferred review nudge after idle", func() bool {
+		worker, ok := deps.state.worker("pane-1")
+		return ok && worker.LastReviewCount == 1 && deps.amux.countKey("pane-1", nudgeSent) == 1
+	})
+}
+
+func TestPRReviewPollingDefersBlockingReviewNudgeWhenFreshCaptureShowsActivity(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	captureTicker := newFakeTicker()
+	prTicker := newFakeTicker()
+	deps.tickers.enqueue(captureTicker, prTicker)
+	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--state", "open", "--json", "number"}, `[]`, nil)
+	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
+	payload := `{"reviewDecision":"CHANGES_REQUESTED","reviews":[{"author":{"login":"alice"},"state":"CHANGES_REQUESTED","body":"Please add tests."}]}`
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, payload, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, payload, nil)
+	deps.amux.captureSequence("pane-1", []string{"still coding"})
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-689", "Implement daemon core", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	makeWorkerIdleForReviewNudge(deps)
+	nudge := "New blocking PR review feedback on #42:\n- alice: Please add tests.\n\nAddress the feedback in the PR review and push an update."
+	nudgeSent := nudge + "\n"
+
+	prTicker.tick(deps.clock.Now())
+	waitFor(t, "fresh capture review deferral", func() bool {
+		worker, ok := deps.state.worker("pane-1")
+		return ok && worker.LastCapture == "still coding"
+	})
+
+	worker, ok := deps.state.worker("pane-1")
+	if !ok {
+		t.Fatal("worker not found after fresh capture deferral")
+	}
+	if got, want := worker.LastReviewCount, 0; got != want {
+		t.Fatalf("worker.LastReviewCount after fresh capture deferral = %d, want %d", got, want)
+	}
+	if got := deps.amux.countKey("pane-1", nudgeSent); got != 0 {
+		t.Fatalf("review nudge count after fresh capture deferral = %d, want 0", got)
+	}
+
+	makeWorkerIdleForReviewNudge(deps)
+	prTicker.tick(deps.clock.Now())
+	waitFor(t, "fresh capture review nudge after idle", func() bool {
+		worker, ok := deps.state.worker("pane-1")
+		return ok && worker.LastReviewCount == 1 && deps.amux.countKey("pane-1", nudgeSent) == 1
+	})
+}
+
+func makeWorkerIdleForReviewNudge(deps *testDeps) {
+	deps.clock.Advance((2 * defaultCaptureInterval) + time.Second)
 }
