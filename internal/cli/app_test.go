@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -150,6 +151,28 @@ func TestAppRunDispatchesCommands(t *testing.T) {
 				}
 				if d.assignRequest.Agent != "claude" {
 					t.Fatalf("expected agent claude, got %q", d.assignRequest.Agent)
+				}
+				if !strings.Contains(stdout, "LAB-690") {
+					t.Fatalf("expected issue in output, got %q", stdout)
+				}
+			},
+		},
+		{
+			name: "assign title flag",
+			args: func(_, _ string) []string {
+				return []string{"assign", "LAB-690", "--prompt", "Implement CLI wiring", "--title", "Worker pane title"}
+			},
+			assert: func(t *testing.T, d *fakeDaemon, _ *fakeState, stdout, _ string, _, _ string) {
+				t.Helper()
+				if d.assignRequest == nil {
+					t.Fatal("expected assign to be called")
+				}
+				field := reflect.ValueOf(*d.assignRequest).FieldByName("Title")
+				if !field.IsValid() {
+					t.Fatal("AssignRequest missing Title field")
+				}
+				if got, want := field.String(), "Worker pane title"; got != want {
+					t.Fatalf("assign title = %q, want %q", got, want)
 				}
 				if !strings.Contains(stdout, "LAB-690") {
 					t.Fatalf("expected issue in output, got %q", stdout)
