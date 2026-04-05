@@ -210,14 +210,22 @@ func (d *Daemon) Assign(ctx context.Context, issue, prompt, agentProfile string,
 		return err
 	}
 
+	assignmentBranch := issue
+	prNumber, err := d.lookupOpenPRNumber(ctx, assignmentBranch)
+	if err != nil {
+		return fmt.Errorf("check open PRs for %s: %w", issue, err)
+	}
+	adoptingOpenPR := prNumber > 0
+
 	now := d.now()
 	claimedTask := Task{
 		Project:      d.project,
 		Issue:        issue,
 		Status:       TaskStatusStarting,
 		Prompt:       prompt,
-		Branch:       issue,
+		Branch:       assignmentBranch,
 		AgentProfile: profile.Name,
+		PRNumber:     prNumber,
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	}
@@ -235,12 +243,16 @@ func (d *Daemon) Assign(ctx context.Context, issue, prompt, agentProfile string,
 		return fmt.Errorf("acquire clone: %w", err)
 	}
 
-	if err := d.prepareClone(ctx, clone.Path, issue); err != nil {
+	prepareClone := d.prepareClone
+	if adoptingOpenPR {
+		prepareClone = d.prepareAdoptedClone
+	}
+	if err := prepareClone(ctx, clone.Path, assignmentBranch); err != nil {
 		_ = d.pool.Release(ctx, d.project, clone)
 		restoreReservation()
 		return fmt.Errorf("prepare clone: %w", err)
 	}
-	clone.CurrentBranch = issue
+	clone.CurrentBranch = assignmentBranch
 	clone.AssignedTask = issue
 
 	pane, err := d.amux.Spawn(ctx, SpawnRequest{
@@ -256,7 +268,7 @@ func (d *Daemon) Assign(ctx context.Context, issue, prompt, agentProfile string,
 		return fmt.Errorf("spawn pane: %w", err)
 	}
 
-	metadata, err := d.assignmentPaneMetadata(ctx, pane.ID, profile.Name, issue, issue, resolveTaskTitle(issue, firstTitle(title)))
+	metadata, err := d.assignmentPaneMetadata(ctx, pane.ID, profile.Name, assignmentBranch, issue, resolveTaskTitle(issue, firstTitle(title)), prNumber)
 	if err != nil {
 		_ = d.rollbackAssignment(ctx, clone, pane, issue)
 		restoreReservation()
@@ -333,8 +345,9 @@ func (d *Daemon) Assign(ctx context.Context, issue, prompt, agentProfile string,
 		PaneName:     pane.Name,
 		CloneName:    clone.Name,
 		ClonePath:    clone.Path,
-		Branch:       issue,
+		Branch:       assignmentBranch,
 		AgentProfile: profile.Name,
+		PRNumber:     prNumber,
 		Message:      "task assigned",
 	})
 	return nil
@@ -352,14 +365,6 @@ func (d *Daemon) validateAssignment(ctx context.Context, issue, prompt string) e
 		}
 	} else if !errors.Is(err, ErrTaskNotFound) {
 		return fmt.Errorf("load task %s: %w", issue, err)
-	}
-
-	prNumber, err := d.lookupOpenPRNumber(ctx, issue)
-	if err != nil {
-		return fmt.Errorf("check open PRs for %s: %w", issue, err)
-	}
-	if prNumber > 0 {
-		return fmt.Errorf("issue %s already has open PR #%d", issue, prNumber)
 	}
 
 	return nil
