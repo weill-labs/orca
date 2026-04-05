@@ -22,6 +22,7 @@ type testDeps struct {
 	events       *fakeEvents
 	tickers      *fakeTickerFactory
 	pidPath      string
+	sleep        func(context.Context, time.Duration) error
 }
 
 func noSleep(context.Context, time.Duration) error { return nil }
@@ -58,6 +59,7 @@ func newTestDeps(t *testing.T) *testDeps {
 		events:       newFakeEvents(),
 		tickers:      &fakeTickerFactory{},
 		pidPath:      filepath.Join(tmp, "orca.pid"),
+		sleep:        noSleep,
 	}
 }
 
@@ -77,6 +79,7 @@ func (d *testDeps) newDaemon(t *testing.T) *Daemon {
 		Events:           d.events,
 		Now:              d.clock.Now,
 		NewTicker:        d.tickers.NewTicker,
+		Sleep:            d.sleep,
 		CaptureInterval:  5 * time.Second,
 		PollInterval:     30 * time.Second,
 		MergeGracePeriod: 2 * time.Minute,

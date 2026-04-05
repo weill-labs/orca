@@ -12,6 +12,7 @@ import (
 type fakeAmux struct {
 	mu                    sync.Mutex
 	spawnPane             Pane
+	spawnResults          []Pane
 	paneExists            map[string]bool
 	paneExistsErr         error
 	listPanes             []Pane
@@ -56,6 +57,11 @@ func (a *fakeAmux) Spawn(ctx context.Context, req SpawnRequest) (Pane, error) {
 	}
 	if a.sentKeys == nil {
 		a.sentKeys = make(map[string][]string)
+	}
+	if len(a.spawnResults) > 0 {
+		pane := a.spawnResults[0]
+		a.spawnResults = a.spawnResults[1:]
+		return pane, nil
 	}
 	return a.spawnPane, nil
 }
