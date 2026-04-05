@@ -18,6 +18,7 @@ type sessionCapturePane struct {
 	ID          uint64          `json:"id"`
 	Name        string          `json:"name,omitempty"`
 	Lead        bool            `json:"lead,omitempty"`
+	Active      bool            `json:"active,omitempty"`
 	ColumnIndex int             `json:"column_index"`
 	Position    *capturePanePos `json:"position,omitempty"`
 }
@@ -75,17 +76,22 @@ func (c *CLIClient) captureSessionLayout(ctx context.Context, session string) (s
 
 func planSpawnPlacement(layout sessionCapture, leadPane string) spawnPlacement {
 	trimmedLeadPane := strings.TrimSpace(leadPane)
+	anchorPane, hasAnchorPane := spawnAnchorPane(layout.Panes, trimmedLeadPane)
 	columns := make(map[int][]sessionCapturePane)
 	for _, pane := range layout.Panes {
-		if paneExcludedFromWorkerColumns(pane, trimmedLeadPane) {
+		if paneExcludedFromWorkerColumns(pane, anchorPane, hasAnchorPane) {
 			continue
 		}
 		columns[pane.ColumnIndex] = append(columns[pane.ColumnIndex], pane)
 	}
 
 	if len(columns) == 0 {
+		atPane := trimmedLeadPane
+		if atPane == "" && hasAnchorPane {
+			atPane = paneRef(anchorPane)
+		}
 		return spawnPlacement{
-			atPane:    trimmedLeadPane,
+			atPane:    atPane,
 			rootLevel: true,
 		}
 	}
@@ -115,14 +121,45 @@ func planSpawnPlacement(layout sessionCapture, leadPane string) spawnPlacement {
 	}
 }
 
-func paneExcludedFromWorkerColumns(pane sessionCapturePane, leadPane string) bool {
-	if pane.Lead {
-		return true
+func spawnAnchorPane(panes []sessionCapturePane, leadPane string) (sessionCapturePane, bool) {
+	if pane, ok := findSessionPane(panes, func(pane sessionCapturePane) bool {
+		return paneMatchesRef(pane, leadPane)
+	}); ok {
+		return pane, true
 	}
-	if leadPane == "" {
+
+	if pane, ok := findSessionPane(panes, func(pane sessionCapturePane) bool {
+		return pane.Lead
+	}); ok {
+		return pane, true
+	}
+
+	return findSessionPane(panes, func(pane sessionCapturePane) bool {
+		return pane.Active
+	})
+}
+
+func paneExcludedFromWorkerColumns(pane, anchorPane sessionCapturePane, hasAnchorPane bool) bool {
+	if !hasAnchorPane {
 		return false
 	}
-	return paneMatchesRef(pane, leadPane)
+	return panesMatch(pane, anchorPane)
+}
+
+func panesMatch(left, right sessionCapturePane) bool {
+	if left.ID != 0 && right.ID != 0 {
+		return left.ID == right.ID
+	}
+	return left.Name != "" && left.Name == right.Name
+}
+
+func findSessionPane(panes []sessionCapturePane, matches func(sessionCapturePane) bool) (sessionCapturePane, bool) {
+	for _, pane := range panes {
+		if matches(pane) {
+			return pane, true
+		}
+	}
+	return sessionCapturePane{}, false
 }
 
 func paneMatchesRef(pane sessionCapturePane, ref string) bool {
