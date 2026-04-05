@@ -27,7 +27,7 @@ func (d *Daemon) agentHandshake(ctx context.Context, paneID string, profile Agen
 			}
 			trustConfirmed = true
 		case !resumed && hasResumePrompt(profile, output):
-			if err := d.amux.SendKeys(ctx, paneID, profile.ResumeSequence...); err != nil {
+			if err := d.resumeAgentInPane(ctx, paneID, profile); err != nil {
 				return fmt.Errorf("resume prior session: %w", err)
 			}
 			resumed = true
