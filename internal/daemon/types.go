@@ -26,26 +26,27 @@ const (
 	MergeQueueStatusQueued         = "queued"
 	MergeQueueStatusAwaitingChecks = "awaiting_checks"
 
-	EventDaemonStarted        = "daemon.started"
-	EventDaemonStopped        = "daemon.stopped"
-	EventTaskAssigned         = "task.assigned"
-	EventTaskAssignFailed     = "task.assign_failed"
-	EventTaskCancelled        = "task.cancelled"
-	EventTaskCompleted        = "task.completed"
-	EventTaskFailed           = "task.failed"
-	EventTaskCompletionFailed = "task.completion_failed"
-	EventWorkerNudged         = "worker.nudged"
-	EventWorkerNudgedCI       = "worker.nudged_ci"
-	EventWorkerNudgedConflict = "worker.nudged_conflict"
-	EventWorkerNudgedReview   = "worker.nudged_review"
-	EventWorkerEscalated      = "worker.escalated"
-	EventWorkerRecovered      = "worker.recovered"
-	EventWorkerPostmortem     = "worker.postmortem"
-	EventPRDetected           = "pr.detected"
-	EventPREnqueued           = "pr.enqueued"
-	EventPRLandingStarted     = "pr.landing_started"
-	EventPRLandingFailed      = "pr.landing_failed"
-	EventPRMerged             = "pr.merged"
+	EventDaemonStarted         = "daemon.started"
+	EventDaemonStopped         = "daemon.stopped"
+	EventTaskAssigned          = "task.assigned"
+	EventTaskAssignFailed      = "task.assign_failed"
+	EventTaskCancelled         = "task.cancelled"
+	EventTaskCompleted         = "task.completed"
+	EventTaskFailed            = "task.failed"
+	EventTaskCompletionFailed  = "task.completion_failed"
+	EventWorkerNudged          = "worker.nudged"
+	EventWorkerNudgedCI        = "worker.nudged_ci"
+	EventWorkerNudgedConflict  = "worker.nudged_conflict"
+	EventWorkerNudgedReview    = "worker.nudged_review"
+	EventWorkerReviewEscalated = "worker.review_escalated"
+	EventWorkerEscalated       = "worker.escalated"
+	EventWorkerRecovered       = "worker.recovered"
+	EventWorkerPostmortem      = "worker.postmortem"
+	EventPRDetected            = "pr.detected"
+	EventPREnqueued            = "pr.enqueued"
+	EventPRLandingStarted      = "pr.landing_started"
+	EventPRLandingFailed       = "pr.landing_failed"
+	EventPRMerged              = "pr.merged"
 )
 
 var (
@@ -178,6 +179,7 @@ type Worker struct {
 	Health                string    `json:"health,omitempty"`
 	LastReviewCount       int       `json:"last_review_count,omitempty"`
 	LastIssueCommentCount int       `json:"last_issue_comment_count,omitempty"`
+	ReviewNudgeCount      int       `json:"review_nudge_count,omitempty"`
 	LastCIState           string    `json:"last_ci_state,omitempty"`
 	LastMergeableState    string    `json:"last_mergeable_state,omitempty"`
 	NudgeCount            int       `json:"nudge_count,omitempty"`

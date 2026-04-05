@@ -90,6 +90,7 @@ type Worker struct {
 	ClonePath             string    `json:"clone_path,omitempty"`
 	LastReviewCount       int       `json:"last_review_count,omitempty"`
 	LastIssueCommentCount int       `json:"last_issue_comment_count,omitempty"`
+	ReviewNudgeCount      int       `json:"review_nudge_count,omitempty"`
 	LastCIState           string    `json:"last_ci_state,omitempty"`
 	LastMergeableState    string    `json:"last_mergeable_state,omitempty"`
 	NudgeCount            int       `json:"nudge_count,omitempty"`
