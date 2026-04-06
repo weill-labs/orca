@@ -371,7 +371,7 @@ func TestWorkerAppearsIdleForReviewNudgeHandlesCaptureEdges(t *testing.T) {
 			tt.captureSetup(deps.amux)
 
 			d := deps.newDaemon(t)
-			active := &ActiveAssignment{
+			update := &TaskStateUpdate{Active: ActiveAssignment{
 				Task: Task{
 					Project:   "/tmp/project",
 					Issue:     "LAB-804",
@@ -379,9 +379,9 @@ func TestWorkerAppearsIdleForReviewNudgeHandlesCaptureEdges(t *testing.T) {
 					ClonePath: "/tmp/clone-01",
 				},
 				Worker: tt.worker,
-			}
+			}}
 
-			got := d.workerAppearsIdleForReviewNudge(context.Background(), active, AgentProfile{Name: "codex"})
+			got := d.workerAppearsIdleForReviewNudge(context.Background(), update, AgentProfile{Name: "codex"}, now)
 			if got != tt.wantIdle {
 				t.Fatalf("workerAppearsIdleForReviewNudge() = %t, want %t", got, tt.wantIdle)
 			}
