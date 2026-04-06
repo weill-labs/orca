@@ -180,6 +180,25 @@ func TestAppRunDispatchesCommands(t *testing.T) {
 			},
 		},
 		{
+			name: "spawn",
+			args: func(_, _ string) []string { return []string{"spawn", "--title", "Scratch pane"} },
+			assert: func(t *testing.T, d *fakeDaemon, _ *fakeState, stdout, _ string, repoRoot, _ string) {
+				t.Helper()
+				if d.spawnRequest == nil {
+					t.Fatal("expected spawn to be called")
+				}
+				if got, want := d.spawnRequest.Project, repoRoot; got != want {
+					t.Fatalf("spawn project = %q, want %q", got, want)
+				}
+				if got, want := d.spawnRequest.Title, "Scratch pane"; got != want {
+					t.Fatalf("spawn title = %q, want %q", got, want)
+				}
+				if !strings.Contains(stdout, "pane-7") || !strings.Contains(stdout, "/clones/orca01") {
+					t.Fatalf("expected spawn output, got %q", stdout)
+				}
+			},
+		},
+		{
 			name: "enqueue",
 			args: func(_, _ string) []string { return []string{"enqueue", "42"} },
 			assert: func(t *testing.T, d *fakeDaemon, _ *fakeState, stdout, _ string, _, _ string) {
@@ -330,6 +349,7 @@ func TestAppRunDispatchesCommands(t *testing.T) {
 				startResult:   daemon.StartResult{Project: otherRepo, Session: "alpha", PID: 321, StartedAt: now},
 				stopResult:    daemon.StopResult{Project: repoRoot, PID: 321, StoppedAt: now},
 				assignResult:  daemon.TaskActionResult{Project: repoRoot, Issue: "LAB-690", Status: "queued", Agent: "codex", UpdatedAt: now},
+				spawnResult:   daemon.SpawnPaneResult{Project: repoRoot, PaneID: "pane-7", PaneName: "Scratch pane", ClonePath: "/clones/orca01"},
 				enqueueResult: daemon.MergeQueueActionResult{Project: repoRoot, PRNumber: 42, Status: "queued", Position: 1, UpdatedAt: now},
 				cancelResult:  daemon.TaskActionResult{Project: repoRoot, Issue: "LAB-690", Status: "cancelled", UpdatedAt: now},
 				resumeResult:  daemon.TaskActionResult{Project: repoRoot, Issue: "LAB-690", Status: "active", Agent: "codex", UpdatedAt: now},
@@ -440,6 +460,7 @@ func TestAppRunParseErrors(t *testing.T) {
 		{name: "assign missing issue", args: []string{"assign", "--prompt", "x"}, wantErr: "assign requires ISSUE"},
 		{name: "assign missing prompt", args: []string{"assign", "LAB-690"}, wantErr: "assign requires --prompt"},
 		{name: "batch missing manifest", args: []string{"batch"}, wantErr: "batch requires MANIFEST"},
+		{name: "spawn extra arg", args: []string{"spawn", "extra"}, wantErr: "spawn does not accept positional arguments"},
 		{name: "enqueue missing pr number", args: []string{"enqueue"}, wantErr: "enqueue requires PR_NUMBER"},
 		{name: "cancel missing issue", args: []string{"cancel"}, wantErr: "cancel requires ISSUE"},
 		{name: "resume missing issue", args: []string{"resume"}, wantErr: "resume requires ISSUE"},
@@ -607,6 +628,15 @@ func TestAppCommandsAcceptProjectFlag(t *testing.T) {
 			},
 		},
 		{
+			name: "spawn",
+			args: []string{"spawn", "--project", targetSubdir},
+			assert: func(t *testing.T, d *fakeDaemon, _ *fakeState) {
+				if d.spawnRequest == nil || d.spawnRequest.Project != targetRepo {
+					t.Fatalf("spawn project = %#v, want %q", d.spawnRequest, targetRepo)
+				}
+			},
+		},
+		{
 			name: "enqueue",
 			args: []string{"enqueue", "42", "--project", targetSubdir},
 			assert: func(t *testing.T, d *fakeDaemon, _ *fakeState) {
@@ -727,6 +757,7 @@ type fakeDaemon struct {
 	stopRequest    *daemon.StopRequest
 	assignRequest  *daemon.AssignRequest
 	batchRequest   *daemon.BatchRequest
+	spawnRequest   *daemon.SpawnPaneRequest
 	enqueueRequest *daemon.EnqueueRequest
 	cancelRequest  *daemon.CancelRequest
 	resumeRequest  *daemon.ResumeRequest
@@ -735,6 +766,7 @@ type fakeDaemon struct {
 	stopResult    daemon.StopResult
 	assignResult  daemon.TaskActionResult
 	batchResult   daemon.BatchResult
+	spawnResult   daemon.SpawnPaneResult
 	enqueueResult daemon.MergeQueueActionResult
 	cancelResult  daemon.TaskActionResult
 	resumeResult  daemon.TaskActionResult
@@ -772,6 +804,14 @@ func (f *fakeDaemon) Batch(_ context.Context, req daemon.BatchRequest) (daemon.B
 	}
 	f.batchRequest = &req
 	return f.batchResult, nil
+}
+
+func (f *fakeDaemon) Spawn(_ context.Context, req daemon.SpawnPaneRequest) (daemon.SpawnPaneResult, error) {
+	if f.err != nil {
+		return daemon.SpawnPaneResult{}, f.err
+	}
+	f.spawnRequest = &req
+	return f.spawnResult, nil
 }
 
 func (f *fakeDaemon) Enqueue(_ context.Context, req daemon.EnqueueRequest) (daemon.MergeQueueActionResult, error) {
@@ -879,6 +919,9 @@ func TestUsageTextIncludesResumeCommand(t *testing.T) {
 
 	if !strings.Contains(UsageText(), "resume") {
 		t.Fatalf("UsageText() = %q, want resume command", UsageText())
+	}
+	if !strings.Contains(UsageText(), "spawn") {
+		t.Fatalf("UsageText() = %q, want spawn command", UsageText())
 	}
 	if !strings.Contains(UsageText(), "batch") {
 		t.Fatalf("UsageText() = %q, want batch command", UsageText())

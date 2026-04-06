@@ -30,6 +30,7 @@ commands:
   status   Show daemon and task status
   assign   Assign an issue to a worker
   batch    Assign multiple issues from a manifest
+  spawn    Open a clone in a new amux pane
   enqueue  Queue a PR for serialized landing
   cancel   Cancel a task
   resume   Resume a task, recreating its pane if needed
@@ -187,6 +188,8 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.runAssign(ctx, args[1:])
 	case "batch":
 		return a.runBatch(ctx, args[1:])
+	case "spawn":
+		return a.runSpawn(ctx, args[1:])
 	case "enqueue":
 		return a.runEnqueue(ctx, args[1:])
 	case "cancel":
@@ -412,6 +415,53 @@ func (a *App) runBatch(ctx context.Context, args []string) error {
 		}
 	}
 	return nil
+}
+
+func (a *App) runSpawn(ctx context.Context, args []string) error {
+	fs := newFlagSet("spawn")
+	var projectPath string
+	var session string
+	var leadPane string
+	var title string
+	var jsonOutput bool
+	fs.StringVar(&projectPath, "project", "", "project path")
+	fs.StringVar(&session, "session", "", "amux session name (defaults to AMUX_SESSION)")
+	fs.StringVar(&leadPane, "lead-pane", "", "pane to split from")
+	fs.StringVar(&title, "title", "", "pane title")
+	fs.BoolVar(&jsonOutput, "json", false, "emit JSON output")
+
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
+	if len(fs.Args()) > 0 {
+		return fmt.Errorf("spawn does not accept positional arguments")
+	}
+
+	projectPath, err := a.resolveProject(projectPath)
+	if err != nil {
+		return err
+	}
+
+	if strings.TrimSpace(session) == "" {
+		session = strings.TrimSpace(os.Getenv(amuxSessionEnvVar))
+	}
+
+	result, err := a.daemon.Spawn(ctx, daemon.SpawnPaneRequest{
+		Project:  projectPath,
+		Session:  session,
+		LeadPane: leadPane,
+		Title:    title,
+	})
+	if err != nil {
+		return err
+	}
+
+	if jsonOutput {
+		return writeJSON(a.stdout, result)
+	}
+
+	_, err = fmt.Fprintf(a.stdout, "%s\t%s\n", result.PaneID, result.ClonePath)
+	return err
 }
 
 func (a *App) runEnqueue(ctx context.Context, args []string) error {
