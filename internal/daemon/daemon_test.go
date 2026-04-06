@@ -97,6 +97,25 @@ func TestDaemonStartReturnsAlreadyStartedWhenPIDIsAlive(t *testing.T) {
 	}
 }
 
+func TestDaemonStartReturnsPIDFileReadErrorForInvalidPIDFile(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	d := deps.newDaemon(t)
+
+	if err := os.WriteFile(deps.pidPath, []byte("not-a-pid\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", deps.pidPath, err)
+	}
+
+	err := d.Start(context.Background())
+	if err == nil {
+		t.Fatal("Start() succeeded, want error")
+	}
+	if !strings.Contains(err.Error(), "read pid file") {
+		t.Fatalf("Start() error = %v, want read pid file error", err)
+	}
+}
+
 func TestAssignAllocatesCloneStartsAgentAndRegistersState(t *testing.T) {
 	t.Parallel()
 
