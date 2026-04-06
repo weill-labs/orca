@@ -41,6 +41,7 @@ const (
 	EventWorkerHandshake       = "worker.handshake"
 	EventWorkerNudged          = "worker.nudged"
 	EventWorkerNudgedCI        = "worker.nudged_ci"
+	EventWorkerCIEscalated     = "worker.ci_escalated"
 	EventWorkerNudgedConflict  = "worker.nudged_conflict"
 	EventWorkerNudgedReview    = "worker.nudged_review"
 	EventWorkerReviewEscalated = "worker.review_escalated"
@@ -188,6 +189,9 @@ type Worker struct {
 	LastIssueCommentCount int       `json:"last_issue_comment_count,omitempty"`
 	ReviewNudgeCount      int       `json:"review_nudge_count,omitempty"`
 	LastCIState           string    `json:"last_ci_state,omitempty"`
+	CINudgeCount          int       `json:"ci_nudge_count,omitempty"`
+	CIFailurePollCount    int       `json:"ci_failure_poll_count,omitempty"`
+	CIEscalated           bool      `json:"ci_escalated,omitempty"`
 	LastMergeableState    string    `json:"last_mergeable_state,omitempty"`
 	NudgeCount            int       `json:"nudge_count,omitempty"`
 	LastCapture           string    `json:"last_capture,omitempty"`

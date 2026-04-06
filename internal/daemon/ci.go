@@ -4,14 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 )
 
 const (
-	ciStateFail     = "fail"
-	ciStatePending  = "pending"
-	ciStatePass     = "pass"
-	ciStateCancel   = "cancel"
-	ciStateSkipping = "skipping"
+	ciStateFail                = "fail"
+	ciStatePending             = "pending"
+	ciStatePass                = "pass"
+	ciStateCancel              = "cancel"
+	ciStateSkipping            = "skipping"
+	maxCINudges                = 3
+	ciFailureRenudgePollWindow = 2
 )
 
 func (d *Daemon) handlePRChecksPoll(ctx context.Context, update *TaskStateUpdate, profile AgentProfile) {
@@ -23,21 +26,68 @@ func (d *Daemon) handlePRChecksPoll(ctx context.Context, update *TaskStateUpdate
 
 	previous := update.Active.Worker.LastCIState
 	if ciState != ciStateFail {
-		if previous != ciState {
-			update.Active.Worker.LastCIState = ciState
-			update.Active.Worker.UpdatedAt = now
+		if d.resetCIWorkerState(&update.Active.Worker, ciState, now) {
 			update.WorkerChanged = true
 		}
 		return
 	}
-	if previous == ciStateFail {
+	if previous != ciStateFail {
+		update.Active.Worker.CINudgeCount = 0
+		update.Active.Worker.CIFailurePollCount = 0
+		update.Active.Worker.CIEscalated = false
+		if d.recordCIFailureNudge(ctx, update, profile, now) {
+			update.WorkerChanged = true
+		}
 		return
 	}
-	if d.nudgeForCIFailure(ctx, update, profile) {
-		update.Active.Worker.LastCIState = ciStateFail
-		update.Active.Worker.UpdatedAt = now
+	if update.Active.Worker.CIEscalated {
+		return
+	}
+	update.Active.Worker.CIFailurePollCount++
+	update.Active.Worker.UpdatedAt = now
+	update.WorkerChanged = true
+	if update.Active.Worker.CIFailurePollCount < ciFailureRenudgePollWindow {
+		return
+	}
+	if update.Active.Worker.CINudgeCount >= maxCINudges {
+		update.Active.Worker.CIEscalated = true
+		event := d.assignmentEvent(update.Active, profile, EventWorkerCIEscalated, fmt.Sprintf("CI nudges exhausted after %d attempts; lead intervention required", update.Active.Worker.CINudgeCount))
+		event.Retry = update.Active.Worker.CINudgeCount
+		update.Events = append(update.Events, event)
+		return
+	}
+	if d.recordCIFailureNudge(ctx, update, profile, now) {
 		update.WorkerChanged = true
 	}
+}
+
+func (d *Daemon) resetCIWorkerState(worker *Worker, ciState string, now time.Time) bool {
+	if worker.LastCIState == ciState &&
+		worker.CINudgeCount == 0 &&
+		worker.CIFailurePollCount == 0 &&
+		!worker.CIEscalated {
+		return false
+	}
+
+	worker.LastCIState = ciState
+	worker.CINudgeCount = 0
+	worker.CIFailurePollCount = 0
+	worker.CIEscalated = false
+	worker.UpdatedAt = now
+	return true
+}
+
+func (d *Daemon) recordCIFailureNudge(ctx context.Context, update *TaskStateUpdate, profile AgentProfile, now time.Time) bool {
+	if !d.nudgeForCIFailure(ctx, update, profile) {
+		return false
+	}
+
+	update.Active.Worker.LastCIState = ciStateFail
+	update.Active.Worker.CINudgeCount++
+	update.Active.Worker.CIFailurePollCount = 0
+	update.Active.Worker.CIEscalated = false
+	update.Active.Worker.UpdatedAt = now
+	return true
 }
 
 func (d *Daemon) nudgeForCIFailure(ctx context.Context, update *TaskStateUpdate, profile AgentProfile) bool {
