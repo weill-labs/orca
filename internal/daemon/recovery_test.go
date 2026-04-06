@@ -100,6 +100,54 @@ func TestDaemonStartResumesMonitoringLiveAssignments(t *testing.T) {
 	}
 }
 
+func TestDaemonStartNormalizesLegacyNumericPaneRefs(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	captureTicker := newFakeTicker()
+	pollTicker := newFakeTicker()
+	deps.tickers.enqueue(captureTicker, pollTicker)
+	seedActiveAssignment(t, deps, "LAB-854", "7")
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	task, ok := deps.state.task("LAB-854")
+	if !ok {
+		t.Fatal("task missing after startup")
+	}
+	if got, want := task.PaneID, "worker-LAB-854"; got != want {
+		t.Fatalf("task.PaneID = %q, want %q", got, want)
+	}
+
+	worker, ok := deps.state.worker("worker-LAB-854")
+	if !ok {
+		t.Fatal("worker missing after startup normalization")
+	}
+	if got, want := worker.PaneID, "worker-LAB-854"; got != want {
+		t.Fatalf("worker.PaneID = %q, want %q", got, want)
+	}
+	if _, ok := deps.state.worker("7"); ok {
+		t.Fatal("legacy numeric worker ref retained after normalization")
+	}
+
+	if got, want := deps.amux.paneExistsCalls, []string{"worker-LAB-854"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("pane exists calls = %#v, want %#v", got, want)
+	}
+	if got, want := deps.amux.captureCount("worker-LAB-854"), 1; got != want {
+		t.Fatalf("capture count = %d, want %d", got, want)
+	}
+	if got := deps.amux.captureCount("7"); got != 0 {
+		t.Fatalf("legacy capture count = %d, want 0", got)
+	}
+}
+
 func TestDaemonStartMissingPaneRecoveryIsIdempotentAcrossRestart(t *testing.T) {
 	t.Parallel()
 

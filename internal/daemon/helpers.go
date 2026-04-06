@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -439,6 +440,93 @@ func assignmentPaneName(task Task, worker Worker) string {
 		paneName = strings.TrimSpace(task.PaneID)
 	}
 	return paneName
+}
+
+func workerPaneRef(task Task, worker Worker) string {
+	for _, candidate := range []string{
+		strings.TrimSpace(task.PaneName),
+		strings.TrimSpace(worker.PaneName),
+		strings.TrimSpace(task.PaneID),
+		strings.TrimSpace(worker.PaneID),
+	} {
+		if candidate == "" || isNumericPaneRef(candidate) {
+			continue
+		}
+		return candidate
+	}
+	if issue := strings.TrimSpace(task.Issue); issue != "" {
+		return "worker-" + issue
+	}
+	return strings.TrimSpace(task.PaneID)
+}
+
+func isNumericPaneRef(ref string) bool {
+	if strings.TrimSpace(ref) == "" {
+		return false
+	}
+	_, err := strconv.Atoi(ref)
+	return err == nil
+}
+
+func (d *Daemon) normalizeStoredPaneRef(ctx context.Context, task *Task, worker *Worker) error {
+	if task == nil {
+		return nil
+	}
+	// Only migrate legacy numeric refs. Already-stable non-numeric refs should
+	// keep their existing value so restart behavior stays unchanged.
+	if !isNumericPaneRef(strings.TrimSpace(task.PaneID)) && !isNumericPaneRef(strings.TrimSpace(derefWorker(worker).PaneID)) {
+		return nil
+	}
+
+	stableRef := workerPaneRef(*task, derefWorker(worker))
+	if stableRef == "" {
+		return nil
+	}
+
+	now := d.now()
+	oldTaskRef := strings.TrimSpace(task.PaneID)
+	if task.PaneID != stableRef || strings.TrimSpace(task.PaneName) != stableRef {
+		task.PaneID = stableRef
+		task.PaneName = stableRef
+		task.UpdatedAt = now
+		if err := d.state.PutTask(ctx, *task); err != nil {
+			return fmt.Errorf("normalize task pane ref: %w", err)
+		}
+	}
+
+	if worker == nil {
+		return nil
+	}
+
+	oldWorkerRef := strings.TrimSpace(worker.PaneID)
+	if worker.PaneID == stableRef && strings.TrimSpace(worker.PaneName) == stableRef {
+		return nil
+	}
+
+	worker.PaneID = stableRef
+	worker.PaneName = stableRef
+	worker.UpdatedAt = now
+	if err := d.state.PutWorker(ctx, *worker); err != nil {
+		return fmt.Errorf("normalize worker pane ref: %w", err)
+	}
+	if oldWorkerRef != "" && oldWorkerRef != stableRef {
+		if err := d.state.DeleteWorker(ctx, d.project, oldWorkerRef); err != nil && !errors.Is(err, ErrWorkerNotFound) {
+			return fmt.Errorf("delete legacy worker pane ref %s: %w", oldWorkerRef, err)
+		}
+	}
+	if oldTaskRef != "" && oldTaskRef != stableRef && oldTaskRef != oldWorkerRef {
+		if err := d.state.DeleteWorker(ctx, d.project, oldTaskRef); err != nil && !errors.Is(err, ErrWorkerNotFound) {
+			return fmt.Errorf("delete legacy task pane ref %s: %w", oldTaskRef, err)
+		}
+	}
+	return nil
+}
+
+func derefWorker(worker *Worker) Worker {
+	if worker == nil {
+		return Worker{}
+	}
+	return *worker
 }
 
 func (d *Daemon) sendPromptAndEnter(ctx context.Context, paneID, prompt string) error {

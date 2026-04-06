@@ -34,6 +34,10 @@ func (d *Daemon) reconcileTaskOnStartup(ctx context.Context, task Task) {
 		_ = d.failTaskWithoutWorker(ctx, task, "persisted worker missing on daemon startup")
 		return
 	}
+	if err := d.normalizeStoredPaneRef(ctx, &task, &worker); err != nil {
+		d.handleTaskStartupPaneError(ctx, ActiveAssignment{Task: task, Worker: worker}, "worker pane normalization failed on daemon startup", err)
+		return
+	}
 
 	active := ActiveAssignment{
 		Task:   task,

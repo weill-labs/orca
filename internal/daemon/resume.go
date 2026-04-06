@@ -30,6 +30,13 @@ func (d *Daemon) Resume(ctx context.Context, issue, prompt string) error {
 	if err != nil {
 		return err
 	}
+	if hasWorker {
+		if err := d.normalizeStoredPaneRef(ctx, &task, &worker); err != nil {
+			return err
+		}
+	} else if err := d.normalizeStoredPaneRef(ctx, &task, nil); err != nil {
+		return err
+	}
 
 	paneID := strings.TrimSpace(task.PaneID)
 	if paneID != "" {

@@ -428,6 +428,8 @@ func captureUnavailable(err error) bool {
 		return false
 	}
 
+	// Keep this in sync with paneCaptureError/paneMissing so ListPanes can
+	// degrade to "no CWD enrichment" when a pane disappeared mid-scan.
 	message := strings.ToLower(strings.TrimSpace(err.Error()))
 	switch {
 	case strings.Contains(message, "capture failed: not_found"):
