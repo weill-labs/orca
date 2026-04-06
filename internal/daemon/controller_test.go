@@ -161,6 +161,103 @@ func TestStopReturnsContextErrorWhenPollingCancelled(t *testing.T) {
 	waitForProcessExit(t, pid)
 }
 
+func TestStopWithoutForceReturnsTimeoutWhenProcessIgnoresTERM(t *testing.T) {
+	store := &fakeStore{}
+	projectPath := testProjectPath(t)
+	controller, _ := newTestController(t, store, projectPath, scriptOptions{
+		ignoreTERM:  true,
+		stopTimeout: 150 * time.Millisecond,
+	})
+
+	process := startDirectSleepProcess(t, true)
+	pid := process.Process.Pid
+
+	if err := os.MkdirAll(controller.paths.PIDDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	pidFile := controller.paths.pidFile(projectPath)
+	if err := os.WriteFile(pidFile, []byte(fmt.Sprintf("%d", pid)), 0o644); err != nil {
+		t.Fatalf("write controller pid file: %v", err)
+	}
+	store.projectStatus = state.ProjectStatus{
+		Project: projectPath,
+		Daemon: &state.DaemonStatus{
+			PID:    pid,
+			Status: "running",
+		},
+	}
+
+	_, err := controller.Stop(context.Background(), StopRequest{Project: projectPath})
+	if err == nil || !strings.Contains(err.Error(), "daemon did not stop within") {
+		t.Fatalf("Stop() error = %v, want timeout", err)
+	}
+
+	alive, err := processAlive(pid)
+	if err != nil {
+		t.Fatalf("processAlive(%d) error = %v", pid, err)
+	}
+	if !alive {
+		t.Fatal("expected default stop to leave stubborn daemon running")
+	}
+	if store.markDaemonStoppedCalled {
+		t.Fatal("expected timed out stop to leave daemon state running")
+	}
+	if _, err := os.Stat(pidFile); err != nil {
+		t.Fatalf("Stat(%q) error = %v, want pid file to remain", pidFile, err)
+	}
+
+	killTestProcess(t, pid)
+}
+
+func TestStopForceKillsProcessAfterGracePeriod(t *testing.T) {
+	store := &fakeStore{}
+	projectPath := testProjectPath(t)
+	controller, _ := newTestController(t, store, projectPath, scriptOptions{
+		ignoreTERM:  true,
+		stopTimeout: 150 * time.Millisecond,
+	})
+
+	process := startDirectSleepProcess(t, true)
+	pid := process.Process.Pid
+
+	if err := os.MkdirAll(controller.paths.PIDDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	pidFile := controller.paths.pidFile(projectPath)
+	if err := os.WriteFile(pidFile, []byte(fmt.Sprintf("%d", pid)), 0o644); err != nil {
+		t.Fatalf("write controller pid file: %v", err)
+	}
+	store.projectStatus = state.ProjectStatus{
+		Project: projectPath,
+		Daemon: &state.DaemonStatus{
+			PID:    pid,
+			Status: "running",
+		},
+	}
+
+	startedAt := time.Now()
+	result, err := controller.Stop(context.Background(), StopRequest{
+		Project: projectPath,
+		Force:   true,
+	})
+	if err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+	if elapsed := time.Since(startedAt); elapsed < controller.stopTimeout {
+		t.Fatalf("Stop() elapsed = %s, want at least grace period %s", elapsed, controller.stopTimeout)
+	}
+	if got, want := result.PID, pid; got != want {
+		t.Fatalf("result pid = %d, want %d", got, want)
+	}
+	waitForProcessExit(t, pid)
+	if !store.markDaemonStoppedCalled {
+		t.Fatal("expected forced stop to mark daemon stopped")
+	}
+	if _, err := os.Stat(pidFile); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Stat(%q) error = %v, want pid file removed", pidFile, err)
+	}
+}
+
 func TestLocalControllerAssignAndBatchRPC(t *testing.T) {
 	projectPath := testProjectPath(t)
 	tempDir := t.TempDir()
@@ -375,7 +472,8 @@ func TestLocalControllerBatchErrorBranches(t *testing.T) {
 }
 
 type scriptOptions struct {
-	ignoreTERM bool
+	ignoreTERM  bool
+	stopTimeout time.Duration
 }
 
 func newTestController(t *testing.T, store *fakeStore, projectPath string, options scriptOptions) (*LocalController, string) {
@@ -401,13 +499,20 @@ func newTestController(t *testing.T, store *fakeStore, projectPath string, optio
 		Executable:   scriptPath,
 		Now:          func() time.Time { return time.Unix(1, 0).UTC() },
 		StartTimeout: 1500 * time.Millisecond,
-		StopTimeout:  time.Second,
+		StopTimeout:  resolvedStopTimeout(options.stopTimeout),
 	})
 	if err != nil {
 		t.Fatalf("NewLocalController() error = %v", err)
 	}
 
 	return controller, pidOutputPath
+}
+
+func resolvedStopTimeout(stopTimeout time.Duration) time.Duration {
+	if stopTimeout > 0 {
+		return stopTimeout
+	}
+	return time.Second
 }
 
 func waitForPID(t *testing.T, path string) int {
