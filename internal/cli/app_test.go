@@ -557,6 +557,7 @@ func TestAppRunOutputModes(t *testing.T) {
 		args       []string
 		daemon     *fakeDaemon
 		state      *fakeState
+		wantErr    string
 		assert     func(t *testing.T, stdout string, d *fakeDaemon, s *fakeState)
 	}{
 		{
@@ -645,6 +646,7 @@ func TestAppRunOutputModes(t *testing.T) {
 			args:   []string{"events", "extra"},
 			daemon: &fakeDaemon{},
 			state:  &fakeState{},
+			wantErr: "events does not accept positional arguments",
 			assert: func(t *testing.T, stdout string, _ *fakeDaemon, _ *fakeState) {
 				t.Helper()
 				_ = stdout
@@ -671,9 +673,9 @@ func TestAppRunOutputModes(t *testing.T) {
 			})
 
 			err := app.Run(context.Background(), tt.args)
-			if tt.name == "events extra arg" {
-				if err == nil || !strings.Contains(err.Error(), "events does not accept positional arguments") {
-					t.Fatalf("Run() error = %v, want events positional error", err)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("Run() error = %v, want substring %q", err, tt.wantErr)
 				}
 				return
 			}
