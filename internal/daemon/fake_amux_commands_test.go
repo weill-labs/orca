@@ -27,7 +27,7 @@ type fakeAmux struct {
 	killErr               error
 	killHook              func(paneID string)
 	waitIdleErr           error
-	waitIdleHook          func(paneID string, timeout time.Duration)
+	waitIdleHook          func(paneID string, timeout, settle time.Duration)
 	waitContentErr        error
 	waitContentResults    []error
 	waitContentHook       func(paneID, substring string, timeout time.Duration)
@@ -51,6 +51,7 @@ type fakeAmux struct {
 type waitIdleCall struct {
 	PaneID  string
 	Timeout time.Duration
+	Settle  time.Duration
 }
 
 type waitContentCall struct {
@@ -268,11 +269,24 @@ func (a *fakeAmux) WaitIdle(ctx context.Context, paneID string, timeout time.Dur
 		return ctx.Err()
 	}
 	if a.waitIdleHook != nil {
-		a.waitIdleHook(paneID, timeout)
+		a.waitIdleHook(paneID, timeout, 0)
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.waitIdleCalls = append(a.waitIdleCalls, waitIdleCall{PaneID: paneID, Timeout: timeout})
+	return a.waitIdleErr
+}
+
+func (a *fakeAmux) WaitIdleSettle(ctx context.Context, paneID string, timeout, settle time.Duration) error {
+	if a.rejectCanceledContext && ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if a.waitIdleHook != nil {
+		a.waitIdleHook(paneID, timeout, settle)
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.waitIdleCalls = append(a.waitIdleCalls, waitIdleCall{PaneID: paneID, Timeout: timeout, Settle: settle})
 	return a.waitIdleErr
 }
 

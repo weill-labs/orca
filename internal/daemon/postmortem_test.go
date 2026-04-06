@@ -181,7 +181,7 @@ func TestFinishAssignmentMergedCleanupSendsWrapUpThenPostmortem(t *testing.T) {
 	deps.amux.sendKeysHook = func(_ string, keys []string) {
 		operations = append(operations, "send:"+strings.Join(keys, "|"))
 	}
-	deps.amux.waitIdleHook = func(_ string, timeout time.Duration) {
+	deps.amux.waitIdleHook = func(_ string, timeout, _ time.Duration) {
 		operations = append(operations, "wait:"+timeout.String())
 	}
 
@@ -212,7 +212,7 @@ func TestFinishAssignmentMergedCleanupSetsDoneMetadataAfterPostmortem(t *testing
 	deps.amux.sendKeysHook = func(_ string, keys []string) {
 		operations = append(operations, "send:"+strings.Join(keys, "|"))
 	}
-	deps.amux.waitIdleHook = func(_ string, timeout time.Duration) {
+	deps.amux.waitIdleHook = func(_ string, timeout, _ time.Duration) {
 		operations = append(operations, "wait:"+timeout.String())
 	}
 	deps.amux.setMetadataHook = func(_ string, metadata map[string]string) {
@@ -254,7 +254,7 @@ func TestFinishAssignmentCancelledSetsDoneMetadataBeforeKill(t *testing.T) {
 	deps.amux.sendKeysHook = func(_ string, keys []string) {
 		operations = append(operations, "send:"+strings.Join(keys, "|"))
 	}
-	deps.amux.waitIdleHook = func(_ string, timeout time.Duration) {
+	deps.amux.waitIdleHook = func(_ string, timeout, _ time.Duration) {
 		operations = append(operations, "wait:"+timeout.String())
 	}
 	deps.amux.setMetadataHook = func(_ string, metadata map[string]string) {

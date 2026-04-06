@@ -46,8 +46,8 @@ func TestPRMergePollingSendsWrapUpAndCleansClone(t *testing.T) {
 		t.Fatalf("task.PRNumber = %d, want %d", got, want)
 	}
 	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
-		{PaneID: "pane-1", Timeout: 30 * time.Second},
-		{PaneID: "pane-1", Timeout: 30 * time.Second},
+		{PaneID: "pane-1", Timeout: 30 * time.Second, Settle: 2 * time.Second},
+		{PaneID: "pane-1", Timeout: 30 * time.Second, Settle: 2 * time.Second},
 		{PaneID: "pane-1", Timeout: 2 * time.Minute},
 		{PaneID: "pane-1", Timeout: 2 * time.Minute},
 	}; !reflect.DeepEqual(got, want) {
@@ -191,8 +191,8 @@ func TestPRMergePollingStillSendsPostmortemAfterWrapUpError(t *testing.T) {
 	})
 
 	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
-		{PaneID: "pane-1", Timeout: 30 * time.Second},
-		{PaneID: "pane-1", Timeout: 30 * time.Second},
+		{PaneID: "pane-1", Timeout: 30 * time.Second, Settle: 2 * time.Second},
+		{PaneID: "pane-1", Timeout: 30 * time.Second, Settle: 2 * time.Second},
 		{PaneID: "pane-1", Timeout: 2 * time.Minute},
 		{PaneID: "pane-1", Timeout: 2 * time.Minute},
 	}; !reflect.DeepEqual(got, want) {
@@ -455,7 +455,7 @@ func TestPRMergeablePollingRetriesConflictNudgeAfterWaitIdleFailure(t *testing.T
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, ``, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, ``, nil)
 	waitIdleCalls := 0
-	deps.amux.waitIdleHook = func(_ string, _ time.Duration) {
+	deps.amux.waitIdleHook = func(_ string, _ time.Duration, _ time.Duration) {
 		waitIdleCalls++
 		if waitIdleCalls == 3 {
 			deps.amux.waitIdleErr = errors.New("wait idle failed")
@@ -510,10 +510,10 @@ func TestPRMergeablePollingRetriesConflictNudgeAfterWaitIdleFailure(t *testing.T
 		conflictNudgePrompt + "\n",
 	})
 	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
-		{PaneID: "pane-1", Timeout: 30 * time.Second},
-		{PaneID: "pane-1", Timeout: 30 * time.Second},
-		{PaneID: "pane-1", Timeout: 30 * time.Second},
-		{PaneID: "pane-1", Timeout: 30 * time.Second},
+		{PaneID: "pane-1", Timeout: 30 * time.Second, Settle: 2 * time.Second},
+		{PaneID: "pane-1", Timeout: 30 * time.Second, Settle: 2 * time.Second},
+		{PaneID: "pane-1", Timeout: 30 * time.Second, Settle: 2 * time.Second},
+		{PaneID: "pane-1", Timeout: 30 * time.Second, Settle: 2 * time.Second},
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("wait idle calls = %#v, want %#v", got, want)
 	}
@@ -683,9 +683,9 @@ func TestEnqueueNotifiesWorkerWhenRebaseFailsAndAllowsRequeue(t *testing.T) {
 		t.Fatalf("merge queue enter count = %d, want %d", got, want)
 	}
 	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
-		{PaneID: "pane-1", Timeout: 30 * time.Second},
-		{PaneID: "pane-1", Timeout: 30 * time.Second},
-		{PaneID: "pane-1", Timeout: 30 * time.Second},
+		{PaneID: "pane-1", Timeout: 30 * time.Second, Settle: 2 * time.Second},
+		{PaneID: "pane-1", Timeout: 30 * time.Second, Settle: 2 * time.Second},
+		{PaneID: "pane-1", Timeout: 30 * time.Second, Settle: 2 * time.Second},
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("wait idle calls = %#v, want %#v", got, want)
 	}
