@@ -58,6 +58,10 @@ func (d *Daemon) checkTaskCapture(ctx context.Context, active ActiveAssignment) 
 	if snapshot.Exited {
 		return d.checkExitedPaneCapture(active, profile, snapshot, now)
 	}
+	if reason, ok := d.exhaustedContextAutoReassignReason(active, profile, snapshot); ok {
+		update.AutoReassignReason = reason
+		return update
+	}
 
 	output := snapshot.Output()
 	d.recordWorkerOutput(&update, profile, output, now)

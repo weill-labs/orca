@@ -17,12 +17,13 @@ type TaskMonitor struct {
 }
 
 type TaskStateUpdate struct {
-	Active        ActiveAssignment
-	TaskChanged   bool
-	WorkerChanged bool
-	PaneMetadata  map[string]string
-	Events        []Event
-	PRMerged      bool
+	Active             ActiveAssignment
+	TaskChanged        bool
+	WorkerChanged      bool
+	PaneMetadata       map[string]string
+	Events             []Event
+	PRMerged           bool
+	AutoReassignReason string
 }
 
 type taskMonitorCheckKind int
@@ -294,6 +295,13 @@ func (d *Daemon) applyTaskStateUpdate(ctx context.Context, update TaskStateUpdat
 		if err := d.finishAssignment(ctx, active, TaskStatusDone, EventTaskCompleted, true); err != nil {
 			d.emit(ctx, d.assignmentEvent(active, profile, EventTaskCompletionFailed, err.Error()))
 		}
+		return
+	}
+	if update.AutoReassignReason != "" {
+		for _, event := range update.Events {
+			d.emit(ctx, event)
+		}
+		d.autoReassignEscalatedWorker(ctx, active, update.AutoReassignReason)
 		return
 	}
 
