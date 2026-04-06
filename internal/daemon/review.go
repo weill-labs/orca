@@ -58,10 +58,6 @@ func (d *Daemon) checkTaskCapture(ctx context.Context, active ActiveAssignment) 
 	if snapshot.Exited {
 		return d.checkExitedPaneCapture(active, profile, snapshot, now)
 	}
-	if reason, ok := d.exhaustedContextAutoReassignReason(active, profile, snapshot); ok {
-		update.AutoReassignReason = reason
-		return update
-	}
 
 	output := snapshot.Output()
 	d.recordWorkerOutput(&update, profile, output, now)
@@ -90,6 +86,9 @@ func (d *Daemon) checkExitedPaneCapture(active ActiveAssignment, profile AgentPr
 	}
 
 	if update.Active.Worker.Health == WorkerHealthEscalated {
+		return update
+	}
+	if !d.shouldEscalateExitedPane(snapshot, now) {
 		return update
 	}
 
@@ -216,6 +215,7 @@ func (d *Daemon) recordWorkerOutput(update *TaskStateUpdate, profile AgentProfil
 		return false
 	}
 
+	wasEscalated := update.Active.Worker.Health == WorkerHealthEscalated
 	wasStuck := update.Active.Worker.Health == WorkerHealthStuck ||
 		update.Active.Worker.Health == WorkerHealthEscalated ||
 		update.Active.Worker.NudgeCount > 0
@@ -229,6 +229,9 @@ func (d *Daemon) recordWorkerOutput(update *TaskStateUpdate, profile AgentProfil
 	update.TaskChanged = true
 
 	if wasStuck {
+		if wasEscalated {
+			update.PaneMetadataRemovals = append(update.PaneMetadataRemovals, "status")
+		}
 		update.Events = append(update.Events, d.assignmentEvent(update.Active, profile, EventWorkerRecovered, "worker output changed"))
 	}
 	return true

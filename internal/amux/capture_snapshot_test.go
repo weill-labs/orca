@@ -10,7 +10,7 @@ func TestCLIClientCapturePane(t *testing.T) {
 	t.Parallel()
 
 	runner := &fakeRunner{
-		output: []byte(`{"id":9,"name":"worker-1","content":["line one","line two"],"cwd":"/tmp/clone-01","current_command":"bash","child_pids":[],"exited":true}`),
+		output: []byte(`{"id":9,"name":"worker-1","content":["line one","line two"],"cwd":"/tmp/clone-01","current_command":"bash","child_pids":[],"exited":true,"exited_since":"2026-04-02T09:00:00Z"}`),
 	}
 	client := newTestClient(Config{Session: "orca-dev"}, runner)
 
@@ -46,5 +46,8 @@ func TestCLIClientCapturePane(t *testing.T) {
 	}
 	if !got.Exited {
 		t.Fatal("CapturePane() exited = false, want true")
+	}
+	if got.ExitedSince != "2026-04-02T09:00:00Z" {
+		t.Fatalf("CapturePane() exited since = %q, want %q", got.ExitedSince, "2026-04-02T09:00:00Z")
 	}
 }

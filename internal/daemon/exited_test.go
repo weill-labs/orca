@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestExitedPaneDetectionEscalatesWorker(t *testing.T) {
@@ -122,4 +123,62 @@ func TestExitedPaneDetectionEscalatesWorker(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestExitedPaneDetectionWaitsForPersistentExitedState(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	captureTicker := newFakeTicker()
+	prTicker := newFakeTicker()
+	deps.tickers.enqueue(captureTicker, prTicker)
+	seedActiveAssignment(t, deps, "LAB-739", "pane-1")
+
+	recentExit := deps.clock.Now().Add(-5 * time.Second).Format(time.RFC3339)
+	staleExit := deps.clock.Now().Add(-31 * time.Second).Format(time.RFC3339)
+	deps.amux.capturePaneSequence("pane-1", []PaneCapture{
+		{
+			Content:        []string{"shell prompt"},
+			CurrentCommand: "bash",
+			Exited:         true,
+			ExitedSince:    recentExit,
+		},
+		{
+			Content:        []string{"shell prompt"},
+			CurrentCommand: "bash",
+			Exited:         true,
+			ExitedSince:    staleExit,
+		},
+	})
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	captureTicker.tick(deps.clock.Now())
+	waitFor(t, "first exited capture", func() bool {
+		return deps.amux.captureCount("pane-1") == 1
+	})
+
+	worker, ok := deps.state.worker("pane-1")
+	if !ok {
+		t.Fatal("worker missing after first exited capture")
+	}
+	if got, want := worker.Health, WorkerHealthHealthy; got != want {
+		t.Fatalf("worker.Health after recent exited capture = %q, want %q", got, want)
+	}
+	if got := deps.events.countType(EventWorkerEscalated); got != 0 {
+		t.Fatalf("worker escalated events after recent exited capture = %d, want 0", got)
+	}
+
+	captureTicker.tick(deps.clock.Now())
+	waitFor(t, "persistent exited escalation", func() bool {
+		worker, ok := deps.state.worker("pane-1")
+		return ok && worker.Health == WorkerHealthEscalated
+	})
 }

@@ -7,6 +7,30 @@ import (
 	"time"
 )
 
+const (
+	exitedPaneEscalationWindowMultiplier = 6
+	minimumExitedPaneEscalationWindow    = 30 * time.Second
+)
+
+func (d *Daemon) exitedPaneEscalationWindow() time.Duration {
+	window := exitedPaneEscalationWindowMultiplier * d.captureInterval
+	if window < minimumExitedPaneEscalationWindow {
+		return minimumExitedPaneEscalationWindow
+	}
+	return window
+}
+
+func (d *Daemon) shouldEscalateExitedPane(snapshot PaneCapture, now time.Time) bool {
+	exitedAt, ok := snapshot.ExitedAt()
+	if !ok {
+		return true
+	}
+	if exitedAt.After(now) {
+		return false
+	}
+	return now.Sub(exitedAt) >= d.exitedPaneEscalationWindow()
+}
+
 func (d *Daemon) handleExitedPaneCapture(ctx context.Context, active ActiveAssignment, profile AgentProfile, snapshot PaneCapture, now time.Time) {
 	output := snapshot.Output()
 	workerChanged := false

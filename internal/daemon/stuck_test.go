@@ -335,3 +335,63 @@ func TestCancelKillsPaneAfterStuckEscalation(t *testing.T) {
 
 	deps.events.requireTypes(t, EventDaemonStarted, EventTaskAssigned, EventWorkerEscalated, EventWorkerPostmortem, EventTaskCancelled)
 }
+
+func TestStuckDetectionClearsEscalatedPaneMetadataOnRecovery(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	captureTicker := newFakeTicker()
+	prTicker := newFakeTicker()
+	deps.tickers.enqueue(captureTicker, prTicker)
+	deps.config.profiles["codex"] = AgentProfile{
+		Name:              "codex",
+		StartCommand:      "codex --yolo",
+		StuckTextPatterns: []string{"permission prompt"},
+		StuckTimeout:      time.Hour,
+		NudgeCommand:      "Enter",
+		MaxNudgeRetries:   0,
+	}
+	deps.amux.captureSequence("pane-1", []string{
+		"startup output",
+		"permission prompt",
+		"worker resumed",
+	})
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-710", "Leave escalated worker running", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	captureTicker.tick(deps.clock.Now())
+	waitFor(t, "worker escalation", func() bool {
+		active, err := deps.state.ActiveAssignmentByIssue(ctx, d.project, "LAB-710")
+		return err == nil && active.Worker.Health == WorkerHealthEscalated
+	})
+	deps.amux.requireMetadata(t, "pane-1", map[string]string{
+		"agent_profile":  "codex",
+		"branch":         "LAB-710",
+		"status":         "escalated",
+		"task":           "LAB-710",
+		"tracked_issues": `[{"id":"LAB-710","status":"active"}]`,
+	})
+
+	captureTicker.tick(deps.clock.Now())
+	waitFor(t, "worker recovery", func() bool {
+		active, err := deps.state.ActiveAssignmentByIssue(ctx, d.project, "LAB-710")
+		return err == nil && active.Worker.Health == WorkerHealthHealthy
+	})
+	deps.amux.requireMetadata(t, "pane-1", map[string]string{
+		"agent_profile":  "codex",
+		"branch":         "LAB-710",
+		"task":           "LAB-710",
+		"tracked_issues": `[{"id":"LAB-710","status":"active"}]`,
+	})
+}
