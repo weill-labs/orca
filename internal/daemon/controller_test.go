@@ -199,21 +199,13 @@ func TestStopReturnsContextErrorWhenPollingCancelled(t *testing.T) {
 		ignoreTERM: true,
 	})
 
-	process := startDirectSleepProcess(t, true)
-	pid := process.Process.Pid
+	pid := startDetachedSleepProcess(t, true)
 
 	if err := os.MkdirAll(controller.paths.PIDDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
 	if err := os.WriteFile(controller.paths.pidFile(projectPath), []byte(fmt.Sprintf("%d", pid)), 0o644); err != nil {
 		t.Fatalf("write controller pid file: %v", err)
-	}
-	store.projectStatus = state.ProjectStatus{
-		Project: projectPath,
-		Daemon: &state.DaemonStatus{
-			PID:    pid,
-			Status: "running",
-		},
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -236,11 +228,121 @@ func TestStopReturnsContextErrorWhenPollingCancelled(t *testing.T) {
 		t.Fatalf("expected stop to exit before timeout, elapsed %s", elapsed)
 	}
 
-	if err := process.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
-		t.Fatalf("Kill(%d) error = %v", pid, err)
+	killTestProcess(t, pid)
+}
+
+func TestStopWithoutForceReturnsTimeoutWhenProcessIgnoresTERM(t *testing.T) {
+	store := &fakeStore{}
+	projectPath := testProjectPath(t)
+	controller, _ := newTestController(t, store, projectPath, scriptOptions{
+		ignoreTERM:  true,
+		stopTimeout: 150 * time.Millisecond,
+	})
+
+	pid := startDetachedSleepProcess(t, true)
+
+	if err := os.MkdirAll(controller.paths.PIDDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
 	}
-	_, _ = process.Process.Wait()
+	pidFile := controller.paths.pidFile(projectPath)
+	if err := os.WriteFile(pidFile, []byte(fmt.Sprintf("%d", pid)), 0o644); err != nil {
+		t.Fatalf("write controller pid file: %v", err)
+	}
+
+	_, err := controller.Stop(context.Background(), StopRequest{Project: projectPath})
+	if err == nil || !strings.Contains(err.Error(), "daemon did not stop within") {
+		t.Fatalf("Stop() error = %v, want timeout", err)
+	}
+
+	alive, err := processAlive(pid)
+	if err != nil {
+		t.Fatalf("processAlive(%d) error = %v", pid, err)
+	}
+	if !alive {
+		t.Fatal("expected default stop to leave stubborn daemon running")
+	}
+	if store.markDaemonStoppedCalled {
+		t.Fatal("expected timed out stop to leave daemon state running")
+	}
+	if _, err := os.Stat(pidFile); err != nil {
+		t.Fatalf("Stat(%q) error = %v, want pid file to remain", pidFile, err)
+	}
+
+	killTestProcess(t, pid)
+}
+
+func TestStopStopsResponsiveProcess(t *testing.T) {
+	store := &fakeStore{}
+	projectPath := testProjectPath(t)
+	controller, _ := newTestController(t, store, projectPath, scriptOptions{
+		stopTimeout: 150 * time.Millisecond,
+	})
+
+	pid := startDetachedSleepProcess(t, false)
+
+	if err := os.MkdirAll(controller.paths.PIDDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	pidFile := controller.paths.pidFile(projectPath)
+	if err := os.WriteFile(pidFile, []byte(fmt.Sprintf("%d", pid)), 0o644); err != nil {
+		t.Fatalf("write controller pid file: %v", err)
+	}
+
+	result, err := controller.Stop(context.Background(), StopRequest{Project: projectPath})
+	if err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+	if got, want := result.PID, pid; got != want {
+		t.Fatalf("result pid = %d, want %d", got, want)
+	}
 	waitForProcessExit(t, pid)
+	if !store.markDaemonStoppedCalled {
+		t.Fatal("expected responsive stop to mark daemon stopped")
+	}
+	if _, err := os.Stat(pidFile); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Stat(%q) error = %v, want pid file removed", pidFile, err)
+	}
+}
+
+func TestStopForceKillsProcessAfterGracePeriod(t *testing.T) {
+	store := &fakeStore{}
+	projectPath := testProjectPath(t)
+	controller, _ := newTestController(t, store, projectPath, scriptOptions{
+		ignoreTERM:  true,
+		stopTimeout: 150 * time.Millisecond,
+	})
+
+	pid := startDetachedSleepProcess(t, true)
+
+	if err := os.MkdirAll(controller.paths.PIDDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	pidFile := controller.paths.pidFile(projectPath)
+	if err := os.WriteFile(pidFile, []byte(fmt.Sprintf("%d", pid)), 0o644); err != nil {
+		t.Fatalf("write controller pid file: %v", err)
+	}
+
+	startedAt := time.Now()
+	result, err := controller.Stop(context.Background(), StopRequest{
+		Project: projectPath,
+		Force:   true,
+	})
+	if err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+	if elapsed := time.Since(startedAt); elapsed < controller.stopTimeout {
+		t.Fatalf("Stop() elapsed = %s, want at least grace period %s", elapsed, controller.stopTimeout)
+	}
+	if got, want := result.PID, pid; got != want {
+		t.Fatalf("result pid = %d, want %d", got, want)
+	}
+	waitForProcessExit(t, pid)
+	if !store.markDaemonStoppedCalled {
+		t.Fatal("expected forced stop to mark daemon stopped")
+	}
+	if _, err := os.Stat(pidFile); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Stat(%q) error = %v, want pid file removed", pidFile, err)
+	}
 }
 
 func TestLocalControllerAssignAndBatchRPC(t *testing.T) {
@@ -457,7 +559,8 @@ func TestLocalControllerBatchErrorBranches(t *testing.T) {
 }
 
 type scriptOptions struct {
-	ignoreTERM bool
+	ignoreTERM  bool
+	stopTimeout time.Duration
 }
 
 func newTestController(t *testing.T, store *fakeStore, projectPath string, options scriptOptions) (*LocalController, string) {
@@ -483,13 +586,20 @@ func newTestController(t *testing.T, store *fakeStore, projectPath string, optio
 		Executable:   scriptPath,
 		Now:          func() time.Time { return time.Unix(1, 0).UTC() },
 		StartTimeout: 1500 * time.Millisecond,
-		StopTimeout:  time.Second,
+		StopTimeout:  resolvedStopTimeout(options.stopTimeout),
 	})
 	if err != nil {
 		t.Fatalf("NewLocalController() error = %v", err)
 	}
 
 	return controller, pidOutputPath
+}
+
+func resolvedStopTimeout(stopTimeout time.Duration) time.Duration {
+	if stopTimeout > 0 {
+		return stopTimeout
+	}
+	return time.Second
 }
 
 func waitForPID(t *testing.T, path string) int {
@@ -551,20 +661,82 @@ func waitForDuration(t *testing.T, duration time.Duration) {
 	}
 }
 
-func startDirectSleepProcess(t *testing.T, ignoreTERM bool) *exec.Cmd {
+func startDetachedSleepProcess(t *testing.T, ignoreTERM bool) int {
 	t.Helper()
 
-	command := "exec sleep 1000"
+	tempDir := t.TempDir()
+	readyPath := filepath.Join(tempDir, "ready")
+	scriptPath := filepath.Join(tempDir, "sleep.sh")
+
+	script := "#!/bin/bash\nset -eu\n"
 	if ignoreTERM {
-		command = "trap '' TERM; exec sleep 1000"
+		script += "trap '' TERM\n"
+	}
+	script += fmt.Sprintf("printf ready > %q\n", readyPath)
+	if ignoreTERM {
+		script += "while true; do\n"
+		script += "  sleep 1000 &\n"
+		script += "  wait $!\n"
+		script += "done\n"
+	} else {
+		script += "exec sleep 1000\n"
 	}
 
-	cmd := exec.Command("/bin/bash", "-lc", command)
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("Start() error = %v", err)
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write detached sleep script: %v", err)
 	}
 
-	return cmd
+	cmd := exec.Command("/bin/bash", "-lc", fmt.Sprintf("nohup %q >/dev/null 2>&1 </dev/null & echo $!", scriptPath))
+	output, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("start detached sleep process: %v", err)
+	}
+
+	var pid int
+	if _, err := fmt.Sscanf(strings.TrimSpace(string(output)), "%d", &pid); err != nil {
+		t.Fatalf("parse detached sleep pid %q: %v", strings.TrimSpace(string(output)), err)
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		alive, err := processAlive(pid)
+		if err != nil {
+			t.Fatalf("processAlive(%d) error = %v", pid, err)
+		}
+		if alive {
+			if _, statErr := os.Stat(readyPath); statErr == nil {
+				return pid
+			} else if !errors.Is(statErr, os.ErrNotExist) {
+				t.Fatalf("Stat(%q) error = %v", readyPath, statErr)
+			}
+		}
+		if !alive {
+			break
+		}
+		waitForDuration(t, 10*time.Millisecond)
+	}
+
+	if _, err := os.Stat(readyPath); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("detached sleep pid %d exited before signaling readiness", pid)
+		}
+		t.Fatalf("Stat(%q) error = %v", readyPath, err)
+	}
+
+	deadline = time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		alive, err := processAlive(pid)
+		if err != nil {
+			t.Fatalf("processAlive(%d) error = %v", pid, err)
+		}
+		if alive {
+			return pid
+		}
+		waitForDuration(t, 10*time.Millisecond)
+	}
+
+	t.Fatalf("timed out waiting for detached sleep pid %d to start", pid)
+	return 0
 }
 
 func testProjectPath(t *testing.T) string {

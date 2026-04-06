@@ -45,7 +45,7 @@ var commandUsage = map[string]string{
 	"start": `usage: orca start [--session SESSION] [--project PATH] [--lead-pane PANE] [--json]
 
 Start the orca daemon.`,
-	"stop": `usage: orca stop [--project PATH] [--json]
+	"stop": `usage: orca stop [--project PATH] [--force] [--json]
 
 Stop the orca daemon.`,
 	"status": `usage: orca status [ISSUE] [--project PATH] [--json]
@@ -256,8 +256,10 @@ func (a *App) runStart(ctx context.Context, args []string) error {
 func (a *App) runStop(ctx context.Context, args []string) error {
 	fs := newFlagSet("stop")
 	var projectPath string
+	var force bool
 	var jsonOutput bool
 	fs.StringVar(&projectPath, "project", "", "project path")
+	fs.BoolVar(&force, "force", false, "escalate to SIGKILL after the grace period")
 	fs.BoolVar(&jsonOutput, "json", false, "emit JSON output")
 
 	if err := parseFlags(fs, args); err != nil {
@@ -272,7 +274,10 @@ func (a *App) runStop(ctx context.Context, args []string) error {
 		return err
 	}
 
-	result, err := a.daemon.Stop(ctx, daemon.StopRequest{Project: projectPath})
+	result, err := a.daemon.Stop(ctx, daemon.StopRequest{
+		Project: projectPath,
+		Force:   force,
+	})
 	if err != nil {
 		return err
 	}

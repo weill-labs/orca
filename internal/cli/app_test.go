@@ -67,6 +67,25 @@ func TestAppRunDispatchesCommands(t *testing.T) {
 			},
 		},
 		{
+			name: "stop force",
+			args: func(_, _ string) []string { return []string{"stop", "--force"} },
+			assert: func(t *testing.T, d *fakeDaemon, _ *fakeState, stdout, _ string, repoRoot, _ string) {
+				t.Helper()
+				if d.stopRequest == nil {
+					t.Fatal("expected stop to be called")
+				}
+				if d.stopRequest.Project != repoRoot {
+					t.Fatalf("expected cwd project %q, got %q", repoRoot, d.stopRequest.Project)
+				}
+				if !d.stopRequest.Force {
+					t.Fatal("expected stop --force to set force request")
+				}
+				if !strings.Contains(stdout, "stopped") {
+					t.Fatalf("expected stop output, got %q", stdout)
+				}
+			},
+		},
+		{
 			name: "status project",
 			args: func(_, _ string) []string { return []string{"status"} },
 			prepareState: func(s *fakeState) {
@@ -561,12 +580,12 @@ func TestAppRunOutputModes(t *testing.T) {
 	}
 
 	tests := []struct {
-		name       string
-		args       []string
-		daemon     *fakeDaemon
-		state      *fakeState
-		wantErr    string
-		assert     func(t *testing.T, stdout string, d *fakeDaemon, s *fakeState)
+		name    string
+		args    []string
+		daemon  *fakeDaemon
+		state   *fakeState
+		wantErr string
+		assert  func(t *testing.T, stdout string, d *fakeDaemon, s *fakeState)
 	}{
 		{
 			name: "stop json",
@@ -586,8 +605,8 @@ func TestAppRunOutputModes(t *testing.T) {
 			},
 		},
 		{
-			name: "status issue human",
-			args: []string{"status", "LAB-690"},
+			name:   "status issue human",
+			args:   []string{"status", "LAB-690"},
 			daemon: &fakeDaemon{},
 			state: &fakeState{
 				taskStatus: state.TaskStatus{
@@ -650,10 +669,10 @@ func TestAppRunOutputModes(t *testing.T) {
 			},
 		},
 		{
-			name:   "events extra arg",
-			args:   []string{"events", "extra"},
-			daemon: &fakeDaemon{},
-			state:  &fakeState{},
+			name:    "events extra arg",
+			args:    []string{"events", "extra"},
+			daemon:  &fakeDaemon{},
+			state:   &fakeState{},
 			wantErr: "events does not accept positional arguments",
 			assert: func(t *testing.T, stdout string, _ *fakeDaemon, _ *fakeState) {
 				t.Helper()
@@ -946,9 +965,9 @@ func TestWriteProjectStatusAndTaskStatus(t *testing.T) {
 	now := time.Date(2026, 4, 2, 15, 4, 5, 0, time.UTC)
 
 	tests := []struct {
-		name   string
-		write  func(*bytes.Buffer) error
-		wants  []string
+		name  string
+		write func(*bytes.Buffer) error
+		wants []string
 	}{
 		{
 			name: "project status with daemon and tasks",
@@ -1093,10 +1112,10 @@ func TestParseOptionalSinglePositionalAndFormatTimestamp(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name       string
-		args       []string
-		wantValue  string
-		wantErr    string
+		name      string
+		args      []string
+		wantValue string
+		wantErr   string
 	}{
 		{
 			name:      "flags before positional",
