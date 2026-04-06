@@ -91,10 +91,7 @@ func (c *CLIClient) Spawn(ctx context.Context, req SpawnRequest) (Pane, error) {
 	}
 
 	session := c.resolveSession(req.Session)
-	args, err := c.spawnPlacementArgs(ctx, session, req.AtPane)
-	if err != nil {
-		return Pane{}, fmt.Errorf("plan spawn placement: %w", err)
-	}
+	args := spawnPlacementArgs(req.AtPane)
 	args = append(args, "--name", name)
 
 	output, err := c.run(ctx, session, "spawn", args...)

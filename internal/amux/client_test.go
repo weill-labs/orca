@@ -61,7 +61,7 @@ func TestCLIClientSpawn(t *testing.T) {
 		wantErr  string
 	}{
 		{
-			name: "creates first worker column by root-splitting from the lead pane",
+			name: "targets the explicit lead pane with spiral placement",
 			config: Config{
 				Binary:  "/usr/local/bin/amux",
 				Session: "orca-dev",
@@ -73,16 +73,10 @@ func TestCLIClientSpawn(t *testing.T) {
 				Command: "codex --yolo",
 			},
 			queue: []runnerResult{
-				{output: []byte(testSessionCaptureJSON(t, sessionCapture{
-					Panes: []sessionCapturePane{
-						{ID: 1, Name: "lead-pane", ColumnIndex: 0, Position: &capturePanePos{X: 0, Y: 0, Width: 80, Height: 24}},
-					},
-				}))},
 				{output: []byte("Spawned clone-01 in pane 7\n")},
 			},
 			wantCmds: []recordedCommand{
-				{name: "/usr/local/bin/amux", args: []string{"-s", "override-session", "capture", "--format", "json"}},
-				{name: "/usr/local/bin/amux", args: []string{"-s", "override-session", "spawn", "--at", "lead-pane", "--root", "--vertical", "--name", "clone-01"}},
+				{name: "/usr/local/bin/amux", args: []string{"-s", "override-session", "spawn", "--spiral", "--at", "lead-pane", "--name", "clone-01"}},
 				{name: "/usr/local/bin/amux", args: []string{"-s", "orca-dev", "send-keys", "7", "--delay-final", "250ms", "cd '/tmp/clone-01'"}},
 				{name: "/usr/local/bin/amux", args: []string{"-s", "orca-dev", "send-keys", "7", "--delay-final", "250ms", "Enter"}},
 				{name: "/usr/local/bin/amux", args: []string{"-s", "orca-dev", "wait", "idle", "7", "--timeout", "5s"}},
@@ -92,7 +86,7 @@ func TestCLIClientSpawn(t *testing.T) {
 			wantPane: Pane{ID: "7", Name: "clone-01"},
 		},
 		{
-			name: "fills an existing worker column before creating a new one",
+			name: "uses spiral placement for later spawns in the lead pane window",
 			config: Config{
 				Session: "default",
 			},
@@ -102,17 +96,10 @@ func TestCLIClientSpawn(t *testing.T) {
 				Command: "claude --dangerously-skip-permissions",
 			},
 			queue: []runnerResult{
-				{output: []byte(testSessionCaptureJSON(t, sessionCapture{
-					Panes: []sessionCapturePane{
-						{ID: 1, Name: "lead-pane", ColumnIndex: 0, Position: &capturePanePos{X: 0, Y: 0, Width: 40, Height: 24}},
-						{ID: 2, Name: "worker-LAB-700", ColumnIndex: 1, Position: &capturePanePos{X: 41, Y: 0, Width: 39, Height: 24}},
-					},
-				}))},
 				{output: []byte("Spawned worker-2 in pane 12\n")},
 			},
 			wantCmds: []recordedCommand{
-				{name: "amux", args: []string{"-s", "default", "capture", "--format", "json"}},
-				{name: "amux", args: []string{"-s", "default", "spawn", "--at", "2", "--horizontal", "--name", "worker-2"}},
+				{name: "amux", args: []string{"-s", "default", "spawn", "--spiral", "--at", "lead-pane", "--name", "worker-2"}},
 				{name: "amux", args: []string{"-s", "default", "send-keys", "12", "--delay-final", "250ms", "cd '/tmp/worker-2'"}},
 				{name: "amux", args: []string{"-s", "default", "send-keys", "12", "--delay-final", "250ms", "Enter"}},
 				{name: "amux", args: []string{"-s", "default", "wait", "idle", "12", "--timeout", "5s"}},
@@ -122,7 +109,7 @@ func TestCLIClientSpawn(t *testing.T) {
 			wantPane: Pane{ID: "12", Name: "worker-2"},
 		},
 		{
-			name: "uses the active pane in the current window when lead pane is unset",
+			name: "uses spiral placement without an explicit lead pane",
 			config: Config{
 				Session: "default",
 			},
@@ -131,17 +118,10 @@ func TestCLIClientSpawn(t *testing.T) {
 				Command: "claude --dangerously-skip-permissions",
 			},
 			queue: []runnerResult{
-				{output: []byte(testSessionCaptureJSON(t, sessionCapture{
-					Panes: []sessionCapturePane{
-						{ID: 1, Name: "caller-pane", Active: true, ColumnIndex: 0, Position: &capturePanePos{X: 0, Y: 0, Width: 40, Height: 24}},
-						{ID: 2, Name: "worker-LAB-700", ColumnIndex: 1, Position: &capturePanePos{X: 41, Y: 0, Width: 39, Height: 24}},
-					},
-				}))},
 				{output: []byte("Spawned worker-implicit in pane 14\n")},
 			},
 			wantCmds: []recordedCommand{
-				{name: "amux", args: []string{"-s", "default", "capture", "--format", "json"}},
-				{name: "amux", args: []string{"-s", "default", "spawn", "--at", "2", "--horizontal", "--name", "worker-implicit"}},
+				{name: "amux", args: []string{"-s", "default", "spawn", "--spiral", "--name", "worker-implicit"}},
 				{name: "amux", args: []string{"-s", "default", "send-keys", "14", "--delay-final", "250ms", "cd '/tmp/worker-implicit'"}},
 				{name: "amux", args: []string{"-s", "default", "send-keys", "14", "--delay-final", "250ms", "Enter"}},
 				{name: "amux", args: []string{"-s", "default", "wait", "idle", "14", "--timeout", "5s"}},
@@ -151,7 +131,7 @@ func TestCLIClientSpawn(t *testing.T) {
 			wantPane: Pane{ID: "14", Name: "worker-implicit"},
 		},
 		{
-			name: "creates a new worker column when all existing columns are full",
+			name: "respects explicit worker names with spiral placement",
 			config: Config{
 				Session: "main",
 			},
@@ -162,18 +142,10 @@ func TestCLIClientSpawn(t *testing.T) {
 				Command: "codex --yolo",
 			},
 			queue: []runnerResult{
-				{output: []byte(testSessionCaptureJSON(t, sessionCapture{
-					Panes: []sessionCapturePane{
-						{ID: 1, Name: "lead-pane", ColumnIndex: 0, Position: &capturePanePos{X: 0, Y: 0, Width: 26, Height: 24}},
-						{ID: 7, Name: "worker-LAB-97", ColumnIndex: 1, Position: &capturePanePos{X: 27, Y: 0, Width: 26, Height: 11}},
-						{ID: 8, Name: "worker-LAB-98", ColumnIndex: 1, Position: &capturePanePos{X: 27, Y: 12, Width: 26, Height: 12}},
-					},
-				}))},
 				{output: []byte("Split vertical: new pane worker-LAB-99\n")},
 			},
 			wantCmds: []recordedCommand{
-				{name: "amux", args: []string{"-s", "main", "capture", "--format", "json"}},
-				{name: "amux", args: []string{"-s", "main", "spawn", "--at", "8", "--root", "--vertical", "--name", "worker-LAB-99"}},
+				{name: "amux", args: []string{"-s", "main", "spawn", "--spiral", "--at", "lead-pane", "--name", "worker-LAB-99"}},
 				{name: "amux", args: []string{"-s", "main", "send-keys", "worker-LAB-99", "--delay-final", "250ms", "cd '/tmp/clone-5'"}},
 				{name: "amux", args: []string{"-s", "main", "send-keys", "worker-LAB-99", "--delay-final", "250ms", "Enter"}},
 				{name: "amux", args: []string{"-s", "main", "wait", "idle", "worker-LAB-99", "--timeout", "5s"}},
@@ -192,17 +164,10 @@ func TestCLIClientSpawn(t *testing.T) {
 				CWD:    "/tmp/worker-3",
 			},
 			queue: []runnerResult{
-				{output: []byte(testSessionCaptureJSON(t, sessionCapture{
-					Panes: []sessionCapturePane{
-						{ID: 1, Name: "lead-pane", ColumnIndex: 0, Position: &capturePanePos{X: 0, Y: 0, Width: 40, Height: 24}},
-						{ID: 2, Name: "worker-LAB-700", ColumnIndex: 1, Position: &capturePanePos{X: 41, Y: 0, Width: 39, Height: 24}},
-					},
-				}))},
 				{err: errors.New("exit status 1")},
 			},
 			wantCmds: []recordedCommand{
-				{name: "amux", args: []string{"-s", "default", "capture", "--format", "json"}},
-				{name: "amux", args: []string{"-s", "default", "spawn", "--at", "2", "--horizontal", "--name", "worker-3"}},
+				{name: "amux", args: []string{"-s", "default", "spawn", "--spiral", "--at", "lead-pane", "--name", "worker-3"}},
 			},
 			wantErr: "exit status 1",
 		},
@@ -216,17 +181,10 @@ func TestCLIClientSpawn(t *testing.T) {
 				CWD:    "/tmp/worker-4",
 			},
 			queue: []runnerResult{
-				{output: []byte(testSessionCaptureJSON(t, sessionCapture{
-					Panes: []sessionCapturePane{
-						{ID: 1, Name: "lead-pane", ColumnIndex: 0, Position: &capturePanePos{X: 0, Y: 0, Width: 40, Height: 24}},
-						{ID: 2, Name: "worker-LAB-700", ColumnIndex: 1, Position: &capturePanePos{X: 41, Y: 0, Width: 39, Height: 24}},
-					},
-				}))},
 				{output: []byte("Spawned worker-4\n")},
 			},
 			wantCmds: []recordedCommand{
-				{name: "amux", args: []string{"-s", "default", "capture", "--format", "json"}},
-				{name: "amux", args: []string{"-s", "default", "spawn", "--at", "2", "--horizontal", "--name", "worker-4"}},
+				{name: "amux", args: []string{"-s", "default", "spawn", "--spiral", "--at", "lead-pane", "--name", "worker-4"}},
 			},
 			wantErr: "parse pane id",
 		},
@@ -260,26 +218,33 @@ func TestCLIClientSpawn(t *testing.T) {
 	}
 }
 
-func TestCLIClientSpawnReturnsLayoutCaptureErrors(t *testing.T) {
+func TestCLIClientSpawnDoesNotInspectSessionLayout(t *testing.T) {
 	t.Parallel()
 
 	runner := &fakeRunner{
+		output: []byte("not-json"),
 		queue: []runnerResult{
-			{output: []byte("not-json")},
+			{output: []byte("Spawned clone-01 in pane 7\n")},
 		},
 	}
 	client := newTestClient(Config{Session: "orca-dev"}, runner)
 
-	_, err := client.Spawn(context.Background(), SpawnRequest{
+	gotPane, err := client.Spawn(context.Background(), SpawnRequest{
 		AtPane: "lead-pane",
 		CWD:    "/tmp/clone-01",
 	})
-	if err == nil || !strings.Contains(err.Error(), "plan spawn placement: parse session capture json") {
-		t.Fatalf("Spawn() error = %v, want layout capture parse error", err)
+	if err != nil {
+		t.Fatalf("Spawn() error = %v", err)
+	}
+	if gotPane != (Pane{ID: "7", Name: "clone-01"}) {
+		t.Fatalf("Spawn() pane = %#v, want pane 7 clone-01", gotPane)
 	}
 
 	wantCmds := []recordedCommand{
-		{name: "amux", args: []string{"-s", "orca-dev", "capture", "--format", "json"}},
+		{name: "amux", args: []string{"-s", "orca-dev", "spawn", "--spiral", "--at", "lead-pane", "--name", "clone-01"}},
+		{name: "amux", args: []string{"-s", "orca-dev", "send-keys", "7", "--delay-final", "250ms", "cd '/tmp/clone-01'"}},
+		{name: "amux", args: []string{"-s", "orca-dev", "send-keys", "7", "--delay-final", "250ms", "Enter"}},
+		{name: "amux", args: []string{"-s", "orca-dev", "wait", "idle", "7", "--timeout", "5s"}},
 	}
 	if !reflect.DeepEqual(runner.calls, wantCmds) {
 		t.Fatalf("Spawn() commands = %#v, want %#v", runner.calls, wantCmds)
