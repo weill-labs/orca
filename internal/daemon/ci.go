@@ -53,7 +53,11 @@ func (d *Daemon) nudgeForCIFailure(ctx context.Context, update *TaskStateUpdate,
 }
 
 func (d *Daemon) lookupPRChecksState(ctx context.Context, prNumber int) (string, error) {
-	output, err := d.commands.Run(ctx, d.project, "gh", "pr", "checks", fmt.Sprintf("%d", prNumber), "--json", "bucket")
+	return lookupPRChecksState(ctx, d.commands, d.project, prNumber)
+}
+
+func lookupPRChecksState(ctx context.Context, commands CommandRunner, project string, prNumber int) (string, error) {
+	output, err := commands.Run(ctx, project, "gh", "pr", "checks", fmt.Sprintf("%d", prNumber), "--json", "bucket")
 	if err != nil {
 		return "", err
 	}

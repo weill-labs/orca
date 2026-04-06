@@ -49,13 +49,15 @@ type Daemon struct {
 	pollInterval     time.Duration
 	mergeGracePeriod time.Duration
 
-	started     atomic.Bool
-	stopContext context.Context
-	stopCancel  context.CancelFunc
-	loopDone    chan struct{}
-
-	taskMonitorMu sync.Mutex
-	taskMonitors  map[string]*TaskMonitor
+	started           atomic.Bool
+	stopContext       context.Context
+	stopCancel        context.CancelFunc
+	loopDone          chan struct{}
+	mergeQueueInbox   chan ProcessQueue
+	mergeQueueUpdates chan MergeQueueUpdate
+	mergeQueueDone    chan struct{}
+	taskMonitorMu     sync.Mutex
+	taskMonitors      map[string]*TaskMonitor
 }
 
 type realTicker struct {
@@ -161,6 +163,12 @@ func (d *Daemon) Start(ctx context.Context) error {
 	d.stopContext, d.stopCancel = context.WithCancel(context.Background())
 	d.reconcileNonTerminalAssignments(ctx)
 	d.refreshTaskMonitors(ctx)
+	d.resetMergeQueueTransientStatuses(ctx)
+	d.mergeQueueInbox = make(chan ProcessQueue)
+	d.mergeQueueUpdates = make(chan MergeQueueUpdate, 32)
+	d.mergeQueueDone = make(chan struct{})
+	actor := newMergeQueueActor(d.project, d.commands, d.mergeQueueUpdates)
+	go actor.run(d.stopContext, d.mergeQueueInbox, d.mergeQueueDone)
 	d.loopDone = make(chan struct{})
 	go d.runLoop(d.stopContext, d.loopDone)
 
@@ -184,10 +192,17 @@ func (d *Daemon) Stop(ctx context.Context) error {
 	if d.loopDone != nil {
 		<-d.loopDone
 	}
+	if d.mergeQueueDone != nil {
+		<-d.mergeQueueDone
+	}
 
 	if err := os.Remove(d.pidPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("remove pid file: %w", err)
 	}
+
+	d.mergeQueueInbox = nil
+	d.mergeQueueUpdates = nil
+	d.mergeQueueDone = nil
 
 	d.emit(ctx, Event{
 		Time:    d.now(),

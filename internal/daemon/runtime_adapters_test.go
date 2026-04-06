@@ -282,6 +282,109 @@ func TestSQLiteStateAdapterNonTerminalTasksAndWorkerByPane(t *testing.T) {
 	}
 }
 
+func TestSQLiteStateAdapterMergeQueueRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	store := openDaemonStateStore(t)
+	adapter := newSQLiteStateAdapter(store)
+	now := time.Date(2026, 4, 6, 10, 0, 0, 0, time.UTC)
+
+	position, err := adapter.EnqueueMerge(context.Background(), MergeQueueEntry{
+		Project:   "/repo",
+		Issue:     "LAB-750",
+		PRNumber:  42,
+		Status:    MergeQueueStatusQueued,
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("EnqueueMerge(42) error = %v", err)
+	}
+	if got, want := position, 1; got != want {
+		t.Fatalf("position for PR 42 = %d, want %d", got, want)
+	}
+
+	position, err = adapter.EnqueueMerge(context.Background(), MergeQueueEntry{
+		Project:   "/repo",
+		Issue:     "LAB-751",
+		PRNumber:  43,
+		Status:    MergeQueueStatusAwaitingChecks,
+		CreatedAt: now.Add(time.Minute),
+		UpdatedAt: now.Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("EnqueueMerge(43) error = %v", err)
+	}
+	if got, want := position, 2; got != want {
+		t.Fatalf("position for PR 43 = %d, want %d", got, want)
+	}
+
+	entry, err := adapter.MergeEntry(context.Background(), "/repo", 42)
+	if err != nil {
+		t.Fatalf("MergeEntry() error = %v", err)
+	}
+	if entry == nil {
+		t.Fatal("MergeEntry() = nil, want entry")
+	}
+	if got, want := entry.Status, MergeQueueStatusQueued; got != want {
+		t.Fatalf("entry.Status = %q, want %q", got, want)
+	}
+
+	entries, err := adapter.MergeEntries(context.Background(), "/repo")
+	if err != nil {
+		t.Fatalf("MergeEntries() error = %v", err)
+	}
+	if got, want := len(entries), 2; got != want {
+		t.Fatalf("len(entries) = %d, want %d", got, want)
+	}
+	if got, want := entries[0].PRNumber, 42; got != want {
+		t.Fatalf("entries[0].PRNumber = %d, want %d", got, want)
+	}
+	if got, want := entries[1].PRNumber, 43; got != want {
+		t.Fatalf("entries[1].PRNumber = %d, want %d", got, want)
+	}
+
+	entry.Status = MergeQueueStatusCheckingCI
+	entry.UpdatedAt = now.Add(2 * time.Minute)
+	if err := adapter.UpdateMergeEntry(context.Background(), *entry); err != nil {
+		t.Fatalf("UpdateMergeEntry() error = %v", err)
+	}
+
+	updatedEntry, err := adapter.MergeEntry(context.Background(), "/repo", 42)
+	if err != nil {
+		t.Fatalf("MergeEntry() after update error = %v", err)
+	}
+	if updatedEntry == nil {
+		t.Fatal("MergeEntry() after update = nil, want entry")
+	}
+	if got, want := updatedEntry.Status, MergeQueueStatusCheckingCI; got != want {
+		t.Fatalf("updatedEntry.Status = %q, want %q", got, want)
+	}
+
+	if err := adapter.DeleteMergeEntry(context.Background(), "/repo", 42); err != nil {
+		t.Fatalf("DeleteMergeEntry() error = %v", err)
+	}
+	deletedEntry, err := adapter.MergeEntry(context.Background(), "/repo", 42)
+	if err != nil {
+		t.Fatalf("MergeEntry() after delete error = %v", err)
+	}
+	if deletedEntry != nil {
+		t.Fatalf("MergeEntry() after delete = %#v, want nil", deletedEntry)
+	}
+
+	if err := adapter.DeleteMergeEntry(context.Background(), "/repo", 42); !errors.Is(err, ErrTaskNotFound) {
+		t.Fatalf("DeleteMergeEntry() missing error = %v, want ErrTaskNotFound", err)
+	}
+	if err := adapter.UpdateMergeEntry(context.Background(), MergeQueueEntry{
+		Project:  "/repo",
+		Issue:    "LAB-752",
+		PRNumber: 99,
+		Status:   MergeQueueStatusQueued,
+	}); !errors.Is(err, ErrTaskNotFound) {
+		t.Fatalf("UpdateMergeEntry() missing error = %v, want ErrTaskNotFound", err)
+	}
+}
+
 func TestExecCommandRunner(t *testing.T) {
 	t.Parallel()
 

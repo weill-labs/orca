@@ -44,57 +44,8 @@ func (d *Daemon) Enqueue(ctx context.Context, prNumber int) (MergeQueueActionRes
 	}, nil
 }
 
-func (d *Daemon) processMergeQueue(ctx context.Context) {
-	entry, err := d.state.NextMergeEntry(ctx, d.project)
-	if err != nil || entry == nil {
-		return
-	}
-
-	active, err := d.state.ActiveAssignmentByPRNumber(ctx, d.project, entry.PRNumber)
-	if err != nil {
-		d.emit(ctx, d.mergeQueueEvent(nil, EventPRLandingFailed, entry.PRNumber, fmt.Sprintf("PR #%d is no longer tracked by an active assignment", entry.PRNumber), d.now()))
-		_ = d.state.DeleteMergeEntry(ctx, d.project, entry.PRNumber)
-		return
-	}
-
-	switch entry.Status {
-	case "", MergeQueueStatusQueued:
-		d.emit(ctx, d.mergeQueueEvent(&active, EventPRLandingStarted, entry.PRNumber, "processing queued PR landing", d.now()))
-		if err := d.rebaseQueuedPR(ctx, entry.PRNumber); err != nil {
-			d.handleQueuedPRFailure(ctx, active, entry.PRNumber, mergeQueueRebaseConflictPrompt(entry.PRNumber), err)
-			_ = d.state.DeleteMergeEntry(ctx, d.project, entry.PRNumber)
-			return
-		}
-		entry.Status = MergeQueueStatusAwaitingChecks
-		entry.UpdatedAt = d.now()
-		_ = d.state.UpdateMergeEntry(ctx, *entry)
-	case MergeQueueStatusAwaitingChecks:
-		ciState, err := d.lookupPRChecksState(ctx, entry.PRNumber)
-		if err != nil {
-			return
-		}
-		switch ciState {
-		case ciStatePass, ciStateSkipping:
-			if err := d.mergeQueuedPR(ctx, entry.PRNumber); err != nil {
-				d.handleQueuedPRFailure(ctx, active, entry.PRNumber, mergeQueueMergeFailedPrompt(entry.PRNumber), err)
-				_ = d.state.DeleteMergeEntry(ctx, d.project, entry.PRNumber)
-				return
-			}
-			_ = d.state.DeleteMergeEntry(ctx, d.project, entry.PRNumber)
-		case ciStateFail, ciStateCancel:
-			d.handleQueuedPRFailure(ctx, active, entry.PRNumber, mergeQueueChecksFailedPrompt(entry.PRNumber), fmt.Errorf("required checks state is %s", ciState))
-			_ = d.state.DeleteMergeEntry(ctx, d.project, entry.PRNumber)
-		}
-	default:
-		entry.Status = MergeQueueStatusQueued
-		entry.UpdatedAt = d.now()
-		_ = d.state.UpdateMergeEntry(ctx, *entry)
-	}
-}
-
 func (d *Daemon) checkTaskPRPoll(ctx context.Context, active ActiveAssignment) TaskStateUpdate {
 	update := TaskStateUpdate{Active: active}
-
 	profile, err := d.profileForTask(ctx, active.Task)
 	if err != nil {
 		return update
@@ -148,16 +99,6 @@ func mergeTaskStateUpdates(base, next TaskStateUpdate) TaskStateUpdate {
 	merged.Events = append(merged.Events, next.Events...)
 	merged.PRMerged = merged.PRMerged || next.PRMerged
 	return merged
-}
-
-func (d *Daemon) rebaseQueuedPR(ctx context.Context, prNumber int) error {
-	_, err := d.commands.Run(ctx, d.project, "gh", "pr", "update-branch", fmt.Sprintf("%d", prNumber), "--rebase")
-	return err
-}
-
-func (d *Daemon) mergeQueuedPR(ctx context.Context, prNumber int) error {
-	_, err := d.commands.Run(ctx, d.project, "gh", "pr", "merge", fmt.Sprintf("%d", prNumber), "--squash")
-	return err
 }
 
 func (d *Daemon) lookupPRNumber(ctx context.Context, branch string) (int, error) {

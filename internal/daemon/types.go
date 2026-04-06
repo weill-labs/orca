@@ -25,6 +25,9 @@ const (
 
 	MergeQueueStatusQueued         = "queued"
 	MergeQueueStatusAwaitingChecks = "awaiting_checks"
+	MergeQueueStatusCheckingCI     = "checking_ci"
+	MergeQueueStatusRebasing       = "rebasing"
+	MergeQueueStatusMerging        = "merging"
 
 	EventDaemonStarted         = "daemon.started"
 	EventDaemonStopped         = "daemon.stopped"
@@ -98,7 +101,7 @@ type StateStore interface {
 	ActiveAssignmentByPRNumber(ctx context.Context, project string, prNumber int) (ActiveAssignment, error)
 	EnqueueMerge(ctx context.Context, entry MergeQueueEntry) (int, error)
 	MergeEntry(ctx context.Context, project string, prNumber int) (*MergeQueueEntry, error)
-	NextMergeEntry(ctx context.Context, project string) (*MergeQueueEntry, error)
+	MergeEntries(ctx context.Context, project string) ([]MergeQueueEntry, error)
 	UpdateMergeEntry(ctx context.Context, entry MergeQueueEntry) error
 	DeleteMergeEntry(ctx context.Context, project string, prNumber int) error
 	RecordEvent(ctx context.Context, event Event) error
@@ -204,6 +207,19 @@ type MergeQueueEntry struct {
 	Status    string    `json:"status,omitempty"`
 	CreatedAt time.Time `json:"created_at,omitempty"`
 	UpdatedAt time.Time `json:"updated_at,omitempty"`
+}
+
+type ProcessQueue struct {
+	Entries []MergeQueueEntry
+	Ack     chan struct{}
+}
+
+type MergeQueueUpdate struct {
+	Entry         MergeQueueEntry
+	Delete        bool
+	EventType     string
+	EventMessage  string
+	FailurePrompt string
 }
 
 type Event struct {

@@ -712,25 +712,6 @@ func (s *SQLiteStore) EnqueueMergeEntry(ctx context.Context, entry MergeQueueEnt
 	return position, nil
 }
 
-func (s *SQLiteStore) NextMergeEntry(ctx context.Context, project string) (*MergeQueueEntry, error) {
-	row := s.db.QueryRowContext(ctx, `
-		SELECT project, issue, pr_number, status, created_at, updated_at
-		FROM merge_queue
-		WHERE project = ?
-		ORDER BY created_at ASC, pr_number ASC
-		LIMIT 1
-	`, project)
-
-	entry, err := scanMergeQueueEntry(row)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("next merge entry: %w", err)
-	}
-	return &entry, nil
-}
-
 func (s *SQLiteStore) MergeEntry(ctx context.Context, project string, prNumber int) (*MergeQueueEntry, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT project, issue, pr_number, status, created_at, updated_at
@@ -746,6 +727,32 @@ func (s *SQLiteStore) MergeEntry(ctx context.Context, project string, prNumber i
 		return nil, fmt.Errorf("lookup merge entry: %w", err)
 	}
 	return &entry, nil
+}
+
+func (s *SQLiteStore) MergeEntries(ctx context.Context, project string) ([]MergeQueueEntry, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT project, issue, pr_number, status, created_at, updated_at
+		FROM merge_queue
+		WHERE project = ?
+		ORDER BY created_at ASC, pr_number ASC
+	`, project)
+	if err != nil {
+		return nil, fmt.Errorf("list merge entries: %w", err)
+	}
+	defer rows.Close()
+
+	entries := make([]MergeQueueEntry, 0)
+	for rows.Next() {
+		entry, err := scanMergeQueueEntry(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan merge entry: %w", err)
+		}
+		entries = append(entries, entry)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate merge entries: %w", err)
+	}
+	return entries, nil
 }
 
 func (s *SQLiteStore) UpdateMergeEntry(ctx context.Context, entry MergeQueueEntry) error {

@@ -418,12 +418,12 @@ func TestSQLiteStorePersistsWorkerMonitorStateAndMergeQueue(t *testing.T) {
 		t.Fatalf("position = %d, want %d", got, want)
 	}
 
-	entry, err := store.NextMergeEntry(context.Background(), project)
+	entry, err := store.MergeEntry(context.Background(), project, 42)
 	if err != nil {
-		t.Fatalf("NextMergeEntry() error = %v", err)
+		t.Fatalf("MergeEntry() error = %v", err)
 	}
 	if entry == nil {
-		t.Fatal("NextMergeEntry() = nil, want entry")
+		t.Fatal("MergeEntry() = nil, want entry")
 	}
 	if got, want := entry.PRNumber, 42; got != want {
 		t.Fatalf("entry.PRNumber = %d, want %d", got, want)
@@ -432,18 +432,29 @@ func TestSQLiteStorePersistsWorkerMonitorStateAndMergeQueue(t *testing.T) {
 		t.Fatalf("entry.Status = %q, want %q", got, want)
 	}
 
+	entries, err := store.MergeEntries(context.Background(), project)
+	if err != nil {
+		t.Fatalf("MergeEntries() error = %v", err)
+	}
+	if got, want := len(entries), 1; got != want {
+		t.Fatalf("len(entries) = %d, want %d", got, want)
+	}
+	if got, want := entries[0].PRNumber, 42; got != want {
+		t.Fatalf("entries[0].PRNumber = %d, want %d", got, want)
+	}
+
 	entry.Status = "awaiting_checks"
 	entry.UpdatedAt = now.Add(time.Minute)
 	if err := store.UpdateMergeEntry(context.Background(), *entry); err != nil {
 		t.Fatalf("UpdateMergeEntry() error = %v", err)
 	}
 
-	updatedEntry, err := store.NextMergeEntry(context.Background(), project)
+	updatedEntry, err := store.MergeEntry(context.Background(), project, 42)
 	if err != nil {
-		t.Fatalf("NextMergeEntry() after update error = %v", err)
+		t.Fatalf("MergeEntry() after update error = %v", err)
 	}
 	if updatedEntry == nil {
-		t.Fatal("NextMergeEntry() after update = nil, want entry")
+		t.Fatal("MergeEntry() after update = nil, want entry")
 	}
 	if got, want := updatedEntry.Status, "awaiting_checks"; got != want {
 		t.Fatalf("updatedEntry.Status = %q, want %q", got, want)
@@ -452,12 +463,12 @@ func TestSQLiteStorePersistsWorkerMonitorStateAndMergeQueue(t *testing.T) {
 	if err := store.DeleteMergeEntry(context.Background(), project, 42); err != nil {
 		t.Fatalf("DeleteMergeEntry() error = %v", err)
 	}
-	emptyEntry, err := store.NextMergeEntry(context.Background(), project)
+	emptyEntry, err := store.MergeEntry(context.Background(), project, 42)
 	if err != nil {
-		t.Fatalf("NextMergeEntry() after delete error = %v", err)
+		t.Fatalf("MergeEntry() after delete error = %v", err)
 	}
 	if emptyEntry != nil {
-		t.Fatalf("NextMergeEntry() after delete = %#v, want nil", emptyEntry)
+		t.Fatalf("MergeEntry() after delete = %#v, want nil", emptyEntry)
 	}
 }
 
@@ -584,6 +595,84 @@ func TestSQLiteStoreWorkerByPaneAndNonTerminalTasks(t *testing.T) {
 	}
 	if _, err := store.WorkerByPane(context.Background(), project, "missing"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("WorkerByPane() missing error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestSQLiteStoreMergeQueueOrderingAndNotFound(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	project := "/repo"
+	now := time.Date(2026, 4, 6, 10, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+
+	position, err := store.EnqueueMergeEntry(context.Background(), MergeQueueEntry{
+		Project:  project,
+		Issue:    "LAB-751",
+		PRNumber: 43,
+		Status:   "awaiting_checks",
+	})
+	if err != nil {
+		t.Fatalf("EnqueueMergeEntry(43) error = %v", err)
+	}
+	if got, want := position, 1; got != want {
+		t.Fatalf("position for PR 43 = %d, want %d", got, want)
+	}
+
+	position, err = store.EnqueueMergeEntry(context.Background(), MergeQueueEntry{
+		Project:   project,
+		Issue:     "LAB-750",
+		PRNumber:  42,
+		Status:    "queued",
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("EnqueueMergeEntry(42) error = %v", err)
+	}
+	if got, want := position, 2; got != want {
+		t.Fatalf("position for PR 42 = %d, want %d", got, want)
+	}
+
+	entry, err := store.MergeEntry(context.Background(), project, 43)
+	if err != nil {
+		t.Fatalf("MergeEntry(43) error = %v", err)
+	}
+	if entry == nil {
+		t.Fatal("MergeEntry(43) = nil, want entry")
+	}
+	if !entry.CreatedAt.Equal(now) {
+		t.Fatalf("entry.CreatedAt = %v, want %v", entry.CreatedAt, now)
+	}
+	if !entry.UpdatedAt.Equal(now) {
+		t.Fatalf("entry.UpdatedAt = %v, want %v", entry.UpdatedAt, now)
+	}
+
+	entries, err := store.MergeEntries(context.Background(), project)
+	if err != nil {
+		t.Fatalf("MergeEntries() error = %v", err)
+	}
+	if got, want := len(entries), 2; got != want {
+		t.Fatalf("len(entries) = %d, want %d", got, want)
+	}
+	if got, want := entries[0].PRNumber, 42; got != want {
+		t.Fatalf("entries[0].PRNumber = %d, want %d", got, want)
+	}
+	if got, want := entries[1].PRNumber, 43; got != want {
+		t.Fatalf("entries[1].PRNumber = %d, want %d", got, want)
+	}
+
+	if err := store.UpdateMergeEntry(context.Background(), MergeQueueEntry{
+		Project:  project,
+		Issue:    "LAB-799",
+		PRNumber: 99,
+		Status:   "queued",
+	}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("UpdateMergeEntry(missing) error = %v, want ErrNotFound", err)
+	}
+
+	if err := store.DeleteMergeEntry(context.Background(), project, 99); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("DeleteMergeEntry(missing) error = %v, want ErrNotFound", err)
 	}
 }
 

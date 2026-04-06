@@ -2,7 +2,9 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
 )
 
 func TestEnqueueResumesPersistedMergeQueueStateAfterRestart(t *testing.T) {
@@ -12,18 +14,15 @@ func TestEnqueueResumesPersistedMergeQueueStateAfterRestart(t *testing.T) {
 		name              string
 		tickBeforeRestart bool
 		wantRebaseCalls   int
-		restartTicks      int
 	}{
 		{
 			name:            "queued entry restarts from rebase",
 			wantRebaseCalls: 1,
-			restartTicks:    2,
 		},
 		{
 			name:              "awaiting checks entry skips repeated rebase",
 			tickBeforeRestart: true,
 			wantRebaseCalls:   1,
-			restartTicks:      1,
 		},
 	}
 
@@ -82,14 +81,17 @@ func TestEnqueueResumesPersistedMergeQueueStateAfterRestart(t *testing.T) {
 				_ = second.Stop(context.Background())
 			})
 
-			for i := 0; i < tt.restartTicks; i++ {
-				secondPollTicker.tick(deps.clock.Now())
-			}
 			if !tt.tickBeforeRestart {
+				secondPollTicker.tick(deps.clock.Now())
 				waitFor(t, "post-restart merge queue rebase", func() bool {
 					return deps.commands.countCalls("gh", []string{"pr", "update-branch", "42", "--rebase"}) == 1
 				})
+				waitFor(t, "post-restart awaiting checks", func() bool {
+					entry, err := deps.state.MergeEntry(context.Background(), "/tmp/project", 42)
+					return err == nil && entry != nil && entry.Status == MergeQueueStatusAwaitingChecks
+				})
 			}
+			secondPollTicker.tick(deps.clock.Now())
 			waitFor(t, "post-restart merge queue merge", func() bool {
 				return deps.commands.countCalls("gh", []string{"pr", "merge", "42", "--squash"}) == 1
 			})
@@ -101,5 +103,235 @@ func TestEnqueueResumesPersistedMergeQueueStateAfterRestart(t *testing.T) {
 				t.Fatalf("rebase call count = %d, want %d", got, want)
 			}
 		})
+	}
+}
+
+func TestStartResetsTransientMergeQueueStatuses(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		status     string
+		wantStatus string
+	}{
+		{
+			name:       "rebasing resumes from queued",
+			status:     MergeQueueStatusRebasing,
+			wantStatus: MergeQueueStatusQueued,
+		},
+		{
+			name:       "checking ci resumes from awaiting checks",
+			status:     MergeQueueStatusCheckingCI,
+			wantStatus: MergeQueueStatusAwaitingChecks,
+		},
+		{
+			name:       "merging resumes from awaiting checks",
+			status:     MergeQueueStatusMerging,
+			wantStatus: MergeQueueStatusAwaitingChecks,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			deps := newTestDeps(t)
+			deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+			now := deps.clock.Now()
+			deps.state.mergeQueue = []MergeQueueEntry{
+				{
+					Project:   "/tmp/project",
+					Issue:     "LAB-689",
+					PRNumber:  42,
+					Status:    tt.status,
+					CreatedAt: now.Add(-time.Minute),
+					UpdatedAt: now.Add(-time.Minute),
+				},
+			}
+
+			d := deps.newDaemon(t)
+			ctx := context.Background()
+			if err := d.Start(ctx); err != nil {
+				t.Fatalf("Start() error = %v", err)
+			}
+			t.Cleanup(func() {
+				_ = d.Stop(context.Background())
+			})
+
+			entry, err := deps.state.MergeEntry(ctx, "/tmp/project", 42)
+			if err != nil {
+				t.Fatalf("MergeEntry() error = %v", err)
+			}
+			if entry == nil {
+				t.Fatal("MergeEntry() = nil, want entry")
+			}
+			if got, want := entry.Status, tt.wantStatus; got != want {
+				t.Fatalf("entry.Status = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+func TestRestartDropsMergedQueueEntryWithoutFailureNotice(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	pollTicker := newFakeTicker()
+	deps.tickers.enqueue(newFakeTicker(), pollTicker)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":"2026-04-06T03:00:00Z"}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":"2026-04-06T03:00:00Z"}`, nil)
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+
+	task := Task{
+		Project:      "/tmp/project",
+		Issue:        "LAB-689",
+		Status:       TaskStatusActive,
+		Prompt:       "Implement merge queue",
+		PaneID:       "pane-1",
+		PaneName:     "worker-1",
+		CloneName:    "clone-01",
+		ClonePath:    deps.pool.clone.Path,
+		Branch:       "LAB-689",
+		AgentProfile: "codex",
+		PRNumber:     42,
+		CreatedAt:    deps.clock.Now(),
+		UpdatedAt:    deps.clock.Now(),
+	}
+	deps.state.putTaskForTest(task)
+	if err := deps.state.PutWorker(ctx, Worker{
+		Project:        "/tmp/project",
+		PaneID:         "pane-1",
+		PaneName:       "worker-1",
+		Issue:          "LAB-689",
+		ClonePath:      deps.pool.clone.Path,
+		AgentProfile:   "codex",
+		Health:         WorkerHealthHealthy,
+		LastActivityAt: deps.clock.Now(),
+		UpdatedAt:      deps.clock.Now(),
+	}); err != nil {
+		t.Fatalf("PutWorker() error = %v", err)
+	}
+	deps.state.mergeQueue = []MergeQueueEntry{
+		{
+			Project:   "/tmp/project",
+			Issue:     "LAB-689",
+			PRNumber:  42,
+			Status:    MergeQueueStatusMerging,
+			CreatedAt: deps.clock.Now().Add(-time.Minute),
+			UpdatedAt: deps.clock.Now().Add(-time.Minute),
+		},
+	}
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	entry, err := deps.state.MergeEntry(ctx, "/tmp/project", 42)
+	if err != nil {
+		t.Fatalf("MergeEntry() error = %v", err)
+	}
+	if entry == nil || entry.Status != MergeQueueStatusAwaitingChecks {
+		t.Fatalf("entry after startup = %#v, want awaiting checks", entry)
+	}
+
+	pollTicker.tick(deps.clock.Now())
+	waitFor(t, "merged queue entry deleted", func() bool {
+		entry, err := deps.state.MergeEntry(context.Background(), "/tmp/project", 42)
+		return err == nil && entry == nil
+	})
+
+	if got := deps.commands.countCalls("gh", []string{"pr", "merge", "42", "--squash"}); got != 0 {
+		t.Fatalf("merge command count = %d, want 0", got)
+	}
+	if got := deps.amux.countKey("pane-1", mergeQueueMergeFailedPrompt(42)+"\n"); got != 0 {
+		t.Fatalf("failure prompt count = %d, want 0", got)
+	}
+	if got := deps.events.countType(EventPRLandingFailed); got != 0 {
+		t.Fatalf("landing failed event count = %d, want 0", got)
+	}
+
+	pollTicker.tick(deps.clock.Now())
+	waitFor(t, "assignment completed after merged queue cleanup", func() bool {
+		task, ok := deps.state.task("LAB-689")
+		return ok && task.Status == TaskStatusDone
+	})
+}
+
+func TestApplyMergeQueueUpdateStillNotifiesWorkerWhenDeleteFails(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+
+	now := deps.clock.Now()
+	task := Task{
+		Project:      "/tmp/project",
+		Issue:        "LAB-689",
+		Status:       TaskStatusActive,
+		Prompt:       "Implement merge queue",
+		PaneID:       "pane-1",
+		PaneName:     "worker-1",
+		CloneName:    "clone-01",
+		ClonePath:    deps.pool.clone.Path,
+		Branch:       "LAB-689",
+		AgentProfile: "codex",
+		PRNumber:     42,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+	deps.state.putTaskForTest(task)
+	if err := deps.state.PutWorker(ctx, Worker{
+		Project:        "/tmp/project",
+		PaneID:         "pane-1",
+		PaneName:       "worker-1",
+		Issue:          "LAB-689",
+		ClonePath:      deps.pool.clone.Path,
+		AgentProfile:   "codex",
+		Health:         WorkerHealthHealthy,
+		LastActivityAt: now,
+		UpdatedAt:      now,
+	}); err != nil {
+		t.Fatalf("PutWorker() error = %v", err)
+	}
+	deps.state.mergeQueue = []MergeQueueEntry{
+		{
+			Project:   "/tmp/project",
+			Issue:     "LAB-689",
+			PRNumber:  42,
+			Status:    MergeQueueStatusAwaitingChecks,
+			CreatedAt: now,
+			UpdatedAt: now,
+		},
+	}
+	deps.state.deleteMergeErr = errors.New("delete merge entry: sqlite busy")
+
+	d.applyMergeQueueUpdate(ctx, MergeQueueUpdate{
+		Entry: MergeQueueEntry{
+			Project:  "/tmp/project",
+			Issue:    "LAB-689",
+			PRNumber: 42,
+			Status:   MergeQueueStatusAwaitingChecks,
+		},
+		Delete:        true,
+		EventType:     EventPRLandingFailed,
+		EventMessage:  "required checks state is fail",
+		FailurePrompt: mergeQueueChecksFailedPrompt(42),
+	})
+
+	waitFor(t, "worker failure prompt despite delete error", func() bool {
+		return deps.amux.countKey("pane-1", mergeQueueChecksFailedPrompt(42)+"\n") == 1
+	})
+	if got, want := deps.events.countType(EventPRLandingFailed), 1; got != want {
+		t.Fatalf("landing failed event count = %d, want %d", got, want)
+	}
+	if message := deps.events.lastMessage(EventPRLandingFailed); message != "required checks state is fail" {
+		t.Fatalf("landing failed message = %q, want %q", message, "required checks state is fail")
 	}
 }
