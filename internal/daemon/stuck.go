@@ -3,59 +3,42 @@ package daemon
 import (
 	"context"
 	"strings"
+	"time"
 )
 
-func (d *Daemon) nudgeOrEscalate(ctx context.Context, active ActiveAssignment, profile AgentProfile, reason string) {
-	now := d.now()
-	previousHealth := active.Worker.Health
-	active.Worker.Health = WorkerHealthStuck
-	active.Worker.UpdatedAt = now
+func (d *Daemon) nudgeOrEscalate(ctx context.Context, update *TaskStateUpdate, profile AgentProfile, reason string, now time.Time) {
+	previousHealth := update.Active.Worker.Health
 
-	if active.Worker.NudgeCount < profile.MaxNudgeRetries {
-		if err := d.amux.SendKeys(ctx, active.Task.PaneID, profile.NudgeCommand); err != nil {
+	if update.Active.Worker.NudgeCount < profile.MaxNudgeRetries {
+		if err := d.amux.SendKeys(ctx, update.Active.Task.PaneID, profile.NudgeCommand); err != nil {
 			return
 		}
-		active.Worker.NudgeCount++
-		_ = d.state.PutWorker(ctx, active.Worker)
-		d.emit(ctx, Event{
-			Time:         now,
-			Type:         EventWorkerNudged,
-			Project:      d.project,
-			Issue:        active.Task.Issue,
-			PaneID:       active.Task.PaneID,
-			PaneName:     active.Task.PaneName,
-			CloneName:    active.Task.CloneName,
-			ClonePath:    active.Task.ClonePath,
-			Branch:       active.Task.Branch,
-			AgentProfile: profile.Name,
-			Retry:        active.Worker.NudgeCount,
-			Message:      reason,
-		})
+
+		update.Active.Worker.Health = WorkerHealthStuck
+		update.Active.Worker.UpdatedAt = now
+		update.Active.Worker.NudgeCount++
+		update.WorkerChanged = true
+
+		event := d.assignmentEvent(update.Active, profile, EventWorkerNudged, reason)
+		event.Retry = update.Active.Worker.NudgeCount
+		update.Events = append(update.Events, event)
 		return
 	}
 
 	if previousHealth == WorkerHealthEscalated {
 		return
 	}
-	active.Worker.Health = WorkerHealthEscalated
-	_ = d.state.PutWorker(ctx, active.Worker)
-	if active.Task.PaneID != "" {
-		_ = d.setPaneMetadata(ctx, active.Task.PaneID, map[string]string{"status": "escalated"})
+
+	update.Active.Worker.Health = WorkerHealthEscalated
+	update.Active.Worker.UpdatedAt = now
+	update.WorkerChanged = true
+	if update.Active.Task.PaneID != "" {
+		update.PaneMetadata = mergeMetadata(update.PaneMetadata, map[string]string{"status": "escalated"})
 	}
-	d.emit(ctx, Event{
-		Time:         now,
-		Type:         EventWorkerEscalated,
-		Project:      d.project,
-		Issue:        active.Task.Issue,
-		PaneID:       active.Task.PaneID,
-		PaneName:     active.Task.PaneName,
-		CloneName:    active.Task.CloneName,
-		ClonePath:    active.Task.ClonePath,
-		Branch:       active.Task.Branch,
-		AgentProfile: profile.Name,
-		Retry:        active.Worker.NudgeCount,
-		Message:      reason,
-	})
+
+	event := d.assignmentEvent(update.Active, profile, EventWorkerEscalated, reason)
+	event.Retry = update.Active.Worker.NudgeCount
+	update.Events = append(update.Events, event)
 }
 
 func (d *Daemon) matchesStuckPattern(profile AgentProfile, output string) bool {

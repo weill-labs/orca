@@ -130,32 +130,14 @@ func seedTaskMonitorAssignment(t *testing.T, deps *testDeps, issue, paneID strin
 func waitForTaskMonitorBlocks(t *testing.T, started ...<-chan struct{}) {
 	t.Helper()
 
-	deadline := time.After(200 * time.Millisecond)
-	remaining := len(started)
-	seen := make([]bool, len(started))
-	for remaining > 0 {
-		select {
-		case <-deadline:
-			t.Fatal("timed out waiting for parallel task monitor polls")
-		default:
-		}
+	timer := time.NewTimer(200 * time.Millisecond)
+	defer timer.Stop()
 
-		progress := false
-		for i, ch := range started {
-			if seen[i] {
-				continue
-			}
-			select {
-			case <-ch:
-				seen[i] = true
-				remaining--
-				progress = true
-			default:
-			}
+	for _, ch := range started {
+		select {
+		case <-timer.C:
+			t.Fatal("timed out waiting for parallel task monitor polls")
+		case <-ch:
 		}
-		if progress {
-			continue
-		}
-		time.Sleep(5 * time.Millisecond)
 	}
 }

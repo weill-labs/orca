@@ -92,6 +92,7 @@ func (d *Daemon) finishAssignment(ctx context.Context, active ActiveAssignment, 
 func (d *Daemon) finishAssignmentWithMessage(ctx context.Context, active ActiveAssignment, status, eventType string, merged bool, message string) error {
 	var result error
 	cleanupCtx := context.WithoutCancel(ctx)
+	d.stopTaskMonitor(active.Task.Issue)
 
 	if merged {
 		if err := d.amux.SendKeys(cleanupCtx, active.Task.PaneID, mergedWrapUpPrompt); err != nil {

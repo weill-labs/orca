@@ -14,53 +14,40 @@ const (
 	ciStateSkipping = "skipping"
 )
 
-func (d *Daemon) handlePRChecksPoll(ctx context.Context, active ActiveAssignment, profile AgentProfile) {
-	ciState, err := d.lookupPRChecksState(ctx, active.Task.PRNumber)
+func (d *Daemon) handlePRChecksPoll(ctx context.Context, update *TaskStateUpdate, profile AgentProfile) {
+	ciState, err := d.lookupPRChecksState(ctx, update.Active.Task.PRNumber)
 	if err != nil {
 		return
 	}
 
-	previous := active.Worker.LastCIState
+	previous := update.Active.Worker.LastCIState
 	if ciState != ciStateFail {
 		if previous != ciState {
-			active.Worker.LastCIState = ciState
-			active.Worker.UpdatedAt = d.now()
-			_ = d.state.PutWorker(ctx, active.Worker)
+			update.Active.Worker.LastCIState = ciState
+			update.Active.Worker.UpdatedAt = d.now()
+			update.WorkerChanged = true
 		}
 		return
 	}
 	if previous == ciStateFail {
 		return
 	}
-	if d.nudgeForCIFailure(ctx, active, profile) {
-		active.Worker.LastCIState = ciStateFail
-		active.Worker.UpdatedAt = d.now()
-		_ = d.state.PutWorker(ctx, active.Worker)
+	if d.nudgeForCIFailure(ctx, update, profile) {
+		update.Active.Worker.LastCIState = ciStateFail
+		update.Active.Worker.UpdatedAt = d.now()
+		update.WorkerChanged = true
 	}
 }
 
-func (d *Daemon) nudgeForCIFailure(ctx context.Context, active ActiveAssignment, profile AgentProfile) bool {
+func (d *Daemon) nudgeForCIFailure(ctx context.Context, update *TaskStateUpdate, profile AgentProfile) bool {
 	if profile.NudgeCommand == "" {
 		return false
 	}
-	if err := d.amux.SendKeys(ctx, active.Task.PaneID, profile.NudgeCommand); err != nil {
+	if err := d.amux.SendKeys(ctx, update.Active.Task.PaneID, profile.NudgeCommand); err != nil {
 		return false
 	}
 
-	d.emit(ctx, Event{
-		Time:         d.now(),
-		Type:         EventWorkerNudgedCI,
-		Project:      d.project,
-		Issue:        active.Task.Issue,
-		PaneID:       active.Task.PaneID,
-		PaneName:     active.Task.PaneName,
-		CloneName:    active.Task.CloneName,
-		ClonePath:    active.Task.ClonePath,
-		Branch:       active.Task.Branch,
-		AgentProfile: profile.Name,
-		PRNumber:     active.Task.PRNumber,
-		Message:      "pull request checks failing",
-	})
+	update.Events = append(update.Events, d.assignmentEvent(update.Active, profile, EventWorkerNudgedCI, "pull request checks failing"))
 	return true
 }
 

@@ -219,6 +219,7 @@ func (d *Daemon) storeResumedTask(ctx context.Context, task Task, worker Worker,
 	if err := d.state.PutTask(ctx, task); err != nil {
 		return fmt.Errorf("store task after resume: %w", err)
 	}
+	d.ensureTaskMonitor(task.Issue)
 
 	return nil
 }

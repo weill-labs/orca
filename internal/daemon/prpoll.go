@@ -92,96 +92,62 @@ func (d *Daemon) processMergeQueue(ctx context.Context) {
 	}
 }
 
-func (d *Daemon) handlePRPoll(ctx context.Context, active ActiveAssignment) {
+func (d *Daemon) checkTaskPRPoll(ctx context.Context, active ActiveAssignment) TaskStateUpdate {
+	update := TaskStateUpdate{Active: active}
+
 	profile, err := d.profileForTask(ctx, active.Task)
 	if err != nil {
-		return
+		return update
 	}
 
-	if active.Task.PRNumber == 0 {
-		prNumber, err := d.lookupPRNumber(ctx, active.Task.Branch)
+	if update.Active.Task.PRNumber == 0 {
+		prNumber, err := d.lookupPRNumber(ctx, update.Active.Task.Branch)
 		if err != nil {
-			return
+			return update
 		}
 		if prNumber > 0 {
-			metadata, err := d.prPaneMetadata(ctx, active, prNumber)
+			metadata, err := d.prPaneMetadata(ctx, update.Active, prNumber)
 			if err != nil {
-				return
+				return update
 			}
-			if err := d.setPaneMetadata(ctx, active.Task.PaneID, metadata); err != nil {
-				return
-			}
-			active.Task.PRNumber = prNumber
-			active.Task.UpdatedAt = d.now()
-			_ = d.state.PutTask(ctx, active.Task)
-			d.emit(ctx, Event{
-				Time:         d.now(),
-				Type:         EventPRDetected,
-				Project:      d.project,
-				Issue:        active.Task.Issue,
-				PaneID:       active.Task.PaneID,
-				PaneName:     active.Task.PaneName,
-				CloneName:    active.Task.CloneName,
-				ClonePath:    active.Task.ClonePath,
-				Branch:       active.Task.Branch,
-				AgentProfile: profile.Name,
-				PRNumber:     prNumber,
-				Message:      "pull request detected",
-			})
+			update.PaneMetadata = mergeMetadata(update.PaneMetadata, metadata)
+			update.Active.Task.PRNumber = prNumber
+			update.Active.Task.UpdatedAt = d.now()
+			update.TaskChanged = true
+			update.Events = append(update.Events, d.assignmentEvent(update.Active, profile, EventPRDetected, "pull request detected"))
 		}
 	}
 
-	if active.Task.PRNumber == 0 {
-		return
+	if update.Active.Task.PRNumber == 0 {
+		return update
 	}
-	if entry, err := d.state.MergeEntry(ctx, d.project, active.Task.PRNumber); err == nil && entry != nil {
-		return
+	if entry, err := d.state.MergeEntry(ctx, d.project, update.Active.Task.PRNumber); err == nil && entry != nil {
+		return update
 	}
 
-	d.handlePRChecksPoll(ctx, active, profile)
+	d.handlePRChecksPoll(ctx, &update, profile)
 
-	merged, err := d.isPRMerged(ctx, active.Task.PRNumber)
+	merged, err := d.isPRMerged(ctx, update.Active.Task.PRNumber)
 	if err != nil || !merged {
-		d.handlePRMergeablePoll(ctx, active, profile)
-		d.handlePRReviewPoll(ctx, active, profile)
-		return
+		d.handlePRMergeablePoll(ctx, &update, profile)
+		reviewUpdate := d.checkTaskReviewPoll(ctx, update.Active, profile)
+		update = mergeTaskStateUpdates(update, reviewUpdate)
+		return update
 	}
 
-	message := "pull request merged"
-	if err := d.setIssueStatus(ctx, active.Task.Issue, IssueStateDone); err != nil {
-		message = fmt.Sprintf("pull request merged (failed to update Linear issue status: %v)", err)
-	}
+	update.PRMerged = true
+	return update
+}
 
-	d.emit(ctx, Event{
-		Time:         d.now(),
-		Type:         EventPRMerged,
-		Project:      d.project,
-		Issue:        active.Task.Issue,
-		PaneID:       active.Task.PaneID,
-		PaneName:     active.Task.PaneName,
-		CloneName:    active.Task.CloneName,
-		ClonePath:    active.Task.ClonePath,
-		Branch:       active.Task.Branch,
-		AgentProfile: profile.Name,
-		PRNumber:     active.Task.PRNumber,
-		Message:      message,
-	})
-	if err := d.finishAssignment(ctx, active, TaskStatusDone, EventTaskCompleted, true); err != nil {
-		d.emit(ctx, Event{
-			Time:         d.now(),
-			Type:         EventTaskCompletionFailed,
-			Project:      d.project,
-			Issue:        active.Task.Issue,
-			PaneID:       active.Task.PaneID,
-			PaneName:     active.Task.PaneName,
-			CloneName:    active.Task.CloneName,
-			ClonePath:    active.Task.ClonePath,
-			Branch:       active.Task.Branch,
-			AgentProfile: profile.Name,
-			PRNumber:     active.Task.PRNumber,
-			Message:      err.Error(),
-		})
-	}
+func mergeTaskStateUpdates(base, next TaskStateUpdate) TaskStateUpdate {
+	merged := base
+	merged.Active = next.Active
+	merged.TaskChanged = merged.TaskChanged || next.TaskChanged
+	merged.WorkerChanged = merged.WorkerChanged || next.WorkerChanged
+	merged.PaneMetadata = mergeMetadata(merged.PaneMetadata, next.PaneMetadata)
+	merged.Events = append(merged.Events, next.Events...)
+	merged.PRMerged = merged.PRMerged || next.PRMerged
+	return merged
 }
 
 func (d *Daemon) rebaseQueuedPR(ctx context.Context, prNumber int) error {

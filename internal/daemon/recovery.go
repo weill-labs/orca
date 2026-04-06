@@ -138,6 +138,7 @@ func (d *Daemon) failTaskWithoutWorker(ctx context.Context, task Task, message s
 func (d *Daemon) failAssignment(ctx context.Context, active ActiveAssignment, eventType, message string) error {
 	cleanupCtx := context.WithoutCancel(ctx)
 	now := d.now()
+	d.stopTaskMonitor(active.Task.Issue)
 
 	task := active.Task
 	task.Status = TaskStatusFailed
