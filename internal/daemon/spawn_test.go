@@ -11,23 +11,24 @@ import (
 	"time"
 
 	"github.com/weill-labs/orca/internal/amux"
-	"github.com/weill-labs/orca/internal/pool"
 	state "github.com/weill-labs/orca/internal/daemonstate"
+	"github.com/weill-labs/orca/internal/pool"
+	projectpkg "github.com/weill-labs/orca/internal/project"
 )
 
 func TestLocalControllerSpawn(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name    string
-		amux    *fakeSpawnAmux
-		store   func(t *testing.T) state.Store
-		detect  func(string) (string, error)
-		session *string
+		name         string
+		amux         *fakeSpawnAmux
+		store        func(t *testing.T) state.Store
+		detect       func(string) (string, error)
+		session      *string
 		setupProject func(t *testing.T, project string)
-		poolRunner pool.Runner
-		assert  func(t *testing.T, store state.Store, result SpawnPaneResult, amuxClient *fakeSpawnAmux, project string)
-		wantErr string
+		poolRunner   pool.Runner
+		assert       func(t *testing.T, store state.Store, result SpawnPaneResult, amuxClient *fakeSpawnAmux, project string)
+		wantErr      string
 	}{
 		{
 			name: "allocates clone and opens pane without creating a task",
@@ -158,8 +159,8 @@ func TestLocalControllerSpawn(t *testing.T) {
 			},
 		},
 		{
-			name: "returns clone allocation failures",
-			amux: &fakeSpawnAmux{},
+			name:       "returns clone allocation failures",
+			amux:       &fakeSpawnAmux{},
 			poolRunner: spawnFailingRunner{err: errors.New("clone failed")},
 			assert: func(t *testing.T, _ state.Store, _ SpawnPaneResult, amuxClient *fakeSpawnAmux, _ string) {
 				t.Helper()
@@ -224,6 +225,10 @@ func TestLocalControllerSpawn(t *testing.T) {
 			t.Parallel()
 
 			project, origin := newSpawnProject(t)
+			canonicalProject, err := projectpkg.CanonicalPath(project)
+			if err != nil {
+				t.Fatalf("CanonicalPath(%q) error = %v", project, err)
+			}
 			store := newSpawnStore(t)
 			if tt.store != nil {
 				store = tt.store(t)
@@ -269,7 +274,7 @@ func TestLocalControllerSpawn(t *testing.T) {
 				t.Fatalf("Spawn() error = %v", err)
 			}
 
-			tt.assert(t, store, result, tt.amux, project)
+			tt.assert(t, store, result, tt.amux, canonicalProject)
 		})
 	}
 }
@@ -300,16 +305,20 @@ func (f *fakeSpawnAmux) Spawn(_ context.Context, req amux.SpawnRequest) (amux.Pa
 	return f.spawnPane, nil
 }
 
-func (f *fakeSpawnAmux) PaneExists(context.Context, string) (bool, error)                  { return false, nil }
-func (f *fakeSpawnAmux) ListPanes(context.Context) ([]amux.Pane, error)                    { return nil, nil }
-func (f *fakeSpawnAmux) SendKeys(context.Context, string, ...string) error                 { return nil }
-func (f *fakeSpawnAmux) Capture(context.Context, string) (string, error)                   { return "", nil }
-func (f *fakeSpawnAmux) CapturePane(context.Context, string) (amux.PaneCapture, error)     { return amux.PaneCapture{}, nil }
-func (f *fakeSpawnAmux) CaptureHistory(context.Context, string) (amux.PaneCapture, error)  { return amux.PaneCapture{}, nil }
-func (f *fakeSpawnAmux) SetMetadata(context.Context, string, map[string]string) error       { return nil }
-func (f *fakeSpawnAmux) KillPane(context.Context, string) error                             { return nil }
-func (f *fakeSpawnAmux) WaitIdle(context.Context, string, time.Duration) error              { return nil }
-func (f *fakeSpawnAmux) WaitContent(context.Context, string, string, time.Duration) error   { return nil }
+func (f *fakeSpawnAmux) PaneExists(context.Context, string) (bool, error)  { return false, nil }
+func (f *fakeSpawnAmux) ListPanes(context.Context) ([]amux.Pane, error)    { return nil, nil }
+func (f *fakeSpawnAmux) SendKeys(context.Context, string, ...string) error { return nil }
+func (f *fakeSpawnAmux) Capture(context.Context, string) (string, error)   { return "", nil }
+func (f *fakeSpawnAmux) CapturePane(context.Context, string) (amux.PaneCapture, error) {
+	return amux.PaneCapture{}, nil
+}
+func (f *fakeSpawnAmux) CaptureHistory(context.Context, string) (amux.PaneCapture, error) {
+	return amux.PaneCapture{}, nil
+}
+func (f *fakeSpawnAmux) SetMetadata(context.Context, string, map[string]string) error     { return nil }
+func (f *fakeSpawnAmux) KillPane(context.Context, string) error                           { return nil }
+func (f *fakeSpawnAmux) WaitIdle(context.Context, string, time.Duration) error            { return nil }
+func (f *fakeSpawnAmux) WaitContent(context.Context, string, string, time.Duration) error { return nil }
 
 func newSpawnProject(t *testing.T) (string, string) {
 	t.Helper()
