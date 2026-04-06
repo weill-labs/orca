@@ -248,13 +248,17 @@ func (c *CLIClient) WaitIdle(ctx context.Context, paneID string, timeout time.Du
 
 // WaitIdleSettle waits for a pane to become idle and optionally remain settled before returning.
 func (c *CLIClient) WaitIdleSettle(ctx context.Context, paneID string, timeout, settle time.Duration) error {
+	args := waitIdleArgs(paneID, timeout, settle)
+	_, err := c.run(ctx, c.session, args[0], args[1:]...)
+	return err
+}
+
+func waitIdleArgs(paneID string, timeout, settle time.Duration) []string {
 	args := []string{"wait", "idle", paneID}
 	if settle > 0 {
 		args = append(args, "--settle", settle.String())
 	}
-	args = append(args, "--timeout", timeout.String())
-	_, err := c.run(ctx, c.session, args[0], args[1:]...)
-	return err
+	return append(args, "--timeout", timeout.String())
 }
 
 // WaitContent waits for pane output to include a substring.
