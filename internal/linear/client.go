@@ -24,6 +24,7 @@ const (
 
 	issueLookupQuery = `query($id: String!) {
 		issue(id: $id) {
+			title
 			team { key }
 			state { id name }
 		}
@@ -142,7 +143,25 @@ func (c *Client) SetIssueStatus(ctx context.Context, issue, targetState string) 
 	return c.updateIssueState(ctx, issue, stateID)
 }
 
+func (c *Client) IssueTitle(ctx context.Context, issue string) (string, error) {
+	issue = strings.TrimSpace(issue)
+	if issue == "" {
+		return "", fmt.Errorf("issue is required")
+	}
+
+	var response struct {
+		Issue struct {
+			Title string `json:"title"`
+		} `json:"issue"`
+	}
+	if err := c.lookupIssueQuery(ctx, issue, &response); err != nil {
+		return "", fmt.Errorf("lookup issue %s title: %w", issue, err)
+	}
+	return strings.TrimSpace(response.Issue.Title), nil
+}
+
 type issueMetadata struct {
+	Title string `json:"title"`
 	Team struct {
 		Key string `json:"key"`
 	} `json:"team"`
@@ -156,11 +175,7 @@ func (c *Client) lookupIssue(ctx context.Context, issue string) (issueMetadata, 
 	var response struct {
 		Issue issueMetadata `json:"issue"`
 	}
-	err := c.graphQL(ctx, graphQLRequest{
-		Query:     issueLookupQuery,
-		Variables: map[string]string{"id": issue},
-	}, &response)
-	if err != nil {
+	if err := c.lookupIssueQuery(ctx, issue, &response); err != nil {
 		return issueMetadata{}, fmt.Errorf("lookup issue %s: %w", issue, err)
 	}
 	if response.Issue.Team.Key == "" {
@@ -170,6 +185,13 @@ func (c *Client) lookupIssue(ctx context.Context, issue string) (issueMetadata, 
 		return issueMetadata{}, fmt.Errorf("lookup issue %s: missing current state", issue)
 	}
 	return response.Issue, nil
+}
+
+func (c *Client) lookupIssueQuery(ctx context.Context, issue string, response any) error {
+	return c.graphQL(ctx, graphQLRequest{
+		Query:     issueLookupQuery,
+		Variables: map[string]string{"id": issue},
+	}, response)
 }
 
 func (c *Client) lookupStateID(ctx context.Context, teamKey, targetState string) (string, error) {

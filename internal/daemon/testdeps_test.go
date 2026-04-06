@@ -137,9 +137,12 @@ type issueStatusUpdate struct {
 }
 
 type fakeIssueTracker struct {
-	mu      sync.Mutex
-	updates []issueStatusUpdate
-	errors  map[string]error
+	mu           sync.Mutex
+	updates      []issueStatusUpdate
+	errors       map[string]error
+	titles       map[string]string
+	titleErrors  map[string]error
+	titleLookups []string
 }
 
 func (t *fakeIssueTracker) SetIssueStatus(_ context.Context, issue, state string) error {
@@ -152,11 +155,29 @@ func (t *fakeIssueTracker) SetIssueStatus(_ context.Context, issue, state string
 	return nil
 }
 
+func (t *fakeIssueTracker) IssueTitle(_ context.Context, issue string) (string, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.titleLookups = append(t.titleLookups, issue)
+	if err := t.titleErrors[issue]; err != nil {
+		return "", err
+	}
+	return t.titles[issue], nil
+}
+
 func (t *fakeIssueTracker) statuses() []issueStatusUpdate {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	out := make([]issueStatusUpdate, len(t.updates))
 	copy(out, t.updates)
+	return out
+}
+
+func (t *fakeIssueTracker) lookups() []string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	out := make([]string, len(t.titleLookups))
+	copy(out, t.titleLookups)
 	return out
 }
 

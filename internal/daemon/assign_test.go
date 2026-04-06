@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -42,6 +43,93 @@ func TestAssignEnforcesCodexYoloFlag(t *testing.T) {
 
 	if got, want := deps.amux.spawnRequests[0].Command, "codex --yolo"; got != want {
 		t.Fatalf("spawn.Command = %q, want %q", got, want)
+	}
+}
+
+func TestAssignResolvesPaneTitle(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		issue        string
+		title        string
+		linearTitle  string
+		linearErr    error
+		wantTask     string
+		wantLookups  []string
+	}{
+		{
+			name:        "uses provided title as-is",
+			issue:       "LAB-844",
+			title:       "Keep the explicit title",
+			linearTitle: "Ignored Linear title",
+			wantTask:    "Keep the explicit title",
+		},
+		{
+			name:        "uses Linear title when omitted",
+			issue:       "LAB-844",
+			linearTitle: "Default pane title to Linear issue title when --title is omitted",
+			wantTask:    "Default pane title to Linear issue title when --title is omitted",
+			wantLookups: []string{"LAB-844"},
+		},
+		{
+			name:        "falls back to issue when Linear lookup fails",
+			issue:       "LAB-844",
+			linearErr:   errors.New("linear unavailable"),
+			wantTask:    "LAB-844",
+			wantLookups: []string{"LAB-844"},
+		},
+		{
+			name:     "falls back to issue when identifier is not Linear",
+			issue:    "fix-resume-sequence",
+			wantTask: "fix-resume-sequence",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			deps := newTestDeps(t)
+			deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+			deps.issueTracker.titles = map[string]string{tt.issue: tt.linearTitle}
+			deps.issueTracker.titleErrors = map[string]error{tt.issue: tt.linearErr}
+			d := deps.newDaemon(t)
+			ctx := context.Background()
+
+			if err := d.Start(ctx); err != nil {
+				t.Fatalf("Start() error = %v", err)
+			}
+			t.Cleanup(func() {
+				_ = d.Stop(context.Background())
+			})
+
+			var err error
+			if tt.title == "" {
+				err = d.Assign(ctx, tt.issue, "Implement daemon core", "codex")
+			} else {
+				err = d.Assign(ctx, tt.issue, "Implement daemon core", "codex", tt.title)
+			}
+			if err != nil {
+				t.Fatalf("Assign() error = %v", err)
+			}
+
+			waitFor(t, "task registration", func() bool {
+				task, ok := deps.state.task(tt.issue)
+				return ok && task.Status == TaskStatusActive
+			})
+
+			deps.amux.requireMetadata(t, "pane-1", map[string]string{
+				"agent_profile":  "codex",
+				"branch":         tt.issue,
+				"task":           tt.wantTask,
+				"tracked_issues": `[{"id":"` + tt.issue + `","status":"active"}]`,
+			})
+			if got := deps.issueTracker.lookups(); !slices.Equal(got, tt.wantLookups) {
+				t.Fatalf("issue title lookups = %#v, want %#v", got, tt.wantLookups)
+			}
+		})
 	}
 }
 

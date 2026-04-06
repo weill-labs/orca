@@ -97,6 +97,78 @@ func TestClientSetIssueStatusUsesGraphQLLifecycleAcrossPages(t *testing.T) {
 	}
 }
 
+func TestClientIssueTitle(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		responseBody  map[string]any
+		wantTitle     string
+		wantErrSubstr string
+	}{
+		{
+			name: "returns issue title",
+			responseBody: map[string]any{
+				"data": map[string]any{
+					"issue": map[string]any{
+						"title": "Default pane title to Linear issue title when --title is omitted",
+					},
+				},
+			},
+			wantTitle: "Default pane title to Linear issue title when --title is omitted",
+		},
+		{
+			name: "surfaces entity not found",
+			responseBody: map[string]any{
+				"errors": []map[string]any{
+					{
+						"message": "Entity not found",
+						"extensions": map[string]any{
+							"code": "ENTITY_NOT_FOUND",
+						},
+					},
+				},
+			},
+			wantErrSubstr: "Entity not found",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				t.Helper()
+				request := decodeGraphQLRequest(t, r)
+				if got, want := request.Variables.(map[string]any)["id"], "LAB-844"; got != want {
+					t.Fatalf("issue id = %#v, want %q", got, want)
+				}
+				writeJSON(t, w, tt.responseBody)
+			}))
+			t.Cleanup(server.Close)
+
+			client := newTestClient(t, server.URL)
+			title, err := client.IssueTitle(context.Background(), "LAB-844")
+			if tt.wantErrSubstr != "" {
+				if err == nil {
+					t.Fatal("IssueTitle() error = nil, want non-nil")
+				}
+				if !strings.Contains(err.Error(), tt.wantErrSubstr) {
+					t.Fatalf("IssueTitle() error = %v, want substring %q", err, tt.wantErrSubstr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("IssueTitle() error = %v", err)
+			}
+			if got, want := title, tt.wantTitle; got != want {
+				t.Fatalf("IssueTitle() = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
 func TestClientSetIssueStatusSkipsMutationWhenAlreadyInTargetState(t *testing.T) {
 	t.Parallel()
 

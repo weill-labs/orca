@@ -351,7 +351,7 @@ daemonReady:
 	amuxClient.requireMetadata(t, "pane-2", map[string]string{
 		"agent_profile":  "claude",
 		"branch":         "LAB-719",
-		"task":           "LAB-719",
+		"task":           expectedSocketAssignTitle(t, "LAB-719"),
 		"tracked_issues": `[{"id":"LAB-719","status":"active"}]`,
 	})
 	amuxClient.requireSentKeys(t, "pane-1", []string{"Implement Unix socket IPC.\n"})
@@ -389,6 +389,26 @@ func initPoolClone(t *testing.T, root, name string) string {
 	runGit(t, clonePath, "add", "README.md")
 	runGit(t, clonePath, "-c", "user.name=Orca Tests", "-c", "user.email=orca-tests@example.com", "commit", "-m", "initial commit")
 	return clonePath
+}
+
+func expectedSocketAssignTitle(t *testing.T, issue string) string {
+	t.Helper()
+
+	title := resolveTaskTitle(issue, "")
+	if !isLinearIssueIdentifier(issue) {
+		return title
+	}
+
+	tracker, err := newLinearIssueTrackerFromEnv()
+	if err != nil || tracker == nil {
+		return title
+	}
+
+	issueTitle, err := tracker.IssueTitle(context.Background(), issue)
+	if err != nil {
+		return title
+	}
+	return resolveTaskTitle(issue, issueTitle)
 }
 
 func runGit(t *testing.T, dir string, args ...string) {

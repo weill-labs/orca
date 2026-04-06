@@ -51,7 +51,7 @@ Stop the orca daemon.`,
 	"status": `usage: orca status [ISSUE] [--project PATH] [--json]
 
 Show daemon and task status.`,
-	"assign": `usage: orca assign ISSUE --prompt TEXT [--agent NAME] [--project PATH] [--title TEXT] [--json]
+	"assign": `usage: orca assign ISSUE --prompt TEXT [--agent NAME] [--project PATH] [--json]
 
 Assign an issue to a worker.
 
@@ -59,7 +59,6 @@ Flags:
   --prompt  Task prompt
   --agent   Agent profile
   --project Project path
-  --title   Pane task title
   --json    Emit JSON output`,
 	"batch": `usage: orca batch MANIFEST [--project PATH] [--delay DURATION]
 
@@ -332,12 +331,10 @@ func (a *App) runAssign(ctx context.Context, args []string) error {
 	var prompt string
 	var agent string
 	var projectPath string
-	var title string
 	var jsonOutput bool
 	fs.StringVar(&prompt, "prompt", "", "task prompt")
 	fs.StringVar(&agent, "agent", defaultAgent, "agent profile")
 	fs.StringVar(&projectPath, "project", "", "project path")
-	fs.StringVar(&title, "title", "", "pane task title")
 	fs.BoolVar(&jsonOutput, "json", false, "emit JSON output")
 
 	issue, err := parseRequiredSinglePositional(fs, args, "assign requires ISSUE")
@@ -358,7 +355,6 @@ func (a *App) runAssign(ctx context.Context, args []string) error {
 		Issue:   issue,
 		Prompt:  prompt,
 		Agent:   agent,
-		Title:   title,
 	})
 	if err != nil {
 		return err
