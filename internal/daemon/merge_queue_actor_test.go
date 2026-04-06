@@ -288,6 +288,167 @@ func TestDispatchMergeQueueSkipsInFlightAndCleansInvalidEntries(t *testing.T) {
 	}
 }
 
+func TestApplyMergeQueueUpdateStatusOnlyPersistenceErrorSkipsEvents(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	d := deps.newDaemon(t)
+	now := deps.clock.Now()
+	deps.state.mergeQueue = []MergeQueueEntry{
+		{
+			Project:   "/tmp/project",
+			Issue:     "LAB-689",
+			PRNumber:  42,
+			Status:    MergeQueueStatusQueued,
+			CreatedAt: now,
+			UpdatedAt: now,
+		},
+	}
+	deps.state.updateMergeErr = errors.New("update merge entry: sqlite busy")
+
+	d.applyMergeQueueUpdate(context.Background(), MergeQueueUpdate{
+		Entry: MergeQueueEntry{
+			Project:  "/tmp/project",
+			Issue:    "LAB-689",
+			PRNumber: 42,
+			Status:   MergeQueueStatusRebasing,
+		},
+	})
+
+	if got := deps.events.countType(EventPRLandingStarted); got != 0 {
+		t.Fatalf("started event count = %d, want 0", got)
+	}
+	if got := deps.amux.countKey("pane-1", mergeQueueRebaseConflictPrompt(42)+"\n"); got != 0 {
+		t.Fatalf("worker prompt count = %d, want 0", got)
+	}
+	entry, err := deps.state.MergeEntry(context.Background(), "/tmp/project", 42)
+	if err != nil {
+		t.Fatalf("MergeEntry() error = %v", err)
+	}
+	if entry == nil || entry.Status != MergeQueueStatusQueued {
+		t.Fatalf("entry after failed status-only update = %#v, want queued entry", entry)
+	}
+}
+
+func TestApplyMergeQueueUpdateEmitsEventWhenAssignmentMissing(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	d := deps.newDaemon(t)
+
+	d.applyMergeQueueUpdate(context.Background(), MergeQueueUpdate{
+		Entry: MergeQueueEntry{
+			Project:  "/tmp/project",
+			Issue:    "LAB-689",
+			PRNumber: 42,
+			Status:   MergeQueueStatusQueued,
+		},
+		EventType:    EventPRLandingStarted,
+		EventMessage: "processing queued PR landing",
+	})
+
+	if got, want := deps.events.countType(EventPRLandingStarted), 1; got != want {
+		t.Fatalf("started event count = %d, want %d", got, want)
+	}
+	if message := deps.events.lastMessage(EventPRLandingStarted); message != "processing queued PR landing" {
+		t.Fatalf("started event message = %q, want %q", message, "processing queued PR landing")
+	}
+}
+
+func TestApplyMergeQueueUpdatesDrainsBufferedUpdates(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	d := deps.newDaemon(t)
+	now := deps.clock.Now()
+	deps.state.mergeQueue = []MergeQueueEntry{
+		{
+			Project:   "/tmp/project",
+			Issue:     "LAB-689",
+			PRNumber:  42,
+			Status:    MergeQueueStatusQueued,
+			CreatedAt: now,
+			UpdatedAt: now,
+		},
+		{
+			Project:   "/tmp/project",
+			Issue:     "LAB-690",
+			PRNumber:  43,
+			Status:    MergeQueueStatusQueued,
+			CreatedAt: now,
+			UpdatedAt: now,
+		},
+	}
+
+	task := Task{
+		Project:      "/tmp/project",
+		Issue:        "LAB-690",
+		Status:       TaskStatusActive,
+		Prompt:       "Implement merge queue",
+		PaneID:       "pane-1",
+		PaneName:     "worker-1",
+		CloneName:    "clone-01",
+		ClonePath:    deps.pool.clone.Path,
+		Branch:       "LAB-690",
+		AgentProfile: "codex",
+		PRNumber:     43,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+	deps.state.putTaskForTest(task)
+	if err := deps.state.PutWorker(context.Background(), Worker{
+		Project:        "/tmp/project",
+		PaneID:         "pane-1",
+		PaneName:       "worker-1",
+		Issue:          "LAB-690",
+		ClonePath:      deps.pool.clone.Path,
+		AgentProfile:   "codex",
+		Health:         WorkerHealthHealthy,
+		LastActivityAt: now,
+		UpdatedAt:      now,
+	}); err != nil {
+		t.Fatalf("PutWorker() error = %v", err)
+	}
+
+	d.mergeQueueUpdates = make(chan MergeQueueUpdate, 2)
+	d.mergeQueueUpdates <- MergeQueueUpdate{
+		Entry: MergeQueueEntry{
+			Project:  "/tmp/project",
+			Issue:    "LAB-689",
+			PRNumber: 42,
+			Status:   MergeQueueStatusRebasing,
+		},
+	}
+	d.mergeQueueUpdates <- MergeQueueUpdate{
+		Entry: MergeQueueEntry{
+			Project:  "/tmp/project",
+			Issue:    "LAB-690",
+			PRNumber: 43,
+			Status:   MergeQueueStatusQueued,
+		},
+		EventType:    EventPRLandingStarted,
+		EventMessage: "processing queued PR landing",
+	}
+
+	d.applyMergeQueueUpdates(context.Background())
+
+	entry, err := deps.state.MergeEntry(context.Background(), "/tmp/project", 42)
+	if err != nil {
+		t.Fatalf("MergeEntry(42) error = %v", err)
+	}
+	if entry == nil || entry.Status != MergeQueueStatusRebasing {
+		t.Fatalf("entry 42 after drain = %#v, want rebasing entry", entry)
+	}
+	if got, want := deps.events.countType(EventPRLandingStarted), 1; got != want {
+		t.Fatalf("started event count = %d, want %d", got, want)
+	}
+	select {
+	case update := <-d.mergeQueueUpdates:
+		t.Fatalf("mergeQueueUpdates not drained, found %#v", update)
+	default:
+	}
+}
+
 func drainMergeQueueUpdates(updates <-chan MergeQueueUpdate) []MergeQueueUpdate {
 	var out []MergeQueueUpdate
 	for {
