@@ -466,6 +466,35 @@ func TestCLIClientListPanesErrorsAndFallbacks(t *testing.T) {
 	}
 }
 
+func TestCaptureUnavailable(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "nil", want: false},
+		{name: "not found code", err: errors.New("capture failed: not_found"), want: true},
+		{name: "pane not found", err: errors.New("capture failed: pane not found"), want: true},
+		{name: "pane missing", err: errors.New("capture failed: pane missing"), want: true},
+		{name: "no such pane", err: errors.New("capture failed: no such pane"), want: true},
+		{name: "amux eof", err: errors.New("amux capture: EOF"), want: true},
+		{name: "runner eof suffix", err: errors.New("wrapped runner error: EOF"), want: true},
+		{name: "other capture error", err: errors.New("capture failed: denied"), want: false},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := captureUnavailable(tt.err); got != tt.want {
+				t.Fatalf("captureUnavailable(%v) = %t, want %t", tt.err, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestCLIClientPaneExists(t *testing.T) {
 	t.Parallel()
 

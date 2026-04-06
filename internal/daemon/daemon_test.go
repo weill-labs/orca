@@ -330,6 +330,60 @@ func TestDaemonStartNormalizesLeadPaneToStableName(t *testing.T) {
 	}
 }
 
+func TestNormalizeLeadPaneFallbacks(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		leadPane  string
+		listPanes []Pane
+		listErr   error
+		want      string
+	}{
+		{
+			name: "leaves empty lead pane unchanged",
+			want: "",
+		},
+		{
+			name:     "keeps numeric lead pane when list fails",
+			leadPane: "7",
+			listErr:  errors.New("amux unavailable"),
+			want:     "7",
+		},
+		{
+			name:      "keeps numeric lead pane when no stable name matches",
+			leadPane:  "7",
+			listPanes: []Pane{{ID: "8", Name: "worker-LAB-999"}},
+			want:      "7",
+		},
+		{
+			name:      "ignores panes without names",
+			leadPane:  "7",
+			listPanes: []Pane{{ID: "7"}},
+			want:      "7",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			deps := newTestDeps(t)
+			deps.amux.listPanes = append([]Pane(nil), tt.listPanes...)
+			deps.amux.listPanesErr = tt.listErr
+
+			d := deps.newDaemon(t)
+			d.leadPane = tt.leadPane
+			d.normalizeLeadPane(context.Background())
+
+			if got := d.leadPane; got != tt.want {
+				t.Fatalf("leadPane = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestNewOmitsLegacyPostmortemFields(t *testing.T) {
 	deps := newTestDeps(t)
 	daemon, err := New(Options{
