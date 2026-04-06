@@ -6,6 +6,8 @@ import (
 	"time"
 )
 
+const taskMonitorBlockTimeout = 200 * time.Millisecond
+
 func TestTaskMonitorSpawnsOnAssignmentAndStopsOnCompletion(t *testing.T) {
 	t.Parallel()
 
@@ -93,6 +95,49 @@ func TestTaskMonitorPollsAssignmentsInParallel(t *testing.T) {
 	})
 }
 
+func TestTaskMonitorStaleResultIsDropped(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	seedTaskMonitorAssignment(t, deps, "LAB-903", "pane-3", 43)
+
+	check43 := []string{"pr", "checks", "43", "--json", "bucket"}
+	block43 := deps.commands.block("gh", check43)
+	deps.commands.queue("gh", check43, `[{"bucket":"pending"}]`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "43", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "43", "--json", "mergeable"}, ``, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "43", "--json", "reviews,reviewDecision,comments"}, ``, nil)
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+
+	originalMonitor := d.ensureTaskMonitor("LAB-903")
+	response := originalMonitor.dispatch(ctx, taskMonitorCheckPRPoll, activeTaskMonitorAssignment(t, deps, "LAB-903"))
+	if response == nil {
+		t.Fatal("dispatch() = nil, want response channel")
+	}
+
+	waitForTaskMonitorBlocks(t, block43.started)
+	d.stopTaskMonitor("LAB-903")
+	replacementMonitor := d.ensureTaskMonitor("LAB-903")
+	if replacementMonitor == originalMonitor {
+		t.Fatal("replacement monitor = original monitor, want new instance")
+	}
+
+	close(block43.release)
+
+	result := <-response
+	d.applyTaskMonitorResults(ctx, []taskMonitorResult{result})
+
+	worker, ok := deps.state.worker("pane-3")
+	if !ok {
+		t.Fatal("worker missing after stale result application")
+	}
+	if got := worker.LastCIState; got != "" {
+		t.Fatalf("worker.LastCIState = %q, want stale result dropped", got)
+	}
+}
+
 func seedTaskMonitorAssignment(t *testing.T, deps *testDeps, issue, paneID string, prNumber int) {
 	t.Helper()
 
@@ -127,15 +172,31 @@ func seedTaskMonitorAssignment(t *testing.T, deps *testDeps, issue, paneID strin
 	}
 }
 
+func activeTaskMonitorAssignment(t *testing.T, deps *testDeps, issue string) ActiveAssignment {
+	t.Helper()
+
+	task, ok := deps.state.task(issue)
+	if !ok {
+		t.Fatalf("task %q not found", issue)
+	}
+
+	worker, ok := deps.state.worker(task.PaneID)
+	if !ok {
+		t.Fatalf("worker %q not found", task.PaneID)
+	}
+
+	return ActiveAssignment{
+		Task:   task,
+		Worker: worker,
+	}
+}
+
 func waitForTaskMonitorBlocks(t *testing.T, started ...<-chan struct{}) {
 	t.Helper()
 
-	timer := time.NewTimer(200 * time.Millisecond)
-	defer timer.Stop()
-
 	for _, ch := range started {
 		select {
-		case <-timer.C:
+		case <-time.After(taskMonitorBlockTimeout):
 			t.Fatal("timed out waiting for parallel task monitor polls")
 		case <-ch:
 		}
