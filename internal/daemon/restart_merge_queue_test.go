@@ -166,3 +166,93 @@ func TestStartResetsTransientMergeQueueStatuses(t *testing.T) {
 		})
 	}
 }
+
+func TestRestartDropsMergedQueueEntryWithoutFailureNotice(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	pollTicker := newFakeTicker()
+	deps.tickers.enqueue(newFakeTicker(), pollTicker)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":"2026-04-06T03:00:00Z"}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":"2026-04-06T03:00:00Z"}`, nil)
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+
+	task := Task{
+		Project:      "/tmp/project",
+		Issue:        "LAB-689",
+		Status:       TaskStatusActive,
+		Prompt:       "Implement merge queue",
+		PaneID:       "pane-1",
+		PaneName:     "worker-1",
+		CloneName:    "clone-01",
+		ClonePath:    deps.pool.clone.Path,
+		Branch:       "LAB-689",
+		AgentProfile: "codex",
+		PRNumber:     42,
+		CreatedAt:    deps.clock.Now(),
+		UpdatedAt:    deps.clock.Now(),
+	}
+	deps.state.putTaskForTest(task)
+	if err := deps.state.PutWorker(ctx, Worker{
+		Project:        "/tmp/project",
+		PaneID:         "pane-1",
+		PaneName:       "worker-1",
+		Issue:          "LAB-689",
+		ClonePath:      deps.pool.clone.Path,
+		AgentProfile:   "codex",
+		Health:         WorkerHealthHealthy,
+		LastActivityAt: deps.clock.Now(),
+		UpdatedAt:      deps.clock.Now(),
+	}); err != nil {
+		t.Fatalf("PutWorker() error = %v", err)
+	}
+	deps.state.mergeQueue = []MergeQueueEntry{
+		{
+			Project:   "/tmp/project",
+			Issue:     "LAB-689",
+			PRNumber:  42,
+			Status:    MergeQueueStatusMerging,
+			CreatedAt: deps.clock.Now().Add(-time.Minute),
+			UpdatedAt: deps.clock.Now().Add(-time.Minute),
+		},
+	}
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	entry, err := deps.state.MergeEntry(ctx, "/tmp/project", 42)
+	if err != nil {
+		t.Fatalf("MergeEntry() error = %v", err)
+	}
+	if entry == nil || entry.Status != MergeQueueStatusAwaitingChecks {
+		t.Fatalf("entry after startup = %#v, want awaiting checks", entry)
+	}
+
+	pollTicker.tick(deps.clock.Now())
+	waitFor(t, "merged queue entry deleted", func() bool {
+		entry, err := deps.state.MergeEntry(context.Background(), "/tmp/project", 42)
+		return err == nil && entry == nil
+	})
+
+	if got := deps.commands.countCalls("gh", []string{"pr", "merge", "42", "--squash"}); got != 0 {
+		t.Fatalf("merge command count = %d, want 0", got)
+	}
+	if got := deps.amux.countKey("pane-1", mergeQueueMergeFailedPrompt(42)+"\n"); got != 0 {
+		t.Fatalf("failure prompt count = %d, want 0", got)
+	}
+	if got := deps.events.countType(EventPRLandingFailed); got != 0 {
+		t.Fatalf("landing failed event count = %d, want 0", got)
+	}
+
+	pollTicker.tick(deps.clock.Now())
+	waitFor(t, "assignment completed after merged queue cleanup", func() bool {
+		task, ok := deps.state.task("LAB-689")
+		return ok && task.Status == TaskStatusDone
+	})
+}
