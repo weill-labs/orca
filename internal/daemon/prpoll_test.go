@@ -519,7 +519,7 @@ func TestPRMergeablePollingRetriesConflictNudgeAfterWaitIdleFailure(t *testing.T
 	}
 }
 
-func TestEnqueueSerializesQueuedPRLandingsFIFO(t *testing.T) {
+func TestEnqueueProcessesQueuedPRLandingsInParallel(t *testing.T) {
 	t.Parallel()
 
 	deps := newTestDeps(t)
@@ -563,11 +563,15 @@ func TestEnqueueSerializesQueuedPRLandingsFIFO(t *testing.T) {
 	secondTask.PRNumber = 43
 	deps.state.putTaskForTest(secondTask)
 
+	firstRebase := deps.commands.block("gh", []string{"pr", "update-branch", "42", "--rebase"})
 	deps.commands.queue("gh", []string{"pr", "update-branch", "42", "--rebase"}, ``, nil)
 	deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[{"bucket":"pass"}]`, nil)
+	firstMerge := deps.commands.block("gh", []string{"pr", "merge", "42", "--squash"})
 	deps.commands.queue("gh", []string{"pr", "merge", "42", "--squash"}, ``, nil)
+	secondRebase := deps.commands.block("gh", []string{"pr", "update-branch", "43", "--rebase"})
 	deps.commands.queue("gh", []string{"pr", "update-branch", "43", "--rebase"}, ``, nil)
 	deps.commands.queue("gh", []string{"pr", "checks", "43", "--json", "bucket"}, `[{"bucket":"pass"}]`, nil)
+	secondMerge := deps.commands.block("gh", []string{"pr", "merge", "43", "--squash"})
 	deps.commands.queue("gh", []string{"pr", "merge", "43", "--squash"}, ``, nil)
 
 	if _, err := d.Enqueue(ctx, 42); err != nil {
@@ -579,28 +583,49 @@ func TestEnqueueSerializesQueuedPRLandingsFIFO(t *testing.T) {
 	}
 
 	pollTicker.tick(deps.clock.Now())
-	waitFor(t, "first queued PR rebase", func() bool {
-		return deps.commands.countCalls("gh", []string{"pr", "update-branch", "42", "--rebase"}) == 1
-	})
-
-	if got := deps.commands.countCalls("gh", []string{"pr", "update-branch", "43", "--rebase"}); got != 0 {
-		t.Fatalf("second queued PR started before first completed, update-branch calls = %d", got)
+	select {
+	case <-firstRebase.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for PR 42 rebase to start")
+	}
+	select {
+	case <-secondRebase.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for PR 43 rebase to start")
 	}
 
-	pollTicker.tick(deps.clock.Now())
-	waitFor(t, "first queued PR merge", func() bool {
-		return deps.commands.countCalls("gh", []string{"pr", "merge", "42", "--squash"}) == 1
+	if got := deps.commands.countCalls("gh", []string{"pr", "merge", "42", "--squash"}); got != 0 {
+		t.Fatalf("merge started before rebase completed for PR 42: %d", got)
+	}
+	if got := deps.commands.countCalls("gh", []string{"pr", "merge", "43", "--squash"}); got != 0 {
+		t.Fatalf("merge started before rebase completed for PR 43: %d", got)
+	}
+
+	close(firstRebase.release)
+	close(secondRebase.release)
+	waitFor(t, "queued PRs awaiting checks", func() bool {
+		firstEntry, err := deps.state.MergeEntry(context.Background(), "/tmp/project", 42)
+		if err != nil || firstEntry == nil || firstEntry.Status != MergeQueueStatusAwaitingChecks {
+			return false
+		}
+		secondEntry, err := deps.state.MergeEntry(context.Background(), "/tmp/project", 43)
+		return err == nil && secondEntry != nil && secondEntry.Status == MergeQueueStatusAwaitingChecks
 	})
 
 	pollTicker.tick(deps.clock.Now())
-	waitFor(t, "second queued PR rebase", func() bool {
-		return deps.commands.countCalls("gh", []string{"pr", "update-branch", "43", "--rebase"}) == 1
-	})
+	select {
+	case <-firstMerge.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for PR 42 merge to start")
+	}
+	select {
+	case <-secondMerge.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for PR 43 merge to start")
+	}
 
-	pollTicker.tick(deps.clock.Now())
-	waitFor(t, "second queued PR merge", func() bool {
-		return deps.commands.countCalls("gh", []string{"pr", "merge", "43", "--squash"}) == 1
-	})
+	close(firstMerge.release)
+	close(secondMerge.release)
 
 	if got, want := deps.commands.countCalls("gh", []string{"pr", "update-branch", "42", "--rebase"}), 1; got != want {
 		t.Fatalf("rebase count for PR 42 = %d, want %d", got, want)

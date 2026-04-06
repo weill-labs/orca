@@ -279,6 +279,28 @@ func (s *fakeState) MergeEntry(ctx context.Context, project string, prNumber int
 	return nil, nil
 }
 
+func (s *fakeState) MergeEntries(ctx context.Context, project string) ([]MergeQueueEntry, error) {
+	if s.rejectCanceledContext && ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	entries := make([]MergeQueueEntry, 0, len(s.mergeQueue))
+	for _, entry := range s.mergeQueue {
+		if entry.Project == project {
+			entries = append(entries, entry)
+		}
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		if !entries[i].CreatedAt.Equal(entries[j].CreatedAt) {
+			return entries[i].CreatedAt.Before(entries[j].CreatedAt)
+		}
+		return entries[i].PRNumber < entries[j].PRNumber
+	})
+	return entries, nil
+}
+
 func (s *fakeState) NextMergeEntry(ctx context.Context, project string) (*MergeQueueEntry, error) {
 	if s.rejectCanceledContext && ctx.Err() != nil {
 		return nil, ctx.Err()

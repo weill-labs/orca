@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"testing"
+	"time"
 )
 
 func TestEnqueueResumesPersistedMergeQueueStateAfterRestart(t *testing.T) {
@@ -12,18 +13,15 @@ func TestEnqueueResumesPersistedMergeQueueStateAfterRestart(t *testing.T) {
 		name              string
 		tickBeforeRestart bool
 		wantRebaseCalls   int
-		restartTicks      int
 	}{
 		{
 			name:            "queued entry restarts from rebase",
 			wantRebaseCalls: 1,
-			restartTicks:    2,
 		},
 		{
 			name:              "awaiting checks entry skips repeated rebase",
 			tickBeforeRestart: true,
 			wantRebaseCalls:   1,
-			restartTicks:      1,
 		},
 	}
 
@@ -82,14 +80,17 @@ func TestEnqueueResumesPersistedMergeQueueStateAfterRestart(t *testing.T) {
 				_ = second.Stop(context.Background())
 			})
 
-			for i := 0; i < tt.restartTicks; i++ {
-				secondPollTicker.tick(deps.clock.Now())
-			}
 			if !tt.tickBeforeRestart {
+				secondPollTicker.tick(deps.clock.Now())
 				waitFor(t, "post-restart merge queue rebase", func() bool {
 					return deps.commands.countCalls("gh", []string{"pr", "update-branch", "42", "--rebase"}) == 1
 				})
+				waitFor(t, "post-restart awaiting checks", func() bool {
+					entry, err := deps.state.MergeEntry(context.Background(), "/tmp/project", 42)
+					return err == nil && entry != nil && entry.Status == MergeQueueStatusAwaitingChecks
+				})
 			}
+			secondPollTicker.tick(deps.clock.Now())
 			waitFor(t, "post-restart merge queue merge", func() bool {
 				return deps.commands.countCalls("gh", []string{"pr", "merge", "42", "--squash"}) == 1
 			})
@@ -99,6 +100,68 @@ func TestEnqueueResumesPersistedMergeQueueStateAfterRestart(t *testing.T) {
 
 			if got, want := deps.commands.countCalls("gh", []string{"pr", "update-branch", "42", "--rebase"}), tt.wantRebaseCalls; got != want {
 				t.Fatalf("rebase call count = %d, want %d", got, want)
+			}
+		})
+	}
+}
+
+func TestStartResetsTransientMergeQueueStatuses(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		status     string
+		wantStatus string
+	}{
+		{
+			name:       "rebasing resumes from queued",
+			status:     MergeQueueStatusRebasing,
+			wantStatus: MergeQueueStatusQueued,
+		},
+		{
+			name:       "merging resumes from awaiting checks",
+			status:     MergeQueueStatusMerging,
+			wantStatus: MergeQueueStatusAwaitingChecks,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			deps := newTestDeps(t)
+			deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+			now := deps.clock.Now()
+			deps.state.mergeQueue = []MergeQueueEntry{
+				{
+					Project:   "/tmp/project",
+					Issue:     "LAB-689",
+					PRNumber:  42,
+					Status:    tt.status,
+					CreatedAt: now.Add(-time.Minute),
+					UpdatedAt: now.Add(-time.Minute),
+				},
+			}
+
+			d := deps.newDaemon(t)
+			ctx := context.Background()
+			if err := d.Start(ctx); err != nil {
+				t.Fatalf("Start() error = %v", err)
+			}
+			t.Cleanup(func() {
+				_ = d.Stop(context.Background())
+			})
+
+			entry, err := deps.state.MergeEntry(ctx, "/tmp/project", 42)
+			if err != nil {
+				t.Fatalf("MergeEntry() error = %v", err)
+			}
+			if entry == nil {
+				t.Fatal("MergeEntry() = nil, want entry")
+			}
+			if got, want := entry.Status, tt.wantStatus; got != want {
+				t.Fatalf("entry.Status = %q, want %q", got, want)
 			}
 		})
 	}

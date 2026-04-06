@@ -432,6 +432,17 @@ func TestSQLiteStorePersistsWorkerMonitorStateAndMergeQueue(t *testing.T) {
 		t.Fatalf("entry.Status = %q, want %q", got, want)
 	}
 
+	entries, err := store.MergeEntries(context.Background(), project)
+	if err != nil {
+		t.Fatalf("MergeEntries() error = %v", err)
+	}
+	if got, want := len(entries), 1; got != want {
+		t.Fatalf("len(entries) = %d, want %d", got, want)
+	}
+	if got, want := entries[0].PRNumber, 42; got != want {
+		t.Fatalf("entries[0].PRNumber = %d, want %d", got, want)
+	}
+
 	entry.Status = "awaiting_checks"
 	entry.UpdatedAt = now.Add(time.Minute)
 	if err := store.UpdateMergeEntry(context.Background(), *entry); err != nil {

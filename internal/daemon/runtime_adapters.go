@@ -339,6 +339,26 @@ func (a *sqliteStateAdapter) MergeEntry(ctx context.Context, project string, prN
 	}, nil
 }
 
+func (a *sqliteStateAdapter) MergeEntries(ctx context.Context, project string) ([]MergeQueueEntry, error) {
+	entries, err := a.store.MergeEntries(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]MergeQueueEntry, 0, len(entries))
+	for _, entry := range entries {
+		out = append(out, MergeQueueEntry{
+			Project:   entry.Project,
+			Issue:     entry.Issue,
+			PRNumber:  entry.PRNumber,
+			Status:    entry.Status,
+			CreatedAt: entry.CreatedAt,
+			UpdatedAt: entry.UpdatedAt,
+		})
+	}
+	return out, nil
+}
+
 func (a *sqliteStateAdapter) UpdateMergeEntry(ctx context.Context, entry MergeQueueEntry) error {
 	err := a.store.UpdateMergeEntry(ctx, state.MergeQueueEntry{
 		Project:   entry.Project,

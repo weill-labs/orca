@@ -15,6 +15,8 @@ func (d *Daemon) runLoop(ctx context.Context, done chan struct{}) {
 		select {
 		case <-ctx.Done():
 			return
+		case update := <-d.mergeQueueUpdates:
+			d.applyMergeQueueUpdate(ctx, update)
 		case <-captureTick.C():
 			d.runCaptureTick(ctx)
 		case <-pollTick.C():
@@ -33,11 +35,14 @@ func (d *Daemon) runCaptureTick(ctx context.Context) {
 }
 
 func (d *Daemon) runPollTick(ctx context.Context) {
+	d.applyMergeQueueUpdates(ctx)
+
 	assignments, err := d.state.ActiveAssignments(ctx, d.project)
 	if err == nil {
 		results := d.dispatchTaskMonitorChecks(ctx, assignments, taskMonitorCheckPRPoll)
 		d.applyTaskMonitorResults(ctx, results)
 	}
 
-	d.processMergeQueue(ctx)
+	d.dispatchMergeQueue(ctx)
+	d.applyMergeQueueUpdates(ctx)
 }
