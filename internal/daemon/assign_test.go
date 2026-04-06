@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -125,7 +126,7 @@ func TestAssignResolvesPaneTitle(t *testing.T) {
 				"task":           tt.wantTask,
 				"tracked_issues": `[{"id":"` + tt.issue + `","status":"active"}]`,
 			})
-			if got := deps.issueTracker.lookups(); !reflect.DeepEqual(got, tt.wantLookups) {
+			if got := deps.issueTracker.lookups(); !slices.Equal(got, tt.wantLookups) {
 				t.Fatalf("issue title lookups = %#v, want %#v", got, tt.wantLookups)
 			}
 		})

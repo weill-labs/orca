@@ -6,11 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/weill-labs/orca/internal/linear"
 )
+
+var linearIssueIdentifierPattern = regexp.MustCompile(`^[A-Z][A-Z0-9]*-\d+$`)
 
 type trackedStatus string
 
@@ -103,6 +106,10 @@ func firstTitle(values []string) string {
 		return ""
 	}
 	return values[0]
+}
+
+func isLinearIssueIdentifier(issue string) bool {
+	return linearIssueIdentifierPattern.MatchString(strings.TrimSpace(issue))
 }
 
 func trackedIssueMetadata(issue string, status trackedStatus) map[string]string {
@@ -333,6 +340,19 @@ func (d *Daemon) completionPaneMetadata(ctx context.Context, active ActiveAssign
 
 func (d *Daemon) setPaneMetadata(ctx context.Context, paneID string, metadata map[string]string) error {
 	return d.amux.SetMetadata(ctx, paneID, metadata)
+}
+
+func (d *Daemon) resolveAssignmentTitle(ctx context.Context, issue string, title string) string {
+	resolved := resolveTaskTitle(issue, title)
+	if strings.TrimSpace(title) != "" || d.issueTracker == nil || !isLinearIssueIdentifier(issue) {
+		return resolved
+	}
+
+	issueTitle, err := d.issueTracker.IssueTitle(ctx, issue)
+	if err != nil {
+		return resolved
+	}
+	return resolveTaskTitle(issue, issueTitle)
 }
 
 func (d *Daemon) setIssueStatus(ctx context.Context, issue, state string) error {

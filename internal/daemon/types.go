@@ -131,6 +131,7 @@ type AmuxClient interface {
 
 type IssueTracker interface {
 	SetIssueStatus(ctx context.Context, issue, state string) error
+	IssueTitle(ctx context.Context, issue string) (string, error)
 }
 
 type CommandRunner interface {

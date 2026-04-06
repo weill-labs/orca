@@ -24,6 +24,7 @@ const (
 
 	issueLookupQuery = `query($id: String!) {
 		issue(id: $id) {
+			title
 			team { key }
 			state { id name }
 		}
@@ -142,7 +143,29 @@ func (c *Client) SetIssueStatus(ctx context.Context, issue, targetState string) 
 	return c.updateIssueState(ctx, issue, stateID)
 }
 
+func (c *Client) IssueTitle(ctx context.Context, issue string) (string, error) {
+	issue = strings.TrimSpace(issue)
+	if issue == "" {
+		return "", fmt.Errorf("issue is required")
+	}
+
+	var response struct {
+		Issue struct {
+			Title string `json:"title"`
+		} `json:"issue"`
+	}
+	err := c.graphQL(ctx, graphQLRequest{
+		Query:     issueLookupQuery,
+		Variables: map[string]string{"id": issue},
+	}, &response)
+	if err != nil {
+		return "", fmt.Errorf("lookup issue %s title: %w", issue, err)
+	}
+	return strings.TrimSpace(response.Issue.Title), nil
+}
+
 type issueMetadata struct {
+	Title string `json:"title"`
 	Team struct {
 		Key string `json:"key"`
 	} `json:"team"`
