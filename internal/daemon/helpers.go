@@ -429,7 +429,7 @@ func (d *Daemon) sendPromptAndEnter(ctx context.Context, paneID, prompt string) 
 	if err := d.amux.SendKeys(ctx, paneID, trimmed); err != nil {
 		return err
 	}
-	if err := d.amux.WaitIdle(ctx, paneID, defaultAgentHandshakeTimeout); err != nil {
+	if err := d.amux.WaitIdleSettle(ctx, paneID, defaultAgentHandshakeTimeout, defaultPromptSettleDuration); err != nil {
 		return err
 	}
 	return d.amux.SendKeys(ctx, paneID, "Enter")

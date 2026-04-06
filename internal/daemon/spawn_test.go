@@ -315,9 +315,12 @@ func (f *fakeSpawnAmux) CapturePane(context.Context, string) (amux.PaneCapture, 
 func (f *fakeSpawnAmux) CaptureHistory(context.Context, string) (amux.PaneCapture, error) {
 	return amux.PaneCapture{}, nil
 }
-func (f *fakeSpawnAmux) SetMetadata(context.Context, string, map[string]string) error     { return nil }
-func (f *fakeSpawnAmux) KillPane(context.Context, string) error                           { return nil }
-func (f *fakeSpawnAmux) WaitIdle(context.Context, string, time.Duration) error            { return nil }
+func (f *fakeSpawnAmux) SetMetadata(context.Context, string, map[string]string) error { return nil }
+func (f *fakeSpawnAmux) KillPane(context.Context, string) error                       { return nil }
+func (f *fakeSpawnAmux) WaitIdle(context.Context, string, time.Duration) error        { return nil }
+func (f *fakeSpawnAmux) WaitIdleSettle(context.Context, string, time.Duration, time.Duration) error {
+	return nil
+}
 func (f *fakeSpawnAmux) WaitContent(context.Context, string, string, time.Duration) error { return nil }
 
 func newSpawnProject(t *testing.T) (string, string) {

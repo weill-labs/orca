@@ -128,7 +128,7 @@ func TestResumeRestartsExistingWorkerInPlaceAndSendsPrompt(t *testing.T) {
 	deps.amux.requireSentKeys(t, "pane-1", []string{"codex --yolo\n", "Continue from the latest review comments\n"})
 	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
 		{PaneID: "pane-1", Timeout: defaultAgentHandshakeTimeout},
-		{PaneID: "pane-1", Timeout: defaultAgentHandshakeTimeout},
+		{PaneID: "pane-1", Timeout: defaultAgentHandshakeTimeout, Settle: 2 * time.Second},
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("waitIdle calls = %#v, want %#v", got, want)
 	}
@@ -192,7 +192,7 @@ func TestResumeRespawnsCancelledTaskInExistingClone(t *testing.T) {
 	deps.amux.requireSentKeys(t, "pane-2", []string{"Resume work after the cancellation\n"})
 	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
 		{PaneID: "pane-2", Timeout: defaultAgentHandshakeTimeout},
-		{PaneID: "pane-2", Timeout: defaultAgentHandshakeTimeout},
+		{PaneID: "pane-2", Timeout: defaultAgentHandshakeTimeout, Settle: 2 * time.Second},
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("waitIdle calls = %#v, want %#v", got, want)
 	}

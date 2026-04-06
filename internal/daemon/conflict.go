@@ -35,13 +35,7 @@ func (d *Daemon) handlePRMergeablePoll(ctx context.Context, update *TaskStateUpd
 		return
 	}
 
-	if err := d.amux.SendKeys(ctx, update.Active.Task.PaneID, conflictNudgePrompt); err != nil {
-		return
-	}
-	if err := d.amux.WaitIdle(ctx, update.Active.Task.PaneID, defaultAgentHandshakeTimeout); err != nil {
-		return
-	}
-	if err := d.amux.SendKeys(ctx, update.Active.Task.PaneID, "Enter"); err != nil {
+	if err := d.sendPromptAndEnter(ctx, update.Active.Task.PaneID, conflictNudgePrompt); err != nil {
 		return
 	}
 

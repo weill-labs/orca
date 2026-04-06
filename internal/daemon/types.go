@@ -124,6 +124,7 @@ type AmuxClient interface {
 	CaptureHistory(ctx context.Context, paneID string) (PaneCapture, error)
 	KillPane(ctx context.Context, paneID string) error
 	WaitIdle(ctx context.Context, paneID string, timeout time.Duration) error
+	WaitIdleSettle(ctx context.Context, paneID string, timeout, settle time.Duration) error
 	WaitContent(ctx context.Context, paneID, substring string, timeout time.Duration) error
 }
 

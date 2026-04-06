@@ -33,6 +33,7 @@ type MockClient struct {
 	SetMetadataFunc    func(ctx context.Context, paneID string, metadata map[string]string) error
 	KillPaneFunc       func(ctx context.Context, paneID string) error
 	WaitIdleFunc       func(ctx context.Context, paneID string, timeout time.Duration) error
+	WaitIdleSettleFunc func(ctx context.Context, paneID string, timeout, settle time.Duration) error
 	WaitContentFunc    func(ctx context.Context, paneID, substring string, timeout time.Duration) error
 
 	SpawnCalls          []SpawnRequest
@@ -47,6 +48,7 @@ type MockClient struct {
 	WaitIdleCalls       []struct {
 		PaneID  string
 		Timeout time.Duration
+		Settle  time.Duration
 	}
 	WaitContentCalls []struct {
 		PaneID    string
@@ -180,6 +182,7 @@ func (m *MockClient) WaitIdle(ctx context.Context, paneID string, timeout time.D
 	m.WaitIdleCalls = append(m.WaitIdleCalls, struct {
 		PaneID  string
 		Timeout time.Duration
+		Settle  time.Duration
 	}{
 		PaneID:  paneID,
 		Timeout: timeout,
@@ -189,6 +192,26 @@ func (m *MockClient) WaitIdle(ctx context.Context, paneID string, timeout time.D
 
 	if fn != nil {
 		return fn(ctx, paneID, timeout)
+	}
+	return nil
+}
+
+func (m *MockClient) WaitIdleSettle(ctx context.Context, paneID string, timeout, settle time.Duration) error {
+	m.mu.Lock()
+	m.WaitIdleCalls = append(m.WaitIdleCalls, struct {
+		PaneID  string
+		Timeout time.Duration
+		Settle  time.Duration
+	}{
+		PaneID:  paneID,
+		Timeout: timeout,
+		Settle:  settle,
+	})
+	fn := m.WaitIdleSettleFunc
+	m.mu.Unlock()
+
+	if fn != nil {
+		return fn(ctx, paneID, timeout, settle)
 	}
 	return nil
 }
