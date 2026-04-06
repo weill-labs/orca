@@ -82,6 +82,7 @@ func (d *Daemon) autoReassignEscalatedWorker(ctx context.Context, active ActiveA
 
 	prompt := d.exhaustedContextReassignPrompt(ctx, active)
 	message := fmt.Sprintf("task cancelled for exhausted-context auto-reassign: %s", reason)
+	// CLAUDE.md documents exhausted-context recovery as the one automatic cancel/kill exception.
 	if err := d.finishAssignmentWithMessage(ctx, active, TaskStatusCancelled, EventTaskCancelled, false, message); err != nil {
 		d.emit(ctx, d.assignmentEvent(active, profile, EventTaskCompletionFailed, fmt.Sprintf("auto reassign cancellation failed: %v", err)))
 		return

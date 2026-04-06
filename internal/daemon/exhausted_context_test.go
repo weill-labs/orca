@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -274,5 +275,56 @@ func TestExhaustedContextProgressSummaryUsesFallbacks(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("exhaustedContextProgressSummary() = %q, want substring %q", got, want)
 		}
+	}
+}
+
+func TestAutoReassignEscalatedWorkerEmitsCompletionFailureWhenCancelFails(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	deps.amux.killErr = errors.New("kill failed")
+	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-821", "--state", "open", "--json", "number"}, `[]`, nil)
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-821", "Recover after exhausted context", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	active, err := deps.state.ActiveAssignmentByIssue(ctx, d.project, "LAB-821")
+	if err != nil {
+		t.Fatalf("ActiveAssignmentByIssue() error = %v", err)
+	}
+
+	deps.commands.reset()
+	d.autoReassignEscalatedWorker(ctx, active, "idle codex prompt with 9% context remaining")
+
+	if got := deps.events.countType(EventTaskCompletionFailed); got != 1 {
+		t.Fatalf("task completion failed event count = %d, want 1", got)
+	}
+	if got := deps.events.countType(EventTaskAssigned); got != 1 {
+		t.Fatalf("task assigned event count = %d, want 1", got)
+	}
+	if got := deps.events.countType(EventTaskCancelled); got != 1 {
+		t.Fatalf("task cancelled event count = %d, want 1", got)
+	}
+	if got := deps.amux.spawnCount(); got != 1 {
+		t.Fatalf("spawn count = %d, want 1", got)
+	}
+
+	event, ok := deps.events.lastEventOfType(EventTaskCompletionFailed)
+	if !ok {
+		t.Fatalf("lastEventOfType(%q) = false, want true", EventTaskCompletionFailed)
+	}
+	if !strings.Contains(event.Message, "auto reassign cancellation failed: kill failed") {
+		t.Fatalf("event.Message = %q, want auto reassign cancellation context", event.Message)
 	}
 }

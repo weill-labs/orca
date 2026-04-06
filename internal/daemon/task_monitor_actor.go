@@ -298,9 +298,6 @@ func (d *Daemon) applyTaskStateUpdate(ctx context.Context, update TaskStateUpdat
 		return
 	}
 	if update.AutoReassignReason != "" {
-		for _, event := range update.Events {
-			d.emit(ctx, event)
-		}
 		d.autoReassignEscalatedWorker(ctx, active, update.AutoReassignReason)
 		return
 	}

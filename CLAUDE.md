@@ -111,7 +111,7 @@ Before any irreversible action on worker panes, state what information will be l
 
 ## Safety Rules
 
-- **Orca must never kill worker panes automatically.** Stuck detection should notify and set health to "escalated", but leave panes running. Only `orca cancel` (explicit user action) may kill panes. Destroying panes destroys in-progress work.
+- **Orca must never kill worker panes automatically, except exhausted-context recovery for idle codex workers.** Stuck detection should normally notify and set health to "escalated", but leave panes running. The only built-in exception is the LAB-819 exhausted-context flow: once a codex worker is already escalated, shows an idle agent prompt, and reports low remaining context, orca may run postmortem, cancel the assignment, kill that pane, and re-assign the issue with a fresh clone. Outside that documented recovery path, only `orca cancel` (explicit user action) may kill panes. Destroying panes destroys in-progress work.
 - **Orca must never merge PRs.** Merge is a user decision. Orca can detect PR state and notify, but never call `gh pr merge`.
 
 ## Configuration
