@@ -185,6 +185,10 @@ func (d *Daemon) initializePIDFile() error {
 }
 
 func (d *Daemon) removeStalePIDFile() error {
+	return d.removeStalePIDFileWithProcessCheck(processAlive)
+}
+
+func (d *Daemon) removeStalePIDFileWithProcessCheck(processCheck func(int) (bool, error)) error {
 	pid, err := readPIDFile(d.pidPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -193,7 +197,7 @@ func (d *Daemon) removeStalePIDFile() error {
 		return fmt.Errorf("read pid file: %w", err)
 	}
 
-	alive, err := processAlive(pid)
+	alive, err := processCheck(pid)
 	if err != nil {
 		return fmt.Errorf("check pid file process: %w", err)
 	}

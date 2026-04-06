@@ -120,6 +120,30 @@ func TestDaemonStartReturnsPIDFileReadErrorForInvalidPIDFile(t *testing.T) {
 	}
 }
 
+func TestRemoveStalePIDFileReturnsProcessCheckError(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	d := deps.newDaemon(t)
+
+	if err := os.WriteFile(deps.pidPath, []byte("123\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", deps.pidPath, err)
+	}
+
+	err := d.removeStalePIDFileWithProcessCheck(func(int) (bool, error) {
+		return false, errors.New("boom")
+	})
+	if err == nil {
+		t.Fatal("removeStalePIDFileWithProcessCheck() succeeded, want error")
+	}
+	if !strings.Contains(err.Error(), "check pid file process") {
+		t.Fatalf("removeStalePIDFileWithProcessCheck() error = %v, want process check error", err)
+	}
+	if _, statErr := os.Stat(deps.pidPath); statErr != nil {
+		t.Fatalf("Stat(%q) error = %v, want pid file to remain", deps.pidPath, statErr)
+	}
+}
+
 func TestDaemonStartReturnsPIDDirectoryCreationError(t *testing.T) {
 	t.Parallel()
 
