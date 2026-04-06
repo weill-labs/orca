@@ -203,6 +203,46 @@ func TestStopWithoutForceReturnsTimeoutWhenProcessIgnoresTERM(t *testing.T) {
 	killTestProcess(t, pid)
 }
 
+func TestStopStopsResponsiveProcess(t *testing.T) {
+	store := &fakeStore{}
+	projectPath := testProjectPath(t)
+	controller, _ := newTestController(t, store, projectPath, scriptOptions{
+		stopTimeout: 150 * time.Millisecond,
+	})
+
+	pid := startDetachedSleepProcess(t, false)
+
+	if err := os.MkdirAll(controller.paths.PIDDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	pidFile := controller.paths.pidFile(projectPath)
+	if err := os.WriteFile(pidFile, []byte(fmt.Sprintf("%d", pid)), 0o644); err != nil {
+		t.Fatalf("write controller pid file: %v", err)
+	}
+	store.projectStatus = state.ProjectStatus{
+		Project: projectPath,
+		Daemon: &state.DaemonStatus{
+			PID:    pid,
+			Status: "running",
+		},
+	}
+
+	result, err := controller.Stop(context.Background(), StopRequest{Project: projectPath})
+	if err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+	if got, want := result.PID, pid; got != want {
+		t.Fatalf("result pid = %d, want %d", got, want)
+	}
+	waitForProcessExit(t, pid)
+	if !store.markDaemonStoppedCalled {
+		t.Fatal("expected responsive stop to mark daemon stopped")
+	}
+	if _, err := os.Stat(pidFile); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Stat(%q) error = %v, want pid file removed", pidFile, err)
+	}
+}
+
 func TestStopForceKillsProcessAfterGracePeriod(t *testing.T) {
 	store := &fakeStore{}
 	projectPath := testProjectPath(t)
