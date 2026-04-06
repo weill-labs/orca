@@ -6,7 +6,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -151,28 +150,6 @@ func TestAppRunDispatchesCommands(t *testing.T) {
 				}
 				if d.assignRequest.Agent != "claude" {
 					t.Fatalf("expected agent claude, got %q", d.assignRequest.Agent)
-				}
-				if !strings.Contains(stdout, "LAB-690") {
-					t.Fatalf("expected issue in output, got %q", stdout)
-				}
-			},
-		},
-		{
-			name: "assign title flag",
-			args: func(_, _ string) []string {
-				return []string{"assign", "LAB-690", "--prompt", "Implement CLI wiring", "--title", "Worker pane title"}
-			},
-			assert: func(t *testing.T, d *fakeDaemon, _ *fakeState, stdout, _ string, _, _ string) {
-				t.Helper()
-				if d.assignRequest == nil {
-					t.Fatal("expected assign to be called")
-				}
-				field := reflect.ValueOf(*d.assignRequest).FieldByName("Title")
-				if !field.IsValid() {
-					t.Fatal("AssignRequest missing Title field")
-				}
-				if got, want := field.String(), "Worker pane title"; got != want {
-					t.Fatalf("assign title = %q, want %q", got, want)
 				}
 				if !strings.Contains(stdout, "LAB-690") {
 					t.Fatalf("expected issue in output, got %q", stdout)
@@ -389,6 +366,37 @@ func TestAppRunDispatchesCommands(t *testing.T) {
 
 			tt.assert(t, d, s, stdout.String(), stderr.String(), repoRoot, otherRepo)
 		})
+	}
+}
+
+func TestAppRunAssignRejectsRemovedTitleFlag(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := newRepoRoot(t)
+	cwdPath := filepath.Join(repoRoot, "internal", "cli")
+	if err := os.MkdirAll(cwdPath, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", cwdPath, err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	app := New(Options{
+		Daemon:  &fakeDaemon{},
+		State:   &fakeState{},
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		Version: "build-123",
+		Cwd: func() (string, error) {
+			return cwdPath, nil
+		},
+	})
+
+	err := app.Run(context.Background(), []string{"assign", "LAB-690", "--prompt", "Implement CLI wiring", "--title", "Worker pane title"})
+	if err == nil {
+		t.Fatal("Run() error = nil, want parse error")
+	}
+	if !strings.Contains(err.Error(), "flag provided but not defined: -title") {
+		t.Fatalf("Run() error = %v, want removed flag error", err)
 	}
 }
 
