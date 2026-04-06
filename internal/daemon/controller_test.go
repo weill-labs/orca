@@ -125,13 +125,6 @@ func TestStopReturnsContextErrorWhenPollingCancelled(t *testing.T) {
 	if err := os.WriteFile(controller.paths.pidFile(projectPath), []byte(fmt.Sprintf("%d", pid)), 0o644); err != nil {
 		t.Fatalf("write controller pid file: %v", err)
 	}
-	store.projectStatus = state.ProjectStatus{
-		Project: projectPath,
-		Daemon: &state.DaemonStatus{
-			PID:    pid,
-			Status: "running",
-		},
-	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	stopErr := make(chan error, 1)
@@ -173,13 +166,6 @@ func TestStopWithoutForceReturnsTimeoutWhenProcessIgnoresTERM(t *testing.T) {
 	if err := os.WriteFile(pidFile, []byte(fmt.Sprintf("%d", pid)), 0o644); err != nil {
 		t.Fatalf("write controller pid file: %v", err)
 	}
-	store.projectStatus = state.ProjectStatus{
-		Project: projectPath,
-		Daemon: &state.DaemonStatus{
-			PID:    pid,
-			Status: "running",
-		},
-	}
 
 	_, err := controller.Stop(context.Background(), StopRequest{Project: projectPath})
 	if err == nil || !strings.Contains(err.Error(), "daemon did not stop within") {
@@ -219,13 +205,6 @@ func TestStopStopsResponsiveProcess(t *testing.T) {
 	if err := os.WriteFile(pidFile, []byte(fmt.Sprintf("%d", pid)), 0o644); err != nil {
 		t.Fatalf("write controller pid file: %v", err)
 	}
-	store.projectStatus = state.ProjectStatus{
-		Project: projectPath,
-		Daemon: &state.DaemonStatus{
-			PID:    pid,
-			Status: "running",
-		},
-	}
 
 	result, err := controller.Stop(context.Background(), StopRequest{Project: projectPath})
 	if err != nil {
@@ -259,13 +238,6 @@ func TestStopForceKillsProcessAfterGracePeriod(t *testing.T) {
 	pidFile := controller.paths.pidFile(projectPath)
 	if err := os.WriteFile(pidFile, []byte(fmt.Sprintf("%d", pid)), 0o644); err != nil {
 		t.Fatalf("write controller pid file: %v", err)
-	}
-	store.projectStatus = state.ProjectStatus{
-		Project: projectPath,
-		Daemon: &state.DaemonStatus{
-			PID:    pid,
-			Status: "running",
-		},
 	}
 
 	startedAt := time.Now()
@@ -612,21 +584,27 @@ func startDetachedSleepProcess(t *testing.T, ignoreTERM bool) int {
 
 	tempDir := t.TempDir()
 	readyPath := filepath.Join(tempDir, "ready")
-	scriptPath := filepath.Join(tempDir, "sleep.py")
+	scriptPath := filepath.Join(tempDir, "sleep.sh")
 
-	script := "import pathlib, time\n"
+	script := "#!/bin/bash\nset -eu\n"
 	if ignoreTERM {
-		script = "import pathlib, signal, time\n"
-		script += "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+		script += "trap '' TERM\n"
 	}
-	script += fmt.Sprintf("pathlib.Path(%q).write_text('ready')\n", readyPath)
-	script += "time.sleep(1000)\n"
+	script += fmt.Sprintf("printf ready > %q\n", readyPath)
+	if ignoreTERM {
+		script += "while true; do\n"
+		script += "  sleep 1000 &\n"
+		script += "  wait $!\n"
+		script += "done\n"
+	} else {
+		script += "exec sleep 1000\n"
+	}
 
-	if err := os.WriteFile(scriptPath, []byte(script), 0o644); err != nil {
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
 		t.Fatalf("write detached sleep script: %v", err)
 	}
 
-	cmd := exec.Command("/bin/bash", "-lc", fmt.Sprintf("nohup python3 %q >/dev/null 2>&1 </dev/null & echo $!", scriptPath))
+	cmd := exec.Command("/bin/bash", "-lc", fmt.Sprintf("nohup %q >/dev/null 2>&1 </dev/null & echo $!", scriptPath))
 	output, err := cmd.Output()
 	if err != nil {
 		t.Fatalf("start detached sleep process: %v", err)
