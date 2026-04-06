@@ -444,6 +444,51 @@ func TestAppRunStartDefaultsSessionFromAMUXSessionEnv(t *testing.T) {
 	}
 }
 
+func TestAppRunSpawnDefaultsSessionFromAMUXSessionEnv(t *testing.T) {
+	repoRoot := newRepoRoot(t)
+	cwdPath := filepath.Join(repoRoot, "internal", "cli")
+	if err := os.MkdirAll(cwdPath, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", cwdPath, err)
+	}
+
+	t.Setenv("AMUX_SESSION", "spawn-from-env")
+
+	d := &fakeDaemon{
+		spawnResult: daemon.SpawnPaneResult{
+			Project:   repoRoot,
+			PaneID:    "pane-7",
+			ClonePath: "/clones/orca01",
+		},
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	app := New(Options{
+		Daemon:  d,
+		State:   &fakeState{},
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		Version: "build-123",
+		Cwd: func() (string, error) {
+			return cwdPath, nil
+		},
+	})
+
+	if err := app.Run(context.Background(), []string{"spawn", "--title", "Scratch pane"}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if d.spawnRequest == nil {
+		t.Fatal("expected spawn to be called")
+	}
+	if got, want := d.spawnRequest.Session, "spawn-from-env"; got != want {
+		t.Fatalf("spawn session = %q, want %q", got, want)
+	}
+	if stderr.String() != "" {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+}
+
 func TestAppRunParseErrors(t *testing.T) {
 	t.Parallel()
 
@@ -456,6 +501,7 @@ func TestAppRunParseErrors(t *testing.T) {
 		{name: "unknown command", args: []string{"bogus"}, wantErr: "unknown command"},
 		{name: "help unknown command", args: []string{"help", "bogus"}, wantErr: "unknown help topic \"bogus\""},
 		{name: "unknown command help flag", args: []string{"bogus", "--help"}, wantErr: "unknown command"},
+		{name: "stop help unknown flag", args: []string{"stop", "--bogus"}, wantErr: "flag provided but not defined"},
 		{name: "status too many args", args: []string{"status", "LAB-690", "extra"}, wantErr: "status accepts at most one issue"},
 		{name: "assign missing issue", args: []string{"assign", "--prompt", "x"}, wantErr: "assign requires ISSUE"},
 		{name: "assign missing prompt", args: []string{"assign", "LAB-690"}, wantErr: "assign requires --prompt"},
@@ -491,6 +537,153 @@ func TestAppRunParseErrors(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), tt.wantErr) {
 				t.Fatalf("expected error containing %q, got %v", tt.wantErr, err)
+			}
+		})
+	}
+}
+
+func TestAppRunOutputModes(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 2, 15, 4, 5, 0, time.UTC)
+	repoRoot := newRepoRoot(t)
+	cwdPath := filepath.Join(repoRoot, "internal", "cli")
+	if err := os.MkdirAll(cwdPath, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", cwdPath, err)
+	}
+
+	tests := []struct {
+		name       string
+		args       []string
+		daemon     *fakeDaemon
+		state      *fakeState
+		assert     func(t *testing.T, stdout string, d *fakeDaemon, s *fakeState)
+	}{
+		{
+			name: "stop json",
+			args: []string{"stop", "--json"},
+			daemon: &fakeDaemon{
+				stopResult: daemon.StopResult{Project: repoRoot, PID: 321, StoppedAt: now},
+			},
+			state: &fakeState{},
+			assert: func(t *testing.T, stdout string, d *fakeDaemon, _ *fakeState) {
+				t.Helper()
+				if d.stopRequest == nil {
+					t.Fatal("expected stop to be called")
+				}
+				if !strings.Contains(stdout, "\"pid\":321") {
+					t.Fatalf("stdout = %q, want stop json", stdout)
+				}
+			},
+		},
+		{
+			name: "status issue human",
+			args: []string{"status", "LAB-690"},
+			daemon: &fakeDaemon{},
+			state: &fakeState{
+				taskStatus: state.TaskStatus{
+					Task: state.Task{
+						Issue:     "LAB-690",
+						Status:    "queued",
+						Agent:     "codex",
+						WorkerID:  "pane-7",
+						ClonePath: "/clones/orca01",
+						UpdatedAt: now,
+					},
+				},
+			},
+			assert: func(t *testing.T, stdout string, _ *fakeDaemon, s *fakeState) {
+				t.Helper()
+				if got, want := s.taskStatusIssue, "LAB-690"; got != want {
+					t.Fatalf("task status issue = %q, want %q", got, want)
+				}
+				if !strings.Contains(stdout, "issue: LAB-690") || !strings.Contains(stdout, "agent: codex") {
+					t.Fatalf("stdout = %q, want task status details", stdout)
+				}
+			},
+		},
+		{
+			name:   "workers human",
+			args:   []string{"workers"},
+			daemon: &fakeDaemon{},
+			state: &fakeState{
+				workers: []state.Worker{
+					{PaneID: "pane-3", Agent: "codex", State: "healthy", Issue: "LAB-690", ClonePath: "/clones/orca01", UpdatedAt: now},
+				},
+			},
+			assert: func(t *testing.T, stdout string, _ *fakeDaemon, s *fakeState) {
+				t.Helper()
+				if got, want := s.workersProject, repoRoot; got != want {
+					t.Fatalf("workers project = %q, want %q", got, want)
+				}
+				if !strings.Contains(stdout, "pane-3") || !strings.Contains(stdout, "LAB-690") {
+					t.Fatalf("stdout = %q, want worker table", stdout)
+				}
+			},
+		},
+		{
+			name:   "pool json",
+			args:   []string{"pool", "--json"},
+			daemon: &fakeDaemon{},
+			state: &fakeState{
+				clones: []state.Clone{
+					{Path: "/clones/orca01", Status: "free", Branch: "main", UpdatedAt: now},
+				},
+			},
+			assert: func(t *testing.T, stdout string, _ *fakeDaemon, s *fakeState) {
+				t.Helper()
+				if got, want := s.clonesProject, repoRoot; got != want {
+					t.Fatalf("clones project = %q, want %q", got, want)
+				}
+				if !strings.Contains(stdout, "\"path\":\"/clones/orca01\"") {
+					t.Fatalf("stdout = %q, want clone json", stdout)
+				}
+			},
+		},
+		{
+			name:   "events extra arg",
+			args:   []string{"events", "extra"},
+			daemon: &fakeDaemon{},
+			state:  &fakeState{},
+			assert: func(t *testing.T, stdout string, _ *fakeDaemon, _ *fakeState) {
+				t.Helper()
+				_ = stdout
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			app := New(Options{
+				Daemon:  tt.daemon,
+				State:   tt.state,
+				Stdout:  &stdout,
+				Stderr:  &stderr,
+				Version: "build-123",
+				Cwd: func() (string, error) {
+					return cwdPath, nil
+				},
+			})
+
+			err := app.Run(context.Background(), tt.args)
+			if tt.name == "events extra arg" {
+				if err == nil || !strings.Contains(err.Error(), "events does not accept positional arguments") {
+					t.Fatalf("Run() error = %v, want events positional error", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Run() error = %v", err)
+			}
+
+			tt.assert(t, stdout.String(), tt.daemon, tt.state)
+			if stderr.Len() != 0 {
+				t.Fatalf("stderr = %q, want empty", stderr.String())
 			}
 		})
 	}
@@ -735,6 +928,258 @@ func TestAppCommandsAcceptProjectFlag(t *testing.T) {
 			tt.assert(t, d, s)
 		})
 	}
+}
+
+func TestWriteProjectStatusAndTaskStatus(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 2, 15, 4, 5, 0, time.UTC)
+
+	tests := []struct {
+		name   string
+		write  func(*bytes.Buffer) error
+		wants  []string
+	}{
+		{
+			name: "project status with daemon and tasks",
+			write: func(buf *bytes.Buffer) error {
+				return writeProjectStatus(buf, state.ProjectStatus{
+					Project: "repo",
+					Daemon: &state.DaemonStatus{
+						Session: "alpha",
+						PID:     42,
+						Status:  "running",
+					},
+					Summary: state.Summary{
+						Tasks:          2,
+						Queued:         1,
+						Active:         1,
+						Workers:        1,
+						HealthyWorkers: 1,
+						Clones:         2,
+						FreeClones:     1,
+					},
+					Tasks: []state.Task{
+						{
+							Issue:     "LAB-804",
+							Status:    "active",
+							Agent:     "codex",
+							WorkerID:  "pane-7",
+							ClonePath: "/clones/orca01",
+							UpdatedAt: now,
+						},
+					},
+				})
+			},
+			wants: []string{
+				"project: repo",
+				"daemon: running",
+				"session: alpha",
+				"pid: 42",
+				"tasks: 2 total, 1 queued, 1 active, 0 done, 0 cancelled",
+				"ISSUE",
+				"LAB-804",
+			},
+		},
+		{
+			name: "project status without daemon",
+			write: func(buf *bytes.Buffer) error {
+				return writeProjectStatus(buf, state.ProjectStatus{
+					Project: "repo",
+				})
+			},
+			wants: []string{
+				"project: repo",
+				"daemon: stopped",
+				"tasks: 0 total, 0 queued, 0 active, 0 done, 0 cancelled",
+			},
+		},
+		{
+			name: "project status with daemon but no explicit status",
+			write: func(buf *bytes.Buffer) error {
+				return writeProjectStatus(buf, state.ProjectStatus{
+					Project: "repo",
+					Daemon: &state.DaemonStatus{
+						Session: "alpha",
+					},
+					Tasks: []state.Task{
+						{Issue: "LAB-805"},
+					},
+				})
+			},
+			wants: []string{
+				"project: repo",
+				"daemon: stopped",
+				"session: alpha",
+				"LAB-805",
+				"-",
+			},
+		},
+		{
+			name: "task status with events",
+			write: func(buf *bytes.Buffer) error {
+				return writeTaskStatus(buf, state.TaskStatus{
+					Task: state.Task{
+						Issue:     "LAB-804",
+						Status:    "queued",
+						WorkerID:  "pane-7",
+						ClonePath: "/clones/orca01",
+						UpdatedAt: now,
+					},
+					Events: []state.Event{
+						{Kind: "task.assigned", Message: "queued", CreatedAt: now},
+					},
+				})
+			},
+			wants: []string{
+				"issue: LAB-804",
+				"agent: -",
+				"worker: pane-7",
+				"clone: /clones/orca01",
+				"events:",
+				"task.assigned",
+				"queued",
+			},
+		},
+		{
+			name: "task status without events",
+			write: func(buf *bytes.Buffer) error {
+				return writeTaskStatus(buf, state.TaskStatus{
+					Task: state.Task{
+						Issue:  "LAB-806",
+						Status: "done",
+					},
+				})
+			},
+			wants: []string{
+				"issue: LAB-806",
+				"status: done",
+				"agent: -",
+				"worker: -",
+				"clone: -",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var buf bytes.Buffer
+			if err := tt.write(&buf); err != nil {
+				t.Fatalf("write error = %v", err)
+			}
+			for _, want := range tt.wants {
+				if !strings.Contains(buf.String(), want) {
+					t.Fatalf("output = %q, want substring %q", buf.String(), want)
+				}
+			}
+		})
+	}
+}
+
+func TestParseOptionalSinglePositionalAndFormatTimestamp(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		args       []string
+		wantValue  string
+		wantErr    string
+	}{
+		{
+			name:      "flags before positional",
+			args:      []string{"--json", "LAB-804"},
+			wantValue: "LAB-804",
+		},
+		{
+			name:      "no positional",
+			args:      []string{"--json"},
+			wantValue: "",
+		},
+		{
+			name:    "too many positionals",
+			args:    []string{"LAB-804", "extra"},
+			wantErr: "status accepts at most one issue",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			fs := newFlagSet("status")
+			var jsonOutput bool
+			fs.BoolVar(&jsonOutput, "json", false, "emit JSON output")
+
+			got, err := parseOptionalSinglePositional(fs, tt.args)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("parseOptionalSinglePositional() error = %v, want substring %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseOptionalSinglePositional() error = %v", err)
+			}
+			if got != tt.wantValue {
+				t.Fatalf("parseOptionalSinglePositional() = %q, want %q", got, tt.wantValue)
+			}
+		})
+	}
+
+	if got, want := formatTimestamp(time.Time{}), "-"; got != want {
+		t.Fatalf("formatTimestamp(zero) = %q, want %q", got, want)
+	}
+	if got, want := formatTimestamp(time.Date(2026, 4, 2, 15, 4, 5, 0, time.FixedZone("UTC-4", -4*60*60))), "2026-04-02T19:04:05Z"; got != want {
+		t.Fatalf("formatTimestamp(non-zero) = %q, want %q", got, want)
+	}
+}
+
+func TestWriteClonesAndRunEventsError(t *testing.T) {
+	t.Parallel()
+
+	t.Run("write clones empty", func(t *testing.T) {
+		t.Parallel()
+
+		var buf bytes.Buffer
+		if err := writeClones(&buf, nil); err != nil {
+			t.Fatalf("writeClones() error = %v", err)
+		}
+		if got, want := strings.TrimSpace(buf.String()), "no clones"; got != want {
+			t.Fatalf("writeClones() = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("events returns state error", func(t *testing.T) {
+		t.Parallel()
+
+		repoRoot := newRepoRoot(t)
+		cwdPath := filepath.Join(repoRoot, "internal", "cli")
+		if err := os.MkdirAll(cwdPath, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q): %v", cwdPath, err)
+		}
+
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		app := New(Options{
+			Daemon:  &fakeDaemon{},
+			State:   &fakeState{err: errors.New("events failed")},
+			Stdout:  &stdout,
+			Stderr:  &stderr,
+			Version: "build-123",
+			Cwd: func() (string, error) {
+				return cwdPath, nil
+			},
+		})
+
+		err := app.Run(context.Background(), []string{"events"})
+		if err == nil || !strings.Contains(err.Error(), "events failed") {
+			t.Fatalf("Run(events) error = %v, want events failure", err)
+		}
+	})
 }
 
 func newRepoRoot(t *testing.T) string {
