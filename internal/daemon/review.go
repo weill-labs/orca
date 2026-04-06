@@ -159,15 +159,16 @@ func (d *Daemon) checkTaskReviewPoll(ctx context.Context, active ActiveAssignmen
 	if !d.workerAppearsIdleForReviewNudge(ctx, &update, profile, now) {
 		return update
 	}
-	if err := d.sendPromptAndEnter(ctx, update.Active.Task.PaneID, feedback); err != nil {
-		return update
-	}
+	update.queueNudge(func(ctx context.Context, d *Daemon, update *TaskStateUpdate) {
+		if err := d.sendPromptAndEnter(ctx, update.Active.Task.PaneID, feedback); err != nil {
+			return
+		}
 
-	update.Active.Worker.ReviewNudgeCount++
-	d.persistReviewWorkerState(&update.Active.Worker, reviewCount, commentCount, now)
-	update.WorkerChanged = true
-
-	update.Events = append(update.Events, d.assignmentEvent(update.Active, profile, EventWorkerNudgedReview, fmt.Sprintf("sent %d new blocking review(s) to worker", len(blocking))))
+		update.Active.Worker.ReviewNudgeCount++
+		d.persistReviewWorkerState(&update.Active.Worker, reviewCount, commentCount, now)
+		update.WorkerChanged = true
+		update.Events = append(update.Events, d.assignmentEvent(update.Active, profile, EventWorkerNudgedReview, fmt.Sprintf("sent %d new blocking review(s) to worker", len(blocking))))
+	})
 	return update
 }
 

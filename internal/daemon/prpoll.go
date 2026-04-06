@@ -98,6 +98,7 @@ func mergeTaskStateUpdates(base, next TaskStateUpdate) TaskStateUpdate {
 	merged.PaneMetadata = mergeMetadata(merged.PaneMetadata, next.PaneMetadata)
 	merged.Events = append(merged.Events, next.Events...)
 	merged.PRMerged = merged.PRMerged || next.PRMerged
+	merged.nudges = append(merged.nudges, next.nudges...)
 	return merged
 }
 

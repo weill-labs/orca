@@ -35,14 +35,16 @@ func (d *Daemon) handlePRMergeablePoll(ctx context.Context, update *TaskStateUpd
 		return
 	}
 
-	if err := d.sendPromptAndEnter(ctx, update.Active.Task.PaneID, conflictNudgePrompt); err != nil {
-		return
-	}
+	update.queueNudge(func(ctx context.Context, d *Daemon, update *TaskStateUpdate) {
+		if err := d.sendPromptAndEnter(ctx, update.Active.Task.PaneID, conflictNudgePrompt); err != nil {
+			return
+		}
 
-	update.Active.Worker.LastMergeableState = state
-	update.Active.Worker.UpdatedAt = now
-	update.WorkerChanged = true
-	update.Events = append(update.Events, d.assignmentEvent(update.Active, profile, EventWorkerNudgedConflict, strings.TrimSpace(conflictNudgePrompt)))
+		update.Active.Worker.LastMergeableState = state
+		update.Active.Worker.UpdatedAt = now
+		update.WorkerChanged = true
+		update.Events = append(update.Events, d.assignmentEvent(update.Active, profile, EventWorkerNudgedConflict, strings.TrimSpace(conflictNudgePrompt)))
+	})
 }
 
 func (d *Daemon) lookupPRMergeableState(ctx context.Context, prNumber int) (string, bool, error) {
