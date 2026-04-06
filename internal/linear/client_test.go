@@ -152,6 +152,9 @@ func TestClientSetIssueStatusSurfacesGraphQLError(t *testing.T) {
 	if !strings.Contains(err.Error(), "Entity not found (ENTITY_NOT_FOUND)") {
 		t.Fatalf("SetIssueStatus() error = %v, want GraphQL error details", err)
 	}
+	if !errors.Is(err, ErrEntityNotFound) {
+		t.Fatalf("SetIssueStatus() error = %v, want ErrEntityNotFound", err)
+	}
 }
 
 func TestClientSetIssueStatusSurfacesHTTPStatusError(t *testing.T) {

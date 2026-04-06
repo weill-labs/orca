@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/weill-labs/orca/internal/linear"
 )
 
 type trackedStatus string
@@ -337,7 +339,21 @@ func (d *Daemon) setIssueStatus(ctx context.Context, issue, state string) error 
 	if d.issueTracker == nil {
 		return nil
 	}
-	return d.issueTracker.SetIssueStatus(ctx, issue, state)
+	err := d.issueTracker.SetIssueStatus(ctx, issue, state)
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, linear.ErrEntityNotFound) {
+		d.emit(ctx, Event{
+			Time:    d.now(),
+			Type:    EventIssueStatusSkipped,
+			Project: d.project,
+			Issue:   issue,
+			Message: fmt.Sprintf("skipped Linear issue status update to %q: %v", state, err),
+		})
+		return nil
+	}
+	return err
 }
 
 func (d *Daemon) profileForTask(ctx context.Context, task Task) (AgentProfile, error) {

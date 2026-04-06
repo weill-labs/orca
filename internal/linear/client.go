@@ -16,9 +16,11 @@ import (
 const defaultEndpoint = "https://api.linear.app/graphql"
 
 var ErrMissingAPIKey = errors.New("LINEAR_API_KEY not set")
+var ErrEntityNotFound = errors.New("linear entity not found")
 
 const (
-	workflowStatesPageSize = 250
+	workflowStatesPageSize         = 250
+	graphQLErrorCodeEntityNotFound = "ENTITY_NOT_FOUND"
 
 	issueLookupQuery = `query($id: String!) {
 		issue(id: $id) {
@@ -243,6 +245,34 @@ type graphQLError struct {
 	} `json:"extensions"`
 }
 
+type graphQLErrorsError struct {
+	entries []graphQLError
+}
+
+func (e graphQLErrorsError) Error() string {
+	messages := make([]string, 0, len(e.entries))
+	for _, gqlErr := range e.entries {
+		message := gqlErr.Message
+		if code := strings.TrimSpace(gqlErr.Extensions.Code); code != "" {
+			message = fmt.Sprintf("%s (%s)", message, code)
+		}
+		messages = append(messages, message)
+	}
+	return strings.Join(messages, "; ")
+}
+
+func (e graphQLErrorsError) Is(target error) bool {
+	if target != ErrEntityNotFound {
+		return false
+	}
+	for _, gqlErr := range e.entries {
+		if strings.EqualFold(strings.TrimSpace(gqlErr.Extensions.Code), graphQLErrorCodeEntityNotFound) {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *Client) graphQL(ctx context.Context, request graphQLRequest, out any) error {
 	body, err := json.Marshal(request)
 	if err != nil {
@@ -294,19 +324,7 @@ func (c *Client) graphQL(ctx context.Context, request graphQLRequest, out any) e
 }
 
 func formatGraphQLErrors(graphQLErrors []graphQLError) error {
-	messages := make([]string, 0, len(graphQLErrors))
-	for _, gqlErr := range graphQLErrors {
-		message := gqlErr.Message
-		if code := strings.TrimSpace(gqlErr.Extensions.Code); code != "" {
-			message = fmt.Sprintf("%s (%s)", message, code)
-		}
-		messages = append(messages, message)
-	}
-	return errorsJoin(messages)
-}
-
-func errorsJoin(messages []string) error {
-	return errors.New(strings.Join(messages, "; "))
+	return graphQLErrorsError{entries: append([]graphQLError(nil), graphQLErrors...)}
 }
 
 func parseAPIKeyLine(line string) (string, bool) {
