@@ -50,6 +50,8 @@ func (d *Daemon) reconcileTaskOnStartup(ctx context.Context, task Task) {
 		return
 	}
 
+	d.reconcileWorkerHealthFromPaneMetadata(ctx, &active)
+
 	snapshot, err := d.amux.CapturePane(ctx, active.Task.PaneID)
 	if err != nil {
 		d.handleTaskStartupPaneError(ctx, active, "worker pane capture failed on daemon startup", err)
@@ -76,6 +78,23 @@ func (d *Daemon) reconcileTaskOnStartup(ctx context.Context, task Task) {
 		active.Task.UpdatedAt = d.now()
 		_ = d.state.PutTask(ctx, active.Task)
 	}
+}
+
+func (d *Daemon) reconcileWorkerHealthFromPaneMetadata(ctx context.Context, active *ActiveAssignment) {
+	metadata, err := d.amux.Metadata(ctx, active.Task.PaneID)
+	if err != nil {
+		return
+	}
+	if !strings.EqualFold(strings.TrimSpace(metadata["status"]), WorkerHealthEscalated) {
+		return
+	}
+	if active.Worker.Health == WorkerHealthEscalated {
+		return
+	}
+
+	active.Worker.Health = WorkerHealthEscalated
+	active.Worker.UpdatedAt = d.now()
+	_ = d.state.PutWorker(ctx, active.Worker)
 }
 
 func (d *Daemon) handleTaskStartupPaneError(ctx context.Context, active ActiveAssignment, message string, err error) {

@@ -29,9 +29,12 @@ type MetadataRemovalCall struct {
 type MockClient struct {
 	mu sync.Mutex
 
+	metadata map[string]map[string]string
+
 	SpawnFunc          func(ctx context.Context, req SpawnRequest) (Pane, error)
 	PaneExistsFunc     func(ctx context.Context, paneID string) (bool, error)
 	ListPanesFunc      func(ctx context.Context) ([]Pane, error)
+	MetadataFunc       func(ctx context.Context, paneID string) (map[string]string, error)
 	SendKeysFunc       func(ctx context.Context, paneID string, keys ...string) error
 	CaptureFunc        func(ctx context.Context, paneID string) (string, error)
 	CapturePaneFunc    func(ctx context.Context, paneID string) (PaneCapture, error)
@@ -46,6 +49,7 @@ type MockClient struct {
 	SpawnCalls          []SpawnRequest
 	PaneExistsCalls     []string
 	ListPanesCalls      int
+	MetadataCalls       []string
 	SendKeysCalls       []SendKeysCall
 	CaptureCalls        []string
 	CapturePaneCalls    []string
@@ -101,6 +105,19 @@ func (m *MockClient) ListPanes(ctx context.Context) ([]Pane, error) {
 		return fn(ctx)
 	}
 	return nil, nil
+}
+
+func (m *MockClient) Metadata(ctx context.Context, paneID string) (map[string]string, error) {
+	m.mu.Lock()
+	m.MetadataCalls = append(m.MetadataCalls, paneID)
+	fn := m.MetadataFunc
+	stored := cloneMetadataMap(m.metadata[paneID])
+	m.mu.Unlock()
+
+	if fn != nil {
+		return fn(ctx, paneID)
+	}
+	return stored, nil
 }
 
 func (m *MockClient) SendKeys(ctx context.Context, paneID string, keys ...string) error {
@@ -160,6 +177,17 @@ func (m *MockClient) SetMetadata(ctx context.Context, paneID string, metadata ma
 	for key, value := range metadata {
 		copied[key] = value
 	}
+	if m.metadata == nil {
+		m.metadata = make(map[string]map[string]string)
+	}
+	merged := cloneMetadataMap(m.metadata[paneID])
+	if merged == nil {
+		merged = make(map[string]string, len(copied))
+	}
+	for key, value := range copied {
+		merged[key] = value
+	}
+	m.metadata[paneID] = merged
 	m.SetMetadataCalls = append(m.SetMetadataCalls, MetadataCall{
 		PaneID:   paneID,
 		Metadata: copied,
@@ -175,6 +203,17 @@ func (m *MockClient) SetMetadata(ctx context.Context, paneID string, metadata ma
 
 func (m *MockClient) RemoveMetadata(ctx context.Context, paneID string, keys ...string) error {
 	m.mu.Lock()
+	if len(m.metadata[paneID]) > 0 {
+		next := cloneMetadataMap(m.metadata[paneID])
+		for _, key := range keys {
+			delete(next, key)
+		}
+		if len(next) == 0 {
+			delete(m.metadata, paneID)
+		} else {
+			m.metadata[paneID] = next
+		}
+	}
 	m.RemoveMetadataCalls = append(m.RemoveMetadataCalls, MetadataRemovalCall{
 		PaneID: paneID,
 		Keys:   append([]string(nil), keys...),
@@ -186,6 +225,17 @@ func (m *MockClient) RemoveMetadata(ctx context.Context, paneID string, keys ...
 		return fn(ctx, paneID, keys...)
 	}
 	return nil
+}
+
+func cloneMetadataMap(metadata map[string]string) map[string]string {
+	if len(metadata) == 0 {
+		return nil
+	}
+	copied := make(map[string]string, len(metadata))
+	for key, value := range metadata {
+		copied[key] = value
+	}
+	return copied
 }
 
 func (m *MockClient) KillPane(ctx context.Context, paneID string) error {

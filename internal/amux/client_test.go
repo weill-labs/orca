@@ -916,8 +916,8 @@ func TestCLIClientMetadata(t *testing.T) {
 				"",
 			}, "\n"),
 			wantMetadata: map[string]string{
-				"agent_profile": "codex",
-				"status":        "escalated",
+				"agent_profile":  "codex",
+				"status":         "escalated",
 				"tracked_issues": `[{"id":"LAB-850","status":"active"}]`,
 			},
 			wantCmd: recordedCommand{
