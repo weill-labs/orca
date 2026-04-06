@@ -110,6 +110,88 @@ func TestStartLaunchesDaemonInOwnProcessGroup(t *testing.T) {
 	waitForProcessExit(t, pid)
 }
 
+func TestPreparePIDStateExistingPIDFile(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name                  string
+		useLivePID            bool
+		wantErr               error
+		wantMarkDaemonStopped bool
+		wantPIDFileExists     bool
+	}{
+		{
+			name:                  "stale pid file is removed",
+			useLivePID:            false,
+			wantMarkDaemonStopped: true,
+			wantPIDFileExists:     false,
+		},
+		{
+			name:              "live pid file blocks startup",
+			useLivePID:        true,
+			wantErr:           ErrDaemonAlreadyRunning,
+			wantPIDFileExists: true,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			store := &fakeStore{}
+			projectPath := testProjectPath(t)
+			controller, _ := newTestController(t, store, projectPath, scriptOptions{
+				ignoreTERM: false,
+			})
+
+			process := startDirectSleepProcess(t, true)
+			pid := process.Process.Pid
+			if !tt.useLivePID {
+				if err := process.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+					t.Fatalf("Kill(%d) error = %v", pid, err)
+				}
+				_, _ = process.Process.Wait()
+				waitForProcessExit(t, pid)
+			} else {
+				t.Cleanup(func() {
+					if err := process.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+						t.Fatalf("Kill(%d) error = %v", pid, err)
+					}
+					_, _ = process.Process.Wait()
+				})
+			}
+
+			pidFile := controller.paths.pidFile(projectPath)
+			if err := os.MkdirAll(filepath.Dir(pidFile), 0o755); err != nil {
+				t.Fatalf("MkdirAll(%q) error = %v", filepath.Dir(pidFile), err)
+			}
+			if err := os.WriteFile(pidFile, []byte(fmt.Sprintf("%d", pid)), 0o644); err != nil {
+				t.Fatalf("WriteFile(%q) error = %v", pidFile, err)
+			}
+
+			err := controller.preparePIDState(context.Background(), projectPath)
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("preparePIDState() error = %v, want %v", err, tt.wantErr)
+			}
+			if got, want := store.markDaemonStoppedCalled, tt.wantMarkDaemonStopped; got != want {
+				t.Fatalf("markDaemonStoppedCalled = %t, want %t", got, want)
+			}
+
+			_, statErr := os.Stat(pidFile)
+			if tt.wantPIDFileExists {
+				if statErr != nil {
+					t.Fatalf("Stat(%q) error = %v, want existing pid file", pidFile, statErr)
+				}
+				return
+			}
+			if !errors.Is(statErr, os.ErrNotExist) {
+				t.Fatalf("Stat(%q) error = %v, want not exist", pidFile, statErr)
+			}
+		})
+	}
+}
+
 func TestStopReturnsContextErrorWhenPollingCancelled(t *testing.T) {
 	store := &fakeStore{}
 	projectPath := testProjectPath(t)

@@ -185,24 +185,23 @@ func (d *Daemon) initializePIDFile() error {
 }
 
 func (d *Daemon) removeStalePIDFile() error {
-	if _, err := os.Stat(d.pidPath); err == nil {
-		pid, err := readPIDFile(d.pidPath)
-		if err != nil {
-			return fmt.Errorf("read pid file: %w", err)
+	pid, err := readPIDFile(d.pidPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
 		}
-		alive, err := processAlive(pid)
-		if err != nil {
-			return fmt.Errorf("check pid file process: %w", err)
-		}
-		if alive {
-			return fmt.Errorf("pid file already exists: %w", ErrAlreadyStarted)
-		}
-		if err := os.Remove(d.pidPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("remove stale pid file: %w", err)
-		}
-		return nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("stat pid file: %w", err)
+		return fmt.Errorf("read pid file: %w", err)
+	}
+
+	alive, err := processAlive(pid)
+	if err != nil {
+		return fmt.Errorf("check pid file process: %w", err)
+	}
+	if alive {
+		return fmt.Errorf("pid file already exists: %w", ErrAlreadyStarted)
+	}
+	if err := os.Remove(d.pidPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove stale pid file: %w", err)
 	}
 	return nil
 }
