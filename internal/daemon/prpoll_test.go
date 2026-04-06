@@ -785,6 +785,83 @@ func TestEnqueueSkipsDuplicateChecksWhileCIPollInFlight(t *testing.T) {
 	}
 }
 
+func TestEnqueueMergesQueuedPRAfterPendingChecksPassOnLaterTick(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	captureTicker := newFakeTicker()
+	pollTicker := newFakeTicker()
+	deps.tickers.enqueue(captureTicker, pollTicker)
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-689", "Implement daemon core", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	task, ok := deps.state.task("LAB-689")
+	if !ok {
+		t.Fatal("LAB-689 task missing from state")
+	}
+	task.PRNumber = 42
+	deps.state.putTaskForTest(task)
+
+	checkArgs := []string{"pr", "checks", "42", "--json", "bucket"}
+	deps.commands.queue("gh", []string{"pr", "update-branch", "42", "--rebase"}, ``, nil)
+	firstChecks := deps.commands.block("gh", checkArgs)
+	deps.commands.queue("gh", checkArgs, `[{"bucket":"pending"}]`, nil)
+	deps.commands.queue("gh", checkArgs, `[{"bucket":"pass"}]`, nil)
+	deps.commands.queue("gh", []string{"pr", "merge", "42", "--squash"}, ``, nil)
+
+	if _, err := d.Enqueue(ctx, 42); err != nil {
+		t.Fatalf("Enqueue(42) error = %v", err)
+	}
+
+	pollTicker.tick(deps.clock.Now())
+	waitFor(t, "queued PR awaiting checks", func() bool {
+		entry, err := deps.state.MergeEntry(context.Background(), "/tmp/project", 42)
+		return err == nil && entry != nil && entry.Status == MergeQueueStatusAwaitingChecks
+	})
+
+	pollTicker.tick(deps.clock.Now())
+	select {
+	case <-firstChecks.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for pending CI poll to start")
+	}
+	waitFor(t, "queued PR checking CI", func() bool {
+		entry, err := deps.state.MergeEntry(context.Background(), "/tmp/project", 42)
+		return err == nil && entry != nil && entry.Status == MergeQueueStatusCheckingCI
+	})
+
+	close(firstChecks.release)
+	waitFor(t, "queued PR returns to awaiting checks after pending CI", func() bool {
+		entry, err := deps.state.MergeEntry(context.Background(), "/tmp/project", 42)
+		return err == nil && entry != nil && entry.Status == MergeQueueStatusAwaitingChecks
+	})
+	if got := deps.commands.countCalls("gh", []string{"pr", "merge", "42", "--squash"}); got != 0 {
+		t.Fatalf("merge count after pending CI = %d, want 0", got)
+	}
+
+	pollTicker.tick(deps.clock.Now())
+	waitFor(t, "queued PR merged after passing CI", func() bool {
+		return deps.commands.countCalls("gh", []string{"pr", "merge", "42", "--squash"}) == 1
+	})
+
+	if got, want := deps.commands.countCalls("gh", checkArgs), 2; got != want {
+		t.Fatalf("checks call count = %d, want %d", got, want)
+	}
+	if got, want := deps.commands.countCalls("gh", []string{"pr", "update-branch", "42", "--rebase"}), 1; got != want {
+		t.Fatalf("rebase call count = %d, want %d", got, want)
+	}
+}
+
 func TestEnqueueSurvivesRestartUsingPersistedQueueState(t *testing.T) {
 	t.Parallel()
 

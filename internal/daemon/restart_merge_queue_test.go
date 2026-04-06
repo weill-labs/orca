@@ -120,6 +120,11 @@ func TestStartResetsTransientMergeQueueStatuses(t *testing.T) {
 			wantStatus: MergeQueueStatusQueued,
 		},
 		{
+			name:       "checking ci resumes from awaiting checks",
+			status:     MergeQueueStatusCheckingCI,
+			wantStatus: MergeQueueStatusAwaitingChecks,
+		},
+		{
 			name:       "merging resumes from awaiting checks",
 			status:     MergeQueueStatusMerging,
 			wantStatus: MergeQueueStatusAwaitingChecks,
