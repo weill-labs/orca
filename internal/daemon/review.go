@@ -304,13 +304,7 @@ func formatLeadReviewEscalation(active ActiveAssignment, feedback []prFeedback) 
 	var builder strings.Builder
 
 	issue := strings.TrimSpace(active.Task.Issue)
-	paneName := strings.TrimSpace(active.Task.PaneName)
-	if paneName == "" {
-		paneName = strings.TrimSpace(active.Worker.PaneName)
-	}
-	if paneName == "" {
-		paneName = strings.TrimSpace(active.Task.PaneID)
-	}
+	paneName := assignmentPaneName(active.Task, active.Worker)
 
 	if issue != "" && paneName != "" && active.Task.PRNumber > 0 {
 		fmt.Fprintf(&builder, "Review nudges exhausted for %s in %s on PR #%d.\n", issue, paneName, active.Task.PRNumber)

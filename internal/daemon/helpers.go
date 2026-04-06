@@ -381,13 +381,7 @@ func (d *Daemon) mergeQueueEvent(active *ActiveAssignment, eventType string, prN
 
 	event.Issue = active.Task.Issue
 	event.PaneID = active.Task.PaneID
-	event.PaneName = active.Task.PaneName
-	if event.PaneName == "" {
-		event.PaneName = active.Worker.PaneName
-	}
-	if event.PaneName == "" {
-		event.PaneName = active.Task.PaneID
-	}
+	event.PaneName = assignmentPaneName(active.Task, active.Worker)
 	event.CloneName = active.Task.CloneName
 	if event.CloneName == "" && active.Task.ClonePath != "" {
 		event.CloneName = filepath.Base(active.Task.ClonePath)
@@ -414,6 +408,17 @@ func (d *Daemon) emit(ctx context.Context, event Event) {
 			_ = err
 		}
 	}
+}
+
+func assignmentPaneName(task Task, worker Worker) string {
+	paneName := strings.TrimSpace(task.PaneName)
+	if paneName == "" {
+		paneName = strings.TrimSpace(worker.PaneName)
+	}
+	if paneName == "" {
+		paneName = strings.TrimSpace(task.PaneID)
+	}
+	return paneName
 }
 
 func (d *Daemon) sendPromptAndEnter(ctx context.Context, paneID, prompt string) error {
