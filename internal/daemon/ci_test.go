@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestPRPollNudgesWorkerOncePerFailingCITransition(t *testing.T) {
+func TestPRPollRenudgesFailingCIOnScheduleAndEscalatesAfterMax(t *testing.T) {
 	t.Parallel()
 
 	deps := newTestDeps(t)
@@ -14,11 +14,10 @@ func TestPRPollNudgesWorkerOncePerFailingCITransition(t *testing.T) {
 	prTicker := newFakeTicker()
 	deps.tickers.enqueue(captureTicker, prTicker)
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
-	deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[{"bucket":"fail"}]`, nil)
-	deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[{"bucket":"fail"}]`, nil)
-	deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[{"bucket":"pass"}]`, nil)
-	deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[{"bucket":"fail"}]`, nil)
-	for range 4 {
+	for _, bucket := range []string{"fail", "fail", "fail", "fail", "fail", "fail", "fail", "pass", "fail"} {
+		deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[{"bucket":"`+bucket+`"}]`, nil)
+	}
+	for range 9 {
 		deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
 	}
 
@@ -40,43 +39,62 @@ func TestPRPollNudgesWorkerOncePerFailingCITransition(t *testing.T) {
 		return deps.amux.countKey("pane-1", "\n") == 1 && deps.events.countType(EventWorkerNudgedCI) == 1
 	})
 
-	if got, want := deps.events.countType(EventWorkerNudgedCI), 1; got != want {
-		t.Fatalf("ci nudge event count = %d, want %d", got, want)
-	}
-	if got, want := deps.commands.countCall("gh", "pr", "checks", "42", "--json", "bucket"), 1; got != want {
-		t.Fatalf("gh pr checks calls = %d, want %d", got, want)
-	}
-
 	prTicker.tick(deps.clock.Now())
-	waitFor(t, "second CI poll", func() bool {
+	waitFor(t, "first repeated failing CI poll", func() bool {
 		return deps.commands.countCall("gh", "pr", "checks", "42", "--json", "bucket") == 2
 	})
-
-	if got, want := deps.amux.countKey("pane-1", "\n"), 1; got != want {
-		t.Fatalf("nudge count after repeated failure = %d, want %d", got, want)
-	}
-	if got, want := deps.events.countType(EventWorkerNudgedCI), 1; got != want {
-		t.Fatalf("ci nudge event count after repeated failure = %d, want %d", got, want)
-	}
-
 	prTicker.tick(deps.clock.Now())
-	waitFor(t, "passing CI poll", func() bool {
-		return deps.commands.countCall("gh", "pr", "checks", "42", "--json", "bucket") == 3
-	})
-
-	if got, want := deps.amux.countKey("pane-1", "\n"), 1; got != want {
-		t.Fatalf("nudge count after CI recovery = %d, want %d", got, want)
-	}
-
-	prTicker.tick(deps.clock.Now())
-	waitFor(t, "second CI failure nudge", func() bool {
+	waitFor(t, "scheduled second CI nudge", func() bool {
 		return deps.amux.countKey("pane-1", "\n") == 2 && deps.events.countType(EventWorkerNudgedCI) == 2
 	})
 
-	if got, want := deps.events.countType(EventWorkerNudgedCI), 2; got != want {
-		t.Fatalf("ci nudge event count after second failure = %d, want %d", got, want)
+	prTicker.tick(deps.clock.Now())
+	waitFor(t, "second repeated failing CI poll", func() bool {
+		return deps.commands.countCall("gh", "pr", "checks", "42", "--json", "bucket") == 4
+	})
+	if got, want := deps.amux.countKey("pane-1", "\n"), 2; got != want {
+		t.Fatalf("nudge count after deferred failing poll = %d, want %d", got, want)
 	}
-	deps.events.requireTypes(t, EventDaemonStarted, EventTaskAssigned, EventPRDetected, EventWorkerNudgedCI)
+
+	prTicker.tick(deps.clock.Now())
+	waitFor(t, "scheduled third CI nudge", func() bool {
+		return deps.amux.countKey("pane-1", "\n") == 3 && deps.events.countType(EventWorkerNudgedCI) == 3
+	})
+
+	prTicker.tick(deps.clock.Now())
+	waitFor(t, "third repeated failing CI poll", func() bool {
+		return deps.commands.countCall("gh", "pr", "checks", "42", "--json", "bucket") == 6
+	})
+	prTicker.tick(deps.clock.Now())
+	waitFor(t, "ci escalation after nudge exhaustion", func() bool {
+		return deps.events.countType(EventWorkerCIEscalated) == 1
+	})
+	if got, want := deps.amux.countKey("pane-1", "\n"), 3; got != want {
+		t.Fatalf("nudge count after CI escalation = %d, want %d", got, want)
+	}
+
+	prTicker.tick(deps.clock.Now())
+	waitFor(t, "passing CI poll resets schedule", func() bool {
+		worker, ok := deps.state.worker("pane-1")
+		return ok &&
+			deps.commands.countCall("gh", "pr", "checks", "42", "--json", "bucket") == 8 &&
+			worker.LastCIState == ciStatePass
+	})
+
+	prTicker.tick(deps.clock.Now())
+	waitFor(t, "failing CI nudge after reset", func() bool {
+		return deps.amux.countKey("pane-1", "\n") == 4 &&
+			deps.events.countType(EventWorkerNudgedCI) == 4 &&
+			deps.events.countType(EventWorkerCIEscalated) == 1
+	})
+
+	deps.events.requireTypes(t,
+		EventDaemonStarted,
+		EventTaskAssigned,
+		EventPRDetected,
+		EventWorkerNudgedCI,
+		EventWorkerCIEscalated,
+	)
 }
 
 func TestPRPollRetriesCINudgeAfterSendKeysFailure(t *testing.T) {
@@ -122,6 +140,14 @@ func TestPRPollRetriesCINudgeAfterSendKeysFailure(t *testing.T) {
 	waitFor(t, "retried CI nudge", func() bool {
 		return deps.amux.countKey("pane-1", "\n") == 1 && deps.events.countType(EventWorkerNudgedCI) == 1
 	})
+}
+
+func TestEventWorkerCIEscalatedUsesDotDelimitedName(t *testing.T) {
+	t.Parallel()
+
+	if got, want := EventWorkerCIEscalated, "worker.ci_escalated"; got != want {
+		t.Fatalf("EventWorkerCIEscalated = %q, want %q", got, want)
+	}
 }
 
 func TestEventWorkerNudgedCIUsesDotDelimitedName(t *testing.T) {

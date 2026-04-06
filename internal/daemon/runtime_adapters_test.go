@@ -223,6 +223,9 @@ func TestSQLiteStateAdapterNonTerminalTasksAndWorkerByPane(t *testing.T) {
 		LastIssueCommentCount: 4,
 		ReviewNudgeCount:      3,
 		LastCIState:           "fail",
+		CINudgeCount:          2,
+		CIFailurePollCount:    1,
+		CIEscalated:           true,
 		LastMergeableState:    "CONFLICTING",
 		NudgeCount:            3,
 		LastCapture:           "permission prompt",
@@ -270,6 +273,15 @@ func TestSQLiteStateAdapterNonTerminalTasksAndWorkerByPane(t *testing.T) {
 	}
 	if got, want := worker.LastCIState, "fail"; got != want {
 		t.Fatalf("worker.LastCIState = %q, want %q", got, want)
+	}
+	if got, want := worker.CINudgeCount, 2; got != want {
+		t.Fatalf("worker.CINudgeCount = %d, want %d", got, want)
+	}
+	if got, want := worker.CIFailurePollCount, 1; got != want {
+		t.Fatalf("worker.CIFailurePollCount = %d, want %d", got, want)
+	}
+	if got, want := worker.CIEscalated, true; got != want {
+		t.Fatalf("worker.CIEscalated = %t, want %t", got, want)
 	}
 	if got, want := worker.LastMergeableState, "CONFLICTING"; got != want {
 		t.Fatalf("worker.LastMergeableState = %q, want %q", got, want)
