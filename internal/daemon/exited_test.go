@@ -147,6 +147,12 @@ func TestExitedPaneDetectionWaitsForPersistentExitedState(t *testing.T) {
 			Content:        []string{"shell prompt"},
 			CurrentCommand: "bash",
 			Exited:         true,
+			ExitedSince:    recentExit,
+		},
+		{
+			Content:        []string{"shell prompt"},
+			CurrentCommand: "bash",
+			Exited:         true,
 			ExitedSince:    staleExit,
 		},
 	})
@@ -162,7 +168,7 @@ func TestExitedPaneDetectionWaitsForPersistentExitedState(t *testing.T) {
 
 	captureTicker.tick(deps.clock.Now())
 	waitFor(t, "first exited capture", func() bool {
-		return deps.amux.captureCount("pane-1") == 1
+		return deps.amux.captureCount("pane-1") >= 2
 	})
 
 	worker, ok := deps.state.worker("pane-1")
@@ -181,4 +187,69 @@ func TestExitedPaneDetectionWaitsForPersistentExitedState(t *testing.T) {
 		worker, ok := deps.state.worker("pane-1")
 		return ok && worker.Health == WorkerHealthEscalated
 	})
+}
+
+func TestShouldEscalateExitedPane(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	d := deps.newDaemon(t)
+	now := deps.clock.Now()
+
+	tests := []struct {
+		name     string
+		snapshot PaneCapture
+		want     bool
+	}{
+		{
+			name: "missing exited timestamp falls back to escalate",
+			snapshot: PaneCapture{
+				Exited: true,
+			},
+			want: true,
+		},
+		{
+			name: "invalid exited timestamp falls back to escalate",
+			snapshot: PaneCapture{
+				Exited:      true,
+				ExitedSince: "not-a-timestamp",
+			},
+			want: true,
+		},
+		{
+			name: "future exited timestamp does not escalate",
+			snapshot: PaneCapture{
+				Exited:      true,
+				ExitedSince: now.Add(time.Minute).Format(time.RFC3339),
+			},
+			want: false,
+		},
+		{
+			name: "recent exited timestamp does not escalate",
+			snapshot: PaneCapture{
+				Exited:      true,
+				ExitedSince: now.Add(-5 * time.Second).Format(time.RFC3339),
+			},
+			want: false,
+		},
+		{
+			name: "stale exited timestamp escalates",
+			snapshot: PaneCapture{
+				Exited:      true,
+				ExitedSince: now.Add(-31 * time.Second).Format(time.RFC3339),
+			},
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got, want := d.shouldEscalateExitedPane(tt.snapshot, now), tt.want; got != want {
+				t.Fatalf("shouldEscalateExitedPane() = %v, want %v", got, want)
+			}
+		})
+	}
 }
