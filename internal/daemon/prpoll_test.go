@@ -713,6 +713,78 @@ func TestEnqueueNotifiesWorkerWhenRebaseFailsAndAllowsRequeue(t *testing.T) {
 	})
 }
 
+func TestEnqueueSkipsDuplicateChecksWhileCIPollInFlight(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	captureTicker := newFakeTicker()
+	pollTicker := newFakeTicker()
+	deps.tickers.enqueue(captureTicker, pollTicker)
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-689", "Implement daemon core", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	task, ok := deps.state.task("LAB-689")
+	if !ok {
+		t.Fatal("LAB-689 task missing from state")
+	}
+	task.PRNumber = 42
+	deps.state.putTaskForTest(task)
+
+	checkArgs := []string{"pr", "checks", "42", "--json", "bucket"}
+	deps.commands.queue("gh", []string{"pr", "update-branch", "42", "--rebase"}, ``, nil)
+	firstChecks := deps.commands.block("gh", checkArgs)
+	deps.commands.queue("gh", checkArgs, `[{"bucket":"pass"}]`, nil)
+	deps.commands.queue("gh", []string{"pr", "merge", "42", "--squash"}, ``, nil)
+
+	if _, err := d.Enqueue(ctx, 42); err != nil {
+		t.Fatalf("Enqueue(42) error = %v", err)
+	}
+
+	pollTicker.tick(deps.clock.Now())
+	waitFor(t, "queued PR awaiting checks", func() bool {
+		entry, err := deps.state.MergeEntry(context.Background(), "/tmp/project", 42)
+		return err == nil && entry != nil && entry.Status == MergeQueueStatusAwaitingChecks
+	})
+
+	pollTicker.tick(deps.clock.Now())
+	select {
+	case <-firstChecks.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for CI check poll to start")
+	}
+	waitFor(t, "queued PR checking CI", func() bool {
+		entry, err := deps.state.MergeEntry(context.Background(), "/tmp/project", 42)
+		return err == nil && entry != nil && entry.Status == MergeQueueStatusCheckingCI
+	})
+
+	secondChecks := deps.commands.block("gh", checkArgs)
+	pollTicker.tick(deps.clock.Now())
+	select {
+	case <-secondChecks.started:
+		t.Fatal("second CI poll started while first CI poll was still in flight")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	close(firstChecks.release)
+	waitFor(t, "queued PR merged after CI completes", func() bool {
+		return deps.commands.countCalls("gh", []string{"pr", "merge", "42", "--squash"}) == 1
+	})
+
+	if got, want := deps.commands.countCalls("gh", checkArgs), 1; got != want {
+		t.Fatalf("checks call count = %d, want %d", got, want)
+	}
+}
+
 func TestEnqueueSurvivesRestartUsingPersistedQueueState(t *testing.T) {
 	t.Parallel()
 

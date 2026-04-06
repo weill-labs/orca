@@ -49,8 +49,10 @@ func (a *mergeQueueActor) processQueue(ctx context.Context, msg ProcessQueue) {
 			})
 			go a.processRebase(ctx, entry)
 		case MergeQueueStatusAwaitingChecks:
+			entry.Status = MergeQueueStatusCheckingCI
+			a.sendUpdate(ctx, MergeQueueUpdate{Entry: entry})
 			go a.processAwaitingChecks(ctx, entry)
-		case MergeQueueStatusRebasing, MergeQueueStatusMerging:
+		case MergeQueueStatusCheckingCI, MergeQueueStatusRebasing, MergeQueueStatusMerging:
 			continue
 		default:
 			entry.Status = MergeQueueStatusQueued
@@ -78,6 +80,8 @@ func (a *mergeQueueActor) processRebase(ctx context.Context, entry MergeQueueEnt
 func (a *mergeQueueActor) processAwaitingChecks(ctx context.Context, entry MergeQueueEntry) {
 	ciState, err := lookupPRChecksState(ctx, a.commands, a.project, entry.PRNumber)
 	if err != nil {
+		entry.Status = MergeQueueStatusAwaitingChecks
+		a.sendUpdate(ctx, MergeQueueUpdate{Entry: entry})
 		return
 	}
 
@@ -107,6 +111,9 @@ func (a *mergeQueueActor) processAwaitingChecks(ctx context.Context, entry Merge
 			EventMessage:  fmt.Sprintf("required checks state is %s", ciState),
 			FailurePrompt: mergeQueueChecksFailedPrompt(entry.PRNumber),
 		})
+	default:
+		entry.Status = MergeQueueStatusAwaitingChecks
+		a.sendUpdate(ctx, MergeQueueUpdate{Entry: entry})
 	}
 }
 
@@ -159,7 +166,7 @@ func (d *Daemon) dispatchMergeQueue(ctx context.Context) {
 		}
 
 		switch entry.Status {
-		case MergeQueueStatusRebasing, MergeQueueStatusMerging:
+		case MergeQueueStatusCheckingCI, MergeQueueStatusRebasing, MergeQueueStatusMerging:
 			continue
 		default:
 			msg.Entries = append(msg.Entries, entry)
@@ -198,17 +205,21 @@ func (d *Daemon) applyMergeQueueUpdates(ctx context.Context) {
 }
 
 func (d *Daemon) applyMergeQueueUpdate(ctx context.Context, update MergeQueueUpdate) {
+	var persistenceErr error
 	if !update.Delete {
 		update.Entry.UpdatedAt = d.now()
 		if err := d.state.UpdateMergeEntry(ctx, update.Entry); err != nil && !errors.Is(err, ErrTaskNotFound) {
-			return
+			persistenceErr = err
 		}
 	} else {
 		if err := d.state.DeleteMergeEntry(ctx, d.project, update.Entry.PRNumber); err != nil && !errors.Is(err, ErrTaskNotFound) {
-			return
+			persistenceErr = err
 		}
 	}
 
+	if persistenceErr != nil && update.EventType == "" && update.FailurePrompt == "" {
+		return
+	}
 	if update.EventType == "" {
 		return
 	}
@@ -236,6 +247,8 @@ func (d *Daemon) resetMergeQueueTransientStatuses(ctx context.Context) {
 	for _, entry := range entries {
 		nextStatus := ""
 		switch entry.Status {
+		case MergeQueueStatusCheckingCI:
+			nextStatus = MergeQueueStatusAwaitingChecks
 		case MergeQueueStatusRebasing:
 			nextStatus = MergeQueueStatusQueued
 		case MergeQueueStatusMerging:

@@ -13,6 +13,8 @@ type fakeState struct {
 	tasks                 map[string]Task
 	workers               map[string]Worker
 	mergeQueue            []MergeQueueEntry
+	updateMergeErr        error
+	deleteMergeErr        error
 	events                []Event
 }
 
@@ -301,27 +303,15 @@ func (s *fakeState) MergeEntries(ctx context.Context, project string) ([]MergeQu
 	return entries, nil
 }
 
-func (s *fakeState) NextMergeEntry(ctx context.Context, project string) (*MergeQueueEntry, error) {
-	if s.rejectCanceledContext && ctx.Err() != nil {
-		return nil, ctx.Err()
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, entry := range s.mergeQueue {
-		if entry.Project == project {
-			copied := entry
-			return &copied, nil
-		}
-	}
-	return nil, nil
-}
-
 func (s *fakeState) UpdateMergeEntry(ctx context.Context, entry MergeQueueEntry) error {
 	if s.rejectCanceledContext && ctx.Err() != nil {
 		return ctx.Err()
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.updateMergeErr != nil {
+		return s.updateMergeErr
+	}
 	for i, existing := range s.mergeQueue {
 		if existing.Project == entry.Project && existing.PRNumber == entry.PRNumber {
 			s.mergeQueue[i] = entry
@@ -337,6 +327,9 @@ func (s *fakeState) DeleteMergeEntry(ctx context.Context, project string, prNumb
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.deleteMergeErr != nil {
+		return s.deleteMergeErr
+	}
 	for i, entry := range s.mergeQueue {
 		if entry.Project == project && entry.PRNumber == prNumber {
 			s.mergeQueue = append(s.mergeQueue[:i], s.mergeQueue[i+1:]...)

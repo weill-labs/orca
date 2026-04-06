@@ -712,25 +712,6 @@ func (s *SQLiteStore) EnqueueMergeEntry(ctx context.Context, entry MergeQueueEnt
 	return position, nil
 }
 
-func (s *SQLiteStore) NextMergeEntry(ctx context.Context, project string) (*MergeQueueEntry, error) {
-	row := s.db.QueryRowContext(ctx, `
-		SELECT project, issue, pr_number, status, created_at, updated_at
-		FROM merge_queue
-		WHERE project = ?
-		ORDER BY created_at ASC, pr_number ASC
-		LIMIT 1
-	`, project)
-
-	entry, err := scanMergeQueueEntry(row)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("next merge entry: %w", err)
-	}
-	return &entry, nil
-}
-
 func (s *SQLiteStore) MergeEntry(ctx context.Context, project string, prNumber int) (*MergeQueueEntry, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT project, issue, pr_number, status, created_at, updated_at

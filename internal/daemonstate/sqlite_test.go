@@ -418,12 +418,12 @@ func TestSQLiteStorePersistsWorkerMonitorStateAndMergeQueue(t *testing.T) {
 		t.Fatalf("position = %d, want %d", got, want)
 	}
 
-	entry, err := store.NextMergeEntry(context.Background(), project)
+	entry, err := store.MergeEntry(context.Background(), project, 42)
 	if err != nil {
-		t.Fatalf("NextMergeEntry() error = %v", err)
+		t.Fatalf("MergeEntry() error = %v", err)
 	}
 	if entry == nil {
-		t.Fatal("NextMergeEntry() = nil, want entry")
+		t.Fatal("MergeEntry() = nil, want entry")
 	}
 	if got, want := entry.PRNumber, 42; got != want {
 		t.Fatalf("entry.PRNumber = %d, want %d", got, want)
@@ -449,12 +449,12 @@ func TestSQLiteStorePersistsWorkerMonitorStateAndMergeQueue(t *testing.T) {
 		t.Fatalf("UpdateMergeEntry() error = %v", err)
 	}
 
-	updatedEntry, err := store.NextMergeEntry(context.Background(), project)
+	updatedEntry, err := store.MergeEntry(context.Background(), project, 42)
 	if err != nil {
-		t.Fatalf("NextMergeEntry() after update error = %v", err)
+		t.Fatalf("MergeEntry() after update error = %v", err)
 	}
 	if updatedEntry == nil {
-		t.Fatal("NextMergeEntry() after update = nil, want entry")
+		t.Fatal("MergeEntry() after update = nil, want entry")
 	}
 	if got, want := updatedEntry.Status, "awaiting_checks"; got != want {
 		t.Fatalf("updatedEntry.Status = %q, want %q", got, want)
@@ -463,12 +463,12 @@ func TestSQLiteStorePersistsWorkerMonitorStateAndMergeQueue(t *testing.T) {
 	if err := store.DeleteMergeEntry(context.Background(), project, 42); err != nil {
 		t.Fatalf("DeleteMergeEntry() error = %v", err)
 	}
-	emptyEntry, err := store.NextMergeEntry(context.Background(), project)
+	emptyEntry, err := store.MergeEntry(context.Background(), project, 42)
 	if err != nil {
-		t.Fatalf("NextMergeEntry() after delete error = %v", err)
+		t.Fatalf("MergeEntry() after delete error = %v", err)
 	}
 	if emptyEntry != nil {
-		t.Fatalf("NextMergeEntry() after delete = %#v, want nil", emptyEntry)
+		t.Fatalf("MergeEntry() after delete = %#v, want nil", emptyEntry)
 	}
 }
 

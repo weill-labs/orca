@@ -303,24 +303,6 @@ func (a *sqliteStateAdapter) EnqueueMerge(ctx context.Context, entry MergeQueueE
 	})
 }
 
-func (a *sqliteStateAdapter) NextMergeEntry(ctx context.Context, project string) (*MergeQueueEntry, error) {
-	entry, err := a.store.NextMergeEntry(ctx, project)
-	if err != nil {
-		return nil, err
-	}
-	if entry == nil {
-		return nil, nil
-	}
-	return &MergeQueueEntry{
-		Project:   entry.Project,
-		Issue:     entry.Issue,
-		PRNumber:  entry.PRNumber,
-		Status:    entry.Status,
-		CreatedAt: entry.CreatedAt,
-		UpdatedAt: entry.UpdatedAt,
-	}, nil
-}
-
 func (a *sqliteStateAdapter) MergeEntry(ctx context.Context, project string, prNumber int) (*MergeQueueEntry, error) {
 	entry, err := a.store.MergeEntry(ctx, project, prNumber)
 	if err != nil {

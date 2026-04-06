@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 )
@@ -255,4 +256,77 @@ func TestRestartDropsMergedQueueEntryWithoutFailureNotice(t *testing.T) {
 		task, ok := deps.state.task("LAB-689")
 		return ok && task.Status == TaskStatusDone
 	})
+}
+
+func TestApplyMergeQueueUpdateStillNotifiesWorkerWhenDeleteFails(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+
+	now := deps.clock.Now()
+	task := Task{
+		Project:      "/tmp/project",
+		Issue:        "LAB-689",
+		Status:       TaskStatusActive,
+		Prompt:       "Implement merge queue",
+		PaneID:       "pane-1",
+		PaneName:     "worker-1",
+		CloneName:    "clone-01",
+		ClonePath:    deps.pool.clone.Path,
+		Branch:       "LAB-689",
+		AgentProfile: "codex",
+		PRNumber:     42,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+	deps.state.putTaskForTest(task)
+	if err := deps.state.PutWorker(ctx, Worker{
+		Project:        "/tmp/project",
+		PaneID:         "pane-1",
+		PaneName:       "worker-1",
+		Issue:          "LAB-689",
+		ClonePath:      deps.pool.clone.Path,
+		AgentProfile:   "codex",
+		Health:         WorkerHealthHealthy,
+		LastActivityAt: now,
+		UpdatedAt:      now,
+	}); err != nil {
+		t.Fatalf("PutWorker() error = %v", err)
+	}
+	deps.state.mergeQueue = []MergeQueueEntry{
+		{
+			Project:   "/tmp/project",
+			Issue:     "LAB-689",
+			PRNumber:  42,
+			Status:    MergeQueueStatusAwaitingChecks,
+			CreatedAt: now,
+			UpdatedAt: now,
+		},
+	}
+	deps.state.deleteMergeErr = errors.New("delete merge entry: sqlite busy")
+
+	d.applyMergeQueueUpdate(ctx, MergeQueueUpdate{
+		Entry: MergeQueueEntry{
+			Project:  "/tmp/project",
+			Issue:    "LAB-689",
+			PRNumber: 42,
+			Status:   MergeQueueStatusAwaitingChecks,
+		},
+		Delete:        true,
+		EventType:     EventPRLandingFailed,
+		EventMessage:  "required checks state is fail",
+		FailurePrompt: mergeQueueChecksFailedPrompt(42),
+	})
+
+	waitFor(t, "worker failure prompt despite delete error", func() bool {
+		return deps.amux.countKey("pane-1", mergeQueueChecksFailedPrompt(42)+"\n") == 1
+	})
+	if got, want := deps.events.countType(EventPRLandingFailed), 1; got != want {
+		t.Fatalf("landing failed event count = %d, want %d", got, want)
+	}
+	if message := deps.events.lastMessage(EventPRLandingFailed); message != "required checks state is fail" {
+		t.Fatalf("landing failed message = %q, want %q", message, "required checks state is fail")
+	}
 }

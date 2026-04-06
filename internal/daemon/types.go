@@ -25,6 +25,7 @@ const (
 
 	MergeQueueStatusQueued         = "queued"
 	MergeQueueStatusAwaitingChecks = "awaiting_checks"
+	MergeQueueStatusCheckingCI     = "checking_ci"
 	MergeQueueStatusRebasing       = "rebasing"
 	MergeQueueStatusMerging        = "merging"
 
@@ -101,7 +102,6 @@ type StateStore interface {
 	EnqueueMerge(ctx context.Context, entry MergeQueueEntry) (int, error)
 	MergeEntry(ctx context.Context, project string, prNumber int) (*MergeQueueEntry, error)
 	MergeEntries(ctx context.Context, project string) ([]MergeQueueEntry, error)
-	NextMergeEntry(ctx context.Context, project string) (*MergeQueueEntry, error)
 	UpdateMergeEntry(ctx context.Context, entry MergeQueueEntry) error
 	DeleteMergeEntry(ctx context.Context, project string, prNumber int) error
 	RecordEvent(ctx context.Context, event Event) error
