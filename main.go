@@ -17,11 +17,46 @@ import (
 // BuildCommit is set by goreleaser at build time.
 var BuildCommit string
 
+type stateStore interface {
+	state.Store
+	Close() error
+}
+
+type appRunner interface {
+	Run(context.Context, []string) error
+}
+
+type runDependencies struct {
+	resolvePaths      func() (daemon.Paths, error)
+	openStateStore    func(string) (stateStore, error)
+	newController     func(daemon.ControllerOptions) (daemon.Controller, error)
+	newApp            func(cli.Options) appRunner
+	runDaemonProcess  func([]string) error
+}
+
+var defaultRunDependencies = runDependencies{
+	resolvePaths: daemon.ResolvePaths,
+	openStateStore: func(path string) (stateStore, error) {
+		return state.OpenSQLite(path)
+	},
+	newController: func(options daemon.ControllerOptions) (daemon.Controller, error) {
+		return daemon.NewLocalController(options)
+	},
+	newApp: func(options cli.Options) appRunner {
+		return cli.New(options)
+	},
+	runDaemonProcess: runDaemonProcess,
+}
+
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
+	return runWithDeps(args, stdout, stderr, defaultRunDependencies)
+}
+
+func runWithDeps(args []string, stdout, stderr io.Writer, deps runDependencies) int {
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, cli.UsageText())
 		return 1
@@ -35,7 +70,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	if args[0] == "__daemon-serve" {
-		if err := runDaemonProcess(args[1:]); err != nil {
+		if err := deps.runDaemonProcess(args[1:]); err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
@@ -47,20 +82,20 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 
-	paths, err := daemon.ResolvePaths()
+	paths, err := deps.resolvePaths()
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
 
-	store, err := state.OpenSQLite(paths.StateDB)
+	store, err := deps.openStateStore(paths.StateDB)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
 	defer store.Close()
 
-	controller, err := daemon.NewLocalController(daemon.ControllerOptions{
+	controller, err := deps.newController(daemon.ControllerOptions{
 		Store: store,
 		Paths: paths,
 	})
@@ -69,7 +104,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	app := cli.New(cli.Options{
+	app := deps.newApp(cli.Options{
 		Daemon:  controller,
 		State:   store,
 		Stdout:  stdout,
