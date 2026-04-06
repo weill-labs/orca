@@ -77,13 +77,13 @@ func TestCLIClientSpawn(t *testing.T) {
 			},
 			wantCmds: []recordedCommand{
 				{name: "/usr/local/bin/amux", args: []string{"-s", "override-session", "spawn", "--at", "lead-pane", "--name", "clone-01"}},
-				{name: "/usr/local/bin/amux", args: []string{"-s", "orca-dev", "send-keys", "7", "--delay-final", "250ms", "cd '/tmp/clone-01'"}},
-				{name: "/usr/local/bin/amux", args: []string{"-s", "orca-dev", "send-keys", "7", "--delay-final", "250ms", "Enter"}},
-				{name: "/usr/local/bin/amux", args: []string{"-s", "orca-dev", "wait", "idle", "7", "--timeout", "5s"}},
-				{name: "/usr/local/bin/amux", args: []string{"-s", "orca-dev", "send-keys", "7", "--delay-final", "250ms", "codex --yolo"}},
-				{name: "/usr/local/bin/amux", args: []string{"-s", "orca-dev", "send-keys", "7", "--delay-final", "250ms", "Enter"}},
+				{name: "/usr/local/bin/amux", args: []string{"-s", "orca-dev", "send-keys", "clone-01", "--delay-final", "250ms", "cd '/tmp/clone-01'"}},
+				{name: "/usr/local/bin/amux", args: []string{"-s", "orca-dev", "send-keys", "clone-01", "--delay-final", "250ms", "Enter"}},
+				{name: "/usr/local/bin/amux", args: []string{"-s", "orca-dev", "wait", "idle", "clone-01", "--timeout", "5s"}},
+				{name: "/usr/local/bin/amux", args: []string{"-s", "orca-dev", "send-keys", "clone-01", "--delay-final", "250ms", "codex --yolo"}},
+				{name: "/usr/local/bin/amux", args: []string{"-s", "orca-dev", "send-keys", "clone-01", "--delay-final", "250ms", "Enter"}},
 			},
-			wantPane: Pane{ID: "7", Name: "clone-01"},
+			wantPane: Pane{ID: "clone-01", Name: "clone-01"},
 		},
 		{
 			name: "spawns in the lead pane window",
@@ -100,13 +100,13 @@ func TestCLIClientSpawn(t *testing.T) {
 			},
 			wantCmds: []recordedCommand{
 				{name: "amux", args: []string{"-s", "default", "spawn", "--at", "lead-pane", "--name", "worker-2"}},
-				{name: "amux", args: []string{"-s", "default", "send-keys", "12", "--delay-final", "250ms", "cd '/tmp/worker-2'"}},
-				{name: "amux", args: []string{"-s", "default", "send-keys", "12", "--delay-final", "250ms", "Enter"}},
-				{name: "amux", args: []string{"-s", "default", "wait", "idle", "12", "--timeout", "5s"}},
-				{name: "amux", args: []string{"-s", "default", "send-keys", "12", "--delay-final", "250ms", "claude --dangerously-skip-permissions"}},
-				{name: "amux", args: []string{"-s", "default", "send-keys", "12", "--delay-final", "250ms", "Enter"}},
+				{name: "amux", args: []string{"-s", "default", "send-keys", "worker-2", "--delay-final", "250ms", "cd '/tmp/worker-2'"}},
+				{name: "amux", args: []string{"-s", "default", "send-keys", "worker-2", "--delay-final", "250ms", "Enter"}},
+				{name: "amux", args: []string{"-s", "default", "wait", "idle", "worker-2", "--timeout", "5s"}},
+				{name: "amux", args: []string{"-s", "default", "send-keys", "worker-2", "--delay-final", "250ms", "claude --dangerously-skip-permissions"}},
+				{name: "amux", args: []string{"-s", "default", "send-keys", "worker-2", "--delay-final", "250ms", "Enter"}},
 			},
-			wantPane: Pane{ID: "12", Name: "worker-2"},
+			wantPane: Pane{ID: "worker-2", Name: "worker-2"},
 		},
 		{
 			name: "spawns without an explicit lead pane",
@@ -122,13 +122,13 @@ func TestCLIClientSpawn(t *testing.T) {
 			},
 			wantCmds: []recordedCommand{
 				{name: "amux", args: []string{"-s", "default", "spawn", "--root", "--name", "worker-implicit"}},
-				{name: "amux", args: []string{"-s", "default", "send-keys", "14", "--delay-final", "250ms", "cd '/tmp/worker-implicit'"}},
-				{name: "amux", args: []string{"-s", "default", "send-keys", "14", "--delay-final", "250ms", "Enter"}},
-				{name: "amux", args: []string{"-s", "default", "wait", "idle", "14", "--timeout", "5s"}},
-				{name: "amux", args: []string{"-s", "default", "send-keys", "14", "--delay-final", "250ms", "claude --dangerously-skip-permissions"}},
-				{name: "amux", args: []string{"-s", "default", "send-keys", "14", "--delay-final", "250ms", "Enter"}},
+				{name: "amux", args: []string{"-s", "default", "send-keys", "worker-implicit", "--delay-final", "250ms", "cd '/tmp/worker-implicit'"}},
+				{name: "amux", args: []string{"-s", "default", "send-keys", "worker-implicit", "--delay-final", "250ms", "Enter"}},
+				{name: "amux", args: []string{"-s", "default", "wait", "idle", "worker-implicit", "--timeout", "5s"}},
+				{name: "amux", args: []string{"-s", "default", "send-keys", "worker-implicit", "--delay-final", "250ms", "claude --dangerously-skip-permissions"}},
+				{name: "amux", args: []string{"-s", "default", "send-keys", "worker-implicit", "--delay-final", "250ms", "Enter"}},
 			},
-			wantPane: Pane{ID: "14", Name: "worker-implicit"},
+			wantPane: Pane{ID: "worker-implicit", Name: "worker-implicit"},
 		},
 		{
 			name: "respects explicit worker names",
@@ -236,15 +236,15 @@ func TestCLIClientSpawnDoesNotInspectSessionLayout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn() error = %v", err)
 	}
-	if gotPane != (Pane{ID: "7", Name: "clone-01"}) {
-		t.Fatalf("Spawn() pane = %#v, want pane 7 clone-01", gotPane)
+	if gotPane != (Pane{ID: "clone-01", Name: "clone-01"}) {
+		t.Fatalf("Spawn() pane = %#v, want named pane clone-01", gotPane)
 	}
 
 	wantCmds := []recordedCommand{
 		{name: "amux", args: []string{"-s", "orca-dev", "spawn", "--at", "lead-pane", "--name", "clone-01"}},
-		{name: "amux", args: []string{"-s", "orca-dev", "send-keys", "7", "--delay-final", "250ms", "cd '/tmp/clone-01'"}},
-		{name: "amux", args: []string{"-s", "orca-dev", "send-keys", "7", "--delay-final", "250ms", "Enter"}},
-		{name: "amux", args: []string{"-s", "orca-dev", "wait", "idle", "7", "--timeout", "5s"}},
+		{name: "amux", args: []string{"-s", "orca-dev", "send-keys", "clone-01", "--delay-final", "250ms", "cd '/tmp/clone-01'"}},
+		{name: "amux", args: []string{"-s", "orca-dev", "send-keys", "clone-01", "--delay-final", "250ms", "Enter"}},
+		{name: "amux", args: []string{"-s", "orca-dev", "wait", "idle", "clone-01", "--timeout", "5s"}},
 	}
 	if !reflect.DeepEqual(runner.calls, wantCmds) {
 		t.Fatalf("Spawn() commands = %#v, want %#v", runner.calls, wantCmds)
@@ -361,8 +361,8 @@ func TestCLIClientListPanes(t *testing.T) {
 
 	wantCmds := []recordedCommand{
 		{name: "amux", args: []string{"-s", "orca-dev", "list", "--no-cwd"}},
-		{name: "amux", args: []string{"-s", "orca-dev", "capture", "--format", "json", "1"}},
-		{name: "amux", args: []string{"-s", "orca-dev", "capture", "--format", "json", "2"}},
+		{name: "amux", args: []string{"-s", "orca-dev", "capture", "--format", "json", "worker-LAB-711"}},
+		{name: "amux", args: []string{"-s", "orca-dev", "capture", "--format", "json", "worker-LAB-712"}},
 	}
 	if !reflect.DeepEqual(runner.calls, wantCmds) {
 		t.Fatalf("ListPanes() commands = %#v, want %#v", runner.calls, wantCmds)
@@ -400,10 +400,34 @@ func TestCLIClientListPanesErrorsAndFallbacks(t *testing.T) {
 			runner: &fakeRunner{
 				queue: []runnerResult{
 					{output: []byte(validHeader + "\n" + validRow + "\n")},
+					{output: []byte(`{"error":{"message":"denied"}}`)},
+				},
+			},
+			wantErr: "capture pane worker-LAB-711: capture failed: denied",
+		},
+		{
+			name: "skips missing panes",
+			runner: &fakeRunner{
+				queue: []runnerResult{
+					{output: []byte(validHeader + "\n" + validRow + "\n")},
 					{output: []byte(`{"error":{"message":"pane missing"}}`)},
 				},
 			},
-			wantErr: "capture pane 1: capture failed: pane missing",
+			wantPanes: []Pane{
+				{ID: "1", Name: "worker-LAB-711"},
+			},
+		},
+		{
+			name: "skips eof capture failures",
+			runner: &fakeRunner{
+				queue: []runnerResult{
+					{output: []byte(validHeader + "\n" + validRow + "\n")},
+					{output: []byte("amux capture: EOF"), err: errors.New("exit status 1")},
+				},
+			},
+			wantPanes: []Pane{
+				{ID: "1", Name: "worker-LAB-711"},
+			},
 		},
 		{
 			name: "preserves list name when capture omits it",
