@@ -7,12 +7,15 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	amuxapi "github.com/weill-labs/orca/internal/amux"
 )
 
 type fakeAmux struct {
 	mu                    sync.Mutex
 	spawnPane             Pane
 	spawnResults          []Pane
+	spawnPanes            []Pane
 	paneExists            map[string]bool
 	paneExistsErr         error
 	listPanes             []Pane
@@ -26,7 +29,8 @@ type fakeAmux struct {
 	waitIdleErr           error
 	waitIdleHook          func(paneID string, timeout time.Duration)
 	waitContentErr        error
-	waitContentHook       func(paneID, content string, timeout time.Duration)
+	waitContentResults    []error
+	waitContentHook       func(paneID, substring string, timeout time.Duration)
 	capturePaneErr        error
 	rejectCanceledContext bool
 	spawnRequests         []SpawnRequest
@@ -50,9 +54,9 @@ type waitIdleCall struct {
 }
 
 type waitContentCall struct {
-	PaneID  string
-	Content string
-	Timeout time.Duration
+	PaneID    string
+	Substring string
+	Timeout   time.Duration
 }
 
 func (a *fakeAmux) Spawn(ctx context.Context, req SpawnRequest) (Pane, error) {
@@ -67,6 +71,15 @@ func (a *fakeAmux) Spawn(ctx context.Context, req SpawnRequest) (Pane, error) {
 	}
 	if a.sentKeys == nil {
 		a.sentKeys = make(map[string][]string)
+	}
+	if len(a.spawnPanes) > 0 {
+		pane := a.spawnPanes[0]
+		if len(a.spawnPanes) == 1 {
+			a.spawnPanes = nil
+		} else {
+			a.spawnPanes = append([]Pane(nil), a.spawnPanes[1:]...)
+		}
+		return pane, nil
 	}
 	if len(a.spawnResults) > 0 {
 		pane := a.spawnResults[0]
@@ -263,20 +276,28 @@ func (a *fakeAmux) WaitIdle(ctx context.Context, paneID string, timeout time.Dur
 	return a.waitIdleErr
 }
 
-func (a *fakeAmux) WaitContent(ctx context.Context, paneID, content string, timeout time.Duration) error {
+func (a *fakeAmux) WaitContent(ctx context.Context, paneID, substring string, timeout time.Duration) error {
 	if a.rejectCanceledContext && ctx.Err() != nil {
 		return ctx.Err()
 	}
 	if a.waitContentHook != nil {
-		a.waitContentHook(paneID, content, timeout)
+		a.waitContentHook(paneID, substring, timeout)
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.waitContentCalls = append(a.waitContentCalls, waitContentCall{
-		PaneID:  paneID,
-		Content: content,
-		Timeout: timeout,
+		PaneID:    paneID,
+		Substring: substring,
+		Timeout:   timeout,
 	})
+	if len(a.waitContentResults) > 0 {
+		err := a.waitContentResults[0]
+		a.waitContentResults = a.waitContentResults[1:]
+		return err
+	}
+	if a.waitContentErr == nil {
+		return amuxapi.ErrWaitContentTimeout
+	}
 	return a.waitContentErr
 }
 
@@ -346,6 +367,36 @@ func (a *fakeAmux) captureHistoryCount(paneID string) int {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.historyCaptureCalls[paneID]
+}
+
+func (a *fakeAmux) spawnCount() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return len(a.spawnRequests)
+}
+
+func (a *fakeAmux) waitIdleCount(paneID string) int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	count := 0
+	for _, call := range a.waitIdleCalls {
+		if call.PaneID == paneID {
+			count++
+		}
+	}
+	return count
+}
+
+func (a *fakeAmux) waitContentCount(paneID string) int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	count := 0
+	for _, call := range a.waitContentCalls {
+		if call.PaneID == paneID {
+			count++
+		}
+	}
+	return count
 }
 
 func (a *fakeAmux) requireMetadata(t *testing.T, paneID string, want map[string]string) {

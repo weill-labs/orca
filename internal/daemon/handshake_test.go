@@ -3,10 +3,15 @@ package daemon
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	amuxapi "github.com/weill-labs/orca/internal/amux"
 )
 
 func TestAssignConfirmsCodexTrustPromptBeforeSendingPrompt(t *testing.T) {
@@ -14,7 +19,11 @@ func TestAssignConfirmsCodexTrustPromptBeforeSendingPrompt(t *testing.T) {
 
 	deps := newTestDeps(t)
 	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
-	deps.amux.captureSequence("pane-1", []string{"Do you trust this folder?"})
+	deps.amux.waitContentResults = []error{
+		nil,
+		amuxapi.ErrWaitContentTimeout,
+	}
+	deps.amux.captureSequence("pane-1", []string{"Codex is ready."})
 	d := deps.newDaemon(t)
 	ctx := context.Background()
 
@@ -35,13 +44,19 @@ func TestAssignConfirmsCodexTrustPromptBeforeSendingPrompt(t *testing.T) {
 	})
 
 	deps.amux.requireSentKeys(t, "pane-1", []string{"Enter", "Implement handshake", "Enter"})
-	if got, want := deps.amux.captureCount("pane-1"), 2; got != want {
+	if got, want := deps.amux.captureCount("pane-1"), 1; got != want {
 		t.Fatalf("capture count = %d, want %d", got, want)
 	}
+	if got, want := deps.amux.waitContentCalls, []waitContentCall{
+		{PaneID: "pane-1", Substring: "do you trust", Timeout: defaultTrustPromptTimeout},
+		{PaneID: "pane-1", Substring: "do you trust", Timeout: defaultTrustPromptTimeout},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("waitContent calls = %#v, want %#v", got, want)
+	}
 	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
-		{PaneID: "pane-1", Timeout: 30 * time.Second},
-		{PaneID: "pane-1", Timeout: 30 * time.Second},
-		{PaneID: "pane-1", Timeout: 30 * time.Second},
+		{PaneID: "pane-1", Timeout: defaultAgentHandshakeTimeout},
+		{PaneID: "pane-1", Timeout: defaultAgentHandshakeTimeout},
+		{PaneID: "pane-1", Timeout: defaultAgentHandshakeTimeout},
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("waitIdle calls = %#v, want %#v", got, want)
 	}
@@ -52,6 +67,7 @@ func TestAssignDoesNotBlindlyConfirmWhenTrustPromptNotPresent(t *testing.T) {
 
 	deps := newTestDeps(t)
 	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	deps.amux.waitContentErr = amuxapi.ErrWaitContentTimeout
 	deps.amux.captureSequence("pane-1", []string{"Codex is ready."})
 	d := deps.newDaemon(t)
 	ctx := context.Background()
@@ -73,9 +89,14 @@ func TestAssignDoesNotBlindlyConfirmWhenTrustPromptNotPresent(t *testing.T) {
 	})
 
 	deps.amux.requireSentKeys(t, "pane-1", []string{"Implement handshake\n"})
+	if got, want := deps.amux.waitContentCalls, []waitContentCall{
+		{PaneID: "pane-1", Substring: "do you trust", Timeout: defaultTrustPromptTimeout},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("waitContent calls = %#v, want %#v", got, want)
+	}
 	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
-		{PaneID: "pane-1", Timeout: 30 * time.Second},
-		{PaneID: "pane-1", Timeout: 30 * time.Second},
+		{PaneID: "pane-1", Timeout: defaultAgentHandshakeTimeout},
+		{PaneID: "pane-1", Timeout: defaultAgentHandshakeTimeout},
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("waitIdle calls = %#v, want %#v", got, want)
 	}
@@ -86,6 +107,11 @@ func TestAssignResumesCodexBeforeSendingPrompt(t *testing.T) {
 
 	deps := newTestDeps(t)
 	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	deps.amux.waitContentResults = []error{
+		amuxapi.ErrWaitContentTimeout,
+		nil,
+		amuxapi.ErrWaitContentTimeout,
+	}
 	deps.amux.captureSequence("pane-1", []string{"Resume your previous session"})
 	d := deps.newDaemon(t)
 	ctx := context.Background()
@@ -112,14 +138,16 @@ func TestAssignResumesCodexBeforeSendingPrompt(t *testing.T) {
 		"Implement resume flow\n",
 	})
 	if got, want := deps.amux.waitContentCalls, []waitContentCall{
-		{PaneID: "pane-1", Content: "›", Timeout: 30 * time.Second},
+		{PaneID: "pane-1", Substring: "do you trust", Timeout: defaultTrustPromptTimeout},
+		{PaneID: "pane-1", Substring: "›", Timeout: defaultAgentHandshakeTimeout},
+		{PaneID: "pane-1", Substring: "do you trust", Timeout: defaultTrustPromptTimeout},
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("waitContent calls = %#v, want %#v", got, want)
 	}
 	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
-		{PaneID: "pane-1", Timeout: 30 * time.Second},
-		{PaneID: "pane-1", Timeout: 30 * time.Second},
-		{PaneID: "pane-1", Timeout: 30 * time.Second},
+		{PaneID: "pane-1", Timeout: defaultAgentHandshakeTimeout},
+		{PaneID: "pane-1", Timeout: defaultAgentHandshakeTimeout},
+		{PaneID: "pane-1", Timeout: defaultAgentHandshakeTimeout},
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("waitIdle calls = %#v, want %#v", got, want)
 	}
@@ -248,8 +276,376 @@ func TestResumeAgentInPaneReturnsWaitContentError(t *testing.T) {
 
 	deps.amux.requireSentKeys(t, "pane-1", []string{"codex --yolo resume\n"})
 	if got, want := deps.amux.waitContentCalls, []waitContentCall{
-		{PaneID: "pane-1", Content: "›", Timeout: 30 * time.Second},
+		{PaneID: "pane-1", Substring: "›", Timeout: defaultAgentHandshakeTimeout},
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("waitContent calls = %#v, want %#v", got, want)
+	}
+}
+
+func TestConfirmTrustPromptIfPresentIgnoresProfilesWithoutTrustPrompt(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	d := deps.newDaemon(t)
+
+	confirmed, err := d.confirmTrustPromptIfPresent(context.Background(), "pane-1", AgentProfile{Name: "claude"})
+	if err != nil {
+		t.Fatalf("confirmTrustPromptIfPresent() error = %v", err)
+	}
+	if confirmed {
+		t.Fatal("confirmTrustPromptIfPresent() = true, want false")
+	}
+	if got, want := len(deps.amux.waitContentCalls), 0; got != want {
+		t.Fatalf("waitContent calls = %d, want %d", got, want)
+	}
+}
+
+func TestConfirmTrustPromptIfPresentReturnsWaitContentError(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.amux.waitContentErr = errors.New("wait failed")
+	d := deps.newDaemon(t)
+
+	confirmed, err := d.confirmTrustPromptIfPresent(context.Background(), "pane-1", AgentProfile{Name: "codex"})
+	if confirmed {
+		t.Fatal("confirmTrustPromptIfPresent() = true, want false")
+	}
+	if err == nil || !strings.Contains(err.Error(), "wait for trust prompt: wait failed") {
+		t.Fatalf("confirmTrustPromptIfPresent() error = %v, want wrapped wait-content failure", err)
+	}
+}
+
+func TestConfirmTrustPromptIfPresentReturnsSendKeysError(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.amux.waitContentResults = []error{nil}
+	deps.amux.sendKeysErr = errors.New("send failed")
+	d := deps.newDaemon(t)
+
+	confirmed, err := d.confirmTrustPromptIfPresent(context.Background(), "pane-1", AgentProfile{Name: "codex"})
+	if confirmed {
+		t.Fatal("confirmTrustPromptIfPresent() = true, want false")
+	}
+	if err == nil || !strings.Contains(err.Error(), "confirm trust prompt: send failed") {
+		t.Fatalf("confirmTrustPromptIfPresent() error = %v, want wrapped send failure", err)
+	}
+}
+
+func TestConfirmTrustPromptIfPresentReturnsWaitIdleErrorAfterConfirmation(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.amux.waitContentResults = []error{nil}
+	deps.amux.waitIdleErr = errors.New("idle failed")
+	d := deps.newDaemon(t)
+
+	confirmed, err := d.confirmTrustPromptIfPresent(context.Background(), "pane-1", AgentProfile{Name: "codex"})
+	if confirmed {
+		t.Fatal("confirmTrustPromptIfPresent() = true, want false")
+	}
+	if err == nil || !strings.Contains(err.Error(), "wait for post-startup action idle: idle failed") {
+		t.Fatalf("confirmTrustPromptIfPresent() error = %v, want wrapped idle failure", err)
+	}
+}
+
+func TestEmitHandshakeEventUsesWorkerMetadataBeforeTaskFallback(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+
+	if err := deps.state.PutWorker(ctx, Worker{
+		Project:      d.project,
+		PaneID:       "pane-1",
+		PaneName:     "worker-pane",
+		Issue:        "LAB-WORKER",
+		AgentProfile: "codex",
+	}); err != nil {
+		t.Fatalf("PutWorker() error = %v", err)
+	}
+	if err := deps.state.PutTask(ctx, Task{
+		Project:      d.project,
+		Issue:        "LAB-TASK",
+		PaneID:       "pane-1",
+		PaneName:     "task-pane",
+		CloneName:    "clone-01",
+		ClonePath:    "/tmp/clone-01",
+		Branch:       "LAB-TASK",
+		AgentProfile: "aider",
+		CreatedAt:    deps.clock.Now(),
+		UpdatedAt:    deps.clock.Now(),
+	}); err != nil {
+		t.Fatalf("PutTask() error = %v", err)
+	}
+
+	d.emitHandshakeEvent(ctx, "pane-1", AgentProfile{}, handshakeStepWait)
+
+	got := deps.events.eventsByType(EventWorkerHandshake)
+	if len(got) != 1 {
+		t.Fatalf("handshake events = %d, want 1", len(got))
+	}
+	event := got[0]
+	if event.Issue != "LAB-WORKER" {
+		t.Fatalf("event.Issue = %q, want %q", event.Issue, "LAB-WORKER")
+	}
+	if event.PaneName != "worker-pane" {
+		t.Fatalf("event.PaneName = %q, want %q", event.PaneName, "worker-pane")
+	}
+	if event.AgentProfile != "codex" {
+		t.Fatalf("event.AgentProfile = %q, want %q", event.AgentProfile, "codex")
+	}
+	if event.CloneName != "clone-01" || event.ClonePath != "/tmp/clone-01" || event.Branch != "LAB-TASK" {
+		t.Fatalf("event clone metadata = %#v, want task clone metadata", event)
+	}
+}
+
+func TestEmitHandshakeEventFallsBackToTaskMetadata(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+
+	if err := deps.state.PutTask(ctx, Task{
+		Project:      d.project,
+		Issue:        "LAB-TASK",
+		PaneID:       "pane-1",
+		PaneName:     "task-pane",
+		CloneName:    "clone-01",
+		ClonePath:    "/tmp/clone-01",
+		Branch:       "LAB-TASK",
+		AgentProfile: "codex",
+		CreatedAt:    deps.clock.Now(),
+		UpdatedAt:    deps.clock.Now(),
+	}); err != nil {
+		t.Fatalf("PutTask() error = %v", err)
+	}
+
+	d.emitHandshakeEvent(ctx, "pane-1", AgentProfile{}, handshakeStepWaitTrustContent)
+
+	got := deps.events.eventsByType(EventWorkerHandshake)
+	if len(got) != 1 {
+		t.Fatalf("handshake events = %d, want 1", len(got))
+	}
+	event := got[0]
+	if event.Issue != "LAB-TASK" {
+		t.Fatalf("event.Issue = %q, want %q", event.Issue, "LAB-TASK")
+	}
+	if event.PaneName != "task-pane" {
+		t.Fatalf("event.PaneName = %q, want %q", event.PaneName, "task-pane")
+	}
+	if event.AgentProfile != "codex" {
+		t.Fatalf("event.AgentProfile = %q, want %q", event.AgentProfile, "codex")
+	}
+	if event.CloneName != "clone-01" || event.ClonePath != "/tmp/clone-01" || event.Branch != "LAB-TASK" {
+		t.Fatalf("event clone metadata = %#v, want task clone metadata", event)
+	}
+}
+
+func TestHandshakePromptDetectionHelpers(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		profile    AgentProfile
+		output     string
+		wantTrust  bool
+		wantResume bool
+	}{
+		{
+			name:       "codex detects trust prompt and resume prompt",
+			profile:    AgentProfile{Name: "codex", ResumeSequence: []string{"codex --yolo resume", "Enter", "."}},
+			output:     "Do you trust this folder? Resume your previous session",
+			wantTrust:  true,
+			wantResume: true,
+		},
+		{
+			name:       "codex without resume sequence ignores resume prompt",
+			profile:    AgentProfile{Name: "codex"},
+			output:     "Resume your previous session",
+			wantTrust:  false,
+			wantResume: false,
+		},
+		{
+			name:       "non codex ignores both prompts",
+			profile:    AgentProfile{Name: "claude", ResumeSequence: []string{"claude --resume", "Enter"}},
+			output:     "Do you trust this folder? Resume your previous session",
+			wantTrust:  false,
+			wantResume: false,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := hasTrustPrompt(tt.profile, tt.output); got != tt.wantTrust {
+				t.Fatalf("hasTrustPrompt() = %v, want %v", got, tt.wantTrust)
+			}
+			if got := hasResumePrompt(tt.profile, tt.output); got != tt.wantResume {
+				t.Fatalf("hasResumePrompt() = %v, want %v", got, tt.wantResume)
+			}
+		})
+	}
+}
+
+func TestAssignEmitsCodexHandshakeDiagnostics(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	deps.amux.waitContentResults = []error{
+		nil,
+		amuxapi.ErrWaitContentTimeout,
+	}
+	deps.amux.captureSequence("pane-1", []string{"Codex is ready."})
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-729", "Fix handshake diagnostics", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	waitFor(t, "handshake diagnostics", func() bool {
+		return len(deps.events.eventsByType(EventWorkerHandshake)) == 7
+	})
+
+	got := deps.events.eventsByType(EventWorkerHandshake)
+	wantMessages := []string{
+		handshakeStepWait,
+		handshakeStepWaitTrustContent,
+		handshakeStepTrustDetected,
+		handshakeStepTrustEnter,
+		handshakeStepWait,
+		handshakeStepWaitTrustContent,
+		handshakeStepCapture,
+	}
+	for i, event := range got {
+		if event.Message != wantMessages[i] {
+			t.Fatalf("event[%d].Message = %q, want %q", i, event.Message, wantMessages[i])
+		}
+		if gotIssue, wantIssue := event.Issue, "LAB-729"; gotIssue != wantIssue {
+			t.Fatalf("event[%d].Issue = %q, want %q", i, gotIssue, wantIssue)
+		}
+		if gotPane, wantPane := event.PaneID, "pane-1"; gotPane != wantPane {
+			t.Fatalf("event[%d].PaneID = %q, want %q", i, gotPane, wantPane)
+		}
+		if gotProfile, wantProfile := event.AgentProfile, "codex"; gotProfile != wantProfile {
+			t.Fatalf("event[%d].AgentProfile = %q, want %q", i, gotProfile, wantProfile)
+		}
+	}
+}
+
+func TestAssignAllowsConcurrentTrustPromptWaitsAcrossPanes(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+
+	secondClonePath := filepath.Join(t.TempDir(), "clone-02")
+	if err := os.MkdirAll(secondClonePath, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", secondClonePath, err)
+	}
+	deps.pool.clones = []Clone{
+		deps.pool.clone,
+		{Name: "clone-02", Path: secondClonePath},
+	}
+	deps.amux.spawnPanes = []Pane{
+		{ID: "pane-1", Name: "worker-1"},
+		{ID: "pane-2", Name: "worker-2"},
+	}
+	deps.amux.captureSequence("pane-1", []string{"Codex is ready."})
+	deps.amux.captureSequence("pane-2", []string{"Codex is ready."})
+	deps.amux.waitContentResults = []error{
+		amuxapi.ErrWaitContentTimeout,
+		amuxapi.ErrWaitContentTimeout,
+	}
+
+	firstWaitContentEntered := make(chan struct{})
+	releaseFirstWaitContent := make(chan struct{})
+	secondWaitContentEntered := make(chan struct{}, 1)
+	var firstWaitContent sync.Once
+	var secondWaitContent sync.Once
+	deps.amux.waitContentHook = func(paneID, substring string, timeout time.Duration) {
+		if substring != "do you trust" {
+			t.Errorf("wait content substring = %q, want %q", substring, "do you trust")
+		}
+		if timeout != defaultTrustPromptTimeout {
+			t.Errorf("wait content timeout = %v, want %v", timeout, defaultTrustPromptTimeout)
+		}
+		switch paneID {
+		case "pane-1":
+			firstWaitContent.Do(func() {
+				close(firstWaitContentEntered)
+				<-releaseFirstWaitContent
+			})
+		case "pane-2":
+			secondWaitContent.Do(func() {
+				secondWaitContentEntered <- struct{}{}
+			})
+		}
+	}
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	firstErr := make(chan error, 1)
+	secondErr := make(chan error, 1)
+	go func() {
+		firstErr <- d.Assign(ctx, "LAB-729-1", "Implement handshake one", "codex")
+	}()
+
+	select {
+	case <-firstWaitContentEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for first trust prompt wait")
+	}
+
+	go func() {
+		secondErr <- d.Assign(ctx, "LAB-729-2", "Implement handshake two", "codex")
+	}()
+
+	waitFor(t, "second spawn", func() bool {
+		return deps.amux.spawnCount() == 2
+	})
+
+	select {
+	case <-secondWaitContentEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("second trust prompt wait did not start while the first was blocked")
+	}
+
+	close(releaseFirstWaitContent)
+
+	if err := <-firstErr; err != nil {
+		t.Fatalf("first Assign() error = %v", err)
+	}
+	if err := <-secondErr; err != nil {
+		t.Fatalf("second Assign() error = %v", err)
+	}
+
+	if got, want := deps.amux.waitContentCount("pane-1"), 1; got != want {
+		t.Fatalf("pane-1 waitContent count = %d, want %d", got, want)
+	}
+	if got, want := deps.amux.waitContentCount("pane-2"), 1; got != want {
+		t.Fatalf("pane-2 waitContent count = %d, want %d", got, want)
 	}
 }

@@ -54,6 +54,18 @@ func (e *fakeEvents) lastMessage(eventType string) string {
 	return event.Message
 }
 
+func (e *fakeEvents) eventsByType(eventType string) []Event {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	events := make([]Event, 0, len(e.events))
+	for _, event := range e.events {
+		if event.Type == eventType {
+			events = append(events, event)
+		}
+	}
+	return events
+}
+
 func (e *fakeEvents) requireTypes(t *testing.T, want ...string) {
 	t.Helper()
 	e.mu.Lock()

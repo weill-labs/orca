@@ -34,6 +34,7 @@ const (
 	EventTaskCompleted         = "task.completed"
 	EventTaskFailed            = "task.failed"
 	EventTaskCompletionFailed  = "task.completion_failed"
+	EventWorkerHandshake       = "worker.handshake"
 	EventWorkerNudged          = "worker.nudged"
 	EventWorkerNudgedCI        = "worker.nudged_ci"
 	EventWorkerNudgedConflict  = "worker.nudged_conflict"
@@ -118,7 +119,7 @@ type AmuxClient interface {
 	CaptureHistory(ctx context.Context, paneID string) (PaneCapture, error)
 	KillPane(ctx context.Context, paneID string) error
 	WaitIdle(ctx context.Context, paneID string, timeout time.Duration) error
-	WaitContent(ctx context.Context, paneID, content string, timeout time.Duration) error
+	WaitContent(ctx context.Context, paneID, substring string, timeout time.Duration) error
 }
 
 type IssueTracker interface {
