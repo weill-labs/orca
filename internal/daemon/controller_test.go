@@ -661,6 +661,56 @@ func waitForDuration(t *testing.T, duration time.Duration) {
 	}
 }
 
+func startDirectSleepProcess(t *testing.T, ignoreTERM bool) *exec.Cmd {
+	t.Helper()
+
+	tempDir := t.TempDir()
+	readyPath := filepath.Join(tempDir, "ready")
+	scriptPath := filepath.Join(tempDir, "sleep.sh")
+
+	script := "#!/bin/bash\nset -eu\n"
+	if ignoreTERM {
+		script += "trap '' TERM\n"
+	}
+	script += fmt.Sprintf("printf ready > %q\n", readyPath)
+	if ignoreTERM {
+		script += "while true; do\n"
+		script += "  sleep 1000 &\n"
+		script += "  wait $!\n"
+		script += "done\n"
+	} else {
+		script += "exec sleep 1000\n"
+	}
+
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write direct sleep script: %v", err)
+	}
+
+	cmd := exec.Command("/bin/bash", scriptPath)
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start direct sleep process: %v", err)
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(readyPath); err == nil {
+			alive, aliveErr := processAlive(cmd.Process.Pid)
+			if aliveErr != nil {
+				t.Fatalf("processAlive(%d) error = %v", cmd.Process.Pid, aliveErr)
+			}
+			if alive {
+				return cmd
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("Stat(%q) error = %v", readyPath, err)
+		}
+		waitForDuration(t, 10*time.Millisecond)
+	}
+
+	t.Fatalf("timed out waiting for direct sleep pid %d to start", cmd.Process.Pid)
+	return nil
+}
+
 func startDetachedSleepProcess(t *testing.T, ignoreTERM bool) int {
 	t.Helper()
 

@@ -2,6 +2,8 @@ package daemon
 
 import (
 	"context"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 )
@@ -138,6 +140,100 @@ func TestTaskMonitorStaleResultIsDropped(t *testing.T) {
 	}
 }
 
+func TestTaskMonitorPollRunsConflictNudgesWithBoundedConcurrency(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	d := deps.newDaemon(t)
+	t.Cleanup(func() {
+		d.stopAllTaskMonitors(true)
+	})
+
+	assignments := seedConflictNudgeAssignments(t, deps, 5)
+	waitIdle := newBlockedWaitIdle()
+	deps.amux.waitIdleHook = waitIdle.hook
+	t.Cleanup(waitIdle.releaseAll)
+
+	resultCh := make(chan []taskMonitorResult, 1)
+	go func() {
+		resultCh <- d.dispatchTaskMonitorChecks(context.Background(), assignments, taskMonitorCheckPRPoll)
+	}()
+
+	waitIdle.waitForStarted(t, 4)
+	waitIdle.requireStartedCount(t, 4)
+
+	waitIdle.releaseOne()
+	waitIdle.waitForStarted(t, 5)
+	waitIdle.releaseAll()
+
+	results := <-resultCh
+	d.applyTaskMonitorResults(context.Background(), results)
+
+	for i := 0; i < 5; i++ {
+		paneID := fmt.Sprintf("pane-%d", i+1)
+		worker, ok := deps.state.worker(paneID)
+		if !ok {
+			t.Fatalf("worker %q missing after conflict nudges", paneID)
+		}
+		if got, want := worker.LastMergeableState, "CONFLICTING"; got != want {
+			t.Fatalf("worker %q last mergeable state = %q, want %q", paneID, got, want)
+		}
+	}
+	if got, want := deps.events.countType(EventWorkerNudgedConflict), 5; got != want {
+		t.Fatalf("conflict nudge event count = %d, want %d", got, want)
+	}
+}
+
+func TestTaskMonitorPollRunsReviewNudgesWithBoundedConcurrency(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	d := deps.newDaemon(t)
+	t.Cleanup(func() {
+		d.stopAllTaskMonitors(true)
+	})
+
+	assignments := seedReviewNudgeAssignments(t, deps, 5)
+	deps.clock.Advance(time.Minute)
+	assignments = reloadTaskMonitorAssignments(t, deps, assignments)
+
+	waitIdle := newBlockedWaitIdle()
+	deps.amux.waitIdleHook = waitIdle.hook
+	t.Cleanup(waitIdle.releaseAll)
+
+	resultCh := make(chan []taskMonitorResult, 1)
+	go func() {
+		resultCh <- d.dispatchTaskMonitorChecks(context.Background(), assignments, taskMonitorCheckPRPoll)
+	}()
+
+	waitIdle.waitForStarted(t, 4)
+	waitIdle.requireStartedCount(t, 4)
+
+	waitIdle.releaseOne()
+	waitIdle.waitForStarted(t, 5)
+	waitIdle.releaseAll()
+
+	results := <-resultCh
+	d.applyTaskMonitorResults(context.Background(), results)
+
+	for i := 0; i < 5; i++ {
+		paneID := fmt.Sprintf("pane-%d", i+1)
+		worker, ok := deps.state.worker(paneID)
+		if !ok {
+			t.Fatalf("worker %q missing after review nudges", paneID)
+		}
+		if got, want := worker.ReviewNudgeCount, 1; got != want {
+			t.Fatalf("worker %q review nudge count = %d, want %d", paneID, got, want)
+		}
+		if got, want := worker.LastReviewCount, 1; got != want {
+			t.Fatalf("worker %q last review count = %d, want %d", paneID, got, want)
+		}
+	}
+	if got, want := deps.events.countType(EventWorkerNudgedReview), 5; got != want {
+		t.Fatalf("review nudge event count = %d, want %d", got, want)
+	}
+}
+
 func seedTaskMonitorAssignment(t *testing.T, deps *testDeps, issue, paneID string, prNumber int) {
 	t.Helper()
 
@@ -200,5 +296,125 @@ func waitForTaskMonitorBlocks(t *testing.T, started ...<-chan struct{}) {
 			t.Fatal("timed out waiting for parallel task monitor polls")
 		case <-ch:
 		}
+	}
+}
+
+func seedConflictNudgeAssignments(t *testing.T, deps *testDeps, count int) []ActiveAssignment {
+	t.Helper()
+
+	assignments := make([]ActiveAssignment, 0, count)
+	for i := 0; i < count; i++ {
+		issue := fmt.Sprintf("LAB-%03d", 910+i)
+		paneID := fmt.Sprintf("pane-%d", i+1)
+		prNumber := 100 + i
+		seedTaskMonitorAssignment(t, deps, issue, paneID, prNumber)
+		deps.commands.queue("gh", []string{"pr", "checks", fmt.Sprintf("%d", prNumber), "--json", "bucket"}, ``, nil)
+		deps.commands.queue("gh", []string{"pr", "view", fmt.Sprintf("%d", prNumber), "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
+		deps.commands.queue("gh", []string{"pr", "view", fmt.Sprintf("%d", prNumber), "--json", "mergeable"}, `{"mergeable":"CONFLICTING"}`, nil)
+		deps.commands.queue("gh", []string{"pr", "view", fmt.Sprintf("%d", prNumber), "--json", "reviews,reviewDecision,comments"}, ``, nil)
+		assignments = append(assignments, activeTaskMonitorAssignment(t, deps, issue))
+	}
+	return assignments
+}
+
+func seedReviewNudgeAssignments(t *testing.T, deps *testDeps, count int) []ActiveAssignment {
+	t.Helper()
+
+	assignments := make([]ActiveAssignment, 0, count)
+	for i := 0; i < count; i++ {
+		issue := fmt.Sprintf("LAB-%03d", 920+i)
+		paneID := fmt.Sprintf("pane-%d", i+1)
+		prNumber := 200 + i
+		seedTaskMonitorAssignment(t, deps, issue, paneID, prNumber)
+		deps.commands.queue("gh", []string{"pr", "checks", fmt.Sprintf("%d", prNumber), "--json", "bucket"}, ``, nil)
+		deps.commands.queue("gh", []string{"pr", "view", fmt.Sprintf("%d", prNumber), "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
+		deps.commands.queue("gh", []string{"pr", "view", fmt.Sprintf("%d", prNumber), "--json", "mergeable"}, `{"mergeable":"MERGEABLE"}`, nil)
+		deps.commands.queue("gh", []string{"pr", "view", fmt.Sprintf("%d", prNumber), "--json", "reviews,reviewDecision,comments"}, marshalReviewPayload(t, "CHANGES_REQUESTED", []prReview{
+			testReview(fmt.Sprintf("reviewer-%d", i+1), "CHANGES_REQUESTED", "Please add tests."),
+		}, nil), nil)
+		assignments = append(assignments, activeTaskMonitorAssignment(t, deps, issue))
+	}
+	return assignments
+}
+
+func reloadTaskMonitorAssignments(t *testing.T, deps *testDeps, assignments []ActiveAssignment) []ActiveAssignment {
+	t.Helper()
+
+	reloaded := make([]ActiveAssignment, 0, len(assignments))
+	for _, assignment := range assignments {
+		reloaded = append(reloaded, activeTaskMonitorAssignment(t, deps, assignment.Task.Issue))
+	}
+	return reloaded
+}
+
+type blockedWaitIdle struct {
+	mu       sync.Mutex
+	started  []string
+	release  map[string]chan struct{}
+	released int
+}
+
+func newBlockedWaitIdle() *blockedWaitIdle {
+	return &blockedWaitIdle{
+		release: make(map[string]chan struct{}),
+	}
+}
+
+func (b *blockedWaitIdle) hook(paneID string, _ time.Duration, _ time.Duration) {
+	b.mu.Lock()
+	if _, ok := b.release[paneID]; !ok {
+		b.started = append(b.started, paneID)
+		b.release[paneID] = make(chan struct{})
+	}
+	release := b.release[paneID]
+	b.mu.Unlock()
+
+	<-release
+}
+
+func (b *blockedWaitIdle) waitForStarted(t *testing.T, want int) {
+	t.Helper()
+
+	waitFor(t, fmt.Sprintf("%d blocked nudges", want), func() bool {
+		return b.startedCount() >= want
+	})
+}
+
+func (b *blockedWaitIdle) startedCount() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return len(b.started)
+}
+
+func (b *blockedWaitIdle) requireStartedCount(t *testing.T, want int) {
+	t.Helper()
+
+	waitForDuration(t, 50*time.Millisecond)
+	if got := b.startedCount(); got != want {
+		t.Fatalf("blocked wait-idle count = %d, want %d", got, want)
+	}
+}
+
+func (b *blockedWaitIdle) releaseOne() {
+	b.mu.Lock()
+	paneID := b.started[b.released]
+	release := b.release[paneID]
+	b.released++
+	b.mu.Unlock()
+
+	close(release)
+}
+
+func (b *blockedWaitIdle) releaseAll() {
+	b.mu.Lock()
+	channels := make([]chan struct{}, 0, len(b.started)-b.released)
+	for _, paneID := range b.started[b.released:] {
+		channels = append(channels, b.release[paneID])
+	}
+	b.released = len(b.started)
+	b.mu.Unlock()
+
+	for _, release := range channels {
+		close(release)
 	}
 }
