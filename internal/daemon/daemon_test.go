@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
@@ -113,6 +114,26 @@ func TestDaemonStartReturnsPIDFileReadErrorForInvalidPIDFile(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "read pid file") {
 		t.Fatalf("Start() error = %v, want read pid file error", err)
+	}
+}
+
+func TestDaemonStartReturnsPIDDirectoryCreationError(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	parent := filepath.Join(t.TempDir(), "pid-parent")
+	if err := os.WriteFile(parent, []byte("not a directory\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", parent, err)
+	}
+	deps.pidPath = filepath.Join(parent, "orca.pid")
+	d := deps.newDaemon(t)
+
+	err := d.Start(context.Background())
+	if err == nil {
+		t.Fatal("Start() succeeded, want error")
+	}
+	if !strings.Contains(err.Error(), "create pid directory") {
+		t.Fatalf("Start() error = %v, want create pid directory error", err)
 	}
 }
 
