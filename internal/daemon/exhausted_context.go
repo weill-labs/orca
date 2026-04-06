@@ -32,11 +32,7 @@ func (d *Daemon) exhaustedContextAutoReassignReason(active ActiveAssignment, pro
 }
 
 func looksLikeIdleAgentPrompt(snapshot PaneCapture) bool {
-	lines := snapshot.Content
-	if len(lines) == 0 {
-		lines = strings.Split(snapshot.Output(), "\n")
-	}
-
+	lines := captureLines(snapshot)
 	for i := len(lines) - 1; i >= 0; i-- {
 		line := strings.TrimSpace(lines[i])
 		if line == "" {
@@ -47,13 +43,19 @@ func looksLikeIdleAgentPrompt(snapshot PaneCapture) bool {
 	return false
 }
 
-func contextRemainingPercent(snapshot PaneCapture) (int, bool) {
-	lines := snapshot.Content
-	if len(lines) == 0 {
-		lines = strings.Split(snapshot.Output(), "\n")
+func captureLines(snapshot PaneCapture) []string {
+	if len(snapshot.Content) > 0 {
+		return snapshot.Content
 	}
+	return strings.Split(snapshot.Output(), "\n")
+}
 
-	for _, line := range lines {
+func contextRemainingPercent(snapshot PaneCapture) (int, bool) {
+	for _, line := range captureLines(snapshot) {
+		line := strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
 		lower := strings.ToLower(line)
 		if !strings.Contains(lower, "context") {
 			continue
@@ -100,9 +102,9 @@ func (d *Daemon) autoReassignEscalatedWorker(ctx context.Context, active ActiveA
 }
 
 func (d *Daemon) exhaustedContextReassignPrompt(ctx context.Context, active ActiveAssignment) string {
-	commitCount, err := d.branchCommitCount(ctx, active.Task.ClonePath)
-	if err != nil {
-		commitCount = 0
+	commitCount := "unavailable"
+	if count, err := d.branchCommitCount(ctx, active.Task.ClonePath); err == nil {
+		commitCount = strconv.Itoa(count)
 	}
 
 	summary := exhaustedContextProgressSummary(active.Task.Branch, active.Task.PRNumber, commitCount)
@@ -113,7 +115,17 @@ func (d *Daemon) exhaustedContextReassignPrompt(ctx context.Context, active Acti
 	return original + "\n\n" + summary
 }
 
-func exhaustedContextProgressSummary(branch string, prNumber, commitCount int) string {
+func exhaustedContextProgressSummary(branch string, prNumber int, commitCount string) string {
+	branch = strings.TrimSpace(branch)
+	if branch == "" {
+		branch = "unknown"
+	}
+
+	commitCount = strings.TrimSpace(commitCount)
+	if commitCount == "" {
+		commitCount = "unavailable"
+	}
+
 	pr := "none"
 	if prNumber > 0 {
 		pr = fmt.Sprintf("#%d", prNumber)
@@ -123,8 +135,8 @@ func exhaustedContextProgressSummary(branch string, prNumber, commitCount int) s
 	builder.WriteString("Previous worker exhausted its Codex context and was auto-reassigned after postmortem. Continue from the existing progress instead of starting over.\n\n")
 	builder.WriteString("Previous worker summary:\n")
 	fmt.Fprintf(&builder, "PR: %s\n", pr)
-	fmt.Fprintf(&builder, "Branch: %s\n", strings.TrimSpace(branch))
-	fmt.Fprintf(&builder, "Commit count: %d\n", commitCount)
+	fmt.Fprintf(&builder, "Branch: %s\n", branch)
+	fmt.Fprintf(&builder, "Commit count: %s\n", commitCount)
 	return builder.String()
 }
 

@@ -190,3 +190,89 @@ func TestStuckDetectionDoesNotAutoReassignWithoutLowContextPrompt(t *testing.T) 
 		t.Fatalf("postmortem event count = %d, want 0", got)
 	}
 }
+
+func TestExhaustedContextAutoReassignReason(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	d := deps.newDaemon(t)
+	profile := AgentProfile{Name: "codex"}
+
+	tests := []struct {
+		name     string
+		profile  AgentProfile
+		health   string
+		snapshot PaneCapture
+		want     string
+		wantOK   bool
+	}{
+		{
+			name:     "matches idle codex prompt below threshold",
+			profile:  profile,
+			health:   WorkerHealthEscalated,
+			snapshot: PaneCapture{Content: []string{"9% context remaining", "›"}},
+			want:     "idle codex prompt with 9% context remaining",
+			wantOK:   true,
+		},
+		{
+			name:     "requires escalated worker",
+			profile:  profile,
+			health:   WorkerHealthHealthy,
+			snapshot: PaneCapture{Content: []string{"9% context remaining", "›"}},
+			wantOK:   false,
+		},
+		{
+			name:     "requires idle agent prompt",
+			profile:  profile,
+			health:   WorkerHealthEscalated,
+			snapshot: PaneCapture{Content: []string{"9% context remaining", "still working"}},
+			wantOK:   false,
+		},
+		{
+			name:     "requires remaining context below threshold",
+			profile:  profile,
+			health:   WorkerHealthEscalated,
+			snapshot: PaneCapture{Content: []string{"15% context remaining", "›"}},
+			wantOK:   false,
+		},
+		{
+			name:     "ignores other agent profiles",
+			profile:  AgentProfile{Name: "claude"},
+			health:   WorkerHealthEscalated,
+			snapshot: PaneCapture{Content: []string{"9% context remaining", "›"}},
+			wantOK:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			reason, ok := d.exhaustedContextAutoReassignReason(ActiveAssignment{
+				Worker: Worker{Health: tt.health},
+			}, tt.profile, tt.snapshot)
+			if got, want := ok, tt.wantOK; got != want {
+				t.Fatalf("exhaustedContextAutoReassignReason() ok = %v, want %v", got, want)
+			}
+			if got, want := reason, tt.want; got != want {
+				t.Fatalf("exhaustedContextAutoReassignReason() reason = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+func TestExhaustedContextProgressSummaryUsesFallbacks(t *testing.T) {
+	t.Parallel()
+
+	got := exhaustedContextProgressSummary("", 0, "")
+	for _, want := range []string{
+		"PR: none",
+		"Branch: unknown",
+		"Commit count: unavailable",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("exhaustedContextProgressSummary() = %q, want substring %q", got, want)
+		}
+	}
+}
