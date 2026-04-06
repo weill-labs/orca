@@ -150,8 +150,24 @@ func (d *Daemon) Start(ctx context.Context) error {
 		return fmt.Errorf("create pid directory: %w", err)
 	}
 	if _, err := os.Stat(d.pidPath); err == nil {
-		d.started.Store(false)
-		return fmt.Errorf("pid file already exists: %w", ErrAlreadyStarted)
+		pid, err := readPIDFile(d.pidPath)
+		if err != nil {
+			d.started.Store(false)
+			return fmt.Errorf("read pid file: %w", err)
+		}
+		alive, err := processAlive(pid)
+		if err != nil {
+			d.started.Store(false)
+			return fmt.Errorf("check pid file process: %w", err)
+		}
+		if alive {
+			d.started.Store(false)
+			return fmt.Errorf("pid file already exists: %w", ErrAlreadyStarted)
+		}
+		if err := os.Remove(d.pidPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			d.started.Store(false)
+			return fmt.Errorf("remove stale pid file: %w", err)
+		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		d.started.Store(false)
 		return fmt.Errorf("stat pid file: %w", err)
