@@ -319,30 +319,11 @@ func (c *LocalController) Stop(ctx context.Context, req StopRequest) (StopResult
 		return StopResult{}, fmt.Errorf("stop daemon process: %w", err)
 	}
 
-	deadline := time.Now().Add(c.stopTimeout)
-	for {
-		alive, err := processAlive(pid)
-		if err != nil {
-			return StopResult{}, err
-		}
-		if !alive {
-			stoppedAt := c.now()
-			_ = os.Remove(pidFile)
-			_ = c.store.MarkDaemonStopped(ctx, projectPath, stoppedAt)
-			return StopResult{
-				Project:   projectPath,
-				PID:       pid,
-				StoppedAt: stoppedAt,
-			}, nil
-		}
-
-		waitErr := waitForPollingInterval(ctx, deadline, 50*time.Millisecond)
-		if waitErr == nil {
-			continue
-		}
-		if errors.Is(waitErr, amux.ErrWaitDeadlineExceeded) {
-			break
-		}
+	waitErr := waitForDaemonExit(ctx, pid, c.stopTimeout)
+	if waitErr == nil {
+		return c.finalizeStoppedDaemon(ctx, projectPath, pid, pidFile), nil
+	}
+	if !errors.Is(waitErr, amux.ErrWaitDeadlineExceeded) {
 		return StopResult{}, waitErr
 	}
 
@@ -354,32 +335,14 @@ func (c *LocalController) Stop(ctx context.Context, req StopRequest) (StopResult
 		return StopResult{}, fmt.Errorf("force stop daemon process: %w", err)
 	}
 
-	deadline = time.Now().Add(c.stopTimeout)
-	for {
-		alive, err := processAlive(pid)
-		if err != nil {
-			return StopResult{}, err
-		}
-		if !alive {
-			stoppedAt := c.now()
-			_ = os.Remove(pidFile)
-			_ = c.store.MarkDaemonStopped(ctx, projectPath, stoppedAt)
-			return StopResult{
-				Project:   projectPath,
-				PID:       pid,
-				StoppedAt: stoppedAt,
-			}, nil
-		}
-
-		waitErr := waitForPollingInterval(ctx, deadline, 50*time.Millisecond)
-		if waitErr == nil {
-			continue
-		}
-		if errors.Is(waitErr, amux.ErrWaitDeadlineExceeded) {
-			return StopResult{}, fmt.Errorf("daemon did not stop after SIGKILL within %s", c.stopTimeout)
-		}
-		return StopResult{}, waitErr
+	waitErr = waitForDaemonExit(ctx, pid, c.stopTimeout)
+	if waitErr == nil {
+		return c.finalizeStoppedDaemon(ctx, projectPath, pid, pidFile), nil
 	}
+	if errors.Is(waitErr, amux.ErrWaitDeadlineExceeded) {
+		return StopResult{}, fmt.Errorf("daemon did not stop after SIGKILL within %s", c.stopTimeout)
+	}
+	return StopResult{}, waitErr
 }
 
 func (c *LocalController) Assign(ctx context.Context, req AssignRequest) (TaskActionResult, error) {
@@ -620,6 +583,35 @@ func processAlive(pid int) (bool, error) {
 
 func waitForPollingInterval(ctx context.Context, deadline time.Time, interval time.Duration) error {
 	return amux.WaitUntil(ctx, deadline, interval)
+}
+
+func waitForDaemonExit(ctx context.Context, pid int, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		alive, err := processAlive(pid)
+		if err != nil {
+			return err
+		}
+		if !alive {
+			return nil
+		}
+
+		waitErr := waitForPollingInterval(ctx, deadline, 50*time.Millisecond)
+		if waitErr != nil {
+			return waitErr
+		}
+	}
+}
+
+func (c *LocalController) finalizeStoppedDaemon(ctx context.Context, projectPath string, pid int, pidFile string) StopResult {
+	stoppedAt := c.now()
+	_ = os.Remove(pidFile)
+	_ = c.store.MarkDaemonStopped(ctx, projectPath, stoppedAt)
+	return StopResult{
+		Project:   projectPath,
+		PID:       pid,
+		StoppedAt: stoppedAt,
+	}
 }
 
 func (c *LocalController) cleanupFailedStart(projectPath, pidFile string, process *os.Process) error {
