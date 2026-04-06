@@ -145,20 +145,9 @@ func (d *Daemon) Start(ctx context.Context) error {
 	if !d.started.CompareAndSwap(false, true) {
 		return ErrAlreadyStarted
 	}
-	if err := os.MkdirAll(filepath.Dir(d.pidPath), 0o755); err != nil {
+	if err := d.initializePIDFile(); err != nil {
 		d.started.Store(false)
-		return fmt.Errorf("create pid directory: %w", err)
-	}
-	if _, err := os.Stat(d.pidPath); err == nil {
-		d.started.Store(false)
-		return fmt.Errorf("pid file already exists: %w", ErrAlreadyStarted)
-	} else if !errors.Is(err, os.ErrNotExist) {
-		d.started.Store(false)
-		return fmt.Errorf("stat pid file: %w", err)
-	}
-	if err := os.WriteFile(d.pidPath, []byte(fmt.Sprintf("%d\n", os.Getpid())), 0o644); err != nil {
-		d.started.Store(false)
-		return fmt.Errorf("write pid file: %w", err)
+		return err
 	}
 
 	d.stopContext, d.stopCancel = context.WithCancel(context.Background())
@@ -179,6 +168,45 @@ func (d *Daemon) Start(ctx context.Context) error {
 		Project: d.project,
 		Message: "daemon started",
 	})
+	return nil
+}
+
+func (d *Daemon) initializePIDFile() error {
+	if err := os.MkdirAll(filepath.Dir(d.pidPath), 0o755); err != nil {
+		return fmt.Errorf("create pid directory: %w", err)
+	}
+	if err := d.removeStalePIDFile(); err != nil {
+		return err
+	}
+	if err := os.WriteFile(d.pidPath, []byte(fmt.Sprintf("%d\n", os.Getpid())), 0o644); err != nil {
+		return fmt.Errorf("write pid file: %w", err)
+	}
+	return nil
+}
+
+func (d *Daemon) removeStalePIDFile() error {
+	return d.removeStalePIDFileWithProcessCheck(processAlive)
+}
+
+func (d *Daemon) removeStalePIDFileWithProcessCheck(processCheck func(int) (bool, error)) error {
+	pid, err := readPIDFile(d.pidPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("read pid file: %w", err)
+	}
+
+	alive, err := processCheck(pid)
+	if err != nil {
+		return fmt.Errorf("check pid file process: %w", err)
+	}
+	if alive {
+		return fmt.Errorf("daemon already running: %w", ErrAlreadyStarted)
+	}
+	if err := os.Remove(d.pidPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove stale pid file: %w", err)
+	}
 	return nil
 }
 

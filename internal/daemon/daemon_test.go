@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
@@ -42,6 +43,125 @@ func TestDaemonStartStopPIDLifecycle(t *testing.T) {
 	}
 
 	deps.events.requireTypes(t, EventDaemonStarted, EventDaemonStopped)
+}
+
+func TestDaemonStartReplacesStalePIDFile(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+
+	if err := os.WriteFile(deps.pidPath, []byte("999999999\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", deps.pidPath, err)
+	}
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	data, err := os.ReadFile(deps.pidPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", deps.pidPath, err)
+	}
+	if got, want := strings.TrimSpace(string(data)), strconv.Itoa(os.Getpid()); got != want {
+		t.Fatalf("pid file = %q, want %q", got, want)
+	}
+
+	deps.events.requireTypes(t, EventDaemonStarted)
+}
+
+func TestDaemonStartReturnsAlreadyStartedWhenPIDIsAlive(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	d := deps.newDaemon(t)
+
+	if err := os.WriteFile(deps.pidPath, []byte(strconv.Itoa(os.Getpid())+"\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", deps.pidPath, err)
+	}
+
+	err := d.Start(context.Background())
+	if !errors.Is(err, ErrAlreadyStarted) {
+		t.Fatalf("Start() error = %v, want %v", err, ErrAlreadyStarted)
+	}
+	if !strings.Contains(err.Error(), "daemon already running") {
+		t.Fatalf("Start() error = %v, want daemon already running message", err)
+	}
+
+	data, readErr := os.ReadFile(deps.pidPath)
+	if readErr != nil {
+		t.Fatalf("ReadFile(%q) error = %v", deps.pidPath, readErr)
+	}
+	if got, want := strings.TrimSpace(string(data)), strconv.Itoa(os.Getpid()); got != want {
+		t.Fatalf("pid file = %q, want %q", got, want)
+	}
+}
+
+func TestDaemonStartReturnsPIDFileReadErrorForInvalidPIDFile(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	d := deps.newDaemon(t)
+
+	if err := os.WriteFile(deps.pidPath, []byte("not-a-pid\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", deps.pidPath, err)
+	}
+
+	err := d.Start(context.Background())
+	if err == nil {
+		t.Fatal("Start() succeeded, want error")
+	}
+	if !strings.Contains(err.Error(), "read pid file") {
+		t.Fatalf("Start() error = %v, want read pid file error", err)
+	}
+}
+
+func TestRemoveStalePIDFileReturnsProcessCheckError(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	d := deps.newDaemon(t)
+
+	if err := os.WriteFile(deps.pidPath, []byte("123\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", deps.pidPath, err)
+	}
+
+	err := d.removeStalePIDFileWithProcessCheck(func(int) (bool, error) {
+		return false, errors.New("boom")
+	})
+	if err == nil {
+		t.Fatal("removeStalePIDFileWithProcessCheck() succeeded, want error")
+	}
+	if !strings.Contains(err.Error(), "check pid file process") {
+		t.Fatalf("removeStalePIDFileWithProcessCheck() error = %v, want process check error", err)
+	}
+	if _, statErr := os.Stat(deps.pidPath); statErr != nil {
+		t.Fatalf("Stat(%q) error = %v, want pid file to remain", deps.pidPath, statErr)
+	}
+}
+
+func TestDaemonStartReturnsPIDDirectoryCreationError(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	parent := filepath.Join(t.TempDir(), "pid-parent")
+	if err := os.WriteFile(parent, []byte("not a directory\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", parent, err)
+	}
+	deps.pidPath = filepath.Join(parent, "orca.pid")
+	d := deps.newDaemon(t)
+
+	err := d.Start(context.Background())
+	if err == nil {
+		t.Fatal("Start() succeeded, want error")
+	}
+	if !strings.Contains(err.Error(), "create pid directory") {
+		t.Fatalf("Start() error = %v, want create pid directory error", err)
+	}
 }
 
 func TestAssignAllocatesCloneStartsAgentAndRegistersState(t *testing.T) {
