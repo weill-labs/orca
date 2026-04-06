@@ -117,8 +117,7 @@ func TestStopReturnsContextErrorWhenPollingCancelled(t *testing.T) {
 		ignoreTERM: true,
 	})
 
-	process := startDirectSleepProcess(t, true)
-	pid := process.Process.Pid
+	pid := startDetachedSleepProcess(t, true)
 
 	if err := os.MkdirAll(controller.paths.PIDDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
@@ -154,11 +153,7 @@ func TestStopReturnsContextErrorWhenPollingCancelled(t *testing.T) {
 		t.Fatalf("expected stop to exit before timeout, elapsed %s", elapsed)
 	}
 
-	if err := process.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
-		t.Fatalf("Kill(%d) error = %v", pid, err)
-	}
-	_, _ = process.Process.Wait()
-	waitForProcessExit(t, pid)
+	killTestProcess(t, pid)
 }
 
 func TestStopWithoutForceReturnsTimeoutWhenProcessIgnoresTERM(t *testing.T) {
@@ -169,8 +164,7 @@ func TestStopWithoutForceReturnsTimeoutWhenProcessIgnoresTERM(t *testing.T) {
 		stopTimeout: 150 * time.Millisecond,
 	})
 
-	process := startDirectSleepProcess(t, true)
-	pid := process.Process.Pid
+	pid := startDetachedSleepProcess(t, true)
 
 	if err := os.MkdirAll(controller.paths.PIDDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
@@ -217,8 +211,7 @@ func TestStopForceKillsProcessAfterGracePeriod(t *testing.T) {
 		stopTimeout: 150 * time.Millisecond,
 	})
 
-	process := startDirectSleepProcess(t, true)
-	pid := process.Process.Pid
+	pid := startDetachedSleepProcess(t, true)
 
 	if err := os.MkdirAll(controller.paths.PIDDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
@@ -574,20 +567,76 @@ func waitForDuration(t *testing.T, duration time.Duration) {
 	}
 }
 
-func startDirectSleepProcess(t *testing.T, ignoreTERM bool) *exec.Cmd {
+func startDetachedSleepProcess(t *testing.T, ignoreTERM bool) int {
 	t.Helper()
 
-	command := "exec sleep 1000"
+	tempDir := t.TempDir()
+	readyPath := filepath.Join(tempDir, "ready")
+	scriptPath := filepath.Join(tempDir, "sleep.py")
+
+	script := "import pathlib, time\n"
 	if ignoreTERM {
-		command = "trap '' TERM; exec sleep 1000"
+		script = "import pathlib, signal, time\n"
+		script += "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+	}
+	script += fmt.Sprintf("pathlib.Path(%q).write_text('ready')\n", readyPath)
+	script += "time.sleep(1000)\n"
+
+	if err := os.WriteFile(scriptPath, []byte(script), 0o644); err != nil {
+		t.Fatalf("write detached sleep script: %v", err)
 	}
 
-	cmd := exec.Command("/bin/bash", "-lc", command)
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("Start() error = %v", err)
+	cmd := exec.Command("/bin/bash", "-lc", fmt.Sprintf("nohup python3 %q >/dev/null 2>&1 </dev/null & echo $!", scriptPath))
+	output, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("start detached sleep process: %v", err)
 	}
 
-	return cmd
+	var pid int
+	if _, err := fmt.Sscanf(strings.TrimSpace(string(output)), "%d", &pid); err != nil {
+		t.Fatalf("parse detached sleep pid %q: %v", strings.TrimSpace(string(output)), err)
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		alive, err := processAlive(pid)
+		if err != nil {
+			t.Fatalf("processAlive(%d) error = %v", pid, err)
+		}
+		if alive {
+			if _, statErr := os.Stat(readyPath); statErr == nil {
+				return pid
+			} else if !errors.Is(statErr, os.ErrNotExist) {
+				t.Fatalf("Stat(%q) error = %v", readyPath, statErr)
+			}
+		}
+		if !alive {
+			break
+		}
+		waitForDuration(t, 10*time.Millisecond)
+	}
+
+	if _, err := os.Stat(readyPath); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("detached sleep pid %d exited before signaling readiness", pid)
+		}
+		t.Fatalf("Stat(%q) error = %v", readyPath, err)
+	}
+
+	deadline = time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		alive, err := processAlive(pid)
+		if err != nil {
+			t.Fatalf("processAlive(%d) error = %v", pid, err)
+		}
+		if alive {
+			return pid
+		}
+		waitForDuration(t, 10*time.Millisecond)
+	}
+
+	t.Fatalf("timed out waiting for detached sleep pid %d to start", pid)
+	return 0
 }
 
 func testProjectPath(t *testing.T) string {

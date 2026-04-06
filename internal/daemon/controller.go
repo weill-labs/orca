@@ -66,6 +66,7 @@ type StartResult struct {
 
 type StopRequest struct {
 	Project string
+	Force   bool
 }
 
 type StopResult struct {
@@ -340,7 +341,42 @@ func (c *LocalController) Stop(ctx context.Context, req StopRequest) (StopResult
 			continue
 		}
 		if errors.Is(waitErr, amux.ErrWaitDeadlineExceeded) {
-			return StopResult{}, fmt.Errorf("daemon did not stop within %s", c.stopTimeout)
+			break
+		}
+		return StopResult{}, waitErr
+	}
+
+	if !req.Force {
+		return StopResult{}, fmt.Errorf("daemon did not stop within %s", c.stopTimeout)
+	}
+
+	if err := syscall.Kill(pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+		return StopResult{}, fmt.Errorf("force stop daemon process: %w", err)
+	}
+
+	deadline = time.Now().Add(c.stopTimeout)
+	for {
+		alive, err := processAlive(pid)
+		if err != nil {
+			return StopResult{}, err
+		}
+		if !alive {
+			stoppedAt := c.now()
+			_ = os.Remove(pidFile)
+			_ = c.store.MarkDaemonStopped(ctx, projectPath, stoppedAt)
+			return StopResult{
+				Project:   projectPath,
+				PID:       pid,
+				StoppedAt: stoppedAt,
+			}, nil
+		}
+
+		waitErr := waitForPollingInterval(ctx, deadline, 50*time.Millisecond)
+		if waitErr == nil {
+			continue
+		}
+		if errors.Is(waitErr, amux.ErrWaitDeadlineExceeded) {
+			return StopResult{}, fmt.Errorf("daemon did not stop after SIGKILL within %s", c.stopTimeout)
 		}
 		return StopResult{}, waitErr
 	}
