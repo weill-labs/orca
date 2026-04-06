@@ -16,6 +16,7 @@ import (
 const (
 	defaultCaptureInterval       = 5 * time.Second
 	defaultAgentHandshakeTimeout = 30 * time.Second
+	defaultPromptSettleDuration  = 2 * time.Second
 	defaultTrustPromptTimeout    = 2 * time.Second
 	defaultPollInterval          = 30 * time.Second
 	defaultMergeGracePeriod      = 10 * time.Minute
@@ -337,7 +338,7 @@ func (d *Daemon) Assign(ctx context.Context, issue, prompt, agentProfile string,
 		d.failPendingAssignment(ctx, issue, clone, pane, profile, err, restoreReservation)
 		return fmt.Errorf("send prompt: %w", err)
 	}
-	if err := d.amux.WaitIdle(ctx, pane.ID, defaultAgentHandshakeTimeout); err != nil {
+	if err := d.amux.WaitIdleSettle(ctx, pane.ID, defaultAgentHandshakeTimeout, defaultPromptSettleDuration); err != nil {
 		d.failPendingAssignment(ctx, issue, clone, pane, profile, err, restoreReservation)
 		return fmt.Errorf("send prompt: %w", err)
 	}

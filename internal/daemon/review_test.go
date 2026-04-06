@@ -73,7 +73,7 @@ func TestPRReviewPollingNudgesWorkerOncePerNewBlockingReviewBatch(t *testing.T) 
 		secondNudgeSent,
 	})
 	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
-		{PaneID: "pane-1", Timeout: 30 * time.Second, Settle: 2 * time.Second},
+		{PaneID: "pane-1", Timeout: 30 * time.Second},
 		{PaneID: "pane-1", Timeout: 30 * time.Second, Settle: 2 * time.Second},
 		{PaneID: "pane-1", Timeout: 30 * time.Second, Settle: 2 * time.Second},
 		{PaneID: "pane-1", Timeout: 30 * time.Second, Settle: 2 * time.Second},
@@ -140,7 +140,7 @@ func TestPRReviewPollingAdvancesCountWithoutNudgingForNonBlockingReviews(t *test
 		firstNudgeSent,
 	})
 	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
-		{PaneID: "pane-1", Timeout: 30 * time.Second, Settle: 2 * time.Second},
+		{PaneID: "pane-1", Timeout: 30 * time.Second},
 		{PaneID: "pane-1", Timeout: 30 * time.Second, Settle: 2 * time.Second},
 		{PaneID: "pane-1", Timeout: 30 * time.Second, Settle: 2 * time.Second},
 	}; !reflect.DeepEqual(got, want) {

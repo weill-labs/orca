@@ -962,25 +962,61 @@ func TestCLIClientKillPane(t *testing.T) {
 func TestCLIClientWaitIdle(t *testing.T) {
 	t.Parallel()
 
-	runner := &fakeRunner{}
-	client := newTestClient(Config{Session: "orca-dev"}, runner)
-
-	if err := client.WaitIdle(context.Background(), "pane-17", 45*time.Second); err != nil {
-		t.Fatalf("WaitIdle() error = %v", err)
+	tests := []struct {
+		name    string
+		wait    func(context.Context, *CLIClient) error
+		wantCmd []recordedCommand
+	}{
+		{
+			name: "without settle",
+			wait: func(ctx context.Context, client *CLIClient) error {
+				return client.WaitIdle(ctx, "pane-17", 45*time.Second)
+			},
+			wantCmd: []recordedCommand{{
+				name: "amux",
+				args: []string{
+					"-s", "orca-dev",
+					"wait",
+					"idle",
+					"pane-17",
+					"--timeout", "45s",
+				},
+			}},
+		},
+		{
+			name: "with settle",
+			wait: func(ctx context.Context, client *CLIClient) error {
+				return client.WaitIdleSettle(ctx, "pane-17", 45*time.Second, 2*time.Second)
+			},
+			wantCmd: []recordedCommand{{
+				name: "amux",
+				args: []string{
+					"-s", "orca-dev",
+					"wait",
+					"idle",
+					"pane-17",
+					"--settle", "2s",
+					"--timeout", "45s",
+				},
+			}},
+		},
 	}
 
-	want := []recordedCommand{{
-		name: "amux",
-		args: []string{
-			"-s", "orca-dev",
-			"wait",
-			"idle",
-			"pane-17",
-			"--timeout", "45s",
-		},
-	}}
-	if !reflect.DeepEqual(runner.calls, want) {
-		t.Fatalf("WaitIdle() commands = %#v, want %#v", runner.calls, want)
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			runner := &fakeRunner{}
+			client := newTestClient(Config{Session: "orca-dev"}, runner)
+
+			if err := tt.wait(context.Background(), client); err != nil {
+				t.Fatalf("wait idle error = %v", err)
+			}
+			if !reflect.DeepEqual(runner.calls, tt.wantCmd) {
+				t.Fatalf("wait idle commands = %#v, want %#v", runner.calls, tt.wantCmd)
+			}
+		})
 	}
 }
 
@@ -1128,6 +1164,9 @@ func TestMockClientRecordsCalls(t *testing.T) {
 	if err := mock.WaitIdle(context.Background(), "20", 10*time.Second); err != nil {
 		t.Fatalf("WaitIdle() error = %v", err)
 	}
+	if err := mock.WaitIdleSettle(context.Background(), "20", 10*time.Second, 2*time.Second); err != nil {
+		t.Fatalf("WaitIdleSettle() error = %v", err)
+	}
 	if err := mock.WaitContent(context.Background(), "20", "Do you trust", 10*time.Second); err != nil {
 		t.Fatalf("WaitContent() error = %v", err)
 	}
@@ -1159,8 +1198,15 @@ func TestMockClientRecordsCalls(t *testing.T) {
 	if !reflect.DeepEqual(mock.KillPaneCalls, []string{"20"}) {
 		t.Fatalf("KillPaneCalls = %#v", mock.KillPaneCalls)
 	}
-	if got := len(mock.WaitIdleCalls); got != 1 {
-		t.Fatalf("WaitIdleCalls count = %d, want 1", got)
+	if got, want := mock.WaitIdleCalls, []struct {
+		PaneID  string
+		Timeout time.Duration
+		Settle  time.Duration
+	}{
+		{PaneID: "20", Timeout: 10 * time.Second},
+		{PaneID: "20", Timeout: 10 * time.Second, Settle: 2 * time.Second},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("WaitIdleCalls = %#v, want %#v", got, want)
 	}
 	if got, want := len(mock.WaitContentCalls), 1; got != want {
 		t.Fatalf("WaitContentCalls count = %d, want %d", got, want)

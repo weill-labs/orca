@@ -29,6 +29,7 @@ type Client interface {
 	SetMetadata(ctx context.Context, paneID string, metadata map[string]string) error
 	KillPane(ctx context.Context, paneID string) error
 	WaitIdle(ctx context.Context, paneID string, timeout time.Duration) error
+	WaitIdleSettle(ctx context.Context, paneID string, timeout, settle time.Duration) error
 	WaitContent(ctx context.Context, paneID, substring string, timeout time.Duration) error
 }
 
@@ -242,7 +243,17 @@ func (c *CLIClient) KillPane(ctx context.Context, paneID string) error {
 
 // WaitIdle waits for a pane to become idle before returning.
 func (c *CLIClient) WaitIdle(ctx context.Context, paneID string, timeout time.Duration) error {
-	_, err := c.run(ctx, c.session, "wait", "idle", paneID, "--timeout", timeout.String())
+	return c.WaitIdleSettle(ctx, paneID, timeout, 0)
+}
+
+// WaitIdleSettle waits for a pane to become idle and optionally remain settled before returning.
+func (c *CLIClient) WaitIdleSettle(ctx context.Context, paneID string, timeout, settle time.Duration) error {
+	args := []string{"wait", "idle", paneID}
+	if settle > 0 {
+		args = append(args, "--settle", settle.String())
+	}
+	args = append(args, "--timeout", timeout.String())
+	_, err := c.run(ctx, c.session, args[0], args[1:]...)
 	return err
 }
 
