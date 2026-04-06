@@ -198,7 +198,7 @@ func (d *Daemon) removeStalePIDFile() error {
 		return fmt.Errorf("check pid file process: %w", err)
 	}
 	if alive {
-		return fmt.Errorf("pid file already exists: %w", ErrAlreadyStarted)
+		return fmt.Errorf("daemon already running: %w", ErrAlreadyStarted)
 	}
 	if err := os.Remove(d.pidPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("remove stale pid file: %w", err)

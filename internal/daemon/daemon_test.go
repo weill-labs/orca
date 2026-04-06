@@ -88,6 +88,9 @@ func TestDaemonStartReturnsAlreadyStartedWhenPIDIsAlive(t *testing.T) {
 	if !errors.Is(err, ErrAlreadyStarted) {
 		t.Fatalf("Start() error = %v, want %v", err, ErrAlreadyStarted)
 	}
+	if !strings.Contains(err.Error(), "daemon already running") {
+		t.Fatalf("Start() error = %v, want daemon already running message", err)
+	}
 
 	data, readErr := os.ReadFile(deps.pidPath)
 	if readErr != nil {
