@@ -10,12 +10,11 @@ type taskMonitorNudge func(context.Context, *Daemon, *TaskStateUpdate)
 const taskMonitorNudgeConcurrency = 4
 
 func (d *Daemon) executeTaskMonitorNudges(ctx context.Context, results []taskMonitorResult) {
-	limit := min(len(results), taskMonitorNudgeConcurrency)
-	if limit == 0 {
+	if len(results) == 0 {
 		return
 	}
 
-	sem := make(chan struct{}, limit)
+	sem := make(chan struct{}, taskMonitorNudgeConcurrency)
 	var wg sync.WaitGroup
 
 launchLoop:
