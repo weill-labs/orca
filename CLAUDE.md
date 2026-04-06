@@ -6,6 +6,8 @@ Orca is a deterministic agent orchestration daemon for amux. It manages the full
 
 See [docs/specs/orca-design.md](docs/specs/orca-design.md) for the full design document.
 
+Linear project: https://linear.app/weill-labs/project/orca-0582da3ac28f — file all orca issues under this project.
+
 ## Architecture
 
 - **Daemon**: long-lived background process per project, SQLite state at `~/.config/orca/state.db`
