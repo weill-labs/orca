@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/weill-labs/orca/internal/amux"
+	"github.com/weill-labs/orca/internal/pool"
 	state "github.com/weill-labs/orca/internal/daemonstate"
 )
 
@@ -22,6 +23,9 @@ func TestLocalControllerSpawn(t *testing.T) {
 		amux    *fakeSpawnAmux
 		store   func(t *testing.T) state.Store
 		detect  func(string) (string, error)
+		session *string
+		setupProject func(t *testing.T, project string)
+		poolRunner pool.Runner
 		assert  func(t *testing.T, store state.Store, result SpawnPaneResult, amuxClient *fakeSpawnAmux, project string)
 		wantErr string
 	}{
@@ -153,41 +157,110 @@ func TestLocalControllerSpawn(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "returns clone allocation failures",
+			amux: &fakeSpawnAmux{},
+			poolRunner: spawnFailingRunner{err: errors.New("clone failed")},
+			assert: func(t *testing.T, _ state.Store, _ SpawnPaneResult, amuxClient *fakeSpawnAmux, _ string) {
+				t.Helper()
+				if got := len(amuxClient.spawnRequests); got != 0 {
+					t.Fatalf("len(spawnRequests) = %d, want 0", got)
+				}
+			},
+			wantErr: "auto-create clone",
+		},
+		{
+			name: "returns missing session pane creation failures",
+			amux: &fakeSpawnAmux{
+				spawnErr: errors.New("session not found"),
+			},
+			session: stringPtr(""),
+			wantErr: "spawn pane: session not found",
+			assert: func(t *testing.T, store state.Store, _ SpawnPaneResult, amuxClient *fakeSpawnAmux, project string) {
+				t.Helper()
+				queryableStore, ok := store.(interface {
+					ListClones(context.Context, string) ([]state.Clone, error)
+				})
+				if !ok {
+					t.Fatal("store does not support clone assertions")
+				}
+
+				if got, want := len(amuxClient.spawnRequests), 1; got != want {
+					t.Fatalf("len(spawnRequests) = %d, want %d", got, want)
+				}
+				if got, want := amuxClient.spawnRequests[0].Session, ""; got != want {
+					t.Fatalf("spawn session = %q, want %q", got, want)
+				}
+
+				clones, err := queryableStore.ListClones(context.Background(), project)
+				if err != nil {
+					t.Fatalf("ListClones() error = %v", err)
+				}
+				if got, want := clones[0].Status, "free"; got != want {
+					t.Fatalf("clone status = %q, want %q", got, want)
+				}
+			},
+		},
+		{
+			name: "returns pool directory creation failures",
+			amux: &fakeSpawnAmux{},
+			setupProject: func(t *testing.T, project string) {
+				t.Helper()
+				mustWriteSpawnFile(t, filepath.Join(project, ".orca"), "not-a-directory\n")
+			},
+			wantErr: "create pool directory",
+			assert: func(t *testing.T, _ state.Store, _ SpawnPaneResult, amuxClient *fakeSpawnAmux, _ string) {
+				t.Helper()
+				if got := len(amuxClient.spawnRequests); got != 0 {
+					t.Fatalf("len(spawnRequests) = %d, want 0", got)
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {
 		tt := tt
-			t.Run(tt.name, func(t *testing.T) {
-				t.Parallel()
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-				project, origin := newSpawnProject(t)
-				store := newSpawnStore(t)
-				if tt.store != nil {
-					store = tt.store(t)
-				}
+			project, origin := newSpawnProject(t)
+			store := newSpawnStore(t)
+			if tt.store != nil {
+				store = tt.store(t)
+			}
+			if tt.setupProject != nil {
+				tt.setupProject(t, project)
+			}
 
-				detectOrigin := tt.detect
-				if detectOrigin == nil {
-					detectOrigin = func(string) (string, error) { return origin, nil }
-				}
+			detectOrigin := tt.detect
+			if detectOrigin == nil {
+				detectOrigin = func(string) (string, error) { return origin, nil }
+			}
+			session := "orca-dev"
+			if tt.session != nil {
+				session = *tt.session
+			}
 
-				controller, err := NewLocalController(ControllerOptions{
+			controller, err := NewLocalController(ControllerOptions{
 				Store:        store,
 				Paths:        Paths{StateDB: filepath.Join(t.TempDir(), "state.db"), PIDDir: filepath.Join(t.TempDir(), "pids")},
 				Now:          func() time.Time { return time.Date(2026, 4, 5, 12, 0, 0, 123, time.UTC) },
 				DetectOrigin: detectOrigin,
 				Amux:         tt.amux,
+				PoolRunner:   tt.poolRunner,
 			})
 			if err != nil {
 				t.Fatalf("NewLocalController() error = %v", err)
 			}
 
-			result, err := controller.Spawn(context.Background(), SpawnPaneRequest{
+			req := SpawnPaneRequest{
 				Project:  project,
-				Session:  "orca-dev",
+				Session:  session,
 				LeadPane: "lead-pane",
 				Title:    "Scratch pane",
-			})
+			}
+
+			result, err := controller.Spawn(context.Background(), req)
 			if tt.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 					t.Fatalf("Spawn() error = %v, want substring %q", err, tt.wantErr)
@@ -199,6 +272,18 @@ func TestLocalControllerSpawn(t *testing.T) {
 			tt.assert(t, store, result, tt.amux, project)
 		})
 	}
+}
+
+type spawnFailingRunner struct {
+	err error
+}
+
+func stringPtr(value string) *string {
+	return &value
+}
+
+func (r spawnFailingRunner) Run(context.Context, string, string, ...string) error {
+	return r.err
 }
 
 type fakeSpawnAmux struct {
