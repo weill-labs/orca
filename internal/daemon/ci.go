@@ -19,12 +19,13 @@ func (d *Daemon) handlePRChecksPoll(ctx context.Context, update *TaskStateUpdate
 	if err != nil {
 		return
 	}
+	now := d.now()
 
 	previous := update.Active.Worker.LastCIState
 	if ciState != ciStateFail {
 		if previous != ciState {
 			update.Active.Worker.LastCIState = ciState
-			update.Active.Worker.UpdatedAt = d.now()
+			update.Active.Worker.UpdatedAt = now
 			update.WorkerChanged = true
 		}
 		return
@@ -34,7 +35,7 @@ func (d *Daemon) handlePRChecksPoll(ctx context.Context, update *TaskStateUpdate
 	}
 	if d.nudgeForCIFailure(ctx, update, profile) {
 		update.Active.Worker.LastCIState = ciStateFail
-		update.Active.Worker.UpdatedAt = d.now()
+		update.Active.Worker.UpdatedAt = now
 		update.WorkerChanged = true
 	}
 }

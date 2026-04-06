@@ -23,12 +23,13 @@ func (d *Daemon) handlePRMergeablePoll(ctx context.Context, update *TaskStateUpd
 	if err != nil || !ok {
 		return
 	}
+	now := d.now()
 
 	previousState := update.Active.Worker.LastMergeableState
 	if previousState == "CONFLICTING" || state != "CONFLICTING" {
 		if previousState != state {
 			update.Active.Worker.LastMergeableState = state
-			update.Active.Worker.UpdatedAt = d.now()
+			update.Active.Worker.UpdatedAt = now
 			update.WorkerChanged = true
 		}
 		return
@@ -45,7 +46,7 @@ func (d *Daemon) handlePRMergeablePoll(ctx context.Context, update *TaskStateUpd
 	}
 
 	update.Active.Worker.LastMergeableState = state
-	update.Active.Worker.UpdatedAt = d.now()
+	update.Active.Worker.UpdatedAt = now
 	update.WorkerChanged = true
 	update.Events = append(update.Events, d.assignmentEvent(update.Active, profile, EventWorkerNudgedConflict, strings.TrimSpace(conflictNudgePrompt)))
 }

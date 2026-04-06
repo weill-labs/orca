@@ -106,6 +106,7 @@ func (d *Daemon) checkTaskReviewPoll(ctx context.Context, active ActiveAssignmen
 	if err != nil || !ok {
 		return update
 	}
+	now := d.now()
 
 	reviewCount := len(payload.Reviews)
 	commentCount := len(payload.Comments)
@@ -114,11 +115,11 @@ func (d *Daemon) checkTaskReviewPoll(ctx context.Context, active ActiveAssignmen
 	resetReviewNudgeCount := payload.ReviewDecision != "CHANGES_REQUESTED" && update.Active.Worker.ReviewNudgeCount != 0
 	if resetReviewNudgeCount {
 		update.Active.Worker.ReviewNudgeCount = 0
-		update.Active.Worker.UpdatedAt = d.now()
+		update.Active.Worker.UpdatedAt = now
 		update.WorkerChanged = true
 	}
 	if previousReviewCount > reviewCount || previousCommentCount > commentCount {
-		d.persistReviewWorkerState(&update.Active.Worker, reviewCount, commentCount, d.now())
+		d.persistReviewWorkerState(&update.Active.Worker, reviewCount, commentCount, now)
 		update.WorkerChanged = true
 		return update
 	}
@@ -126,7 +127,7 @@ func (d *Daemon) checkTaskReviewPoll(ctx context.Context, active ActiveAssignmen
 		return update
 	}
 	if payload.ReviewDecision == "APPROVED" || latestReviewContainsLGTM(payload.Reviews) {
-		d.persistReviewWorkerState(&update.Active.Worker, reviewCount, commentCount, d.now())
+		d.persistReviewWorkerState(&update.Active.Worker, reviewCount, commentCount, now)
 		update.WorkerChanged = true
 		return update
 	}
@@ -135,12 +136,12 @@ func (d *Daemon) checkTaskReviewPoll(ctx context.Context, active ActiveAssignmen
 	newComments := payload.Comments[previousCommentCount:]
 	blocking := blockingReviewFeedback(payload.ReviewDecision, newReviews, newComments)
 	if len(blocking) == 0 {
-		d.persistReviewWorkerState(&update.Active.Worker, reviewCount, commentCount, d.now())
+		d.persistReviewWorkerState(&update.Active.Worker, reviewCount, commentCount, now)
 		update.WorkerChanged = true
 		return update
 	}
 	if update.Active.Worker.ReviewNudgeCount >= maxReviewNudges {
-		d.persistReviewWorkerState(&update.Active.Worker, reviewCount, commentCount, d.now())
+		d.persistReviewWorkerState(&update.Active.Worker, reviewCount, commentCount, now)
 		update.WorkerChanged = true
 
 		event := d.assignmentEvent(update.Active, profile, EventWorkerReviewEscalated, fmt.Sprintf("review nudges exhausted after %d attempts; lead intervention required", update.Active.Worker.ReviewNudgeCount))
@@ -151,7 +152,7 @@ func (d *Daemon) checkTaskReviewPoll(ctx context.Context, active ActiveAssignmen
 
 	feedback := formatBlockingReviewFeedback(update.Active.Task.PRNumber, blocking)
 	// A fresh capture can update LastCapture/LastActivityAt before we decide whether to defer.
-	if !d.workerAppearsIdleForReviewNudge(ctx, &update, profile, d.now()) {
+	if !d.workerAppearsIdleForReviewNudge(ctx, &update, profile, now) {
 		return update
 	}
 	if err := d.sendPromptAndEnter(ctx, update.Active.Task.PaneID, feedback); err != nil {
@@ -159,7 +160,7 @@ func (d *Daemon) checkTaskReviewPoll(ctx context.Context, active ActiveAssignmen
 	}
 
 	update.Active.Worker.ReviewNudgeCount++
-	d.persistReviewWorkerState(&update.Active.Worker, reviewCount, commentCount, d.now())
+	d.persistReviewWorkerState(&update.Active.Worker, reviewCount, commentCount, now)
 	update.WorkerChanged = true
 
 	update.Events = append(update.Events, d.assignmentEvent(update.Active, profile, EventWorkerNudgedReview, fmt.Sprintf("sent %d new blocking review(s) to worker", len(blocking))))
