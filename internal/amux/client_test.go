@@ -121,7 +121,7 @@ func TestCLIClientSpawn(t *testing.T) {
 				{output: []byte("Spawned worker-implicit in pane 14\n")},
 			},
 			wantCmds: []recordedCommand{
-				{name: "amux", args: []string{"-s", "default", "spawn", "--root", "--name", "worker-implicit"}},
+				{name: "amux", args: []string{"-s", "default", "spawn", "--auto", "--name", "worker-implicit"}},
 				{name: "amux", args: []string{"-s", "default", "send-keys", "14", "--delay-final", "250ms", "cd '/tmp/worker-implicit'"}},
 				{name: "amux", args: []string{"-s", "default", "send-keys", "14", "--delay-final", "250ms", "Enter"}},
 				{name: "amux", args: []string{"-s", "default", "wait", "idle", "14", "--timeout", "5s"}},
