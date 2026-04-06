@@ -318,16 +318,13 @@ func (d *Daemon) assignmentEvent(active ActiveAssignment, profile AgentProfile, 
 		Project:      d.project,
 		Issue:        active.Task.Issue,
 		PaneID:       active.Task.PaneID,
-		PaneName:     active.Task.PaneName,
+		PaneName:     assignmentPaneName(active.Task, active.Worker),
 		CloneName:    active.Task.CloneName,
 		ClonePath:    active.Task.ClonePath,
 		Branch:       active.Task.Branch,
 		AgentProfile: profile.Name,
 		PRNumber:     active.Task.PRNumber,
 		Message:      message,
-	}
-	if event.PaneName == "" {
-		event.PaneName = active.Worker.PaneName
 	}
 	if event.AgentProfile == "" {
 		event.AgentProfile = active.Task.AgentProfile

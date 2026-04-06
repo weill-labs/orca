@@ -143,6 +143,7 @@ func (d *Daemon) checkTaskReviewPoll(ctx context.Context, active ActiveAssignmen
 	if update.Active.Worker.ReviewNudgeCount >= maxReviewNudges {
 		d.persistReviewWorkerState(&update.Active.Worker, reviewCount, commentCount, now)
 		update.WorkerChanged = true
+		d.notifyLeadPaneReviewEscalation(ctx, update.Active, blockingReviewFeedback(payload.ReviewDecision, payload.Reviews, payload.Comments))
 
 		event := d.assignmentEvent(update.Active, profile, EventWorkerReviewEscalated, fmt.Sprintf("review nudges exhausted after %d attempts; lead intervention required", update.Active.Worker.ReviewNudgeCount))
 		event.Retry = update.Active.Worker.ReviewNudgeCount
@@ -287,6 +288,47 @@ func formatBlockingReviewFeedback(prNumber int, feedback []prFeedback) string {
 		fmt.Fprintf(&builder, "- %s: %s\n", author, body)
 	}
 	builder.WriteString("\nAddress the feedback in the PR review and push an update.")
+	return builder.String()
+}
+
+func (d *Daemon) notifyLeadPaneReviewEscalation(ctx context.Context, active ActiveAssignment, feedback []prFeedback) {
+	leadPane := strings.TrimSpace(d.leadPane)
+	if leadPane == "" || len(feedback) == 0 {
+		return
+	}
+
+	_ = d.amux.SendKeys(ctx, leadPane, formatLeadReviewEscalation(active, feedback), "Enter")
+}
+
+func formatLeadReviewEscalation(active ActiveAssignment, feedback []prFeedback) string {
+	var builder strings.Builder
+
+	issue := strings.TrimSpace(active.Task.Issue)
+	paneName := assignmentPaneName(active.Task, active.Worker)
+
+	if issue != "" && paneName != "" && active.Task.PRNumber > 0 {
+		fmt.Fprintf(&builder, "Review nudges exhausted for %s in %s on PR #%d.\n", issue, paneName, active.Task.PRNumber)
+	} else if paneName != "" && active.Task.PRNumber > 0 {
+		fmt.Fprintf(&builder, "Review nudges exhausted for %s on PR #%d.\n", paneName, active.Task.PRNumber)
+	} else {
+		builder.WriteString("Review nudges exhausted.\n")
+	}
+
+	builder.WriteString("Unresolved review feedback:\n")
+	for _, item := range feedback {
+		author := strings.TrimSpace(item.Author)
+		if author == "" {
+			author = "reviewer"
+		}
+		fmt.Fprintf(&builder, "- %s: %s\n", author, normalizeReviewBody(item.Body))
+	}
+
+	if paneName != "" {
+		fmt.Fprintf(&builder, "\nIntervene in %s to address the feedback or reassign the task.", paneName)
+	} else {
+		builder.WriteString("\nIntervene to address the feedback or reassign the task.")
+	}
+
 	return builder.String()
 }
 

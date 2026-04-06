@@ -214,6 +214,81 @@ func TestPRReviewPollingEscalatesAfterThreeNudgesAndResetsAfterApprovalCycle(t *
 	})
 }
 
+func TestPRReviewPollingNotifiesLeadPaneWhenReviewNudgesAreExhausted(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	captureTicker := newFakeTicker()
+	prTicker := newFakeTicker()
+	deps.tickers.enqueue(captureTicker, prTicker)
+	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--state", "open", "--json", "number"}, `[]`, nil)
+	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, marshalReviewPayload(t, "CHANGES_REQUESTED", []prReview{
+		testReview("alice", "CHANGES_REQUESTED", "Please add tests."),
+	}, nil), nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, marshalReviewPayload(t, "CHANGES_REQUESTED", []prReview{
+		testReview("alice", "CHANGES_REQUESTED", "Please add tests."),
+		testReview("bob", "CHANGES_REQUESTED", "Handle the nil case too."),
+	}, nil), nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, marshalReviewPayload(t, "CHANGES_REQUESTED", []prReview{
+		testReview("alice", "CHANGES_REQUESTED", "Please add tests."),
+		testReview("bob", "CHANGES_REQUESTED", "Handle the nil case too."),
+		testReview("carol", "CHANGES_REQUESTED", "Cover the restart flow."),
+	}, nil), nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, marshalReviewPayload(t, "CHANGES_REQUESTED", []prReview{
+		testReview("alice", "CHANGES_REQUESTED", "Please add tests."),
+		testReview("bob", "CHANGES_REQUESTED", "Handle the nil case too."),
+		testReview("carol", "CHANGES_REQUESTED", "Cover the restart flow."),
+		testReview("dave", "CHANGES_REQUESTED", "Persist the nudge counter."),
+	}, nil), nil)
+
+	d := deps.newDaemon(t)
+	d.leadPane = "lead-pane"
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-689", "Implement daemon core", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+	makeWorkerIdleForReviewNudge(deps)
+
+	aliceNudge := "New blocking PR review feedback on #42:\n- alice: Please add tests.\n\nAddress the feedback in the PR review and push an update.\n"
+	bobNudge := "New blocking PR review feedback on #42:\n- bob: Handle the nil case too.\n\nAddress the feedback in the PR review and push an update.\n"
+	carolNudge := "New blocking PR review feedback on #42:\n- carol: Cover the restart flow.\n\nAddress the feedback in the PR review and push an update.\n"
+	leadNotification := "Review nudges exhausted for LAB-689 in worker-1 on PR #42.\nUnresolved review feedback:\n- alice: Please add tests.\n- bob: Handle the nil case too.\n- carol: Cover the restart flow.\n- dave: Persist the nudge counter.\n\nIntervene in worker-1 to address the feedback or reassign the task.\n"
+
+	prTicker.tick(deps.clock.Now())
+	waitFor(t, "first review nudge", func() bool {
+		return deps.amux.countKey("pane-1", aliceNudge) == 1
+	})
+
+	prTicker.tick(deps.clock.Now())
+	waitFor(t, "second review nudge", func() bool {
+		return deps.amux.countKey("pane-1", bobNudge) == 1
+	})
+
+	prTicker.tick(deps.clock.Now())
+	waitFor(t, "third review nudge", func() bool {
+		return deps.amux.countKey("pane-1", carolNudge) == 1
+	})
+
+	prTicker.tick(deps.clock.Now())
+	waitFor(t, "lead review escalation notification", func() bool {
+		worker, ok := deps.state.worker("pane-1")
+		return ok &&
+			worker.LastReviewCount == 4 &&
+			deps.amux.countKey("lead-pane", leadNotification) == 1 &&
+			deps.events.countType(EventWorkerReviewEscalated) == 1
+	})
+
+	deps.amux.requireSentKeys(t, "lead-pane", []string{leadNotification})
+}
+
 func TestPRReviewPollingDefersReviewNudgeUntilWorkerAppearsIdle(t *testing.T) {
 	t.Parallel()
 
