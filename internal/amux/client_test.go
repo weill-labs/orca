@@ -61,7 +61,7 @@ func TestCLIClientSpawn(t *testing.T) {
 		wantErr  string
 	}{
 		{
-			name: "targets the explicit lead pane with spiral placement",
+			name: "targets the explicit lead pane",
 			config: Config{
 				Binary:  "/usr/local/bin/amux",
 				Session: "orca-dev",
@@ -76,7 +76,7 @@ func TestCLIClientSpawn(t *testing.T) {
 				{output: []byte("Spawned clone-01 in pane 7\n")},
 			},
 			wantCmds: []recordedCommand{
-				{name: "/usr/local/bin/amux", args: []string{"-s", "override-session", "spawn", "--spiral", "--at", "lead-pane", "--name", "clone-01"}},
+				{name: "/usr/local/bin/amux", args: []string{"-s", "override-session", "spawn", "--at", "lead-pane", "--name", "clone-01"}},
 				{name: "/usr/local/bin/amux", args: []string{"-s", "orca-dev", "send-keys", "7", "--delay-final", "250ms", "cd '/tmp/clone-01'"}},
 				{name: "/usr/local/bin/amux", args: []string{"-s", "orca-dev", "send-keys", "7", "--delay-final", "250ms", "Enter"}},
 				{name: "/usr/local/bin/amux", args: []string{"-s", "orca-dev", "wait", "idle", "7", "--timeout", "5s"}},
@@ -86,7 +86,7 @@ func TestCLIClientSpawn(t *testing.T) {
 			wantPane: Pane{ID: "7", Name: "clone-01"},
 		},
 		{
-			name: "uses spiral placement for later spawns in the lead pane window",
+			name: "spawns in the lead pane window",
 			config: Config{
 				Session: "default",
 			},
@@ -99,7 +99,7 @@ func TestCLIClientSpawn(t *testing.T) {
 				{output: []byte("Spawned worker-2 in pane 12\n")},
 			},
 			wantCmds: []recordedCommand{
-				{name: "amux", args: []string{"-s", "default", "spawn", "--spiral", "--at", "lead-pane", "--name", "worker-2"}},
+				{name: "amux", args: []string{"-s", "default", "spawn", "--at", "lead-pane", "--name", "worker-2"}},
 				{name: "amux", args: []string{"-s", "default", "send-keys", "12", "--delay-final", "250ms", "cd '/tmp/worker-2'"}},
 				{name: "amux", args: []string{"-s", "default", "send-keys", "12", "--delay-final", "250ms", "Enter"}},
 				{name: "amux", args: []string{"-s", "default", "wait", "idle", "12", "--timeout", "5s"}},
@@ -109,7 +109,7 @@ func TestCLIClientSpawn(t *testing.T) {
 			wantPane: Pane{ID: "12", Name: "worker-2"},
 		},
 		{
-			name: "uses spiral placement without an explicit lead pane",
+			name: "spawns without an explicit lead pane",
 			config: Config{
 				Session: "default",
 			},
@@ -121,7 +121,7 @@ func TestCLIClientSpawn(t *testing.T) {
 				{output: []byte("Spawned worker-implicit in pane 14\n")},
 			},
 			wantCmds: []recordedCommand{
-				{name: "amux", args: []string{"-s", "default", "spawn", "--spiral", "--name", "worker-implicit"}},
+				{name: "amux", args: []string{"-s", "default", "spawn", "--root", "--name", "worker-implicit"}},
 				{name: "amux", args: []string{"-s", "default", "send-keys", "14", "--delay-final", "250ms", "cd '/tmp/worker-implicit'"}},
 				{name: "amux", args: []string{"-s", "default", "send-keys", "14", "--delay-final", "250ms", "Enter"}},
 				{name: "amux", args: []string{"-s", "default", "wait", "idle", "14", "--timeout", "5s"}},
@@ -131,7 +131,7 @@ func TestCLIClientSpawn(t *testing.T) {
 			wantPane: Pane{ID: "14", Name: "worker-implicit"},
 		},
 		{
-			name: "respects explicit worker names with spiral placement",
+			name: "respects explicit worker names",
 			config: Config{
 				Session: "main",
 			},
@@ -145,7 +145,7 @@ func TestCLIClientSpawn(t *testing.T) {
 				{output: []byte("Split vertical: new pane worker-LAB-99\n")},
 			},
 			wantCmds: []recordedCommand{
-				{name: "amux", args: []string{"-s", "main", "spawn", "--spiral", "--at", "lead-pane", "--name", "worker-LAB-99"}},
+				{name: "amux", args: []string{"-s", "main", "spawn", "--at", "lead-pane", "--name", "worker-LAB-99"}},
 				{name: "amux", args: []string{"-s", "main", "send-keys", "worker-LAB-99", "--delay-final", "250ms", "cd '/tmp/clone-5'"}},
 				{name: "amux", args: []string{"-s", "main", "send-keys", "worker-LAB-99", "--delay-final", "250ms", "Enter"}},
 				{name: "amux", args: []string{"-s", "main", "wait", "idle", "worker-LAB-99", "--timeout", "5s"}},
@@ -167,7 +167,7 @@ func TestCLIClientSpawn(t *testing.T) {
 				{err: errors.New("exit status 1")},
 			},
 			wantCmds: []recordedCommand{
-				{name: "amux", args: []string{"-s", "default", "spawn", "--spiral", "--at", "lead-pane", "--name", "worker-3"}},
+				{name: "amux", args: []string{"-s", "default", "spawn", "--at", "lead-pane", "--name", "worker-3"}},
 			},
 			wantErr: "exit status 1",
 		},
@@ -184,7 +184,7 @@ func TestCLIClientSpawn(t *testing.T) {
 				{output: []byte("Spawned worker-4\n")},
 			},
 			wantCmds: []recordedCommand{
-				{name: "amux", args: []string{"-s", "default", "spawn", "--spiral", "--at", "lead-pane", "--name", "worker-4"}},
+				{name: "amux", args: []string{"-s", "default", "spawn", "--at", "lead-pane", "--name", "worker-4"}},
 			},
 			wantErr: "parse pane id",
 		},
@@ -241,7 +241,7 @@ func TestCLIClientSpawnDoesNotInspectSessionLayout(t *testing.T) {
 	}
 
 	wantCmds := []recordedCommand{
-		{name: "amux", args: []string{"-s", "orca-dev", "spawn", "--spiral", "--at", "lead-pane", "--name", "clone-01"}},
+		{name: "amux", args: []string{"-s", "orca-dev", "spawn", "--at", "lead-pane", "--name", "clone-01"}},
 		{name: "amux", args: []string{"-s", "orca-dev", "send-keys", "7", "--delay-final", "250ms", "cd '/tmp/clone-01'"}},
 		{name: "amux", args: []string{"-s", "orca-dev", "send-keys", "7", "--delay-final", "250ms", "Enter"}},
 		{name: "amux", args: []string{"-s", "orca-dev", "wait", "idle", "7", "--timeout", "5s"}},
