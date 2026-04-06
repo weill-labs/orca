@@ -27,6 +27,7 @@ type Client interface {
 	CapturePane(ctx context.Context, paneID string) (PaneCapture, error)
 	CaptureHistory(ctx context.Context, paneID string) (PaneCapture, error)
 	SetMetadata(ctx context.Context, paneID string, metadata map[string]string) error
+	RemoveMetadata(ctx context.Context, paneID string, keys ...string) error
 	KillPane(ctx context.Context, paneID string) error
 	WaitIdle(ctx context.Context, paneID string, timeout time.Duration) error
 	WaitIdleSettle(ctx context.Context, paneID string, timeout, settle time.Duration) error
@@ -68,6 +69,7 @@ type capturePane struct {
 	CurrentCommand string               `json:"current_command,omitempty"`
 	ChildPIDs      []int                `json:"child_pids,omitempty"`
 	Exited         bool                 `json:"exited,omitempty"`
+	ExitedSince    string               `json:"exited_since,omitempty"`
 	Error          *captureCommandError `json:"error,omitempty"`
 }
 
@@ -235,6 +237,17 @@ func (c *CLIClient) SetMetadata(ctx context.Context, paneID string, metadata map
 	return err
 }
 
+// RemoveMetadata removes the provided metadata keys from a pane.
+func (c *CLIClient) RemoveMetadata(ctx context.Context, paneID string, keys ...string) error {
+	if len(keys) == 0 {
+		return nil
+	}
+
+	args := append([]string{paneID}, keys...)
+	_, err := c.run(ctx, c.session, "meta", append([]string{"rm"}, args...)...)
+	return err
+}
+
 // KillPane terminates a pane.
 func (c *CLIClient) KillPane(ctx context.Context, paneID string) error {
 	_, err := c.run(ctx, c.session, "kill", paneID)
@@ -324,6 +337,7 @@ func (p capturePane) toPaneCapture() PaneCapture {
 		CurrentCommand: p.CurrentCommand,
 		ChildPIDs:      append([]int(nil), p.ChildPIDs...),
 		Exited:         p.Exited,
+		ExitedSince:    p.ExitedSince,
 	}
 }
 

@@ -65,7 +65,9 @@ func (d *Daemon) reconcileTaskOnStartup(ctx context.Context, task Task) {
 		if err != nil {
 			profile = AgentProfile{Name: active.Task.AgentProfile}
 		}
-		d.handleExitedPaneCapture(ctx, active, profile, snapshot, d.now())
+		if d.shouldEscalateExitedPane(snapshot, d.now()) {
+			d.handleExitedPaneCapture(ctx, active, profile, snapshot, d.now())
+		}
 		return
 	}
 

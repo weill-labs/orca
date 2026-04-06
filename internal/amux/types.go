@@ -1,6 +1,9 @@
 package amux
 
-import "strings"
+import (
+	"strings"
+	"time"
+)
 
 type Pane struct {
 	ID   string `json:"id,omitempty"`
@@ -22,8 +25,21 @@ type PaneCapture struct {
 	CurrentCommand string   `json:"current_command,omitempty"`
 	ChildPIDs      []int    `json:"child_pids,omitempty"`
 	Exited         bool     `json:"exited,omitempty"`
+	ExitedSince    string   `json:"exited_since,omitempty"`
 }
 
 func (c PaneCapture) Output() string {
 	return strings.Join(c.Content, "\n")
+}
+
+func (c PaneCapture) ExitedAt() (time.Time, bool) {
+	if !c.Exited || strings.TrimSpace(c.ExitedSince) == "" {
+		return time.Time{}, false
+	}
+
+	exitedAt, err := time.Parse(time.RFC3339, c.ExitedSince)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return exitedAt, true
 }

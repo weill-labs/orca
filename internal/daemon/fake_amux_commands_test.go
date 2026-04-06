@@ -24,6 +24,7 @@ type fakeAmux struct {
 	sendKeysResults       []error
 	sendKeysHook          func(paneID string, keys []string)
 	setMetadataHook       func(paneID string, metadata map[string]string)
+	removeMetadataHook    func(paneID string, keys []string)
 	killErr               error
 	killHook              func(paneID string)
 	waitIdleErr           error
@@ -144,6 +145,33 @@ func (a *fakeAmux) SetMetadata(ctx context.Context, paneID string, metadata map[
 	}
 	for key, value := range metadata {
 		copied[key] = value
+	}
+	a.metadata[paneID] = copied
+	return nil
+}
+
+func (a *fakeAmux) RemoveMetadata(ctx context.Context, paneID string, keys ...string) error {
+	if a.rejectCanceledContext && ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if a.removeMetadataHook != nil {
+		a.removeMetadataHook(paneID, append([]string(nil), keys...))
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.metadata == nil || len(a.metadata[paneID]) == 0 {
+		return nil
+	}
+	copied := make(map[string]string, len(a.metadata[paneID]))
+	for key, value := range a.metadata[paneID] {
+		copied[key] = value
+	}
+	for _, key := range keys {
+		delete(copied, key)
+	}
+	if len(copied) == 0 {
+		delete(a.metadata, paneID)
+		return nil
 	}
 	a.metadata[paneID] = copied
 	return nil
@@ -469,6 +497,7 @@ func clonePaneCapture(capture PaneCapture) PaneCapture {
 		CurrentCommand: capture.CurrentCommand,
 		ChildPIDs:      append([]int(nil), capture.ChildPIDs...),
 		Exited:         capture.Exited,
+		ExitedSince:    capture.ExitedSince,
 	}
 }
 

@@ -890,6 +890,81 @@ func TestCLIClientSetMetadata(t *testing.T) {
 	}
 }
 
+func TestCLIClientRemoveMetadata(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		config  Config
+		paneID  string
+		keys    []string
+		runErr  error
+		wantCmd recordedCommand
+		wantErr string
+	}{
+		{
+			name: "builds rm-meta command",
+			config: Config{
+				Session: "orca-dev",
+			},
+			paneID: "pane-13",
+			keys:   []string{"status", "issue"},
+			wantCmd: recordedCommand{
+				name: "amux",
+				args: []string{
+					"-s", "orca-dev",
+					"meta", "rm",
+					"pane-13",
+					"status",
+					"issue",
+				},
+			},
+		},
+		{
+			name: "returns runner error",
+			config: Config{
+				Session: "orca-dev",
+			},
+			paneID: "pane-14",
+			keys:   []string{"status"},
+			runErr: errors.New("exit status 1"),
+			wantCmd: recordedCommand{
+				name: "amux",
+				args: []string{
+					"-s", "orca-dev",
+					"meta", "rm",
+					"pane-14",
+					"status",
+				},
+			},
+			wantErr: "exit status 1",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			runner := &fakeRunner{err: tt.runErr}
+			client := newTestClient(tt.config, runner)
+
+			err := client.RemoveMetadata(context.Background(), tt.paneID, tt.keys...)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("RemoveMetadata() error = %v, want substring %q", err, tt.wantErr)
+				}
+			} else if err != nil {
+				t.Fatalf("RemoveMetadata() error = %v", err)
+			}
+
+			if !reflect.DeepEqual(runner.calls, []recordedCommand{tt.wantCmd}) {
+				t.Fatalf("RemoveMetadata() commands = %#v, want %#v", runner.calls, []recordedCommand{tt.wantCmd})
+			}
+		})
+	}
+}
+
 func TestCLIClientKillPane(t *testing.T) {
 	t.Parallel()
 

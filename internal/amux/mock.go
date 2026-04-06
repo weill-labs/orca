@@ -19,6 +19,12 @@ type MetadataCall struct {
 	Metadata map[string]string
 }
 
+// MetadataRemovalCall records a RemoveMetadata invocation.
+type MetadataRemovalCall struct {
+	PaneID string
+	Keys   []string
+}
+
 // MockClient is a test double for daemon tests.
 type MockClient struct {
 	mu sync.Mutex
@@ -31,6 +37,7 @@ type MockClient struct {
 	CapturePaneFunc    func(ctx context.Context, paneID string) (PaneCapture, error)
 	CaptureHistoryFunc func(ctx context.Context, paneID string) (PaneCapture, error)
 	SetMetadataFunc    func(ctx context.Context, paneID string, metadata map[string]string) error
+	RemoveMetadataFunc func(ctx context.Context, paneID string, keys ...string) error
 	KillPaneFunc       func(ctx context.Context, paneID string) error
 	WaitIdleFunc       func(ctx context.Context, paneID string, timeout time.Duration) error
 	WaitIdleSettleFunc func(ctx context.Context, paneID string, timeout, settle time.Duration) error
@@ -44,6 +51,7 @@ type MockClient struct {
 	CapturePaneCalls    []string
 	CaptureHistoryCalls []string
 	SetMetadataCalls    []MetadataCall
+	RemoveMetadataCalls []MetadataRemovalCall
 	KillPaneCalls       []string
 	WaitIdleCalls       []struct {
 		PaneID  string
@@ -161,6 +169,21 @@ func (m *MockClient) SetMetadata(ctx context.Context, paneID string, metadata ma
 
 	if fn != nil {
 		return fn(ctx, paneID, copied)
+	}
+	return nil
+}
+
+func (m *MockClient) RemoveMetadata(ctx context.Context, paneID string, keys ...string) error {
+	m.mu.Lock()
+	m.RemoveMetadataCalls = append(m.RemoveMetadataCalls, MetadataRemovalCall{
+		PaneID: paneID,
+		Keys:   append([]string(nil), keys...),
+	})
+	fn := m.RemoveMetadataFunc
+	m.mu.Unlock()
+
+	if fn != nil {
+		return fn(ctx, paneID, keys...)
 	}
 	return nil
 }

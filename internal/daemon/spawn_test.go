@@ -316,6 +316,7 @@ func (f *fakeSpawnAmux) CaptureHistory(context.Context, string) (amux.PaneCaptur
 	return amux.PaneCapture{}, nil
 }
 func (f *fakeSpawnAmux) SetMetadata(context.Context, string, map[string]string) error { return nil }
+func (f *fakeSpawnAmux) RemoveMetadata(context.Context, string, ...string) error      { return nil }
 func (f *fakeSpawnAmux) KillPane(context.Context, string) error                       { return nil }
 func (f *fakeSpawnAmux) WaitIdle(context.Context, string, time.Duration) error        { return nil }
 func (f *fakeSpawnAmux) WaitIdleSettle(context.Context, string, time.Duration, time.Duration) error {

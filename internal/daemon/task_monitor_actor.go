@@ -17,12 +17,13 @@ type TaskMonitor struct {
 }
 
 type TaskStateUpdate struct {
-	Active        ActiveAssignment
-	TaskChanged   bool
-	WorkerChanged bool
-	PaneMetadata  map[string]string
-	Events        []Event
-	PRMerged      bool
+	Active               ActiveAssignment
+	TaskChanged          bool
+	WorkerChanged        bool
+	PaneMetadata         map[string]string
+	PaneMetadataRemovals []string
+	Events               []Event
+	PRMerged             bool
 }
 
 type taskMonitorCheckKind int
@@ -296,12 +297,14 @@ func (d *Daemon) applyTaskStateUpdate(ctx context.Context, update TaskStateUpdat
 		}
 		return
 	}
-
 	if update.WorkerChanged {
 		_ = d.state.PutWorker(ctx, active.Worker)
 	}
 	if update.TaskChanged {
 		_ = d.state.PutTask(ctx, active.Task)
+	}
+	if len(update.PaneMetadataRemovals) > 0 {
+		_ = d.amux.RemoveMetadata(ctx, active.Task.PaneID, update.PaneMetadataRemovals...)
 	}
 	if len(update.PaneMetadata) > 0 {
 		_ = d.setPaneMetadata(ctx, active.Task.PaneID, update.PaneMetadata)
