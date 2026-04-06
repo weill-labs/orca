@@ -13,10 +13,7 @@ import (
 	"github.com/weill-labs/orca/internal/amux"
 	state "github.com/weill-labs/orca/internal/daemonstate"
 	"github.com/weill-labs/orca/internal/pool"
-<<<<<<< HEAD
 	projectpkg "github.com/weill-labs/orca/internal/project"
-=======
->>>>>>> a5d2d23 (Wait for Codex prompt pastes to settle)
 )
 
 func TestLocalControllerSpawn(t *testing.T) {
