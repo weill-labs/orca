@@ -890,6 +890,127 @@ func TestCLIClientSetMetadata(t *testing.T) {
 	}
 }
 
+func TestCLIClientMetadata(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		config       Config
+		paneID       string
+		output       string
+		runErr       error
+		wantMetadata map[string]string
+		wantCmd      recordedCommand
+		wantErr      string
+	}{
+		{
+			name: "parses pane metadata lines",
+			config: Config{
+				Session: "orca-dev",
+			},
+			paneID: "pane-13",
+			output: strings.Join([]string{
+				"agent_profile=codex",
+				"status=escalated",
+				`tracked_issues=[{"id":"LAB-850","status":"active"}]`,
+				"",
+			}, "\n"),
+			wantMetadata: map[string]string{
+				"agent_profile": "codex",
+				"status":        "escalated",
+				"tracked_issues": `[{"id":"LAB-850","status":"active"}]`,
+			},
+			wantCmd: recordedCommand{
+				name: "amux",
+				args: []string{
+					"-s", "orca-dev",
+					"meta", "get",
+					"pane-13",
+				},
+			},
+		},
+		{
+			name: "returns empty metadata for empty output",
+			config: Config{
+				Session: "orca-dev",
+			},
+			paneID:       "pane-14",
+			output:       "\n",
+			wantMetadata: map[string]string{},
+			wantCmd: recordedCommand{
+				name: "amux",
+				args: []string{
+					"-s", "orca-dev",
+					"meta", "get",
+					"pane-14",
+				},
+			},
+		},
+		{
+			name: "returns parse error for malformed metadata row",
+			config: Config{
+				Session: "orca-dev",
+			},
+			paneID: "pane-15",
+			output: "not-a-kv-row\n",
+			wantCmd: recordedCommand{
+				name: "amux",
+				args: []string{
+					"-s", "orca-dev",
+					"meta", "get",
+					"pane-15",
+				},
+			},
+			wantErr: "parse pane metadata row",
+		},
+		{
+			name: "returns runner error",
+			config: Config{
+				Session: "orca-dev",
+			},
+			paneID: "pane-16",
+			runErr: errors.New("exit status 1"),
+			wantCmd: recordedCommand{
+				name: "amux",
+				args: []string{
+					"-s", "orca-dev",
+					"meta", "get",
+					"pane-16",
+				},
+			},
+			wantErr: "exit status 1",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			runner := &fakeRunner{output: []byte(tt.output), err: tt.runErr}
+			client := newTestClient(tt.config, runner)
+
+			gotMetadata, err := client.Metadata(context.Background(), tt.paneID)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("Metadata() error = %v, want substring %q", err, tt.wantErr)
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("Metadata() error = %v", err)
+				}
+				if !reflect.DeepEqual(gotMetadata, tt.wantMetadata) {
+					t.Fatalf("Metadata() = %#v, want %#v", gotMetadata, tt.wantMetadata)
+				}
+			}
+
+			if !reflect.DeepEqual(runner.calls, []recordedCommand{tt.wantCmd}) {
+				t.Fatalf("Metadata() commands = %#v, want %#v", runner.calls, []recordedCommand{tt.wantCmd})
+			}
+		})
+	}
+}
+
 func TestCLIClientRemoveMetadata(t *testing.T) {
 	t.Parallel()
 
@@ -1232,6 +1353,13 @@ func TestMockClientRecordsCalls(t *testing.T) {
 	}
 	if err := mock.SetMetadata(context.Background(), "20", map[string]string{"task": "LAB-688"}); err != nil {
 		t.Fatalf("SetMetadata() error = %v", err)
+	}
+	gotMetadata, err := mock.Metadata(context.Background(), "20")
+	if err != nil {
+		t.Fatalf("Metadata() error = %v", err)
+	}
+	if !reflect.DeepEqual(gotMetadata, map[string]string{"task": "LAB-688"}) {
+		t.Fatalf("Metadata() = %#v, want %#v", gotMetadata, map[string]string{"task": "LAB-688"})
 	}
 	if err := mock.KillPane(context.Background(), "20"); err != nil {
 		t.Fatalf("KillPane() error = %v", err)
