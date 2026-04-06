@@ -117,6 +117,9 @@ func (m *MockClient) Metadata(ctx context.Context, paneID string) (map[string]st
 	if fn != nil {
 		return fn(ctx, paneID)
 	}
+	if stored == nil {
+		return map[string]string{}, nil
+	}
 	return stored, nil
 }
 

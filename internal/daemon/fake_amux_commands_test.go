@@ -131,14 +131,7 @@ func (a *fakeAmux) Metadata(ctx context.Context, paneID string) (map[string]stri
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.metadataCalls = append(a.metadataCalls, paneID)
-	if len(a.metadata[paneID]) == 0 {
-		return nil, nil
-	}
-	copied := make(map[string]string, len(a.metadata[paneID]))
-	for key, value := range a.metadata[paneID] {
-		copied[key] = value
-	}
-	return copied, nil
+	return copyMetadataMap(a.metadata[paneID]), nil
 }
 
 func (a *fakeAmux) SetMetadata(ctx context.Context, paneID string, metadata map[string]string) error {
@@ -517,6 +510,17 @@ func clonePaneCapture(capture PaneCapture) PaneCapture {
 		Exited:         capture.Exited,
 		ExitedSince:    capture.ExitedSince,
 	}
+}
+
+func copyMetadataMap(metadata map[string]string) map[string]string {
+	if len(metadata) == 0 {
+		return map[string]string{}
+	}
+	copied := make(map[string]string, len(metadata))
+	for key, value := range metadata {
+		copied[key] = value
+	}
+	return copied
 }
 
 func paneCaptureFromOutput(output string) PaneCapture {

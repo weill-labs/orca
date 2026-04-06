@@ -81,14 +81,15 @@ func (d *Daemon) reconcileTaskOnStartup(ctx context.Context, task Task) {
 }
 
 func (d *Daemon) reconcileWorkerHealthFromPaneMetadata(ctx context.Context, active *ActiveAssignment) {
+	if active.Worker.Health == WorkerHealthEscalated {
+		return
+	}
+
 	metadata, err := d.amux.Metadata(ctx, active.Task.PaneID)
 	if err != nil {
 		return
 	}
 	if !strings.EqualFold(strings.TrimSpace(metadata["status"]), WorkerHealthEscalated) {
-		return
-	}
-	if active.Worker.Health == WorkerHealthEscalated {
 		return
 	}
 
