@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -52,6 +53,9 @@ type Daemon struct {
 	stopContext context.Context
 	stopCancel  context.CancelFunc
 	loopDone    chan struct{}
+
+	taskMonitorMu sync.Mutex
+	taskMonitors  map[string]*TaskMonitor
 }
 
 type realTicker struct {
@@ -156,6 +160,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 
 	d.stopContext, d.stopCancel = context.WithCancel(context.Background())
 	d.reconcileNonTerminalAssignments(ctx)
+	d.refreshTaskMonitors(ctx)
 	d.loopDone = make(chan struct{})
 	go d.runLoop(d.stopContext, d.loopDone)
 
@@ -336,6 +341,7 @@ func (d *Daemon) Assign(ctx context.Context, issue, prompt, agentProfile string,
 		d.failPendingAssignment(ctx, issue, clone, pane, profile, err, restoreReservation)
 		return fmt.Errorf("store task: %w", err)
 	}
+	d.ensureTaskMonitor(issue)
 
 	d.emit(ctx, Event{
 		Time:         now,

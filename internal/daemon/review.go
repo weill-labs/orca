@@ -41,111 +41,151 @@ type prFeedback struct {
 	Body   string
 }
 
-func (d *Daemon) handlePRReviewPoll(ctx context.Context, active ActiveAssignment, profile AgentProfile) {
+func (d *Daemon) checkTaskCapture(ctx context.Context, active ActiveAssignment) TaskStateUpdate {
+	update := TaskStateUpdate{Active: active}
+
+	profile, err := d.profileForTask(ctx, active.Task)
+	if err != nil {
+		return update
+	}
+
+	snapshot, err := d.amux.CapturePane(ctx, active.Task.PaneID)
+	if err != nil {
+		return update
+	}
+
+	now := d.now()
+	if snapshot.Exited {
+		return d.checkExitedPaneCapture(active, profile, snapshot, now)
+	}
+
+	output := snapshot.Output()
+	d.recordWorkerOutput(&update, profile, output, now)
+
+	if d.matchesStuckPattern(profile, output) {
+		d.nudgeOrEscalate(ctx, &update, profile, "matched stuck text pattern", now)
+		return update
+	}
+	if profile.StuckTimeout > 0 && now.Sub(update.Active.Worker.LastActivityAt) >= profile.StuckTimeout {
+		d.nudgeOrEscalate(ctx, &update, profile, "idle timeout exceeded", now)
+	}
+
+	return update
+}
+
+func (d *Daemon) checkExitedPaneCapture(active ActiveAssignment, profile AgentProfile, snapshot PaneCapture, now time.Time) TaskStateUpdate {
+	update := TaskStateUpdate{Active: active}
+	output := snapshot.Output()
+
+	if output != update.Active.Worker.LastCapture {
+		update.Active.Worker.LastCapture = output
+		update.Active.Worker.UpdatedAt = now
+		update.Active.Task.UpdatedAt = now
+		update.WorkerChanged = true
+		update.TaskChanged = true
+	}
+
+	if update.Active.Worker.Health == WorkerHealthEscalated {
+		return update
+	}
+
+	update.Active.Worker.Health = WorkerHealthEscalated
+	update.Active.Worker.UpdatedAt = now
+	update.Active.Task.UpdatedAt = now
+	update.WorkerChanged = true
+	update.TaskChanged = true
+	update.Events = append(update.Events, d.assignmentEvent(update.Active, profile, EventWorkerEscalated, exitedPaneMessage(snapshot)))
+
+	return update
+}
+
+func (d *Daemon) checkTaskReviewPoll(ctx context.Context, active ActiveAssignment, profile AgentProfile) TaskStateUpdate {
+	update := TaskStateUpdate{Active: active}
+
 	payload, ok, err := d.lookupPRReviews(ctx, active.Task.PRNumber)
 	if err != nil || !ok {
-		return
+		return update
 	}
+	now := d.now()
 
 	reviewCount := len(payload.Reviews)
 	commentCount := len(payload.Comments)
-	previousReviewCount := active.Worker.LastReviewCount
-	previousCommentCount := active.Worker.LastIssueCommentCount
-	resetReviewNudgeCount := payload.ReviewDecision != "CHANGES_REQUESTED" && active.Worker.ReviewNudgeCount != 0
+	previousReviewCount := update.Active.Worker.LastReviewCount
+	previousCommentCount := update.Active.Worker.LastIssueCommentCount
+	resetReviewNudgeCount := payload.ReviewDecision != "CHANGES_REQUESTED" && update.Active.Worker.ReviewNudgeCount != 0
 	if resetReviewNudgeCount {
-		active.Worker.ReviewNudgeCount = 0
+		update.Active.Worker.ReviewNudgeCount = 0
+		update.Active.Worker.UpdatedAt = now
+		update.WorkerChanged = true
 	}
 	if previousReviewCount > reviewCount || previousCommentCount > commentCount {
-		d.persistReviewWorkerState(ctx, &active.Worker, reviewCount, commentCount)
-		return
+		d.persistReviewWorkerState(&update.Active.Worker, reviewCount, commentCount, now)
+		update.WorkerChanged = true
+		return update
 	}
 	if previousReviewCount == reviewCount && previousCommentCount == commentCount {
-		if resetReviewNudgeCount {
-			active.Worker.UpdatedAt = d.now()
-			_ = d.state.PutWorker(ctx, active.Worker)
-		}
-		return
+		return update
 	}
 	if payload.ReviewDecision == "APPROVED" || latestReviewContainsLGTM(payload.Reviews) {
-		d.persistReviewWorkerState(ctx, &active.Worker, reviewCount, commentCount)
-		return
+		d.persistReviewWorkerState(&update.Active.Worker, reviewCount, commentCount, now)
+		update.WorkerChanged = true
+		return update
 	}
 
 	newReviews := payload.Reviews[previousReviewCount:]
 	newComments := payload.Comments[previousCommentCount:]
 	blocking := blockingReviewFeedback(payload.ReviewDecision, newReviews, newComments)
 	if len(blocking) == 0 {
-		d.persistReviewWorkerState(ctx, &active.Worker, reviewCount, commentCount)
-		return
+		d.persistReviewWorkerState(&update.Active.Worker, reviewCount, commentCount, now)
+		update.WorkerChanged = true
+		return update
 	}
-	if active.Worker.ReviewNudgeCount >= maxReviewNudges {
-		d.persistReviewWorkerState(ctx, &active.Worker, reviewCount, commentCount)
-		d.emit(ctx, Event{
-			Time:         d.now(),
-			Type:         EventWorkerReviewEscalated,
-			Project:      d.project,
-			Issue:        active.Task.Issue,
-			PaneID:       active.Task.PaneID,
-			PaneName:     active.Task.PaneName,
-			CloneName:    active.Task.CloneName,
-			ClonePath:    active.Task.ClonePath,
-			Branch:       active.Task.Branch,
-			AgentProfile: profile.Name,
-			PRNumber:     active.Task.PRNumber,
-			Retry:        active.Worker.ReviewNudgeCount,
-			Message:      fmt.Sprintf("review nudges exhausted after %d attempts; lead intervention required", active.Worker.ReviewNudgeCount),
-		})
-		return
+	if update.Active.Worker.ReviewNudgeCount >= maxReviewNudges {
+		d.persistReviewWorkerState(&update.Active.Worker, reviewCount, commentCount, now)
+		update.WorkerChanged = true
+
+		event := d.assignmentEvent(update.Active, profile, EventWorkerReviewEscalated, fmt.Sprintf("review nudges exhausted after %d attempts; lead intervention required", update.Active.Worker.ReviewNudgeCount))
+		event.Retry = update.Active.Worker.ReviewNudgeCount
+		update.Events = append(update.Events, event)
+		return update
 	}
 
-	feedback := formatBlockingReviewFeedback(active.Task.PRNumber, blocking)
+	feedback := formatBlockingReviewFeedback(update.Active.Task.PRNumber, blocking)
 	// A fresh capture can update LastCapture/LastActivityAt before we decide whether to defer.
-	if !d.workerAppearsIdleForReviewNudge(ctx, &active, profile) {
-		return
+	if !d.workerAppearsIdleForReviewNudge(ctx, &update, profile, now) {
+		return update
 	}
-	if err := d.sendPromptAndEnter(ctx, active.Task.PaneID, feedback); err != nil {
-		return
+	if err := d.sendPromptAndEnter(ctx, update.Active.Task.PaneID, feedback); err != nil {
+		return update
 	}
 
-	active.Worker.ReviewNudgeCount++
-	d.persistReviewWorkerState(ctx, &active.Worker, reviewCount, commentCount)
+	update.Active.Worker.ReviewNudgeCount++
+	d.persistReviewWorkerState(&update.Active.Worker, reviewCount, commentCount, now)
+	update.WorkerChanged = true
 
-	d.emit(ctx, Event{
-		Time:         d.now(),
-		Type:         EventWorkerNudgedReview,
-		Project:      d.project,
-		Issue:        active.Task.Issue,
-		PaneID:       active.Task.PaneID,
-		PaneName:     active.Task.PaneName,
-		CloneName:    active.Task.CloneName,
-		ClonePath:    active.Task.ClonePath,
-		Branch:       active.Task.Branch,
-		AgentProfile: profile.Name,
-		PRNumber:     active.Task.PRNumber,
-		Message:      fmt.Sprintf("sent %d new blocking review(s) to worker", len(blocking)),
-	})
+	update.Events = append(update.Events, d.assignmentEvent(update.Active, profile, EventWorkerNudgedReview, fmt.Sprintf("sent %d new blocking review(s) to worker", len(blocking))))
+	return update
 }
 
-func (d *Daemon) persistReviewWorkerState(ctx context.Context, worker *Worker, reviewCount, commentCount int) {
+func (d *Daemon) persistReviewWorkerState(worker *Worker, reviewCount, commentCount int, now time.Time) {
 	worker.LastReviewCount = reviewCount
 	worker.LastIssueCommentCount = commentCount
-	worker.UpdatedAt = d.now()
-	_ = d.state.PutWorker(ctx, *worker)
+	worker.UpdatedAt = now
 }
 
-func (d *Daemon) workerAppearsIdleForReviewNudge(ctx context.Context, active *ActiveAssignment, profile AgentProfile) bool {
-	if d.workerHadRecentOutput(active.Worker, d.now()) {
+func (d *Daemon) workerAppearsIdleForReviewNudge(ctx context.Context, update *TaskStateUpdate, profile AgentProfile, now time.Time) bool {
+	if d.workerHadRecentOutput(update.Active.Worker, now) {
 		return false
 	}
 
-	snapshot, err := d.amux.CapturePane(ctx, active.Task.PaneID)
+	snapshot, err := d.amux.CapturePane(ctx, update.Active.Task.PaneID)
 	if err != nil {
 		return true
 	}
 	if snapshot.Exited {
 		return false
 	}
-	if d.recordWorkerOutput(ctx, active, profile, snapshot.Output(), d.now()) {
+	if d.recordWorkerOutput(update, profile, snapshot.Output(), now) {
 		return false
 	}
 	return true
@@ -166,37 +206,25 @@ func (d *Daemon) reviewNudgeIdleThreshold() time.Duration {
 	return reviewNudgeIdleWindowMultiplier * d.captureInterval
 }
 
-func (d *Daemon) recordWorkerOutput(ctx context.Context, active *ActiveAssignment, profile AgentProfile, output string, now time.Time) bool {
-	if output == active.Worker.LastCapture {
+func (d *Daemon) recordWorkerOutput(update *TaskStateUpdate, profile AgentProfile, output string, now time.Time) bool {
+	if output == update.Active.Worker.LastCapture {
 		return false
 	}
 
-	wasStuck := active.Worker.Health == WorkerHealthStuck ||
-		active.Worker.Health == WorkerHealthEscalated ||
-		active.Worker.NudgeCount > 0
-	active.Worker.LastCapture = output
-	active.Worker.LastActivityAt = now
-	active.Worker.Health = WorkerHealthHealthy
-	active.Worker.NudgeCount = 0
-	active.Worker.UpdatedAt = now
-	active.Task.UpdatedAt = now
-	_ = d.state.PutWorker(ctx, active.Worker)
-	_ = d.state.PutTask(ctx, active.Task)
+	wasStuck := update.Active.Worker.Health == WorkerHealthStuck ||
+		update.Active.Worker.Health == WorkerHealthEscalated ||
+		update.Active.Worker.NudgeCount > 0
+	update.Active.Worker.LastCapture = output
+	update.Active.Worker.LastActivityAt = now
+	update.Active.Worker.Health = WorkerHealthHealthy
+	update.Active.Worker.NudgeCount = 0
+	update.Active.Worker.UpdatedAt = now
+	update.Active.Task.UpdatedAt = now
+	update.WorkerChanged = true
+	update.TaskChanged = true
 
 	if wasStuck {
-		d.emit(ctx, Event{
-			Time:         now,
-			Type:         EventWorkerRecovered,
-			Project:      d.project,
-			Issue:        active.Task.Issue,
-			PaneID:       active.Task.PaneID,
-			PaneName:     active.Task.PaneName,
-			CloneName:    active.Task.CloneName,
-			ClonePath:    active.Task.ClonePath,
-			Branch:       active.Task.Branch,
-			AgentProfile: profile.Name,
-			Message:      "worker output changed",
-		})
+		update.Events = append(update.Events, d.assignmentEvent(update.Active, profile, EventWorkerRecovered, "worker output changed"))
 	}
 	return true
 }

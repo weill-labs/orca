@@ -18,50 +18,37 @@ func (d *Daemon) handleQueuedPRFailure(ctx context.Context, active ActiveAssignm
 	d.emit(ctx, d.mergeQueueEvent(&active, EventPRLandingFailed, prNumber, err.Error(), d.now()))
 }
 
-func (d *Daemon) handlePRMergeablePoll(ctx context.Context, active ActiveAssignment, profile AgentProfile) {
-	state, ok, err := d.lookupPRMergeableState(ctx, active.Task.PRNumber)
+func (d *Daemon) handlePRMergeablePoll(ctx context.Context, update *TaskStateUpdate, profile AgentProfile) {
+	state, ok, err := d.lookupPRMergeableState(ctx, update.Active.Task.PRNumber)
 	if err != nil || !ok {
 		return
 	}
+	now := d.now()
 
-	previousState := active.Worker.LastMergeableState
+	previousState := update.Active.Worker.LastMergeableState
 	if previousState == "CONFLICTING" || state != "CONFLICTING" {
 		if previousState != state {
-			active.Worker.LastMergeableState = state
-			active.Worker.UpdatedAt = d.now()
-			_ = d.state.PutWorker(ctx, active.Worker)
+			update.Active.Worker.LastMergeableState = state
+			update.Active.Worker.UpdatedAt = now
+			update.WorkerChanged = true
 		}
 		return
 	}
 
-	if err := d.amux.SendKeys(ctx, active.Task.PaneID, conflictNudgePrompt); err != nil {
+	if err := d.amux.SendKeys(ctx, update.Active.Task.PaneID, conflictNudgePrompt); err != nil {
 		return
 	}
-	if err := d.amux.WaitIdle(ctx, active.Task.PaneID, defaultAgentHandshakeTimeout); err != nil {
+	if err := d.amux.WaitIdle(ctx, update.Active.Task.PaneID, defaultAgentHandshakeTimeout); err != nil {
 		return
 	}
-	if err := d.amux.SendKeys(ctx, active.Task.PaneID, "Enter"); err != nil {
+	if err := d.amux.SendKeys(ctx, update.Active.Task.PaneID, "Enter"); err != nil {
 		return
 	}
 
-	active.Worker.LastMergeableState = state
-	active.Worker.UpdatedAt = d.now()
-	_ = d.state.PutWorker(ctx, active.Worker)
-
-	d.emit(ctx, Event{
-		Time:         d.now(),
-		Type:         EventWorkerNudgedConflict,
-		Project:      d.project,
-		Issue:        active.Task.Issue,
-		PaneID:       active.Task.PaneID,
-		PaneName:     active.Task.PaneName,
-		CloneName:    active.Task.CloneName,
-		ClonePath:    active.Task.ClonePath,
-		Branch:       active.Task.Branch,
-		AgentProfile: profile.Name,
-		PRNumber:     active.Task.PRNumber,
-		Message:      strings.TrimSpace(conflictNudgePrompt),
-	})
+	update.Active.Worker.LastMergeableState = state
+	update.Active.Worker.UpdatedAt = now
+	update.WorkerChanged = true
+	update.Events = append(update.Events, d.assignmentEvent(update.Active, profile, EventWorkerNudgedConflict, strings.TrimSpace(conflictNudgePrompt)))
 }
 
 func (d *Daemon) lookupPRMergeableState(ctx context.Context, prNumber int) (string, bool, error) {
