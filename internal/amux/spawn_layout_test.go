@@ -66,6 +66,20 @@ func TestPlanSpawnPlacement(t *testing.T) {
 			},
 		},
 		{
+			name: "explicit lead pane takes precedence over a separate amux lead pane",
+			layout: sessionCapture{
+				Panes: []sessionCapturePane{
+					{ID: 1, Name: "lead-pane", Lead: true, ColumnIndex: 0, Position: &capturePanePos{X: 0, Y: 0}},
+					{ID: 2, Name: "worker-a", ColumnIndex: 1, Position: &capturePanePos{X: 40, Y: 0}},
+				},
+			},
+			leadPane: "worker-a",
+			want: spawnPlacement{
+				atPane:     "1",
+				horizontal: true,
+			},
+		},
+		{
 			name: "fills the first column with room using its bottom pane",
 			layout: sessionCapture{
 				Panes: []sessionCapturePane{
