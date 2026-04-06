@@ -84,7 +84,8 @@ func NewClient(config Config) *CLIClient {
 	}
 }
 
-// Spawn creates a pane and returns its stable pane reference, e.g. pane-7.
+// Spawn creates a pane and returns its stable pane reference, preferring the
+// pane name when one is available.
 // amux spawn doesn't support --cwd or --command flags, so after creating the
 // pane we send-keys to cd into the working directory and start the command.
 func (c *CLIClient) Spawn(ctx context.Context, req SpawnRequest) (Pane, error) {
@@ -105,37 +106,40 @@ func (c *CLIClient) Spawn(ctx context.Context, req SpawnRequest) (Pane, error) {
 	if err != nil {
 		return Pane{}, err
 	}
+	pane := Pane{
+		ID:   paneID,
+		Name: name,
+	}
+	paneRef := pane.Ref()
 
 	if req.CWD != "" {
-		if err := c.SendKeys(ctx, paneID, fmt.Sprintf("cd '%s'", req.CWD)); err != nil {
-			_ = c.KillPane(ctx, paneID)
+		if err := c.SendKeys(ctx, paneRef, fmt.Sprintf("cd '%s'", req.CWD)); err != nil {
+			_ = c.KillPane(ctx, paneRef)
 			return Pane{}, fmt.Errorf("send cd to pane: %w", err)
 		}
-		if err := c.SendKeys(ctx, paneID, "Enter"); err != nil {
-			_ = c.KillPane(ctx, paneID)
+		if err := c.SendKeys(ctx, paneRef, "Enter"); err != nil {
+			_ = c.KillPane(ctx, paneRef)
 			return Pane{}, fmt.Errorf("send Enter after cd: %w", err)
 		}
-		if err := c.WaitIdle(ctx, paneID, 5*time.Second); err != nil {
-			_ = c.KillPane(ctx, paneID)
+		if err := c.WaitIdle(ctx, paneRef, 5*time.Second); err != nil {
+			_ = c.KillPane(ctx, paneRef)
 			return Pane{}, fmt.Errorf("wait for cd: %w", err)
 		}
 	}
 
 	if req.Command != "" {
-		if err := c.SendKeys(ctx, paneID, req.Command); err != nil {
-			_ = c.KillPane(ctx, paneID)
+		if err := c.SendKeys(ctx, paneRef, req.Command); err != nil {
+			_ = c.KillPane(ctx, paneRef)
 			return Pane{}, fmt.Errorf("send command to pane: %w", err)
 		}
-		if err := c.SendKeys(ctx, paneID, "Enter"); err != nil {
-			_ = c.KillPane(ctx, paneID)
+		if err := c.SendKeys(ctx, paneRef, "Enter"); err != nil {
+			_ = c.KillPane(ctx, paneRef)
 			return Pane{}, fmt.Errorf("send Enter after command: %w", err)
 		}
 	}
 
-	return Pane{
-		ID:   paneID,
-		Name: name,
-	}, nil
+	pane.ID = paneRef
+	return pane, nil
 }
 
 // ListPanes returns all panes in the session, enriching each pane with its
@@ -152,9 +156,13 @@ func (c *CLIClient) ListPanes(ctx context.Context) ([]Pane, error) {
 	}
 
 	for i := range panes {
-		capture, err := c.capturePaneJSON(ctx, panes[i].ID, false)
+		captureRef := panes[i].Ref()
+		capture, err := c.capturePaneJSON(ctx, captureRef, false)
 		if err != nil {
-			return nil, fmt.Errorf("capture pane %s: %w", panes[i].ID, err)
+			if captureUnavailable(err) {
+				continue
+			}
+			return nil, fmt.Errorf("capture pane %s: %w", captureRef, err)
 		}
 		if capture.Name != "" {
 			panes[i].Name = capture.Name
@@ -413,6 +421,30 @@ func paneCaptureError(errInfo *captureCommandError) error {
 		return fmt.Errorf("capture failed: %s", errInfo.Code)
 	}
 	return fmt.Errorf("capture failed")
+}
+
+func captureUnavailable(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	message := strings.ToLower(strings.TrimSpace(err.Error()))
+	switch {
+	case strings.Contains(message, "capture failed: not_found"):
+		return true
+	case strings.Contains(message, "pane not found"):
+		return true
+	case strings.Contains(message, "pane missing"):
+		return true
+	case strings.Contains(message, "no such pane"):
+		return true
+	case strings.Contains(message, "amux capture: eof"):
+		return true
+	case strings.HasSuffix(message, ": eof"):
+		return true
+	default:
+		return false
+	}
 }
 
 func paneMissing(errInfo *captureCommandError) bool {
