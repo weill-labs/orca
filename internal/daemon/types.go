@@ -28,6 +28,7 @@ const (
 
 	EventDaemonStarted         = "daemon.started"
 	EventDaemonStopped         = "daemon.stopped"
+	EventIssueStatusSkipped    = "issue.status_skipped"
 	EventTaskAssigned          = "task.assigned"
 	EventTaskAssignFailed      = "task.assign_failed"
 	EventTaskCancelled         = "task.cancelled"
