@@ -49,12 +49,26 @@ func (d *Daemon) cleanupCloneAndRelease(ctx context.Context, clone Clone, branch
 	return d.pool.Release(ctx, d.project, clone)
 }
 
-func (d *Daemon) prepareClone(ctx context.Context, clonePath, branch string) error {
+func workerGitIdentity(workerID string) (name string, email string) {
+	trimmed := strings.TrimSpace(workerID)
+	if trimmed == "" {
+		return "", ""
+	}
+	return "Orca " + trimmed, trimmed + "@orca.local"
+}
+
+func (d *Daemon) prepareClone(ctx context.Context, clonePath, branch, workerID string) error {
 	commands := [][]string{
 		{"checkout", "main"},
 		{"pull"},
-		{"checkout", "-B", branch},
 	}
+	if name, email := workerGitIdentity(workerID); name != "" && email != "" {
+		commands = append(commands,
+			[]string{"config", "user.name", name},
+			[]string{"config", "user.email", email},
+		)
+	}
+	commands = append(commands, []string{"checkout", "-B", branch})
 	for _, args := range commands {
 		if _, err := d.commands.Run(ctx, clonePath, "git", args...); err != nil {
 			return err
@@ -63,17 +77,53 @@ func (d *Daemon) prepareClone(ctx context.Context, clonePath, branch string) err
 	return nil
 }
 
-func (d *Daemon) prepareAdoptedClone(ctx context.Context, clonePath, branch string) error {
+func (d *Daemon) prepareAdoptedClone(ctx context.Context, clonePath, branch, workerID string) error {
 	commands := [][]string{
 		{"fetch", "origin"},
-		{"checkout", "-B", branch, "origin/" + branch},
 	}
+	if name, email := workerGitIdentity(workerID); name != "" && email != "" {
+		commands = append(commands,
+			[]string{"config", "user.name", name},
+			[]string{"config", "user.email", email},
+		)
+	}
+	commands = append(commands, []string{"checkout", "-B", branch, "origin/" + branch})
 	for _, args := range commands {
 		if _, err := d.commands.Run(ctx, clonePath, "git", args...); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (d *Daemon) releaseWorkerClaim(ctx context.Context, worker Worker) error {
+	if strings.TrimSpace(worker.WorkerID) == "" {
+		return nil
+	}
+
+	now := d.now()
+	worker.PaneID = ""
+	worker.PaneName = worker.WorkerID
+	worker.Issue = ""
+	worker.ClonePath = ""
+	worker.Health = WorkerHealthHealthy
+	worker.LastReviewCount = 0
+	worker.LastIssueCommentCount = 0
+	worker.ReviewNudgeCount = 0
+	worker.LastCIState = ""
+	worker.CINudgeCount = 0
+	worker.CIFailurePollCount = 0
+	worker.CIEscalated = false
+	worker.LastMergeableState = ""
+	worker.NudgeCount = 0
+	worker.LastCapture = ""
+	worker.LastActivityAt = time.Time{}
+	if worker.CreatedAt.IsZero() {
+		worker.CreatedAt = now
+	}
+	worker.LastSeenAt = now
+	worker.UpdatedAt = now
+	return d.state.PutWorker(ctx, worker)
 }
 
 func taskBlocksAssignment(status string) bool {
@@ -401,6 +451,7 @@ func (d *Daemon) mergeQueueEvent(active *ActiveAssignment, eventType string, prN
 	}
 
 	event.Issue = active.Task.Issue
+	event.WorkerID = active.Task.WorkerID
 	event.PaneID = active.Task.PaneID
 	event.PaneName = assignmentPaneName(active.Task, active.Worker)
 	event.CloneName = active.Task.CloneName
@@ -437,6 +488,12 @@ func assignmentPaneName(task Task, worker Worker) string {
 		paneName = strings.TrimSpace(worker.PaneName)
 	}
 	if paneName == "" {
+		paneName = strings.TrimSpace(task.WorkerID)
+	}
+	if paneName == "" {
+		paneName = strings.TrimSpace(worker.WorkerID)
+	}
+	if paneName == "" {
 		paneName = strings.TrimSpace(task.PaneID)
 	}
 	return paneName
@@ -444,20 +501,17 @@ func assignmentPaneName(task Task, worker Worker) string {
 
 func workerPaneRef(task Task, worker Worker) string {
 	for _, candidate := range []string{
+		strings.TrimSpace(task.WorkerID),
+		strings.TrimSpace(worker.WorkerID),
 		strings.TrimSpace(task.PaneName),
 		strings.TrimSpace(worker.PaneName),
-		strings.TrimSpace(task.PaneID),
-		strings.TrimSpace(worker.PaneID),
 	} {
 		if candidate == "" || isNumericPaneRef(candidate) {
 			continue
 		}
 		return candidate
 	}
-	if issue := strings.TrimSpace(task.Issue); issue != "" {
-		return "worker-" + issue
-	}
-	return strings.TrimSpace(task.PaneID)
+	return ""
 }
 
 func isNumericPaneRef(ref string) bool {
@@ -472,11 +526,6 @@ func (d *Daemon) normalizeStoredPaneRef(ctx context.Context, task *Task, worker 
 	if task == nil {
 		return nil
 	}
-	// Only migrate legacy numeric refs. Already-stable non-numeric refs should
-	// keep their existing value so restart behavior stays unchanged.
-	if !isNumericPaneRef(strings.TrimSpace(task.PaneID)) && !isNumericPaneRef(strings.TrimSpace(derefWorker(worker).PaneID)) {
-		return nil
-	}
 
 	stableRef := workerPaneRef(*task, derefWorker(worker))
 	if stableRef == "" {
@@ -484,9 +533,8 @@ func (d *Daemon) normalizeStoredPaneRef(ctx context.Context, task *Task, worker 
 	}
 
 	now := d.now()
-	oldTaskRef := strings.TrimSpace(task.PaneID)
-	if task.PaneID != stableRef || strings.TrimSpace(task.PaneName) != stableRef {
-		task.PaneID = stableRef
+	if task.WorkerID != stableRef || strings.TrimSpace(task.PaneName) != stableRef {
+		task.WorkerID = stableRef
 		task.PaneName = stableRef
 		task.UpdatedAt = now
 		if err := d.state.PutTask(ctx, *task); err != nil {
@@ -498,26 +546,15 @@ func (d *Daemon) normalizeStoredPaneRef(ctx context.Context, task *Task, worker 
 		return nil
 	}
 
-	oldWorkerRef := strings.TrimSpace(worker.PaneID)
-	if worker.PaneID == stableRef && strings.TrimSpace(worker.PaneName) == stableRef {
+	if worker.WorkerID == stableRef && strings.TrimSpace(worker.PaneName) == stableRef {
 		return nil
 	}
 
-	worker.PaneID = stableRef
+	worker.WorkerID = stableRef
 	worker.PaneName = stableRef
-	worker.UpdatedAt = now
+	worker.LastSeenAt = now
 	if err := d.state.PutWorker(ctx, *worker); err != nil {
 		return fmt.Errorf("normalize worker pane ref: %w", err)
-	}
-	if oldWorkerRef != "" && oldWorkerRef != stableRef {
-		if err := d.state.DeleteWorker(ctx, d.project, oldWorkerRef); err != nil && !errors.Is(err, ErrWorkerNotFound) {
-			return fmt.Errorf("delete legacy worker pane ref %s: %w", oldWorkerRef, err)
-		}
-	}
-	if oldTaskRef != "" && oldTaskRef != stableRef && oldTaskRef != oldWorkerRef {
-		if err := d.state.DeleteWorker(ctx, d.project, oldTaskRef); err != nil && !errors.Is(err, ErrWorkerNotFound) {
-			return fmt.Errorf("delete legacy task pane ref %s: %w", oldTaskRef, err)
-		}
 	}
 	return nil
 }

@@ -29,7 +29,7 @@ func (d *Daemon) reconcileTaskOnStartup(ctx context.Context, task Task) {
 		return
 	}
 
-	worker, err := d.state.WorkerByPane(ctx, d.project, paneID)
+	worker, err := d.state.WorkerByID(ctx, d.project, task.WorkerID)
 	if err != nil {
 		_ = d.failTaskWithoutWorker(ctx, task, "persisted worker missing on daemon startup")
 		return
@@ -98,7 +98,7 @@ func (d *Daemon) reconcileWorkerHealthFromPaneMetadata(ctx context.Context, acti
 	}
 
 	active.Worker.Health = WorkerHealthEscalated
-	active.Worker.UpdatedAt = d.now()
+	active.Worker.LastSeenAt = d.now()
 	_ = d.state.PutWorker(ctx, active.Worker)
 }
 
@@ -119,7 +119,7 @@ func (d *Daemon) escalateAssignmentOnStartupError(ctx context.Context, active Ac
 
 	now := d.now()
 	active.Worker.Health = WorkerHealthEscalated
-	active.Worker.UpdatedAt = now
+	active.Worker.LastSeenAt = now
 	active.Task.UpdatedAt = now
 
 	_ = d.state.PutWorker(ctx, active.Worker)
@@ -135,6 +135,7 @@ func (d *Daemon) escalateAssignmentOnStartupError(ctx context.Context, active Ac
 		Type:         EventWorkerEscalated,
 		Project:      d.project,
 		Issue:        active.Task.Issue,
+		WorkerID:     active.Worker.WorkerID,
 		PaneID:       active.Task.PaneID,
 		PaneName:     active.Task.PaneName,
 		CloneName:    active.Task.CloneName,
@@ -151,6 +152,7 @@ func (d *Daemon) failTaskWithoutWorker(ctx context.Context, task Task, message s
 		Task: task,
 		Worker: Worker{
 			Project:      d.project,
+			WorkerID:     task.WorkerID,
 			PaneID:       task.PaneID,
 			PaneName:     task.PaneName,
 			Issue:        task.Issue,
@@ -183,11 +185,7 @@ func (d *Daemon) failAssignment(ctx context.Context, active ActiveAssignment, ev
 		result = errors.Join(result, d.cleanupCloneAndRelease(cleanupCtx, clone, active.Task.Branch))
 	}
 	result = errors.Join(result, d.state.PutTask(cleanupCtx, task))
-	if active.Task.PaneID != "" {
-		if err := d.state.DeleteWorker(cleanupCtx, d.project, active.Task.PaneID); err != nil && !errors.Is(err, ErrWorkerNotFound) {
-			result = errors.Join(result, err)
-		}
-	}
+	result = errors.Join(result, d.releaseWorkerClaim(cleanupCtx, active.Worker))
 	if active.Task.PRNumber > 0 {
 		if err := d.state.DeleteMergeEntry(cleanupCtx, d.project, active.Task.PRNumber); err != nil && !errors.Is(err, ErrTaskNotFound) {
 			result = errors.Join(result, err)
@@ -209,6 +207,7 @@ func (d *Daemon) failAssignment(ctx context.Context, active ActiveAssignment, ev
 		Type:         eventType,
 		Project:      d.project,
 		Issue:        active.Task.Issue,
+		WorkerID:     active.Worker.WorkerID,
 		PaneID:       active.Task.PaneID,
 		PaneName:     paneName,
 		CloneName:    clone.Name,

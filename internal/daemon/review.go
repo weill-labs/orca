@@ -79,7 +79,7 @@ func (d *Daemon) checkExitedPaneCapture(active ActiveAssignment, profile AgentPr
 
 	if output != update.Active.Worker.LastCapture {
 		update.Active.Worker.LastCapture = output
-		update.Active.Worker.UpdatedAt = now
+		update.Active.Worker.LastSeenAt = now
 		update.Active.Task.UpdatedAt = now
 		update.WorkerChanged = true
 		update.TaskChanged = true
@@ -93,7 +93,7 @@ func (d *Daemon) checkExitedPaneCapture(active ActiveAssignment, profile AgentPr
 	}
 
 	update.Active.Worker.Health = WorkerHealthEscalated
-	update.Active.Worker.UpdatedAt = now
+	update.Active.Worker.LastSeenAt = now
 	update.Active.Task.UpdatedAt = now
 	update.WorkerChanged = true
 	update.TaskChanged = true
@@ -118,7 +118,7 @@ func (d *Daemon) checkTaskReviewPoll(ctx context.Context, active ActiveAssignmen
 	resetReviewNudgeCount := payload.ReviewDecision != "CHANGES_REQUESTED" && update.Active.Worker.ReviewNudgeCount != 0
 	if resetReviewNudgeCount {
 		update.Active.Worker.ReviewNudgeCount = 0
-		update.Active.Worker.UpdatedAt = now
+		update.Active.Worker.LastSeenAt = now
 		update.WorkerChanged = true
 	}
 	if previousReviewCount > reviewCount || previousCommentCount > commentCount {
@@ -175,7 +175,7 @@ func (d *Daemon) checkTaskReviewPoll(ctx context.Context, active ActiveAssignmen
 func (d *Daemon) persistReviewWorkerState(worker *Worker, reviewCount, commentCount int, now time.Time) {
 	worker.LastReviewCount = reviewCount
 	worker.LastIssueCommentCount = commentCount
-	worker.UpdatedAt = now
+	worker.LastSeenAt = now
 }
 
 func (d *Daemon) workerAppearsIdleForReviewNudge(ctx context.Context, update *TaskStateUpdate, profile AgentProfile, now time.Time) bool {
@@ -224,7 +224,7 @@ func (d *Daemon) recordWorkerOutput(update *TaskStateUpdate, profile AgentProfil
 	update.Active.Worker.LastActivityAt = now
 	update.Active.Worker.Health = WorkerHealthHealthy
 	update.Active.Worker.NudgeCount = 0
-	update.Active.Worker.UpdatedAt = now
+	update.Active.Worker.LastSeenAt = now
 	update.Active.Task.UpdatedAt = now
 	update.WorkerChanged = true
 	update.TaskChanged = true

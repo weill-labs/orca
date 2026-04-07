@@ -38,7 +38,7 @@ func (d *Daemon) handleExitedPaneCapture(ctx context.Context, active ActiveAssig
 
 	if output != active.Worker.LastCapture {
 		active.Worker.LastCapture = output
-		active.Worker.UpdatedAt = now
+		active.Worker.LastSeenAt = now
 		active.Task.UpdatedAt = now
 		workerChanged = true
 		taskChanged = true
@@ -55,7 +55,7 @@ func (d *Daemon) handleExitedPaneCapture(ctx context.Context, active ActiveAssig
 	}
 
 	active.Worker.Health = WorkerHealthEscalated
-	active.Worker.UpdatedAt = now
+	active.Worker.LastSeenAt = now
 	active.Task.UpdatedAt = now
 	workerChanged = true
 	taskChanged = true

@@ -42,7 +42,7 @@ func (d *Daemon) handlePRChecksPoll(ctx context.Context, update *TaskStateUpdate
 		return
 	}
 	update.Active.Worker.CIFailurePollCount++
-	update.Active.Worker.UpdatedAt = now
+	update.Active.Worker.LastSeenAt = now
 	update.WorkerChanged = true
 	if update.Active.Worker.CIFailurePollCount < ciFailureRenudgePollWindow {
 		return
@@ -69,7 +69,7 @@ func (d *Daemon) resetCIWorkerState(worker *Worker, ciState string, now time.Tim
 
 	worker.LastCIState = ciState
 	resetCIFailureNudgeState(worker)
-	worker.UpdatedAt = now
+	worker.LastSeenAt = now
 	return true
 }
 
@@ -82,7 +82,7 @@ func (d *Daemon) recordCIFailureNudge(ctx context.Context, update *TaskStateUpda
 	update.Active.Worker.CINudgeCount++
 	update.Active.Worker.CIFailurePollCount = 0
 	update.Active.Worker.CIEscalated = false
-	update.Active.Worker.UpdatedAt = now
+	update.Active.Worker.LastSeenAt = now
 	return true
 }
 

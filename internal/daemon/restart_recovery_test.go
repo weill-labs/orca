@@ -54,7 +54,8 @@ func TestDaemonStartReconcilesNonTerminalAssignments(t *testing.T) {
 			taskStatus:       TaskStatusStarting,
 			paneID:           "",
 			wantTaskStatus:   TaskStatusFailed,
-			wantWorker:       false,
+			wantWorker:       true,
+			wantWorkerHealth: WorkerHealthHealthy,
 			wantRelease:      true,
 			wantFailedEvents: 1,
 		},
@@ -64,7 +65,8 @@ func TestDaemonStartReconcilesNonTerminalAssignments(t *testing.T) {
 			paneID:           "pane-1",
 			skipWorker:       true,
 			wantTaskStatus:   TaskStatusFailed,
-			wantWorker:       false,
+			wantWorker:       true,
+			wantWorkerHealth: WorkerHealthHealthy,
 			wantRelease:      true,
 			wantFailedEvents: 1,
 		},
@@ -74,7 +76,8 @@ func TestDaemonStartReconcilesNonTerminalAssignments(t *testing.T) {
 			paneID:           "pane-1",
 			paneExistsErr:    errors.New("amux unavailable"),
 			wantTaskStatus:   TaskStatusFailed,
-			wantWorker:       false,
+			wantWorker:       true,
+			wantWorkerHealth: WorkerHealthHealthy,
 			wantRelease:      true,
 			wantFailedEvents: 1,
 			wantEventType:    EventTaskFailed,
@@ -86,7 +89,8 @@ func TestDaemonStartReconcilesNonTerminalAssignments(t *testing.T) {
 			paneID:           "pane-1",
 			capturePaneErr:   errors.New("capture failed"),
 			wantTaskStatus:   TaskStatusFailed,
-			wantWorker:       false,
+			wantWorker:       true,
+			wantWorkerHealth: WorkerHealthHealthy,
 			wantRelease:      true,
 			wantFailedEvents: 1,
 			wantCaptureCount: 1,
@@ -99,7 +103,8 @@ func TestDaemonStartReconcilesNonTerminalAssignments(t *testing.T) {
 			paneID:           "pane-1",
 			paneExists:       map[string]bool{"pane-1": false},
 			wantTaskStatus:   TaskStatusFailed,
-			wantWorker:       false,
+			wantWorker:       true,
+			wantWorkerHealth: WorkerHealthHealthy,
 			wantRelease:      true,
 			wantFailedEvents: 1,
 		},
@@ -149,7 +154,11 @@ func TestDaemonStartReconcilesNonTerminalAssignments(t *testing.T) {
 			deps := newTestDeps(t)
 			seedRecoverableAssignment(t, deps, tt.taskStatus, "LAB-740", tt.paneID)
 			if tt.skipWorker && tt.paneID != "" {
-				delete(deps.state.workers, tt.paneID)
+				task, ok := deps.state.task("LAB-740")
+				if !ok {
+					t.Fatal("seeded task missing")
+				}
+				delete(deps.state.workers, task.WorkerID)
 			}
 			deps.amux.paneExists = tt.paneExists
 			deps.amux.paneExistsErr = tt.paneExistsErr
@@ -180,13 +189,18 @@ func TestDaemonStartReconcilesNonTerminalAssignments(t *testing.T) {
 				t.Fatalf("task.Status = %q, want %q", got, want)
 			}
 
-			worker, workerOK := deps.state.worker(tt.paneID)
+			worker, workerOK := deps.state.worker(task.WorkerID)
 			if workerOK != tt.wantWorker {
 				t.Fatalf("worker presence = %v, want %v", workerOK, tt.wantWorker)
 			}
 			if tt.wantWorker {
 				if got, want := worker.Health, tt.wantWorkerHealth; got != want {
 					t.Fatalf("worker.Health = %q, want %q", got, want)
+				}
+				if tt.wantTaskStatus == TaskStatusFailed {
+					if got := worker.PaneID; got != "" {
+						t.Fatalf("worker.PaneID = %q, want empty after release", got)
+					}
 				}
 			}
 
@@ -248,11 +262,19 @@ func TestDaemonStartReconcilesEscalatedWorkerHealthFromPaneMetadata(t *testing.T
 	})
 
 	waitFor(t, "metadata reconciliation", func() bool {
-		worker, ok := deps.state.worker("pane-1")
+		task, ok := deps.state.task("LAB-850")
+		if !ok {
+			return false
+		}
+		worker, ok := deps.state.worker(task.WorkerID)
 		return ok && worker.Health == WorkerHealthEscalated
 	})
 
-	worker, ok := deps.state.worker("pane-1")
+	task, ok := deps.state.task("LAB-850")
+	if !ok {
+		t.Fatal("task missing after startup reconciliation")
+	}
+	worker, ok := deps.state.worker(task.WorkerID)
 	if !ok {
 		t.Fatal("worker missing after startup reconciliation")
 	}
@@ -268,13 +290,15 @@ func seedRecoverableAssignment(t *testing.T, deps *testDeps, status, issue, pane
 	t.Helper()
 
 	now := deps.clock.Now()
+	workerID := nextTestWorkerID(deps)
 	deps.state.putTaskForTest(Task{
 		Project:      "/tmp/project",
 		Issue:        issue,
 		Status:       status,
 		Prompt:       "Recover daemon state",
+		WorkerID:     workerID,
 		PaneID:       paneID,
-		PaneName:     paneID,
+		PaneName:     workerID,
 		CloneName:    deps.pool.clone.Name,
 		ClonePath:    deps.pool.clone.Path,
 		Branch:       issue,
@@ -285,8 +309,9 @@ func seedRecoverableAssignment(t *testing.T, deps *testDeps, status, issue, pane
 	if paneID != "" {
 		if err := deps.state.PutWorker(context.Background(), Worker{
 			Project:        "/tmp/project",
+			WorkerID:       workerID,
 			PaneID:         paneID,
-			PaneName:       paneID,
+			PaneName:       workerID,
 			Issue:          issue,
 			ClonePath:      deps.pool.clone.Path,
 			AgentProfile:   "codex",

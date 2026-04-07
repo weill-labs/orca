@@ -62,17 +62,23 @@ func taskCanResume(status string) bool {
 }
 
 func (d *Daemon) resumeWorker(ctx context.Context, task Task) (Worker, bool, error) {
-	paneID := strings.TrimSpace(task.PaneID)
-	if paneID == "" {
+	workerID := strings.TrimSpace(task.WorkerID)
+	if workerID == "" {
+		workerID = strings.TrimSpace(task.PaneName)
+	}
+	if workerID == "" {
+		workerID = strings.TrimSpace(task.PaneID)
+	}
+	if workerID == "" {
 		return Worker{}, false, nil
 	}
 
-	worker, err := d.state.WorkerByPane(ctx, d.project, paneID)
+	worker, err := d.state.WorkerByID(ctx, d.project, workerID)
 	if errors.Is(err, ErrWorkerNotFound) {
 		return Worker{}, false, nil
 	}
 	if err != nil {
-		return Worker{}, false, fmt.Errorf("load worker %s: %w", paneID, err)
+		return Worker{}, false, fmt.Errorf("load worker %s: %w", workerID, err)
 	}
 	return worker, true, nil
 }
@@ -126,7 +132,7 @@ func (d *Daemon) resumeWithFreshPane(ctx context.Context, task Task, worker Work
 	pane, err := d.amux.Spawn(ctx, SpawnRequest{
 		Session: d.session,
 		AtPane:  d.leadPane,
-		Name:    "worker-" + task.Issue,
+		Name:    task.WorkerID,
 		CWD:     clonePath,
 		Command: profile.StartCommand,
 	})
@@ -180,11 +186,15 @@ func (d *Daemon) resumeWithFreshPane(ctx context.Context, task Task, worker Work
 
 func (d *Daemon) storeResumedTask(ctx context.Context, task Task, worker Worker, hasWorker bool, pane Pane) error {
 	now := d.now()
-	oldPaneID := task.PaneID
-
 	task.Status = TaskStatusActive
+	if task.WorkerID == "" {
+		task.WorkerID = worker.WorkerID
+	}
 	task.PaneID = pane.ID
-	task.PaneName = pane.Name
+	task.PaneName = task.WorkerID
+	if task.PaneName == "" {
+		task.PaneName = pane.Name
+	}
 	if task.PaneName == "" {
 		task.PaneName = pane.ID
 	}
@@ -197,29 +207,37 @@ func (d *Daemon) storeResumedTask(ctx context.Context, task Task, worker Worker,
 	if !hasWorker {
 		resumedWorker = Worker{
 			Project:      d.project,
+			WorkerID:     task.WorkerID,
+			PaneName:     task.WorkerID,
 			Health:       WorkerHealthHealthy,
 			AgentProfile: task.AgentProfile,
 			ClonePath:    task.ClonePath,
 			Issue:        task.Issue,
+			CreatedAt:    now,
+			LastSeenAt:   now,
 		}
 	}
 	resumedWorker.Project = d.project
+	resumedWorker.WorkerID = task.WorkerID
 	resumedWorker.PaneID = pane.ID
-	resumedWorker.PaneName = task.PaneName
+	resumedWorker.PaneName = task.WorkerID
 	resumedWorker.Issue = task.Issue
 	resumedWorker.ClonePath = task.ClonePath
 	resumedWorker.AgentProfile = task.AgentProfile
 	resumedWorker.Health = WorkerHealthHealthy
+	resumedWorker.LastReviewCount = 0
+	resumedWorker.LastIssueCommentCount = 0
+	resumedWorker.ReviewNudgeCount = 0
+	resumedWorker.LastCIState = ""
+	resumedWorker.CINudgeCount = 0
+	resumedWorker.CIFailurePollCount = 0
+	resumedWorker.CIEscalated = false
+	resumedWorker.LastMergeableState = ""
 	resumedWorker.NudgeCount = 0
 	resumedWorker.LastCapture = ""
 	resumedWorker.LastActivityAt = now
+	resumedWorker.LastSeenAt = now
 	resumedWorker.UpdatedAt = now
-
-	if oldPaneID != "" && oldPaneID != pane.ID {
-		if err := d.state.DeleteWorker(ctx, d.project, oldPaneID); err != nil && !errors.Is(err, ErrWorkerNotFound) {
-			return fmt.Errorf("delete worker after resume: %w", err)
-		}
-	}
 	if err := d.state.PutWorker(ctx, resumedWorker); err != nil {
 		return fmt.Errorf("store worker after resume: %w", err)
 	}

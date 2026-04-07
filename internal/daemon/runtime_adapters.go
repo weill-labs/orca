@@ -82,7 +82,8 @@ func convertStateTask(project string, task state.Task) Task {
 		Issue:        task.Issue,
 		Status:       task.Status,
 		Prompt:       task.Prompt,
-		PaneID:       task.WorkerID,
+		WorkerID:     task.WorkerID,
+		PaneID:       task.CurrentPaneID,
 		PaneName:     task.WorkerID,
 		ClonePath:    task.ClonePath,
 		Branch:       task.Issue,
@@ -107,15 +108,16 @@ func (a *sqliteStateAdapter) PutTask(ctx context.Context, task Task) error {
 	}
 
 	return a.store.UpsertTask(ctx, task.Project, state.Task{
-		Issue:     task.Issue,
-		Status:    task.Status,
-		Agent:     task.AgentProfile,
-		Prompt:    task.Prompt,
-		WorkerID:  task.PaneID,
-		ClonePath: task.ClonePath,
-		PRNumber:  prNumber,
-		CreatedAt: task.CreatedAt,
-		UpdatedAt: task.UpdatedAt,
+		Issue:         task.Issue,
+		Status:        task.Status,
+		Agent:         task.AgentProfile,
+		Prompt:        task.Prompt,
+		WorkerID:      task.WorkerID,
+		CurrentPaneID: task.PaneID,
+		ClonePath:     task.ClonePath,
+		PRNumber:      prNumber,
+		CreatedAt:     task.CreatedAt,
+		UpdatedAt:     task.UpdatedAt,
 	})
 }
 
@@ -139,15 +141,16 @@ func (a *sqliteStateAdapter) ClaimTask(ctx context.Context, task Task) (*Task, e
 	}
 
 	claimed, err := a.store.ClaimTask(ctx, task.Project, state.Task{
-		Issue:     task.Issue,
-		Status:    task.Status,
-		Agent:     task.AgentProfile,
-		Prompt:    task.Prompt,
-		WorkerID:  task.PaneID,
-		ClonePath: task.ClonePath,
-		PRNumber:  prNumber,
-		CreatedAt: task.CreatedAt,
-		UpdatedAt: task.UpdatedAt,
+		Issue:         task.Issue,
+		Status:        task.Status,
+		Agent:         task.AgentProfile,
+		Prompt:        task.Prompt,
+		WorkerID:      task.WorkerID,
+		CurrentPaneID: task.PaneID,
+		ClonePath:     task.ClonePath,
+		PRNumber:      prNumber,
+		CreatedAt:     task.CreatedAt,
+		UpdatedAt:     task.UpdatedAt,
 	})
 	if err != nil {
 		return nil, err
@@ -202,8 +205,13 @@ func (a *sqliteStateAdapter) TasksByPane(ctx context.Context, project, paneID st
 }
 
 func (a *sqliteStateAdapter) PutWorker(ctx context.Context, worker Worker) error {
+	lastSeenAt := worker.LastSeenAt
+	if lastSeenAt.IsZero() {
+		lastSeenAt = worker.UpdatedAt
+	}
 	return a.store.UpsertWorker(ctx, worker.Project, state.Worker{
-		PaneID:                worker.PaneID,
+		WorkerID:              worker.WorkerID,
+		CurrentPaneID:         worker.PaneID,
 		Agent:                 worker.AgentProfile,
 		State:                 worker.Health,
 		Issue:                 worker.Issue,
@@ -219,12 +227,69 @@ func (a *sqliteStateAdapter) PutWorker(ctx context.Context, worker Worker) error
 		NudgeCount:            worker.NudgeCount,
 		LastCapture:           worker.LastCapture,
 		LastActivityAt:        worker.LastActivityAt,
-		UpdatedAt:             worker.UpdatedAt,
+		CreatedAt:             worker.CreatedAt,
+		LastSeenAt:            lastSeenAt,
 	})
 }
 
-func (a *sqliteStateAdapter) WorkerByPane(ctx context.Context, project, paneID string) (Worker, error) {
-	worker, err := a.store.WorkerByPane(ctx, project, paneID)
+func (a *sqliteStateAdapter) ClaimWorker(ctx context.Context, worker Worker) (Worker, error) {
+	lastSeenAt := worker.LastSeenAt
+	if lastSeenAt.IsZero() {
+		lastSeenAt = worker.UpdatedAt
+	}
+	claimed, err := a.store.ClaimWorker(ctx, worker.Project, state.Worker{
+		WorkerID:              worker.WorkerID,
+		CurrentPaneID:         worker.PaneID,
+		Agent:                 worker.AgentProfile,
+		State:                 worker.Health,
+		Issue:                 worker.Issue,
+		ClonePath:             worker.ClonePath,
+		LastReviewCount:       worker.LastReviewCount,
+		LastIssueCommentCount: worker.LastIssueCommentCount,
+		ReviewNudgeCount:      worker.ReviewNudgeCount,
+		LastCIState:           worker.LastCIState,
+		CINudgeCount:          worker.CINudgeCount,
+		CIFailurePollCount:    worker.CIFailurePollCount,
+		CIEscalated:           worker.CIEscalated,
+		LastMergeableState:    worker.LastMergeableState,
+		NudgeCount:            worker.NudgeCount,
+		LastCapture:           worker.LastCapture,
+		LastActivityAt:        worker.LastActivityAt,
+		CreatedAt:             worker.CreatedAt,
+		LastSeenAt:            lastSeenAt,
+	})
+	if err != nil {
+		return Worker{}, err
+	}
+
+	return Worker{
+		Project:               worker.Project,
+		PaneID:                worker.PaneID,
+		WorkerID:              claimed.WorkerID,
+		PaneName:              claimed.WorkerID,
+		Issue:                 claimed.Issue,
+		ClonePath:             claimed.ClonePath,
+		AgentProfile:          claimed.Agent,
+		Health:                claimed.State,
+		LastReviewCount:       claimed.LastReviewCount,
+		LastIssueCommentCount: claimed.LastIssueCommentCount,
+		ReviewNudgeCount:      claimed.ReviewNudgeCount,
+		LastCIState:           claimed.LastCIState,
+		CINudgeCount:          claimed.CINudgeCount,
+		CIFailurePollCount:    claimed.CIFailurePollCount,
+		CIEscalated:           claimed.CIEscalated,
+		LastMergeableState:    claimed.LastMergeableState,
+		NudgeCount:            claimed.NudgeCount,
+		LastCapture:           claimed.LastCapture,
+		LastActivityAt:        claimed.LastActivityAt,
+		CreatedAt:             claimed.CreatedAt,
+		LastSeenAt:            claimed.LastSeenAt,
+		UpdatedAt:             claimed.LastSeenAt,
+	}, nil
+}
+
+func (a *sqliteStateAdapter) WorkerByID(ctx context.Context, project, workerID string) (Worker, error) {
+	worker, err := a.store.WorkerByID(ctx, project, workerID)
 	if err != nil {
 		if errors.Is(err, state.ErrNotFound) {
 			return Worker{}, ErrWorkerNotFound
@@ -234,8 +299,9 @@ func (a *sqliteStateAdapter) WorkerByPane(ctx context.Context, project, paneID s
 
 	return Worker{
 		Project:               project,
-		PaneID:                worker.PaneID,
-		PaneName:              worker.PaneID,
+		WorkerID:              worker.WorkerID,
+		PaneID:                worker.CurrentPaneID,
+		PaneName:              worker.WorkerID,
 		Issue:                 worker.Issue,
 		ClonePath:             worker.ClonePath,
 		AgentProfile:          worker.Agent,
@@ -251,16 +317,95 @@ func (a *sqliteStateAdapter) WorkerByPane(ctx context.Context, project, paneID s
 		NudgeCount:            worker.NudgeCount,
 		LastCapture:           worker.LastCapture,
 		LastActivityAt:        worker.LastActivityAt,
-		UpdatedAt:             worker.UpdatedAt,
+		CreatedAt:             worker.CreatedAt,
+		LastSeenAt:            worker.LastSeenAt,
+		UpdatedAt:             worker.LastSeenAt,
 	}, nil
 }
 
-func (a *sqliteStateAdapter) DeleteWorker(ctx context.Context, project, paneID string) error {
-	err := a.store.DeleteWorker(ctx, project, paneID)
+func (a *sqliteStateAdapter) WorkerByPane(ctx context.Context, project, paneID string) (Worker, error) {
+	worker, err := a.store.WorkerByPane(ctx, project, paneID)
+	if err != nil {
+		if errors.Is(err, state.ErrNotFound) {
+			return Worker{}, ErrWorkerNotFound
+		}
+		return Worker{}, err
+	}
+
+	return Worker{
+		Project:               project,
+		WorkerID:              worker.WorkerID,
+		PaneID:                worker.CurrentPaneID,
+		PaneName:              worker.WorkerID,
+		Issue:                 worker.Issue,
+		ClonePath:             worker.ClonePath,
+		AgentProfile:          worker.Agent,
+		Health:                worker.State,
+		LastReviewCount:       worker.LastReviewCount,
+		LastIssueCommentCount: worker.LastIssueCommentCount,
+		ReviewNudgeCount:      worker.ReviewNudgeCount,
+		LastCIState:           worker.LastCIState,
+		CINudgeCount:          worker.CINudgeCount,
+		CIFailurePollCount:    worker.CIFailurePollCount,
+		CIEscalated:           worker.CIEscalated,
+		LastMergeableState:    worker.LastMergeableState,
+		NudgeCount:            worker.NudgeCount,
+		LastCapture:           worker.LastCapture,
+		LastActivityAt:        worker.LastActivityAt,
+		CreatedAt:             worker.CreatedAt,
+		LastSeenAt:            worker.LastSeenAt,
+		UpdatedAt:             worker.LastSeenAt,
+	}, nil
+}
+
+func (a *sqliteStateAdapter) DeleteWorker(ctx context.Context, project, workerID string) error {
+	err := a.store.DeleteWorker(ctx, project, workerID)
+	if errors.Is(err, state.ErrNotFound) {
+		worker, lookupErr := a.store.WorkerByPane(ctx, project, workerID)
+		if lookupErr == nil {
+			err = a.store.DeleteWorker(ctx, project, worker.WorkerID)
+		}
+	}
 	if errors.Is(err, state.ErrNotFound) {
 		return ErrWorkerNotFound
 	}
 	return err
+}
+
+func (a *sqliteStateAdapter) ListWorkers(ctx context.Context, project string) ([]Worker, error) {
+	workers, err := a.store.ListWorkers(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]Worker, 0, len(workers))
+	for _, worker := range workers {
+		out = append(out, Worker{
+			Project:               project,
+			WorkerID:              worker.WorkerID,
+			PaneID:                worker.CurrentPaneID,
+			PaneName:              worker.WorkerID,
+			Issue:                 worker.Issue,
+			ClonePath:             worker.ClonePath,
+			AgentProfile:          worker.Agent,
+			Health:                worker.State,
+			LastReviewCount:       worker.LastReviewCount,
+			LastIssueCommentCount: worker.LastIssueCommentCount,
+			ReviewNudgeCount:      worker.ReviewNudgeCount,
+			LastCIState:           worker.LastCIState,
+			CINudgeCount:          worker.CINudgeCount,
+			CIFailurePollCount:    worker.CIFailurePollCount,
+			CIEscalated:           worker.CIEscalated,
+			LastMergeableState:    worker.LastMergeableState,
+			NudgeCount:            worker.NudgeCount,
+			LastCapture:           worker.LastCapture,
+			LastActivityAt:        worker.LastActivityAt,
+			CreatedAt:             worker.CreatedAt,
+			LastSeenAt:            worker.LastSeenAt,
+			UpdatedAt:             worker.LastSeenAt,
+		})
+	}
+	return out, nil
 }
 
 func (a *sqliteStateAdapter) ActiveAssignments(ctx context.Context, project string) ([]ActiveAssignment, error) {
@@ -380,6 +525,7 @@ func (a *sqliteStateAdapter) RecordEvent(ctx context.Context, event Event) error
 		Project:   event.Project,
 		Kind:      event.Type,
 		Issue:     event.Issue,
+		WorkerID:  event.WorkerID,
 		Message:   event.Message,
 		Payload:   payload,
 		CreatedAt: event.Time,
@@ -393,8 +539,9 @@ func convertAssignment(project string, assignment state.Assignment) ActiveAssign
 		Issue:        assignment.Task.Issue,
 		Status:       assignment.Task.Status,
 		Prompt:       assignment.Task.Prompt,
-		PaneID:       assignment.Task.WorkerID,
-		PaneName:     assignment.Worker.PaneID,
+		WorkerID:     assignment.Task.WorkerID,
+		PaneID:       assignment.Worker.CurrentPaneID,
+		PaneName:     assignment.Worker.WorkerID,
 		ClonePath:    assignment.Task.ClonePath,
 		Branch:       assignment.Task.Issue,
 		AgentProfile: assignment.Task.Agent,
@@ -410,8 +557,9 @@ func convertAssignment(project string, assignment state.Assignment) ActiveAssign
 
 	worker := Worker{
 		Project:               project,
-		PaneID:                assignment.Worker.PaneID,
-		PaneName:              assignment.Worker.PaneID,
+		WorkerID:              assignment.Worker.WorkerID,
+		PaneID:                assignment.Worker.CurrentPaneID,
+		PaneName:              assignment.Worker.WorkerID,
 		Issue:                 assignment.Worker.Issue,
 		ClonePath:             assignment.Worker.ClonePath,
 		AgentProfile:          assignment.Worker.Agent,
@@ -427,7 +575,9 @@ func convertAssignment(project string, assignment state.Assignment) ActiveAssign
 		NudgeCount:            assignment.Worker.NudgeCount,
 		LastCapture:           assignment.Worker.LastCapture,
 		LastActivityAt:        assignment.Worker.LastActivityAt,
-		UpdatedAt:             assignment.Worker.UpdatedAt,
+		CreatedAt:             assignment.Worker.CreatedAt,
+		LastSeenAt:            assignment.Worker.LastSeenAt,
+		UpdatedAt:             assignment.Worker.LastSeenAt,
 	}
 
 	return ActiveAssignment{

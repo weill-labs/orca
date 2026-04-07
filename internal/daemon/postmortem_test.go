@@ -316,6 +316,16 @@ func TestFinishAssignmentCancelledIgnoresMissingPaneKill(t *testing.T) {
 	if _, err := deps.state.WorkerByPane(context.Background(), d.project, active.Task.PaneID); !errors.Is(err, ErrWorkerNotFound) {
 		t.Fatalf("WorkerByPane() error = %v, want ErrWorkerNotFound", err)
 	}
+	worker, err := deps.state.WorkerByID(context.Background(), d.project, active.Worker.WorkerID)
+	if err != nil {
+		t.Fatalf("WorkerByID() error = %v", err)
+	}
+	if got := worker.PaneID; got != "" {
+		t.Fatalf("worker.PaneID = %q, want empty after cancellation", got)
+	}
+	if got := worker.Issue; got != "" {
+		t.Fatalf("worker.Issue = %q, want empty after cancellation", got)
+	}
 
 	if got, want := deps.pool.releasedClones(), []Clone{{
 		Name:          active.Task.CloneName,
@@ -495,8 +505,9 @@ func newPostmortemAssignment(deps *testDeps) ActiveAssignment {
 			Project:      "/tmp/project",
 			Issue:        "LAB-689",
 			Branch:       "LAB-689",
+			WorkerID:     "worker-01",
 			PaneID:       deps.amux.spawnPane.ID,
-			PaneName:     deps.amux.spawnPane.Name,
+			PaneName:     "worker-01",
 			CloneName:    deps.pool.clone.Name,
 			ClonePath:    deps.pool.clone.Path,
 			AgentProfile: deps.config.profiles["codex"].Name,
@@ -505,8 +516,10 @@ func newPostmortemAssignment(deps *testDeps) ActiveAssignment {
 		},
 		Worker: Worker{
 			Project:      "/tmp/project",
+			WorkerID:     "worker-01",
 			PaneID:       deps.amux.spawnPane.ID,
-			PaneName:     deps.amux.spawnPane.Name,
+			PaneName:     "worker-01",
+			Issue:        "LAB-689",
 			ClonePath:    deps.pool.clone.Path,
 			AgentProfile: deps.config.profiles["codex"].Name,
 		},

@@ -50,6 +50,7 @@ func (d *Daemon) ensurePostmortem(ctx context.Context, active ActiveAssignment) 
 		Type:         EventWorkerPostmortem,
 		Project:      d.project,
 		Issue:        active.Task.Issue,
+		WorkerID:     active.Worker.WorkerID,
 		PaneID:       active.Task.PaneID,
 		PaneName:     active.Task.PaneName,
 		CloneName:    active.Task.CloneName,
@@ -142,7 +143,7 @@ func (d *Daemon) finishAssignmentWithMessage(ctx context.Context, active ActiveA
 	active.Task.Status = status
 	active.Task.UpdatedAt = d.now()
 	result = errors.Join(result, d.state.PutTask(cleanupCtx, active.Task))
-	result = errors.Join(result, d.state.DeleteWorker(cleanupCtx, d.project, active.Task.PaneID))
+	result = errors.Join(result, d.releaseWorkerClaim(cleanupCtx, active.Worker))
 	if active.Task.PRNumber > 0 {
 		if err := d.state.DeleteMergeEntry(cleanupCtx, d.project, active.Task.PRNumber); err != nil && !errors.Is(err, ErrTaskNotFound) {
 			result = errors.Join(result, err)
@@ -168,6 +169,7 @@ func (d *Daemon) finishAssignmentWithMessage(ctx context.Context, active ActiveA
 		Type:         eventType,
 		Project:      d.project,
 		Issue:        active.Task.Issue,
+		WorkerID:     active.Worker.WorkerID,
 		PaneID:       active.Task.PaneID,
 		PaneName:     active.Task.PaneName,
 		CloneName:    clone.Name,

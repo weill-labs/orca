@@ -154,7 +154,7 @@ func TestResumeRespawnsCancelledTaskInExistingClone(t *testing.T) {
 		t.Fatalf("DeleteWorker() error = %v", err)
 	}
 
-	deps.amux.spawnPane = Pane{ID: "pane-2", Name: "worker-LAB-757"}
+	deps.amux.spawnPane = Pane{ID: "pane-2", Name: "worker-01"}
 	deps.amux.paneExists = map[string]bool{"pane-9": false}
 
 	d := deps.newDaemon(t)
@@ -250,10 +250,7 @@ func TestResumeNormalizesLegacyNumericPaneRefBeforePaneChecks(t *testing.T) {
 		t.Fatalf("PutTask() error = %v", err)
 	}
 
-	deps.amux.paneExists = map[string]bool{
-		"7":              false,
-		"worker-LAB-757": true,
-	}
+	deps.amux.paneExists = map[string]bool{"7": true}
 
 	d := deps.newDaemon(t)
 	ctx := context.Background()
@@ -278,13 +275,13 @@ func TestResumeNormalizesLegacyNumericPaneRefBeforePaneChecks(t *testing.T) {
 		t.Fatalf("Resume() error = %v", err)
 	}
 
-	if got, want := deps.amux.paneExistsCalls, []string{"worker-LAB-757"}; !reflect.DeepEqual(got, want) {
+	if got, want := deps.amux.paneExistsCalls, []string{"7"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("pane exists calls = %#v, want %#v", got, want)
 	}
-	deps.amux.requireSentKeys(t, "worker-LAB-757", []string{"codex --yolo\n", "Implement startup recovery\n"})
+	deps.amux.requireSentKeys(t, "7", []string{"codex --yolo\n", "Implement startup recovery\n"})
 	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
-		{PaneID: "worker-LAB-757", Timeout: defaultAgentHandshakeTimeout},
-		{PaneID: "worker-LAB-757", Timeout: defaultAgentHandshakeTimeout, Settle: 2 * time.Second},
+		{PaneID: "7", Timeout: defaultAgentHandshakeTimeout},
+		{PaneID: "7", Timeout: defaultAgentHandshakeTimeout, Settle: 2 * time.Second},
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("waitIdle calls = %#v, want %#v", got, want)
 	}
@@ -293,18 +290,15 @@ func TestResumeNormalizesLegacyNumericPaneRefBeforePaneChecks(t *testing.T) {
 	if !ok {
 		t.Fatal("task missing after resume")
 	}
-	if got, want := resumedTask.PaneID, "worker-LAB-757"; got != want {
+	if got, want := resumedTask.PaneID, "7"; got != want {
 		t.Fatalf("task.PaneID = %q, want %q", got, want)
 	}
-	worker, ok := deps.state.worker("worker-LAB-757")
+	worker, ok := deps.state.worker(resumedTask.WorkerID)
 	if !ok {
-		t.Fatal("worker missing after resume normalization")
+		t.Fatal("worker missing after resume")
 	}
-	if got, want := worker.PaneID, "worker-LAB-757"; got != want {
+	if got, want := worker.PaneID, "7"; got != want {
 		t.Fatalf("worker.PaneID = %q, want %q", got, want)
-	}
-	if _, ok := deps.state.worker("7"); ok {
-		t.Fatal("legacy numeric worker ref retained after resume")
 	}
 }
 
@@ -320,6 +314,7 @@ func TestResumeReturnsNormalizationErrorWithoutWorker(t *testing.T) {
 		t.Fatal("seeded task missing")
 	}
 	task.Status = TaskStatusCancelled
+	task.PaneName = ""
 	task.UpdatedAt = deps.clock.Now()
 	if err := deps.state.PutTask(context.Background(), task); err != nil {
 		t.Fatalf("PutTask() error = %v", err)
@@ -450,8 +445,8 @@ func TestResumeHandlesWorkerLookupAndPaneErrors(t *testing.T) {
 		seedActiveAssignment(t, deps, "LAB-757", "pane-1")
 
 		state := &resumeStateStub{
-			fakeState:       deps.state,
-			workerByPaneErr: errors.New("state unavailable"),
+			fakeState:     deps.state,
+			workerByIDErr: errors.New("state unavailable"),
 		}
 		d := newResumeCoverageDaemon(t, deps, state, deps.amux)
 		if err := d.Start(context.Background()); err != nil {
@@ -460,7 +455,7 @@ func TestResumeHandlesWorkerLookupAndPaneErrors(t *testing.T) {
 		t.Cleanup(func() { _ = d.Stop(context.Background()) })
 
 		err := d.Resume(context.Background(), "LAB-757", "")
-		if err == nil || !strings.Contains(err.Error(), "load worker pane-1") {
+		if err == nil || !strings.Contains(err.Error(), "load worker worker-01") {
 			t.Fatalf("Resume() error = %v, want worker lookup context", err)
 		}
 	})
@@ -539,8 +534,8 @@ func TestResumeWorkerHandlesNoPaneAndLookupErrors(t *testing.T) {
 	}
 
 	state := &resumeStateStub{
-		fakeState:       deps.state,
-		workerByPaneErr: errors.New("lookup failed"),
+		fakeState:     deps.state,
+		workerByIDErr: errors.New("lookup failed"),
 	}
 	d = newResumeCoverageDaemon(t, deps, state, deps.amux)
 	_, _, err = d.resumeWorker(context.Background(), Task{PaneID: "pane-1"})
@@ -853,7 +848,7 @@ func TestStoreResumedTaskCoversFallbacksAndWriteErrors(t *testing.T) {
 
 		deps := newTestDeps(t)
 		d := deps.newDaemon(t)
-		oldWorker := Worker{Project: "/tmp/project", PaneID: "old-pane", AgentProfile: "codex"}
+		oldWorker := Worker{Project: "/tmp/project", WorkerID: "worker-01", PaneID: "old-pane", PaneName: "worker-01", AgentProfile: "codex"}
 		if err := deps.state.PutWorker(context.Background(), oldWorker); err != nil {
 			t.Fatalf("PutWorker() error = %v", err)
 		}
@@ -862,13 +857,17 @@ func TestStoreResumedTaskCoversFallbacksAndWriteErrors(t *testing.T) {
 			Project:      "/tmp/project",
 			Issue:        "LAB-757",
 			Status:       TaskStatusCancelled,
+			WorkerID:     "worker-01",
 			PaneID:       "old-pane",
+			PaneName:     "worker-01",
 			ClonePath:    filepath.Join(t.TempDir(), "clone-01"),
 			AgentProfile: "codex",
 		}
 		worker := Worker{
 			Project:      "/tmp/project",
+			WorkerID:     "worker-01",
 			PaneID:       "old-pane",
+			PaneName:     "worker-01",
 			AgentProfile: "codex",
 		}
 		pane := Pane{ID: "pane-2"}
@@ -881,40 +880,21 @@ func TestStoreResumedTaskCoversFallbacksAndWriteErrors(t *testing.T) {
 		if !ok {
 			t.Fatal("task missing after storeResumedTask")
 		}
-		if got, want := resumedTask.PaneName, "pane-2"; got != want {
+		if got, want := resumedTask.PaneName, "worker-01"; got != want {
 			t.Fatalf("task.PaneName = %q, want %q", got, want)
 		}
 		if got, want := resumedTask.CloneName, "clone-01"; got != want {
 			t.Fatalf("task.CloneName = %q, want %q", got, want)
 		}
-		resumedWorker, ok := deps.state.worker("pane-2")
+		resumedWorker, ok := deps.state.worker("worker-01")
 		if !ok {
 			t.Fatal("worker missing after storeResumedTask")
 		}
+		if got, want := resumedWorker.PaneID, "pane-2"; got != want {
+			t.Fatalf("worker.PaneID = %q, want %q", got, want)
+		}
 		if got, want := resumedWorker.Health, WorkerHealthHealthy; got != want {
 			t.Fatalf("worker.Health = %q, want %q", got, want)
-		}
-	})
-
-	t.Run("delete old worker error", func(t *testing.T) {
-		t.Parallel()
-
-		deps := newTestDeps(t)
-		state := &resumeStateStub{
-			fakeState:       deps.state,
-			deleteWorkerErr: errors.New("delete failed"),
-		}
-		d := newResumeCoverageDaemon(t, deps, state, deps.amux)
-
-		err := d.storeResumedTask(context.Background(), Task{
-			Project:      "/tmp/project",
-			Issue:        "LAB-757",
-			PaneID:       "old-pane",
-			ClonePath:    deps.pool.clone.Path,
-			AgentProfile: "codex",
-		}, Worker{}, false, Pane{ID: "pane-2"})
-		if err == nil || !strings.Contains(err.Error(), "delete worker after resume") {
-			t.Fatalf("storeResumedTask() error = %v, want delete worker error", err)
 		}
 	})
 
@@ -964,6 +944,7 @@ func TestStoreResumedTaskCoversFallbacksAndWriteErrors(t *testing.T) {
 type resumeStateStub struct {
 	*fakeState
 	taskByIssueErr  error
+	workerByIDErr   error
 	workerByPaneErr error
 	tasksByPaneErr  error
 	putWorkerErr    error
@@ -976,6 +957,13 @@ func (s *resumeStateStub) TaskByIssue(ctx context.Context, project, issue string
 		return Task{}, s.taskByIssueErr
 	}
 	return s.fakeState.TaskByIssue(ctx, project, issue)
+}
+
+func (s *resumeStateStub) WorkerByID(ctx context.Context, project, workerID string) (Worker, error) {
+	if s.workerByIDErr != nil {
+		return Worker{}, s.workerByIDErr
+	}
+	return s.fakeState.WorkerByID(ctx, project, workerID)
 }
 
 func (s *resumeStateStub) WorkerByPane(ctx context.Context, project, paneID string) (Worker, error) {

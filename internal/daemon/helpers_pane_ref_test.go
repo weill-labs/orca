@@ -28,27 +28,27 @@ func TestWorkerPaneRef(t *testing.T) {
 			want:   "worker-LAB-854",
 		},
 		{
-			name: "falls back to stable task pane id",
-			task: Task{PaneID: "worker-LAB-854", Issue: "LAB-854"},
-			want: "worker-LAB-854",
+			name: "falls back to stable task pane name",
+			task: Task{PaneName: "worker-01", PaneID: "7", Issue: "LAB-854"},
+			want: "worker-01",
 		},
 		{
-			name:   "falls back to stable worker pane id",
+			name:   "falls back to stable worker pane name",
 			task:   Task{Issue: "LAB-854"},
-			worker: Worker{PaneID: "worker-LAB-854"},
-			want:   "worker-LAB-854",
+			worker: Worker{PaneName: "worker-01"},
+			want:   "worker-01",
 		},
 		{
-			name:   "guesses worker name from issue when refs are numeric",
+			name:   "returns empty when only numeric pane refs remain",
 			task:   Task{PaneID: "7", Issue: "LAB-854"},
 			worker: Worker{PaneID: "8"},
-			want:   "worker-LAB-854",
+			want:   "",
 		},
 		{
-			name:   "falls back to numeric task id when issue is empty",
+			name:   "returns empty when no stable worker ref exists",
 			task:   Task{PaneID: "7"},
 			worker: Worker{PaneID: "8"},
-			want:   "7",
+			want:   "",
 		},
 	}
 
@@ -64,7 +64,7 @@ func TestWorkerPaneRef(t *testing.T) {
 }
 
 func TestNormalizeStoredPaneRef(t *testing.T) {
-	t.Run("migrates legacy refs and deletes duplicates", func(t *testing.T) {
+	t.Run("copies stable worker id onto task and worker refs", func(t *testing.T) {
 		t.Parallel()
 
 		deps := newTestDeps(t)
@@ -75,61 +75,57 @@ func TestNormalizeStoredPaneRef(t *testing.T) {
 		task := Task{
 			Project:   "/tmp/project",
 			Issue:     "LAB-854",
+			WorkerID:  "",
 			PaneID:    "7",
 			PaneName:  "7",
 			UpdatedAt: now,
 		}
 		worker := Worker{
 			Project:   "/tmp/project",
+			WorkerID:  "worker-01",
 			Issue:     "LAB-854",
 			PaneID:    "8",
-			PaneName:  "worker-LAB-854",
+			PaneName:  "",
 			UpdatedAt: now,
 		}
 		deps.state.putTaskForTest(task)
 		if err := deps.state.PutWorker(ctx, worker); err != nil {
 			t.Fatalf("PutWorker() error = %v", err)
 		}
-		if err := deps.state.PutWorker(ctx, Worker{
-			Project:   "/tmp/project",
-			Issue:     "LAB-854",
-			PaneID:    "7",
-			PaneName:  "7",
-			UpdatedAt: now,
-		}); err != nil {
-			t.Fatalf("PutWorker() stale error = %v", err)
-		}
 
 		if err := d.normalizeStoredPaneRef(ctx, &task, &worker); err != nil {
 			t.Fatalf("normalizeStoredPaneRef() error = %v", err)
 		}
 
-		if got, want := task.PaneID, "worker-LAB-854"; got != want {
-			t.Fatalf("task.PaneID = %q, want %q", got, want)
+		if got, want := task.WorkerID, "worker-01"; got != want {
+			t.Fatalf("task.WorkerID = %q, want %q", got, want)
 		}
-		if got, want := worker.PaneID, "worker-LAB-854"; got != want {
-			t.Fatalf("worker.PaneID = %q, want %q", got, want)
+		if got, want := task.PaneName, "worker-01"; got != want {
+			t.Fatalf("task.PaneName = %q, want %q", got, want)
+		}
+		if got, want := worker.WorkerID, "worker-01"; got != want {
+			t.Fatalf("worker.WorkerID = %q, want %q", got, want)
+		}
+		if got, want := worker.PaneName, "worker-01"; got != want {
+			t.Fatalf("worker.PaneName = %q, want %q", got, want)
 		}
 
 		storedTask, ok := deps.state.task("LAB-854")
 		if !ok {
 			t.Fatal("task missing after normalization")
 		}
-		if got, want := storedTask.PaneID, "worker-LAB-854"; got != want {
-			t.Fatalf("storedTask.PaneID = %q, want %q", got, want)
+		if got, want := storedTask.WorkerID, "worker-01"; got != want {
+			t.Fatalf("storedTask.WorkerID = %q, want %q", got, want)
 		}
-		if _, ok := deps.state.worker("7"); ok {
-			t.Fatal("stale task pane worker ref retained")
+		if got, want := storedTask.PaneName, "worker-01"; got != want {
+			t.Fatalf("storedTask.PaneName = %q, want %q", got, want)
 		}
-		if _, ok := deps.state.worker("8"); ok {
-			t.Fatal("stale worker pane ref retained")
-		}
-		if _, ok := deps.state.worker("worker-LAB-854"); !ok {
+		if _, ok := deps.state.worker("worker-01"); !ok {
 			t.Fatal("stable worker ref missing after normalization")
 		}
 	})
 
-	t.Run("skips stable non numeric refs", func(t *testing.T) {
+	t.Run("fills missing pane names from stable worker id", func(t *testing.T) {
 		t.Parallel()
 
 		deps := newTestDeps(t)
@@ -138,14 +134,16 @@ func TestNormalizeStoredPaneRef(t *testing.T) {
 		task := Task{
 			Project:   "/tmp/project",
 			Issue:     "LAB-854",
-			PaneID:    "worker-LAB-854",
+			WorkerID:  "worker-01",
+			PaneID:    "pane-1",
 			PaneName:  "",
 			UpdatedAt: now,
 		}
 		worker := Worker{
 			Project:   "/tmp/project",
+			WorkerID:  "worker-01",
 			Issue:     "LAB-854",
-			PaneID:    "worker-LAB-854",
+			PaneID:    "pane-1",
 			PaneName:  "",
 			UpdatedAt: now,
 		}
@@ -153,11 +151,14 @@ func TestNormalizeStoredPaneRef(t *testing.T) {
 		if err := d.normalizeStoredPaneRef(context.Background(), &task, &worker); err != nil {
 			t.Fatalf("normalizeStoredPaneRef() error = %v", err)
 		}
-		if got, want := task.PaneID, "worker-LAB-854"; got != want {
+		if got, want := task.PaneID, "pane-1"; got != want {
 			t.Fatalf("task.PaneID = %q, want %q", got, want)
 		}
-		if got, want := task.PaneName, ""; got != want {
+		if got, want := task.PaneName, "worker-01"; got != want {
 			t.Fatalf("task.PaneName = %q, want %q", got, want)
+		}
+		if got, want := worker.PaneName, "worker-01"; got != want {
+			t.Fatalf("worker.PaneName = %q, want %q", got, want)
 		}
 	})
 
@@ -174,32 +175,21 @@ func TestNormalizeStoredPaneRef(t *testing.T) {
 			{
 				name:  "task update failure",
 				state: &resumeStateStub{fakeState: newFakeState(), putTaskErr: errors.New("put task failed")},
-				task:  Task{Project: "/tmp/project", Issue: "LAB-854", PaneID: "7", PaneName: "7"},
+				task:  Task{Project: "/tmp/project", Issue: "LAB-854", WorkerID: "worker-01", PaneID: "7", PaneName: ""},
 				want:  "normalize task pane ref: put task failed",
 			},
 			{
 				name:  "worker update failure",
 				state: &resumeStateStub{fakeState: newFakeState(), putWorkerErr: errors.New("put worker failed")},
-				task:  Task{Project: "/tmp/project", Issue: "LAB-854", PaneID: "7", PaneName: "7"},
+				task:  Task{Project: "/tmp/project", Issue: "LAB-854", WorkerID: "worker-01", PaneID: "7", PaneName: "worker-01"},
 				worker: &Worker{
 					Project:  "/tmp/project",
+					WorkerID: "worker-01",
 					Issue:    "LAB-854",
 					PaneID:   "8",
-					PaneName: "worker-LAB-854",
+					PaneName: "",
 				},
 				want: "normalize worker pane ref: put worker failed",
-			},
-			{
-				name:  "legacy worker delete failure",
-				state: &resumeStateStub{fakeState: newFakeState(), deleteWorkerErr: errors.New("delete worker failed")},
-				task:  Task{Project: "/tmp/project", Issue: "LAB-854", PaneID: "7", PaneName: "7"},
-				worker: &Worker{
-					Project:  "/tmp/project",
-					Issue:    "LAB-854",
-					PaneID:   "8",
-					PaneName: "worker-LAB-854",
-				},
-				want: "delete legacy worker pane ref 8: delete worker failed",
 			},
 		}
 

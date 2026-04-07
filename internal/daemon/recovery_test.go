@@ -29,8 +29,8 @@ func TestDaemonStartFailsMissingPaneAssignmentsAndReleasesClone(t *testing.T) {
 		if !ok || task.Status != TaskStatusFailed {
 			return false
 		}
-		_, workerOK := deps.state.worker("pane-1")
-		return !workerOK
+		worker, workerOK := deps.state.worker(task.WorkerID)
+		return workerOK && worker.PaneID == "" && worker.Issue == ""
 	})
 
 	task, ok := deps.state.task("LAB-721")
@@ -40,8 +40,12 @@ func TestDaemonStartFailsMissingPaneAssignmentsAndReleasesClone(t *testing.T) {
 	if got, want := task.Status, TaskStatusFailed; got != want {
 		t.Fatalf("task.Status = %q, want %q", got, want)
 	}
-	if _, ok := deps.state.worker("pane-1"); ok {
-		t.Fatal("worker retained after missing-pane reconciliation")
+	worker, ok := deps.state.worker(task.WorkerID)
+	if !ok {
+		t.Fatal("worker missing after missing-pane reconciliation")
+	}
+	if got := worker.PaneID; got != "" {
+		t.Fatalf("worker.PaneID = %q, want empty", got)
 	}
 	if got, want := deps.pool.releasedClones(), []Clone{{
 		Name:          deps.pool.clone.Name,
@@ -124,29 +128,26 @@ func TestDaemonStartNormalizesLegacyNumericPaneRefs(t *testing.T) {
 	if !ok {
 		t.Fatal("task missing after startup")
 	}
-	if got, want := task.PaneID, "worker-LAB-854"; got != want {
+	if got, want := task.PaneID, "7"; got != want {
 		t.Fatalf("task.PaneID = %q, want %q", got, want)
 	}
-
-	worker, ok := deps.state.worker("worker-LAB-854")
-	if !ok {
-		t.Fatal("worker missing after startup normalization")
+	if got, want := task.WorkerID, "worker-01"; got != want {
+		t.Fatalf("task.WorkerID = %q, want %q", got, want)
 	}
-	if got, want := worker.PaneID, "worker-LAB-854"; got != want {
+
+	worker, ok := deps.state.worker("worker-01")
+	if !ok {
+		t.Fatal("worker missing after startup reconciliation")
+	}
+	if got, want := worker.PaneID, "7"; got != want {
 		t.Fatalf("worker.PaneID = %q, want %q", got, want)
 	}
-	if _, ok := deps.state.worker("7"); ok {
-		t.Fatal("legacy numeric worker ref retained after normalization")
-	}
 
-	if got, want := deps.amux.paneExistsCalls, []string{"worker-LAB-854"}; !reflect.DeepEqual(got, want) {
+	if got, want := deps.amux.paneExistsCalls, []string{"7"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("pane exists calls = %#v, want %#v", got, want)
 	}
-	if got, want := deps.amux.captureCount("worker-LAB-854"), 1; got != want {
+	if got, want := deps.amux.captureCount("7"), 1; got != want {
 		t.Fatalf("capture count = %d, want %d", got, want)
-	}
-	if got := deps.amux.captureCount("7"); got != 0 {
-		t.Fatalf("legacy capture count = %d, want 0", got)
 	}
 }
 
@@ -155,6 +156,18 @@ func TestDaemonStartEscalatesWhenPaneRefNormalizationFails(t *testing.T) {
 
 	deps := newTestDeps(t)
 	seedActiveAssignment(t, deps, "LAB-856", "7")
+	task, ok := deps.state.task("LAB-856")
+	if !ok {
+		t.Fatal("seeded task missing")
+	}
+	worker, ok := deps.state.worker(task.WorkerID)
+	if !ok {
+		t.Fatal("seeded worker missing")
+	}
+	worker.PaneName = ""
+	if err := deps.state.PutWorker(context.Background(), worker); err != nil {
+		t.Fatalf("PutWorker() error = %v", err)
+	}
 	state := &resumeStateStub{
 		fakeState:    deps.state,
 		putWorkerErr: errors.New("put worker failed"),
@@ -233,13 +246,15 @@ func seedActiveAssignment(t *testing.T, deps *testDeps, issue, paneID string) {
 	t.Helper()
 
 	now := deps.clock.Now()
+	workerID := nextTestWorkerID(deps)
 	deps.state.putTaskForTest(Task{
 		Project:      "/tmp/project",
 		Issue:        issue,
 		Status:       TaskStatusActive,
 		Prompt:       "Implement startup recovery",
+		WorkerID:     workerID,
 		PaneID:       paneID,
-		PaneName:     paneID,
+		PaneName:     workerID,
 		CloneName:    deps.pool.clone.Name,
 		ClonePath:    deps.pool.clone.Path,
 		Branch:       issue,
@@ -249,8 +264,9 @@ func seedActiveAssignment(t *testing.T, deps *testDeps, issue, paneID string) {
 	})
 	if err := deps.state.PutWorker(context.Background(), Worker{
 		Project:        "/tmp/project",
+		WorkerID:       workerID,
 		PaneID:         paneID,
-		PaneName:       paneID,
+		PaneName:       workerID,
 		Issue:          issue,
 		ClonePath:      deps.pool.clone.Path,
 		AgentProfile:   "codex",

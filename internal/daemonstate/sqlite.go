@@ -3,6 +3,7 @@ package state
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -41,8 +42,9 @@ CREATE TABLE IF NOT EXISTS tasks (
 
 CREATE TABLE IF NOT EXISTS workers (
 	project TEXT NOT NULL,
-	pane_id TEXT NOT NULL,
-	agent TEXT NOT NULL,
+	worker_id TEXT NOT NULL,
+	agent_profile TEXT NOT NULL,
+	current_pane_id TEXT NOT NULL DEFAULT '',
 	state TEXT NOT NULL,
 	issue TEXT NOT NULL DEFAULT '',
 	clone_path TEXT NOT NULL DEFAULT '',
@@ -57,8 +59,9 @@ CREATE TABLE IF NOT EXISTS workers (
 	nudge_count INTEGER NOT NULL DEFAULT 0,
 	last_capture TEXT NOT NULL DEFAULT '',
 	last_activity_at TEXT NOT NULL DEFAULT '',
-	updated_at TEXT NOT NULL,
-	PRIMARY KEY (project, pane_id)
+	created_at TEXT NOT NULL,
+	last_seen_at TEXT NOT NULL,
+	PRIMARY KEY (project, worker_id)
 );
 
 CREATE TABLE IF NOT EXISTS merge_queue (
@@ -86,13 +89,101 @@ CREATE TABLE IF NOT EXISTS events (
 	project TEXT NOT NULL,
 	kind TEXT NOT NULL,
 	issue TEXT NOT NULL DEFAULT '',
+	worker_id TEXT NOT NULL DEFAULT '',
 	message TEXT NOT NULL,
 	payload TEXT,
 	created_at TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_tasks_project_updated ON tasks(project, updated_at DESC);
-CREATE INDEX IF NOT EXISTS idx_workers_project_updated ON workers(project, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_workers_project_last_seen ON workers(project, last_seen_at DESC, worker_id ASC);
+CREATE INDEX IF NOT EXISTS idx_clones_project_updated ON clones(project, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_events_project_id ON events(project, id);
+CREATE INDEX IF NOT EXISTS idx_events_project_issue_id ON events(project, issue, id);
+CREATE INDEX IF NOT EXISTS idx_events_project_worker_id ON events(project, worker_id, id);
+CREATE INDEX IF NOT EXISTS idx_merge_queue_project_created ON merge_queue(project, created_at ASC, pr_number ASC);
+`
+
+const schemaBootstrapSQL = `
+CREATE TABLE IF NOT EXISTS daemon_status (
+	project TEXT PRIMARY KEY,
+	session TEXT NOT NULL,
+	pid INTEGER NOT NULL DEFAULT 0,
+	status TEXT NOT NULL,
+	started_at TEXT NOT NULL,
+	updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS tasks (
+	project TEXT NOT NULL,
+	issue TEXT NOT NULL,
+	status TEXT NOT NULL,
+	agent TEXT NOT NULL,
+	prompt TEXT NOT NULL DEFAULT '',
+	worker_id TEXT NOT NULL DEFAULT '',
+	clone_path TEXT NOT NULL DEFAULT '',
+	pr_number INTEGER,
+	created_at TEXT NOT NULL,
+	updated_at TEXT NOT NULL,
+	PRIMARY KEY (project, issue)
+);
+
+CREATE TABLE IF NOT EXISTS workers (
+	project TEXT NOT NULL,
+	worker_id TEXT NOT NULL,
+	agent_profile TEXT NOT NULL,
+	current_pane_id TEXT NOT NULL DEFAULT '',
+	state TEXT NOT NULL,
+	issue TEXT NOT NULL DEFAULT '',
+	clone_path TEXT NOT NULL DEFAULT '',
+	last_review_count INTEGER NOT NULL DEFAULT 0,
+	last_issue_comment_count INTEGER NOT NULL DEFAULT 0,
+	review_nudge_count INTEGER NOT NULL DEFAULT 0,
+	last_ci_state TEXT NOT NULL DEFAULT '',
+	ci_nudge_count INTEGER NOT NULL DEFAULT 0,
+	ci_failure_poll_count INTEGER NOT NULL DEFAULT 0,
+	ci_escalated INTEGER NOT NULL DEFAULT 0,
+	last_mergeable_state TEXT NOT NULL DEFAULT '',
+	nudge_count INTEGER NOT NULL DEFAULT 0,
+	last_capture TEXT NOT NULL DEFAULT '',
+	last_activity_at TEXT NOT NULL DEFAULT '',
+	created_at TEXT NOT NULL,
+	last_seen_at TEXT NOT NULL,
+	PRIMARY KEY (project, worker_id)
+);
+
+CREATE TABLE IF NOT EXISTS merge_queue (
+	project TEXT NOT NULL,
+	pr_number INTEGER NOT NULL,
+	issue TEXT NOT NULL,
+	status TEXT NOT NULL,
+	created_at TEXT NOT NULL,
+	updated_at TEXT NOT NULL,
+	PRIMARY KEY (project, pr_number)
+);
+
+CREATE TABLE IF NOT EXISTS clones (
+	project TEXT NOT NULL,
+	path TEXT NOT NULL,
+	status TEXT NOT NULL,
+	issue TEXT NOT NULL DEFAULT '',
+	branch TEXT NOT NULL DEFAULT '',
+	updated_at TEXT NOT NULL,
+	PRIMARY KEY (project, path)
+);
+
+CREATE TABLE IF NOT EXISTS events (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	project TEXT NOT NULL,
+	kind TEXT NOT NULL,
+	issue TEXT NOT NULL DEFAULT '',
+	worker_id TEXT NOT NULL DEFAULT '',
+	message TEXT NOT NULL,
+	payload TEXT,
+	created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_tasks_project_updated ON tasks(project, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_clones_project_updated ON clones(project, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_events_project_id ON events(project, id);
 CREATE INDEX IF NOT EXISTS idx_events_project_issue_id ON events(project, issue, id);
@@ -144,11 +235,17 @@ func (s *SQLiteStore) Close() error {
 }
 
 func (s *SQLiteStore) EnsureSchema(ctx context.Context) error {
-	if err := s.execWithRetry(ctx, schemaSQL); err != nil {
+	if err := s.execWithRetry(ctx, schemaBootstrapSQL); err != nil {
 		return fmt.Errorf("ensure sqlite schema: %w", err)
 	}
-	if err := s.ensureWorkersColumns(ctx); err != nil {
+	if err := s.ensureWorkerIdentitySchema(ctx); err != nil {
 		return err
+	}
+	if err := s.ensureWorkerTrackingColumns(ctx); err != nil {
+		return err
+	}
+	if err := s.execWithRetry(ctx, schemaSQL); err != nil {
+		return fmt.Errorf("ensure sqlite schema indexes: %w", err)
 	}
 
 	return nil
@@ -235,10 +332,10 @@ func (s *SQLiteStore) TaskStatus(ctx context.Context, project, issue string) (Ta
 
 func (s *SQLiteStore) ListWorkers(ctx context.Context, project string) ([]Worker, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT pane_id, agent, state, issue, clone_path, last_review_count, last_issue_comment_count, review_nudge_count, last_ci_state, ci_nudge_count, ci_failure_poll_count, ci_escalated, last_mergeable_state, nudge_count, last_capture, last_activity_at, updated_at
+		SELECT worker_id, current_pane_id, agent_profile, state, issue, clone_path, last_review_count, last_issue_comment_count, review_nudge_count, last_ci_state, ci_nudge_count, ci_failure_poll_count, ci_escalated, last_mergeable_state, nudge_count, last_capture, last_activity_at, created_at, last_seen_at
 		FROM workers
 		WHERE project = ?
-		ORDER BY updated_at DESC, pane_id ASC
+		ORDER BY last_seen_at DESC, worker_id ASC
 	`, project)
 	if err != nil {
 		return nil, fmt.Errorf("list workers: %w", err)
@@ -247,34 +344,10 @@ func (s *SQLiteStore) ListWorkers(ctx context.Context, project string) ([]Worker
 
 	workers := make([]Worker, 0)
 	for rows.Next() {
-		var worker Worker
-		var ciEscalated int
-		var lastActivityAt string
-		var updatedAt string
-		if err := rows.Scan(
-			&worker.PaneID,
-			&worker.Agent,
-			&worker.State,
-			&worker.Issue,
-			&worker.ClonePath,
-			&worker.LastReviewCount,
-			&worker.LastIssueCommentCount,
-			&worker.ReviewNudgeCount,
-			&worker.LastCIState,
-			&worker.CINudgeCount,
-			&worker.CIFailurePollCount,
-			&ciEscalated,
-			&worker.LastMergeableState,
-			&worker.NudgeCount,
-			&worker.LastCapture,
-			&lastActivityAt,
-			&updatedAt,
-		); err != nil {
+		worker, err := scanWorker(rows)
+		if err != nil {
 			return nil, fmt.Errorf("scan worker: %w", err)
 		}
-		worker.CIEscalated = ciEscalated != 0
-		worker.LastActivityAt = parseTime(lastActivityAt)
-		worker.UpdatedAt = parseTime(updatedAt)
 		workers = append(workers, worker)
 	}
 
@@ -285,11 +358,28 @@ func (s *SQLiteStore) ListWorkers(ctx context.Context, project string) ([]Worker
 	return workers, nil
 }
 
+func (s *SQLiteStore) WorkerByID(ctx context.Context, project, workerID string) (Worker, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT worker_id, current_pane_id, agent_profile, state, issue, clone_path, last_review_count, last_issue_comment_count, review_nudge_count, last_ci_state, ci_nudge_count, ci_failure_poll_count, ci_escalated, last_mergeable_state, nudge_count, last_capture, last_activity_at, created_at, last_seen_at
+		FROM workers
+		WHERE project = ? AND worker_id = ?
+	`, project, workerID)
+
+	worker, err := scanWorker(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Worker{}, ErrNotFound
+	}
+	if err != nil {
+		return Worker{}, fmt.Errorf("lookup worker by id: %w", err)
+	}
+	return worker, nil
+}
+
 func (s *SQLiteStore) WorkerByPane(ctx context.Context, project, paneID string) (Worker, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT pane_id, agent, state, issue, clone_path, last_review_count, last_issue_comment_count, review_nudge_count, last_ci_state, ci_nudge_count, ci_failure_poll_count, ci_escalated, last_mergeable_state, nudge_count, last_capture, last_activity_at, updated_at
+		SELECT worker_id, current_pane_id, agent_profile, state, issue, clone_path, last_review_count, last_issue_comment_count, review_nudge_count, last_ci_state, ci_nudge_count, ci_failure_poll_count, ci_escalated, last_mergeable_state, nudge_count, last_capture, last_activity_at, created_at, last_seen_at
 		FROM workers
-		WHERE project = ? AND pane_id = ?
+		WHERE project = ? AND current_pane_id = ?
 	`, project, paneID)
 
 	worker, err := scanWorker(row)
@@ -334,10 +424,13 @@ func (s *SQLiteStore) ListClones(ctx context.Context, project string) ([]Clone, 
 
 func (s *SQLiteStore) NonTerminalTasks(ctx context.Context, project string) ([]Task, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT issue, status, agent, prompt, worker_id, clone_path, pr_number, created_at, updated_at
-		FROM tasks
-		WHERE project = ? AND status IN ('starting', 'active')
-		ORDER BY updated_at DESC, issue ASC
+		SELECT t.issue, t.status, t.agent, t.prompt, t.worker_id, w.current_pane_id, t.clone_path, t.pr_number, t.created_at, t.updated_at
+		FROM tasks t
+		LEFT JOIN workers w
+			ON w.project = t.project
+			AND w.worker_id = t.worker_id
+		WHERE t.project = ? AND t.status IN ('starting', 'active')
+		ORDER BY t.updated_at DESC, t.issue ASC
 	`, project)
 	if err != nil {
 		return nil, fmt.Errorf("list non-terminal tasks: %w", err)
@@ -478,15 +571,20 @@ func (s *SQLiteStore) UpsertTask(ctx context.Context, project string, task Task)
 }
 
 func (s *SQLiteStore) UpsertWorker(ctx context.Context, project string, worker Worker) error {
-	if worker.UpdatedAt.IsZero() {
-		worker.UpdatedAt = s.now()
+	now := s.now()
+	if worker.CreatedAt.IsZero() {
+		worker.CreatedAt = now
+	}
+	if worker.LastSeenAt.IsZero() {
+		worker.LastSeenAt = now
 	}
 
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO workers(project, pane_id, agent, state, issue, clone_path, last_review_count, last_issue_comment_count, review_nudge_count, last_ci_state, ci_nudge_count, ci_failure_poll_count, ci_escalated, last_mergeable_state, nudge_count, last_capture, last_activity_at, updated_at)
-		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(project, pane_id) DO UPDATE SET
-			agent = excluded.agent,
+		INSERT INTO workers(project, worker_id, agent_profile, current_pane_id, state, issue, clone_path, last_review_count, last_issue_comment_count, review_nudge_count, last_ci_state, ci_nudge_count, ci_failure_poll_count, ci_escalated, last_mergeable_state, nudge_count, last_capture, last_activity_at, created_at, last_seen_at)
+		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(project, worker_id) DO UPDATE SET
+			agent_profile = excluded.agent_profile,
+			current_pane_id = excluded.current_pane_id,
 			state = excluded.state,
 			issue = excluded.issue,
 			clone_path = excluded.clone_path,
@@ -501,8 +599,8 @@ func (s *SQLiteStore) UpsertWorker(ctx context.Context, project string, worker W
 			nudge_count = excluded.nudge_count,
 			last_capture = excluded.last_capture,
 			last_activity_at = excluded.last_activity_at,
-			updated_at = excluded.updated_at
-	`, project, worker.PaneID, worker.Agent, worker.State, worker.Issue, worker.ClonePath, worker.LastReviewCount, worker.LastIssueCommentCount, worker.ReviewNudgeCount, worker.LastCIState, worker.CINudgeCount, worker.CIFailurePollCount, boolToInt(worker.CIEscalated), worker.LastMergeableState, worker.NudgeCount, worker.LastCapture, formatTime(worker.LastActivityAt), formatTime(worker.UpdatedAt))
+			last_seen_at = excluded.last_seen_at
+	`, project, worker.WorkerID, worker.Agent, worker.CurrentPaneID, worker.State, worker.Issue, worker.ClonePath, worker.LastReviewCount, worker.LastIssueCommentCount, worker.ReviewNudgeCount, worker.LastCIState, worker.CINudgeCount, worker.CIFailurePollCount, boolToInt(worker.CIEscalated), worker.LastMergeableState, worker.NudgeCount, worker.LastCapture, formatTime(worker.LastActivityAt), formatTime(worker.CreatedAt), formatTime(worker.LastSeenAt))
 	if err != nil {
 		return fmt.Errorf("upsert worker: %w", err)
 	}
@@ -510,11 +608,71 @@ func (s *SQLiteStore) UpsertWorker(ctx context.Context, project string, worker W
 	return nil
 }
 
-func (s *SQLiteStore) DeleteWorker(ctx context.Context, project, paneID string) error {
+func (s *SQLiteStore) ClaimWorker(ctx context.Context, project string, worker Worker) (Worker, error) {
+	now := s.now()
+	if worker.CreatedAt.IsZero() {
+		worker.CreatedAt = now
+	}
+	if worker.LastSeenAt.IsZero() {
+		worker.LastSeenAt = now
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Worker{}, fmt.Errorf("begin claim worker tx: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	row := tx.QueryRowContext(ctx, `
+		SELECT worker_id, current_pane_id, agent_profile, state, issue, clone_path, last_review_count, last_issue_comment_count, review_nudge_count, last_ci_state, ci_nudge_count, ci_failure_poll_count, ci_escalated, last_mergeable_state, nudge_count, last_capture, last_activity_at, created_at, last_seen_at
+		FROM workers
+		WHERE project = ? AND agent_profile = ? AND issue = ''
+		ORDER BY created_at ASC, worker_id ASC
+		LIMIT 1
+	`, project, worker.Agent)
+
+	claimed, scanErr := scanWorker(row)
+	switch {
+	case scanErr == nil:
+		claimed.Issue = worker.Issue
+		claimed.State = worker.State
+		claimed.LastSeenAt = worker.LastSeenAt
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE workers
+			SET issue = ?, state = ?, last_seen_at = ?
+			WHERE project = ? AND worker_id = ?
+		`, claimed.Issue, claimed.State, formatTime(claimed.LastSeenAt), project, claimed.WorkerID); err != nil {
+			return Worker{}, fmt.Errorf("claim existing worker: %w", err)
+		}
+	case errors.Is(scanErr, sql.ErrNoRows):
+		worker.WorkerID, err = nextWorkerIDTx(ctx, tx, project)
+		if err != nil {
+			return Worker{}, err
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO workers(project, worker_id, agent_profile, current_pane_id, state, issue, clone_path, last_review_count, last_issue_comment_count, review_nudge_count, last_ci_state, ci_nudge_count, ci_failure_poll_count, ci_escalated, last_mergeable_state, nudge_count, last_capture, last_activity_at, created_at, last_seen_at)
+			VALUES(?, ?, ?, '', ?, ?, '', 0, 0, 0, '', 0, 0, 0, '', 0, '', '', ?, ?)
+		`, project, worker.WorkerID, worker.Agent, worker.State, worker.Issue, formatTime(worker.CreatedAt), formatTime(worker.LastSeenAt)); err != nil {
+			return Worker{}, fmt.Errorf("insert claimed worker: %w", err)
+		}
+		claimed = worker
+	case scanErr != nil:
+		return Worker{}, fmt.Errorf("load claimable worker: %w", scanErr)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return Worker{}, fmt.Errorf("commit claim worker tx: %w", err)
+	}
+	return claimed, nil
+}
+
+func (s *SQLiteStore) DeleteWorker(ctx context.Context, project, workerID string) error {
 	result, err := s.db.ExecContext(ctx, `
 		DELETE FROM workers
-		WHERE project = ? AND pane_id = ?
-	`, project, paneID)
+		WHERE project = ? AND worker_id = ?
+	`, project, workerID)
 	if err != nil {
 		return fmt.Errorf("delete worker: %w", err)
 	}
@@ -567,9 +725,12 @@ func (s *SQLiteStore) ClaimTask(ctx context.Context, project string, task Task) 
 	}()
 
 	row := tx.QueryRowContext(ctx, `
-		SELECT issue, status, agent, prompt, worker_id, clone_path, pr_number, created_at, updated_at
-		FROM tasks
-		WHERE project = ? AND issue = ?
+		SELECT t.issue, t.status, t.agent, t.prompt, t.worker_id, w.current_pane_id, t.clone_path, t.pr_number, t.created_at, t.updated_at
+		FROM tasks t
+		LEFT JOIN workers w
+			ON w.project = t.project
+			AND w.worker_id = t.worker_id
+		WHERE t.project = ? AND t.issue = ?
 	`, project, task.Issue)
 
 	existing, err := scanTask(row)
@@ -612,12 +773,12 @@ func (s *SQLiteStore) ClaimTask(ctx context.Context, project string, task Task) 
 func (s *SQLiteStore) ActiveAssignments(ctx context.Context, project string) ([]Assignment, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT
-			t.issue, t.status, t.agent, t.prompt, t.worker_id, t.clone_path, t.pr_number, t.created_at, t.updated_at,
-			w.pane_id, w.agent, w.state, w.issue, w.clone_path, w.last_review_count, w.last_issue_comment_count, w.review_nudge_count, w.last_ci_state, w.ci_nudge_count, w.ci_failure_poll_count, w.ci_escalated, w.last_mergeable_state, w.nudge_count, w.last_capture, w.last_activity_at, w.updated_at
+			t.issue, t.status, t.agent, t.prompt, t.worker_id, w.current_pane_id, t.clone_path, t.pr_number, t.created_at, t.updated_at,
+			w.worker_id, w.current_pane_id, w.agent_profile, w.state, w.issue, w.clone_path, w.last_review_count, w.last_issue_comment_count, w.review_nudge_count, w.last_ci_state, w.ci_nudge_count, w.ci_failure_poll_count, w.ci_escalated, w.last_mergeable_state, w.nudge_count, w.last_capture, w.last_activity_at, w.created_at, w.last_seen_at
 		FROM tasks t
 		INNER JOIN workers w
 			ON w.project = t.project
-			AND w.pane_id = t.worker_id
+			AND w.worker_id = t.worker_id
 		WHERE t.project = ? AND t.status = 'active'
 		ORDER BY t.updated_at DESC, t.issue ASC
 	`, project)
@@ -643,12 +804,12 @@ func (s *SQLiteStore) ActiveAssignments(ctx context.Context, project string) ([]
 func (s *SQLiteStore) ActiveAssignmentByIssue(ctx context.Context, project, issue string) (Assignment, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT
-			t.issue, t.status, t.agent, t.prompt, t.worker_id, t.clone_path, t.pr_number, t.created_at, t.updated_at,
-			w.pane_id, w.agent, w.state, w.issue, w.clone_path, w.last_review_count, w.last_issue_comment_count, w.review_nudge_count, w.last_ci_state, w.ci_nudge_count, w.ci_failure_poll_count, w.ci_escalated, w.last_mergeable_state, w.nudge_count, w.last_capture, w.last_activity_at, w.updated_at
+			t.issue, t.status, t.agent, t.prompt, t.worker_id, w.current_pane_id, t.clone_path, t.pr_number, t.created_at, t.updated_at,
+			w.worker_id, w.current_pane_id, w.agent_profile, w.state, w.issue, w.clone_path, w.last_review_count, w.last_issue_comment_count, w.review_nudge_count, w.last_ci_state, w.ci_nudge_count, w.ci_failure_poll_count, w.ci_escalated, w.last_mergeable_state, w.nudge_count, w.last_capture, w.last_activity_at, w.created_at, w.last_seen_at
 		FROM tasks t
 		INNER JOIN workers w
 			ON w.project = t.project
-			AND w.pane_id = t.worker_id
+			AND w.worker_id = t.worker_id
 		WHERE t.project = ? AND t.issue = ? AND t.status = 'active'
 	`, project, issue)
 
@@ -665,12 +826,12 @@ func (s *SQLiteStore) ActiveAssignmentByIssue(ctx context.Context, project, issu
 func (s *SQLiteStore) ActiveAssignmentByPRNumber(ctx context.Context, project string, prNumber int) (Assignment, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT
-			t.issue, t.status, t.agent, t.prompt, t.worker_id, t.clone_path, t.pr_number, t.created_at, t.updated_at,
-			w.pane_id, w.agent, w.state, w.issue, w.clone_path, w.last_review_count, w.last_issue_comment_count, w.review_nudge_count, w.last_ci_state, w.ci_nudge_count, w.ci_failure_poll_count, w.ci_escalated, w.last_mergeable_state, w.nudge_count, w.last_capture, w.last_activity_at, w.updated_at
+			t.issue, t.status, t.agent, t.prompt, t.worker_id, w.current_pane_id, t.clone_path, t.pr_number, t.created_at, t.updated_at,
+			w.worker_id, w.current_pane_id, w.agent_profile, w.state, w.issue, w.clone_path, w.last_review_count, w.last_issue_comment_count, w.review_nudge_count, w.last_ci_state, w.ci_nudge_count, w.ci_failure_poll_count, w.ci_escalated, w.last_mergeable_state, w.nudge_count, w.last_capture, w.last_activity_at, w.created_at, w.last_seen_at
 		FROM tasks t
 		INNER JOIN workers w
 			ON w.project = t.project
-			AND w.pane_id = t.worker_id
+			AND w.worker_id = t.worker_id
 		WHERE t.project = ? AND t.pr_number = ? AND t.status = 'active'
 	`, project, prNumber)
 
@@ -890,10 +1051,13 @@ func (s *SQLiteStore) UpdateTaskStatus(ctx context.Context, project, issue, stat
 
 func (s *SQLiteStore) TasksByPane(ctx context.Context, project, paneID string) ([]Task, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT issue, status, agent, prompt, worker_id, clone_path, pr_number, created_at, updated_at
-		FROM tasks
-		WHERE project = ? AND worker_id = ?
-		ORDER BY created_at ASC, updated_at ASC, issue ASC
+		SELECT t.issue, t.status, t.agent, t.prompt, t.worker_id, w.current_pane_id, t.clone_path, t.pr_number, t.created_at, t.updated_at
+		FROM tasks t
+		INNER JOIN workers w
+			ON w.project = t.project
+			AND w.worker_id = t.worker_id
+		WHERE t.project = ? AND w.current_pane_id = ?
+		ORDER BY t.created_at ASC, t.updated_at ASC, t.issue ASC
 	`, project, paneID)
 	if err != nil {
 		return nil, fmt.Errorf("list tasks by pane: %w", err)
@@ -927,9 +1091,9 @@ func (s *SQLiteStore) AppendEvent(ctx context.Context, event Event) (Event, erro
 	}
 
 	result, err := s.db.ExecContext(ctx, `
-		INSERT INTO events(project, kind, issue, message, payload, created_at)
-		VALUES(?, ?, ?, ?, ?, ?)
-	`, event.Project, event.Kind, event.Issue, event.Message, payload, formatTime(event.CreatedAt))
+		INSERT INTO events(project, kind, issue, worker_id, message, payload, created_at)
+		VALUES(?, ?, ?, ?, ?, ?, ?)
+	`, event.Project, event.Kind, event.Issue, event.WorkerID, event.Message, payload, formatTime(event.CreatedAt))
 	if err != nil {
 		return Event{}, fmt.Errorf("append event: %w", err)
 	}
@@ -967,9 +1131,12 @@ func (s *SQLiteStore) lookupDaemon(ctx context.Context, project string) (*Daemon
 
 func (s *SQLiteStore) lookupTask(ctx context.Context, project, issue string) (Task, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT issue, status, agent, prompt, worker_id, clone_path, pr_number, created_at, updated_at
-		FROM tasks
-		WHERE project = ? AND issue = ?
+		SELECT t.issue, t.status, t.agent, t.prompt, t.worker_id, w.current_pane_id, t.clone_path, t.pr_number, t.created_at, t.updated_at
+		FROM tasks t
+		LEFT JOIN workers w
+			ON w.project = t.project
+			AND w.worker_id = t.worker_id
+		WHERE t.project = ? AND t.issue = ?
 	`, project, issue)
 
 	task, err := scanTask(row)
@@ -985,10 +1152,13 @@ func (s *SQLiteStore) lookupTask(ctx context.Context, project, issue string) (Ta
 
 func (s *SQLiteStore) listTasks(ctx context.Context, project string) ([]Task, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT issue, status, agent, prompt, worker_id, clone_path, pr_number, created_at, updated_at
-		FROM tasks
-		WHERE project = ?
-		ORDER BY updated_at DESC, issue ASC
+		SELECT t.issue, t.status, t.agent, t.prompt, t.worker_id, w.current_pane_id, t.clone_path, t.pr_number, t.created_at, t.updated_at
+		FROM tasks t
+		LEFT JOIN workers w
+			ON w.project = t.project
+			AND w.worker_id = t.worker_id
+		WHERE t.project = ?
+		ORDER BY t.updated_at DESC, t.issue ASC
 	`, project)
 	if err != nil {
 		return nil, fmt.Errorf("list tasks: %w", err)
@@ -1013,7 +1183,7 @@ func (s *SQLiteStore) listTasks(ctx context.Context, project string) ([]Task, er
 
 func (s *SQLiteStore) queryEvents(ctx context.Context, project, issue string, afterID int64) ([]Event, error) {
 	const baseQuery = `
-		SELECT id, project, kind, issue, message, payload, created_at
+		SELECT id, project, kind, issue, worker_id, message, payload, created_at
 		FROM events
 		WHERE project = ? AND id > ?
 	`
@@ -1037,7 +1207,7 @@ func (s *SQLiteStore) queryEvents(ctx context.Context, project, issue string, af
 		var event Event
 		var payload sql.NullString
 		var createdAt string
-		if err := rows.Scan(&event.ID, &event.Project, &event.Kind, &event.Issue, &event.Message, &payload, &createdAt); err != nil {
+		if err := rows.Scan(&event.ID, &event.Project, &event.Kind, &event.Issue, &event.WorkerID, &event.Message, &payload, &createdAt); err != nil {
 			return nil, fmt.Errorf("scan event: %w", err)
 		}
 		if payload.Valid {
@@ -1079,15 +1249,19 @@ type rowScanner interface {
 func scanTask(scanner rowScanner) (Task, error) {
 	var task Task
 	var prNumber sql.NullInt64
+	var currentPaneID sql.NullString
 	var createdAt string
 	var updatedAt string
-	if err := scanner.Scan(&task.Issue, &task.Status, &task.Agent, &task.Prompt, &task.WorkerID, &task.ClonePath, &prNumber, &createdAt, &updatedAt); err != nil {
+	if err := scanner.Scan(&task.Issue, &task.Status, &task.Agent, &task.Prompt, &task.WorkerID, &currentPaneID, &task.ClonePath, &prNumber, &createdAt, &updatedAt); err != nil {
 		return Task{}, err
 	}
 
 	if prNumber.Valid {
 		value := int(prNumber.Int64)
 		task.PRNumber = &value
+	}
+	if currentPaneID.Valid {
+		task.CurrentPaneID = currentPaneID.String
 	}
 	task.CreatedAt = parseTime(createdAt)
 	task.UpdatedAt = parseTime(updatedAt)
@@ -1102,18 +1276,21 @@ func scanAssignment(scanner rowScanner) (Assignment, error) {
 	var worker Worker
 	var ciEscalated int
 	var lastActivityAt string
-	var workerUpdatedAt string
+	var workerCreatedAt string
+	var workerLastSeenAt string
 	if err := scanner.Scan(
 		&task.Issue,
 		&task.Status,
 		&task.Agent,
 		&task.Prompt,
 		&task.WorkerID,
+		&task.CurrentPaneID,
 		&task.ClonePath,
 		&prNumber,
 		&taskCreatedAt,
 		&taskUpdatedAt,
-		&worker.PaneID,
+		&worker.WorkerID,
+		&worker.CurrentPaneID,
 		&worker.Agent,
 		&worker.State,
 		&worker.Issue,
@@ -1129,7 +1306,8 @@ func scanAssignment(scanner rowScanner) (Assignment, error) {
 		&worker.NudgeCount,
 		&worker.LastCapture,
 		&lastActivityAt,
-		&workerUpdatedAt,
+		&workerCreatedAt,
+		&workerLastSeenAt,
 	); err != nil {
 		return Assignment{}, err
 	}
@@ -1141,7 +1319,8 @@ func scanAssignment(scanner rowScanner) (Assignment, error) {
 	task.UpdatedAt = parseTime(taskUpdatedAt)
 	worker.CIEscalated = ciEscalated != 0
 	worker.LastActivityAt = parseTime(lastActivityAt)
-	worker.UpdatedAt = parseTime(workerUpdatedAt)
+	worker.CreatedAt = parseTime(workerCreatedAt)
+	worker.LastSeenAt = parseTime(workerLastSeenAt)
 
 	return Assignment{
 		Task:   task,
@@ -1153,9 +1332,11 @@ func scanWorker(scanner rowScanner) (Worker, error) {
 	var worker Worker
 	var ciEscalated int
 	var lastActivityAt string
-	var updatedAt string
+	var createdAt string
+	var lastSeenAt string
 	if err := scanner.Scan(
-		&worker.PaneID,
+		&worker.WorkerID,
+		&worker.CurrentPaneID,
 		&worker.Agent,
 		&worker.State,
 		&worker.Issue,
@@ -1171,13 +1352,15 @@ func scanWorker(scanner rowScanner) (Worker, error) {
 		&worker.NudgeCount,
 		&worker.LastCapture,
 		&lastActivityAt,
-		&updatedAt,
+		&createdAt,
+		&lastSeenAt,
 	); err != nil {
 		return Worker{}, err
 	}
 	worker.CIEscalated = ciEscalated != 0
 	worker.LastActivityAt = parseTime(lastActivityAt)
-	worker.UpdatedAt = parseTime(updatedAt)
+	worker.CreatedAt = parseTime(createdAt)
+	worker.LastSeenAt = parseTime(lastSeenAt)
 	return worker, nil
 }
 
@@ -1202,7 +1385,47 @@ func taskStatusBlocksClaim(status string) bool {
 	}
 }
 
-func (s *SQLiteStore) ensureWorkersColumns(ctx context.Context) error {
+func (s *SQLiteStore) ensureWorkerIdentitySchema(ctx context.Context) error {
+	if err := s.addColumnIfMissing(ctx, "events", "worker_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+
+	hasWorkerID, err := s.tableHasColumn(ctx, "workers", "worker_id")
+	if err != nil {
+		return err
+	}
+	if !hasWorkerID {
+		if err := s.ensureLegacyWorkerTrackingColumns(ctx); err != nil {
+			return err
+		}
+		if err := s.migrateLegacyWorkerIdentitySchema(ctx); err != nil {
+			return err
+		}
+	}
+
+	type columnSpec struct {
+		name       string
+		definition string
+	}
+	for _, spec := range []columnSpec{
+		{name: "agent_profile", definition: "TEXT NOT NULL DEFAULT ''"},
+		{name: "current_pane_id", definition: "TEXT NOT NULL DEFAULT ''"},
+		{name: "created_at", definition: "TEXT NOT NULL DEFAULT ''"},
+		{name: "last_seen_at", definition: "TEXT NOT NULL DEFAULT ''"},
+	} {
+		if err := s.addColumnIfMissing(ctx, "workers", spec.name, spec.definition); err != nil {
+			return err
+		}
+	}
+
+	if err := s.backfillEventWorkerIDs(ctx); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (s *SQLiteStore) ensureWorkerTrackingColumns(ctx context.Context) error {
 	type columnSpec struct {
 		name       string
 		definition string
@@ -1231,10 +1454,307 @@ func (s *SQLiteStore) ensureWorkersColumns(ctx context.Context) error {
 	return nil
 }
 
-func (s *SQLiteStore) addColumnIfMissing(ctx context.Context, table, column, definition string) error {
+func (s *SQLiteStore) ensureLegacyWorkerTrackingColumns(ctx context.Context) error {
+	type columnSpec struct {
+		name       string
+		definition string
+	}
+
+	specs := []columnSpec{
+		{name: "last_review_count", definition: "INTEGER NOT NULL DEFAULT 0"},
+		{name: "last_issue_comment_count", definition: "INTEGER NOT NULL DEFAULT 0"},
+		{name: "review_nudge_count", definition: "INTEGER NOT NULL DEFAULT 0"},
+		{name: "last_ci_state", definition: "TEXT NOT NULL DEFAULT ''"},
+		{name: "ci_nudge_count", definition: "INTEGER NOT NULL DEFAULT 0"},
+		{name: "ci_failure_poll_count", definition: "INTEGER NOT NULL DEFAULT 0"},
+		{name: "ci_escalated", definition: "INTEGER NOT NULL DEFAULT 0"},
+		{name: "last_mergeable_state", definition: "TEXT NOT NULL DEFAULT ''"},
+		{name: "nudge_count", definition: "INTEGER NOT NULL DEFAULT 0"},
+		{name: "last_capture", definition: "TEXT NOT NULL DEFAULT ''"},
+		{name: "last_activity_at", definition: "TEXT NOT NULL DEFAULT ''"},
+	}
+
+	for _, spec := range specs {
+		if err := s.addColumnIfMissing(ctx, "workers", spec.name, spec.definition); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (s *SQLiteStore) migrateLegacyWorkerIdentitySchema(ctx context.Context) error {
+	type legacyWorker struct {
+		project               string
+		paneID                string
+		agent                 string
+		state                 string
+		issue                 string
+		clonePath             string
+		lastReviewCount       int
+		lastIssueCommentCount int
+		reviewNudgeCount      int
+		lastCIState           string
+		ciNudgeCount          int
+		ciFailurePollCount    int
+		ciEscalated           int
+		lastMergeableState    string
+		nudgeCount            int
+		lastCapture           string
+		lastActivityAt        string
+		updatedAt             string
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT project, pane_id, agent, state, issue, clone_path, last_review_count, last_issue_comment_count, review_nudge_count, last_ci_state, ci_nudge_count, ci_failure_poll_count, ci_escalated, last_mergeable_state, nudge_count, last_capture, last_activity_at, updated_at
+		FROM workers
+		ORDER BY project ASC, pane_id ASC
+	`)
+	if err != nil {
+		return fmt.Errorf("load legacy workers: %w", err)
+	}
+	defer rows.Close()
+
+	legacyWorkers := make([]legacyWorker, 0)
+	workerIDsByPane := make(map[string]string)
+	sequences := make(map[string]int)
+	for rows.Next() {
+		var worker legacyWorker
+		if err := rows.Scan(
+			&worker.project,
+			&worker.paneID,
+			&worker.agent,
+			&worker.state,
+			&worker.issue,
+			&worker.clonePath,
+			&worker.lastReviewCount,
+			&worker.lastIssueCommentCount,
+			&worker.reviewNudgeCount,
+			&worker.lastCIState,
+			&worker.ciNudgeCount,
+			&worker.ciFailurePollCount,
+			&worker.ciEscalated,
+			&worker.lastMergeableState,
+			&worker.nudgeCount,
+			&worker.lastCapture,
+			&worker.lastActivityAt,
+			&worker.updatedAt,
+		); err != nil {
+			return fmt.Errorf("scan legacy worker: %w", err)
+		}
+		sequences[worker.project]++
+		workerIDsByPane[worker.project+"\x00"+worker.paneID] = workerIDForSequence(sequences[worker.project])
+		legacyWorkers = append(legacyWorkers, worker)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate legacy workers: %w", err)
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin worker identity migration tx: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	if _, err := tx.ExecContext(ctx, `ALTER TABLE workers RENAME TO workers_legacy`); err != nil {
+		return fmt.Errorf("rename legacy workers table: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		CREATE TABLE workers (
+			project TEXT NOT NULL,
+			worker_id TEXT NOT NULL,
+			agent_profile TEXT NOT NULL,
+			current_pane_id TEXT NOT NULL DEFAULT '',
+			state TEXT NOT NULL,
+			issue TEXT NOT NULL DEFAULT '',
+			clone_path TEXT NOT NULL DEFAULT '',
+			last_review_count INTEGER NOT NULL DEFAULT 0,
+			last_issue_comment_count INTEGER NOT NULL DEFAULT 0,
+			review_nudge_count INTEGER NOT NULL DEFAULT 0,
+			last_ci_state TEXT NOT NULL DEFAULT '',
+			ci_nudge_count INTEGER NOT NULL DEFAULT 0,
+			ci_failure_poll_count INTEGER NOT NULL DEFAULT 0,
+			ci_escalated INTEGER NOT NULL DEFAULT 0,
+			last_mergeable_state TEXT NOT NULL DEFAULT '',
+			nudge_count INTEGER NOT NULL DEFAULT 0,
+			last_capture TEXT NOT NULL DEFAULT '',
+			last_activity_at TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			last_seen_at TEXT NOT NULL,
+			PRIMARY KEY (project, worker_id)
+		)
+	`); err != nil {
+		return fmt.Errorf("create migrated workers table: %w", err)
+	}
+
+	for _, worker := range legacyWorkers {
+		workerID := workerIDsByPane[worker.project+"\x00"+worker.paneID]
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO workers(project, worker_id, agent_profile, current_pane_id, state, issue, clone_path, last_review_count, last_issue_comment_count, review_nudge_count, last_ci_state, ci_nudge_count, ci_failure_poll_count, ci_escalated, last_mergeable_state, nudge_count, last_capture, last_activity_at, created_at, last_seen_at)
+			VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, worker.project, workerID, worker.agent, worker.paneID, worker.state, worker.issue, worker.clonePath, worker.lastReviewCount, worker.lastIssueCommentCount, worker.reviewNudgeCount, worker.lastCIState, worker.ciNudgeCount, worker.ciFailurePollCount, worker.ciEscalated, worker.lastMergeableState, worker.nudgeCount, worker.lastCapture, worker.lastActivityAt, worker.updatedAt, worker.updatedAt); err != nil {
+			return fmt.Errorf("insert migrated worker %s/%s: %w", worker.project, worker.paneID, err)
+		}
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE tasks
+			SET worker_id = ?
+			WHERE project = ? AND worker_id = ?
+		`, workerID, worker.project, worker.paneID); err != nil {
+			return fmt.Errorf("rewrite task worker ids for %s/%s: %w", worker.project, worker.paneID, err)
+		}
+	}
+
+	if err := backfillEventWorkerIDsTx(ctx, tx, workerIDsByPane); err != nil {
+		return err
+	}
+
+	if _, err := tx.ExecContext(ctx, `DROP TABLE workers_legacy`); err != nil {
+		return fmt.Errorf("drop legacy workers table: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit worker identity migration tx: %w", err)
+	}
+
+	if err := s.execWithRetry(ctx, schemaSQL); err != nil {
+		return fmt.Errorf("re-ensure schema after worker identity migration: %w", err)
+	}
+
+	return nil
+}
+
+func (s *SQLiteStore) backfillEventWorkerIDs(ctx context.Context) error {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT project, worker_id, current_pane_id
+		FROM workers
+		WHERE current_pane_id <> ''
+	`)
+	if err != nil {
+		return fmt.Errorf("load worker ids for event backfill: %w", err)
+	}
+	defer rows.Close()
+
+	workerIDsByPane := make(map[string]string)
+	for rows.Next() {
+		var project string
+		var workerID string
+		var currentPaneID string
+		if err := rows.Scan(&project, &workerID, &currentPaneID); err != nil {
+			return fmt.Errorf("scan worker id backfill row: %w", err)
+		}
+		workerIDsByPane[project+"\x00"+currentPaneID] = workerID
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate worker ids for event backfill: %w", err)
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin event worker backfill tx: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+	if err := backfillEventWorkerIDsTx(ctx, tx, workerIDsByPane); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit event worker backfill tx: %w", err)
+	}
+	return nil
+}
+
+func backfillEventWorkerIDsTx(ctx context.Context, tx *sql.Tx, workerIDsByPane map[string]string) error {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT id, project, payload
+		FROM events
+		WHERE worker_id = ''
+	`)
+	if err != nil {
+		return fmt.Errorf("load events for worker id backfill: %w", err)
+	}
+	defer rows.Close()
+
+	type eventRow struct {
+		id      int64
+		project string
+		payload sql.NullString
+	}
+	events := make([]eventRow, 0)
+	for rows.Next() {
+		var event eventRow
+		if err := rows.Scan(&event.id, &event.project, &event.payload); err != nil {
+			return fmt.Errorf("scan event backfill row: %w", err)
+		}
+		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate events for worker id backfill: %w", err)
+	}
+
+	for _, event := range events {
+		if !event.payload.Valid || strings.TrimSpace(event.payload.String) == "" {
+			continue
+		}
+
+		payload := make(map[string]any)
+		if err := json.Unmarshal([]byte(event.payload.String), &payload); err != nil {
+			continue
+		}
+		paneID, _ := payload["pane_id"].(string)
+		if strings.TrimSpace(paneID) == "" {
+			continue
+		}
+		workerID := workerIDsByPane[event.project+"\x00"+paneID]
+		if workerID == "" {
+			continue
+		}
+		payload["worker_id"] = workerID
+		encoded, err := json.Marshal(payload)
+		if err != nil {
+			return fmt.Errorf("marshal event payload with worker id: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE events
+			SET worker_id = ?, payload = ?
+			WHERE id = ?
+		`, workerID, string(encoded), event.id); err != nil {
+			return fmt.Errorf("update event worker id %d: %w", event.id, err)
+		}
+	}
+
+	return nil
+}
+
+func nextWorkerIDTx(ctx context.Context, tx *sql.Tx, project string) (string, error) {
+	var maxID sql.NullInt64
+	if err := tx.QueryRowContext(ctx, `
+		SELECT MAX(CAST(SUBSTR(worker_id, 8) AS INTEGER))
+		FROM workers
+		WHERE project = ? AND worker_id GLOB 'worker-[0-9]*'
+	`, project).Scan(&maxID); err != nil {
+		return "", fmt.Errorf("query next worker id: %w", err)
+	}
+
+	next := 1
+	if maxID.Valid {
+		next = int(maxID.Int64) + 1
+	}
+	return workerIDForSequence(next), nil
+}
+
+func workerIDForSequence(sequence int) string {
+	if sequence < 1 {
+		sequence = 1
+	}
+	return fmt.Sprintf("worker-%02d", sequence)
+}
+
+func (s *SQLiteStore) tableHasColumn(ctx context.Context, table, column string) (bool, error) {
 	rows, err := s.db.QueryContext(ctx, fmt.Sprintf("PRAGMA table_info(%s)", table))
 	if err != nil {
-		return fmt.Errorf("query table info for %s: %w", table, err)
+		return false, fmt.Errorf("query table info for %s: %w", table, err)
 	}
 	defer rows.Close()
 
@@ -1246,14 +1766,25 @@ func (s *SQLiteStore) addColumnIfMissing(ctx context.Context, table, column, def
 		var defaultValue sql.NullString
 		var pk int
 		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &pk); err != nil {
-			return fmt.Errorf("scan table info for %s: %w", table, err)
+			return false, fmt.Errorf("scan table info for %s: %w", table, err)
 		}
 		if name == column {
-			return nil
+			return true, nil
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("iterate table info for %s: %w", table, err)
+		return false, fmt.Errorf("iterate table info for %s: %w", table, err)
+	}
+	return false, nil
+}
+
+func (s *SQLiteStore) addColumnIfMissing(ctx context.Context, table, column, definition string) error {
+	hasColumn, err := s.tableHasColumn(ctx, table, column)
+	if err != nil {
+		return err
+	}
+	if hasColumn {
+		return nil
 	}
 
 	if err := s.execWithRetry(ctx, fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, definition)); err != nil {

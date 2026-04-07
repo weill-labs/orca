@@ -260,7 +260,7 @@ func TestPRReviewPollingNotifiesLeadPaneWhenReviewNudgesAreExhausted(t *testing.
 	aliceNudge := "New blocking PR review feedback on #42:\n- alice: Please add tests.\n\nAddress the feedback in the PR review and push an update.\n"
 	bobNudge := "New blocking PR review feedback on #42:\n- bob: Handle the nil case too.\n\nAddress the feedback in the PR review and push an update.\n"
 	carolNudge := "New blocking PR review feedback on #42:\n- carol: Cover the restart flow.\n\nAddress the feedback in the PR review and push an update.\n"
-	leadNotification := "Review nudges exhausted for LAB-689 in worker-1 on PR #42.\nUnresolved review feedback:\n- alice: Please add tests.\n- bob: Handle the nil case too.\n- carol: Cover the restart flow.\n- dave: Persist the nudge counter.\n\nIntervene in worker-1 to address the feedback or reassign the task.\n"
+	leadNotification := "Review nudges exhausted for LAB-689 in worker-01 on PR #42.\nUnresolved review feedback:\n- alice: Please add tests.\n- bob: Handle the nil case too.\n- carol: Cover the restart flow.\n- dave: Persist the nudge counter.\n\nIntervene in worker-01 to address the feedback or reassign the task.\n"
 
 	prTicker.tick(deps.clock.Now())
 	waitFor(t, "first review nudge", func() bool {
