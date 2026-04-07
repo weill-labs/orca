@@ -48,6 +48,7 @@ func TestPaneAlreadyGone(t *testing.T) {
 		{name: "pane not found", err: errors.New("amux kill pane-1: exit status 1: pane not found"), want: true},
 		{name: "pane missing", err: errors.New("amux kill pane-1: exit status 1: pane missing"), want: true},
 		{name: "no such pane", err: errors.New("amux kill pane-1: exit status 1: no such pane"), want: true},
+		{name: "no such session mentioning pane id", err: errors.New("amux kill pane-1: exit status 1: no such session"), want: false},
 		{name: "different error", err: errors.New("amux kill pane-1: exit status 1: permission denied"), want: false},
 		{name: "missing without pane context", err: errors.New("session missing"), want: false},
 	}

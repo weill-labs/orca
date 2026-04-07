@@ -178,7 +178,9 @@ func paneAlreadyGone(err error) bool {
 	}
 
 	message := strings.ToLower(strings.TrimSpace(err.Error()))
-	return strings.Contains(message, "pane") && (strings.Contains(message, "not found") || strings.Contains(message, "missing") || strings.Contains(message, "no such"))
+	return strings.Contains(message, "pane not found") ||
+		strings.Contains(message, "pane missing") ||
+		strings.Contains(message, "no such pane")
 }
 
 func ignoreCancelledPaneError(cancelled bool, err error) error {
