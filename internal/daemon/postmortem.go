@@ -105,19 +105,27 @@ func (d *Daemon) finishAssignmentWithMessage(ctx context.Context, active ActiveA
 	}
 
 	if status != TaskStatusFailed {
-		result = errors.Join(result, ignoreCancelledPaneError(cancelled, d.ensurePostmortem(cleanupCtx, active)))
+		postmortemErr := d.ensurePostmortem(cleanupCtx, active)
+		if cancelled {
+			postmortemErr = ignorePaneAlreadyGoneError(postmortemErr)
+		}
+		result = errors.Join(result, postmortemErr)
 		if active.Task.PaneID != "" {
 			metadata, err := d.completionPaneMetadata(cleanupCtx, active, merged)
 			if err != nil {
 				result = errors.Join(result, err)
 			} else {
-				result = errors.Join(result, ignoreCancelledPaneError(cancelled, d.setPaneMetadata(cleanupCtx, active.Task.PaneID, metadata)))
+				metadataErr := d.setPaneMetadata(cleanupCtx, active.Task.PaneID, metadata)
+				if cancelled {
+					metadataErr = ignorePaneAlreadyGoneError(metadataErr)
+				}
+				result = errors.Join(result, metadataErr)
 			}
 		}
 	}
 
 	if cancelled {
-		if err := ignoreCancelledPaneError(cancelled, d.amux.KillPane(cleanupCtx, active.Task.PaneID)); err != nil {
+		if err := ignorePaneAlreadyGoneError(d.amux.KillPane(cleanupCtx, active.Task.PaneID)); err != nil {
 			result = errors.Join(result, err)
 		}
 	}
@@ -183,8 +191,8 @@ func paneAlreadyGone(err error) bool {
 		strings.Contains(message, "no such pane")
 }
 
-func ignoreCancelledPaneError(cancelled bool, err error) error {
-	if cancelled && paneAlreadyGone(err) {
+func ignorePaneAlreadyGoneError(err error) error {
+	if paneAlreadyGone(err) {
 		return nil
 	}
 	return err
