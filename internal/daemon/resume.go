@@ -9,11 +9,15 @@ import (
 )
 
 func (d *Daemon) Resume(ctx context.Context, issue, prompt string) error {
+	return d.resume(ctx, d.project, issue, prompt)
+}
+
+func (d *Daemon) resume(ctx context.Context, projectPath, issue, prompt string) error {
 	if err := d.requireStarted(); err != nil {
 		return err
 	}
 
-	task, err := d.state.TaskByIssue(ctx, d.project, issue)
+	task, err := d.state.TaskByIssue(ctx, projectPath, issue)
 	if err != nil {
 		return err
 	}
@@ -26,7 +30,7 @@ func (d *Daemon) Resume(ctx context.Context, issue, prompt string) error {
 		return fmt.Errorf("load agent profile %q: %w", task.AgentProfile, err)
 	}
 
-	worker, hasWorker, err := d.resumeWorker(ctx, task)
+	worker, hasWorker, err := d.resumeWorkerForProject(ctx, projectPath, task)
 	if err != nil {
 		return err
 	}
@@ -45,11 +49,11 @@ func (d *Daemon) Resume(ctx context.Context, issue, prompt string) error {
 			return fmt.Errorf("check pane %s: %w", paneID, err)
 		}
 		if exists {
-			return d.resumeExistingPane(ctx, task, worker, hasWorker, profile, strings.TrimSpace(prompt))
+			return d.resumeExistingPaneForProject(ctx, projectPath, task, worker, hasWorker, profile, strings.TrimSpace(prompt))
 		}
 	}
 
-	return d.resumeWithFreshPane(ctx, task, worker, hasWorker, profile, strings.TrimSpace(prompt))
+	return d.resumeWithFreshPaneForProject(ctx, projectPath, task, worker, hasWorker, profile, strings.TrimSpace(prompt))
 }
 
 func taskCanResume(status string) bool {
@@ -61,7 +65,18 @@ func taskCanResume(status string) bool {
 	}
 }
 
+func (d *Daemon) projectPathForTask(task Task) string {
+	if task.Project != "" {
+		return task.Project
+	}
+	return d.project
+}
+
 func (d *Daemon) resumeWorker(ctx context.Context, task Task) (Worker, bool, error) {
+	return d.resumeWorkerForProject(ctx, d.projectPathForTask(task), task)
+}
+
+func (d *Daemon) resumeWorkerForProject(ctx context.Context, projectPath string, task Task) (Worker, bool, error) {
 	workerID := strings.TrimSpace(task.WorkerID)
 	if workerID == "" {
 		workerID = strings.TrimSpace(task.PaneName)
@@ -73,7 +88,7 @@ func (d *Daemon) resumeWorker(ctx context.Context, task Task) (Worker, bool, err
 		return Worker{}, false, nil
 	}
 
-	worker, err := d.state.WorkerByID(ctx, d.project, workerID)
+	worker, err := d.state.WorkerByID(ctx, projectPath, workerID)
 	if errors.Is(err, ErrWorkerNotFound) {
 		return Worker{}, false, nil
 	}
@@ -84,6 +99,10 @@ func (d *Daemon) resumeWorker(ctx context.Context, task Task) (Worker, bool, err
 }
 
 func (d *Daemon) resumeExistingPane(ctx context.Context, task Task, worker Worker, hasWorker bool, profile AgentProfile, prompt string) error {
+	return d.resumeExistingPaneForProject(ctx, d.projectPathForTask(task), task, worker, hasWorker, profile, prompt)
+}
+
+func (d *Daemon) resumeExistingPaneForProject(ctx context.Context, projectPath string, task Task, worker Worker, hasWorker bool, profile AgentProfile, prompt string) error {
 	paneID := strings.TrimSpace(task.PaneID)
 	if paneID == "" {
 		return fmt.Errorf("task %s has no worker pane", task.Issue)
@@ -92,7 +111,7 @@ func (d *Daemon) resumeExistingPane(ctx context.Context, task Task, worker Worke
 		return err
 	}
 
-	metadata, err := d.assignmentPaneMetadata(ctx, paneID, profile.Name, task.Branch, task.Issue, resolveTaskTitle(task.Issue, task.Issue), task.PRNumber)
+	metadata, err := d.assignmentPaneMetadata(ctx, projectPath, paneID, profile.Name, task.Branch, task.Issue, resolveTaskTitle(task.Issue, task.Issue), task.PRNumber)
 	if err != nil {
 		return fmt.Errorf("build pane metadata: %w", err)
 	}
@@ -114,25 +133,37 @@ func (d *Daemon) resumeExistingPane(ctx context.Context, task Task, worker Worke
 	}
 
 	if task.Status != TaskStatusActive {
-		if err := d.setIssueStatus(ctx, task.Issue, IssueStateInProgress); err != nil {
+		if err := d.setIssueStatus(ctx, projectPath, task.Issue, IssueStateInProgress); err != nil {
 			return fmt.Errorf("set issue status: %w", err)
 		}
 	}
 
-	return d.storeResumedTask(ctx, task, worker, hasWorker, Pane{ID: paneID, Name: task.PaneName})
+	return d.storeResumedTaskForProject(ctx, projectPath, task, worker, hasWorker, Pane{ID: paneID, Name: task.PaneName})
 }
 
 func (d *Daemon) resumeWithFreshPane(ctx context.Context, task Task, worker Worker, hasWorker bool, profile AgentProfile, prompt string) error {
+	return d.resumeWithFreshPaneForProject(ctx, d.projectPathForTask(task), task, worker, hasWorker, profile, prompt)
+}
+
+func (d *Daemon) resumeWithFreshPaneForProject(ctx context.Context, projectPath string, task Task, worker Worker, hasWorker bool, profile AgentProfile, prompt string) error {
 	// Resume reuses the recorded clone path instead of re-acquiring from the pool so the task continues in its existing checkout.
 	clonePath := strings.TrimSpace(task.ClonePath)
 	if clonePath == "" {
 		return fmt.Errorf("task %s has no clone path", task.Issue)
 	}
 
+	paneName := strings.TrimSpace(task.WorkerID)
+	if paneName == "" {
+		paneName = strings.TrimSpace(task.PaneName)
+	}
+	if paneName == "" {
+		paneName = "worker-" + task.Issue
+	}
+
 	pane, err := d.amux.Spawn(ctx, SpawnRequest{
 		Session: d.session,
 		AtPane:  d.leadPane,
-		Name:    task.WorkerID,
+		Name:    paneName,
 		CWD:     clonePath,
 		Command: profile.StartCommand,
 	})
@@ -148,7 +179,7 @@ func (d *Daemon) resumeWithFreshPane(ctx context.Context, task Task, worker Work
 		}
 	}()
 
-	metadata, err := d.assignmentPaneMetadata(ctx, pane.ID, profile.Name, task.Branch, task.Issue, resolveTaskTitle(task.Issue, task.Issue), task.PRNumber)
+	metadata, err := d.assignmentPaneMetadata(ctx, projectPath, pane.ID, profile.Name, task.Branch, task.Issue, resolveTaskTitle(task.Issue, task.Issue), task.PRNumber)
 	if err != nil {
 		return fmt.Errorf("build pane metadata: %w", err)
 	}
@@ -172,11 +203,11 @@ func (d *Daemon) resumeWithFreshPane(ctx context.Context, task Task, worker Work
 		}
 	}
 
-	if err := d.setIssueStatus(ctx, task.Issue, IssueStateInProgress); err != nil {
+	if err := d.setIssueStatus(ctx, projectPath, task.Issue, IssueStateInProgress); err != nil {
 		return fmt.Errorf("set issue status: %w", err)
 	}
 
-	if err := d.storeResumedTask(ctx, task, worker, hasWorker, pane); err != nil {
+	if err := d.storeResumedTaskForProject(ctx, projectPath, task, worker, hasWorker, pane); err != nil {
 		return err
 	}
 
@@ -185,10 +216,26 @@ func (d *Daemon) resumeWithFreshPane(ctx context.Context, task Task, worker Work
 }
 
 func (d *Daemon) storeResumedTask(ctx context.Context, task Task, worker Worker, hasWorker bool, pane Pane) error {
+	return d.storeResumedTaskForProject(ctx, d.projectPathForTask(task), task, worker, hasWorker, pane)
+}
+
+func (d *Daemon) storeResumedTaskForProject(ctx context.Context, projectPath string, task Task, worker Worker, hasWorker bool, pane Pane) error {
 	now := d.now()
+	oldPaneID := task.PaneID
+
+	task.Project = projectPath
 	task.Status = TaskStatusActive
 	if task.WorkerID == "" {
 		task.WorkerID = worker.WorkerID
+	}
+	if task.WorkerID == "" {
+		task.WorkerID = strings.TrimSpace(task.PaneName)
+	}
+	if task.WorkerID == "" {
+		task.WorkerID = strings.TrimSpace(pane.Name)
+	}
+	if task.WorkerID == "" {
+		task.WorkerID = strings.TrimSpace(pane.ID)
 	}
 	task.PaneID = pane.ID
 	task.PaneName = task.WorkerID
@@ -206,7 +253,7 @@ func (d *Daemon) storeResumedTask(ctx context.Context, task Task, worker Worker,
 	resumedWorker := worker
 	if !hasWorker {
 		resumedWorker = Worker{
-			Project:      d.project,
+			Project:      projectPath,
 			WorkerID:     task.WorkerID,
 			PaneName:     task.WorkerID,
 			Health:       WorkerHealthHealthy,
@@ -217,7 +264,7 @@ func (d *Daemon) storeResumedTask(ctx context.Context, task Task, worker Worker,
 			LastSeenAt:   now,
 		}
 	}
-	resumedWorker.Project = d.project
+	resumedWorker.Project = projectPath
 	resumedWorker.WorkerID = task.WorkerID
 	resumedWorker.PaneID = pane.ID
 	resumedWorker.PaneName = task.WorkerID
@@ -238,13 +285,18 @@ func (d *Daemon) storeResumedTask(ctx context.Context, task Task, worker Worker,
 	resumedWorker.LastActivityAt = now
 	resumedWorker.LastSeenAt = now
 	resumedWorker.UpdatedAt = now
+	if oldPaneID != "" && oldPaneID != pane.ID {
+		if err := d.state.DeleteWorker(ctx, projectPath, oldPaneID); err != nil && !errors.Is(err, ErrWorkerNotFound) {
+			return fmt.Errorf("delete worker after resume: %w", err)
+		}
+	}
 	if err := d.state.PutWorker(ctx, resumedWorker); err != nil {
 		return fmt.Errorf("store worker after resume: %w", err)
 	}
 	if err := d.state.PutTask(ctx, task); err != nil {
 		return fmt.Errorf("store task after resume: %w", err)
 	}
-	d.ensureTaskMonitor(task.Issue)
+	d.ensureTaskMonitorForProject(projectPath, task.Issue)
 
 	return nil
 }

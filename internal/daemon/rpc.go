@@ -2,8 +2,6 @@ package daemon
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,8 +17,7 @@ const (
 	// Darwin rejects AF_UNIX paths above 103 bytes, so keep the derived socket
 	// name under that ceiling and fall back to a shorter stable location when
 	// config dirs are deeply nested.
-	unixSocketPathMax   = 103
-	socketHashByteCount = 16
+	unixSocketPathMax = 103
 )
 
 type rpcRequest struct {
@@ -43,44 +40,44 @@ type rpcError struct {
 }
 
 type assignRPCParams struct {
-	Issue  string `json:"issue"`
-	Prompt string `json:"prompt"`
-	Agent  string `json:"agent"`
-	Title  string `json:"title"`
+	Project string `json:"project"`
+	Issue   string `json:"issue"`
+	Prompt  string `json:"prompt"`
+	Agent   string `json:"agent"`
+	Title   string `json:"title"`
 }
 
 type batchRPCParams struct {
+	Project string       `json:"project"`
 	Entries []BatchEntry `json:"entries"`
 	Delay   string       `json:"delay"`
 }
 
 type cancelRPCParams struct {
-	Issue string `json:"issue"`
+	Project string `json:"project"`
+	Issue   string `json:"issue"`
 }
 
 type resumeRPCParams struct {
-	Issue  string `json:"issue"`
-	Prompt string `json:"prompt"`
+	Project string `json:"project"`
+	Issue   string `json:"issue"`
+	Prompt  string `json:"prompt"`
 }
 
 type enqueueRPCParams struct {
-	PRNumber int `json:"pr_number"`
+	Project  string `json:"project"`
+	PRNumber int    `json:"pr_number"`
 }
 
 type statusRPCParams struct {
-	Issue string `json:"issue,omitempty"`
+	Project string `json:"project"`
+	Issue   string `json:"issue,omitempty"`
 }
 
-func projectHash(projectPath string) string {
-	sum := sha256.Sum256([]byte(projectPath))
-	return hex.EncodeToString(sum[:])
-}
-
-func socketFileForProject(configDir, projectPath string) string {
+func socketFile(configDir string) string {
 	candidates := []string{
-		filepath.Join(configDir, fmt.Sprintf("orca-%s.sock", projectHash(projectPath))),
-		filepath.Join(configDir, fmt.Sprintf("orca-%s.sock", shortProjectHash(projectPath, socketHashByteCount))),
-		filepath.Join(os.TempDir(), fmt.Sprintf("orca-%s.sock", shortProjectHash(projectPath, socketHashByteCount))),
+		filepath.Join(configDir, "orca.sock"),
+		filepath.Join(os.TempDir(), "orca.sock"),
 	}
 	for _, candidate := range candidates {
 		if len(candidate) <= unixSocketPathMax {
@@ -88,14 +85,6 @@ func socketFileForProject(configDir, projectPath string) string {
 		}
 	}
 	return candidates[len(candidates)-1]
-}
-
-func shortProjectHash(projectPath string, bytes int) string {
-	sum := sha256.Sum256([]byte(projectPath))
-	if bytes <= 0 || bytes > len(sum) {
-		bytes = len(sum)
-	}
-	return hex.EncodeToString(sum[:bytes])
 }
 
 func callRPC(ctx context.Context, socketPath, method string, params any, result any) error {

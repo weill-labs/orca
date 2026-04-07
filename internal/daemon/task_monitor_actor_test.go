@@ -97,6 +97,45 @@ func TestTaskMonitorPollsAssignmentsInParallel(t *testing.T) {
 	})
 }
 
+func TestTaskMonitorUsesProjectScopedKeys(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	d := deps.newDaemon(t)
+	t.Cleanup(func() {
+		d.stopAllTaskMonitors(true)
+	})
+
+	assignments := []ActiveAssignment{
+		{
+			Task: Task{
+				Project: "/repo-a",
+				Issue:   "LAB-901",
+				Status:  TaskStatusActive,
+				PaneID:  "pane-a",
+			},
+			Worker: Worker{Project: "/repo-a", PaneID: "pane-a", Issue: "LAB-901"},
+		},
+		{
+			Task: Task{
+				Project: "/repo-b",
+				Issue:   "LAB-901",
+				Status:  TaskStatusActive,
+				PaneID:  "pane-b",
+			},
+			Worker: Worker{Project: "/repo-b", PaneID: "pane-b", Issue: "LAB-901"},
+		},
+	}
+
+	monitors := d.syncTaskMonitors(assignments)
+	if got, want := len(monitors), 2; got != want {
+		t.Fatalf("len(monitors) = %d, want %d", got, want)
+	}
+	if got, want := d.taskMonitorCount(), 2; got != want {
+		t.Fatalf("taskMonitorCount() = %d, want %d", got, want)
+	}
+}
+
 func TestTaskMonitorStaleResultIsDropped(t *testing.T) {
 	t.Parallel()
 

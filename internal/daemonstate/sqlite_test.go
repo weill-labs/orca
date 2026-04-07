@@ -385,6 +385,259 @@ func TestSQLiteStoreNotFoundAndHelpers(t *testing.T) {
 	}
 }
 
+func TestSQLiteStoreAllActiveQueriesAcrossProjects(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	now := time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC)
+
+	for _, task := range []Task{
+		{
+			Issue:     "LAB-901",
+			Status:    "active",
+			Agent:     "codex",
+			WorkerID:  "worker-a",
+			ClonePath: "/clones/a",
+			CreatedAt: now,
+			UpdatedAt: now,
+		},
+		{
+			Issue:     "LAB-902",
+			Status:    "starting",
+			Agent:     "codex",
+			WorkerID:  "worker-b",
+			ClonePath: "/clones/b",
+			CreatedAt: now,
+			UpdatedAt: now.Add(time.Minute),
+		},
+		{
+			Issue:     "LAB-903",
+			Status:    "done",
+			Agent:     "codex",
+			WorkerID:  "worker-c",
+			ClonePath: "/clones/c",
+			CreatedAt: now,
+			UpdatedAt: now.Add(2 * time.Minute),
+		},
+	} {
+		project := "/repo-a"
+		if task.Issue == "LAB-902" {
+			project = "/repo-b"
+		}
+		if err := store.UpsertTask(context.Background(), project, task); err != nil {
+			t.Fatalf("UpsertTask(%s) error = %v", task.Issue, err)
+		}
+	}
+
+	if err := store.UpsertWorker(context.Background(), "/repo-a", Worker{
+		WorkerID:      "worker-a",
+		CurrentPaneID: "pane-a",
+		Agent:         "codex",
+		State:         "healthy",
+		Issue:         "LAB-901",
+		ClonePath:     "/clones/a",
+		CreatedAt:     now,
+		LastSeenAt:    now,
+	}); err != nil {
+		t.Fatalf("UpsertWorker(/repo-a) error = %v", err)
+	}
+
+	if err := store.UpsertWorker(context.Background(), "/repo-b", Worker{
+		WorkerID:      "worker-b",
+		CurrentPaneID: "pane-b",
+		Agent:         "codex",
+		State:         "healthy",
+		Issue:         "LAB-902",
+		ClonePath:     "/clones/b",
+		CreatedAt:     now.Add(time.Minute),
+		LastSeenAt:    now.Add(time.Minute),
+	}); err != nil {
+		t.Fatalf("UpsertWorker(/repo-b) error = %v", err)
+	}
+
+	if _, err := store.EnqueueMergeEntry(context.Background(), MergeQueueEntry{
+		Project:   "/repo-a",
+		Issue:     "LAB-901",
+		PRNumber:  41,
+		Status:    "queued",
+		CreatedAt: now,
+		UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("EnqueueMergeEntry(/repo-a) error = %v", err)
+	}
+	if _, err := store.EnqueueMergeEntry(context.Background(), MergeQueueEntry{
+		Project:   "/repo-b",
+		Issue:     "LAB-902",
+		PRNumber:  42,
+		Status:    "awaiting_checks",
+		CreatedAt: now.Add(time.Minute),
+		UpdatedAt: now.Add(time.Minute),
+	}); err != nil {
+		t.Fatalf("EnqueueMergeEntry(/repo-b) error = %v", err)
+	}
+
+	tasks, err := store.AllNonTerminalTasks(context.Background())
+	if err != nil {
+		t.Fatalf("AllNonTerminalTasks() error = %v", err)
+	}
+	if got, want := len(tasks), 2; got != want {
+		t.Fatalf("len(AllNonTerminalTasks()) = %d, want %d", got, want)
+	}
+
+	assignments, err := store.AllActiveAssignments(context.Background())
+	if err != nil {
+		t.Fatalf("AllActiveAssignments() error = %v", err)
+	}
+	if got, want := len(assignments), 1; got != want {
+		t.Fatalf("len(AllActiveAssignments()) = %d, want %d", got, want)
+	}
+	if got, want := assignments[0].Task.Issue, "LAB-901"; got != want {
+		t.Fatalf("AllActiveAssignments()[0].Task.Issue = %q, want %q", got, want)
+	}
+
+	entries, err := store.AllMergeEntries(context.Background())
+	if err != nil {
+		t.Fatalf("AllMergeEntries() error = %v", err)
+	}
+	if got, want := len(entries), 2; got != want {
+		t.Fatalf("len(AllMergeEntries()) = %d, want %d", got, want)
+	}
+}
+
+func TestSQLiteStoreGlobalStatusFansOutAcrossProjects(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	now := time.Date(2026, 4, 7, 12, 0, 0, 0, time.UTC)
+
+	if err := store.UpsertTask(context.Background(), "/repo-a", Task{
+		Issue:     "LAB-901",
+		Status:    "active",
+		Agent:     "codex",
+		Prompt:    "Fix global status queries",
+		WorkerID:  "worker-a",
+		ClonePath: "/clones/a",
+		CreatedAt: now,
+		UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("UpsertTask(/repo-a) error = %v", err)
+	}
+	if err := store.UpsertTask(context.Background(), "/repo-b", Task{
+		Issue:     "LAB-902",
+		Status:    "done",
+		Agent:     "claude",
+		Prompt:    "Verify global status output",
+		WorkerID:  "worker-b",
+		ClonePath: "/clones/b",
+		CreatedAt: now.Add(time.Minute),
+		UpdatedAt: now.Add(time.Minute),
+	}); err != nil {
+		t.Fatalf("UpsertTask(/repo-b) error = %v", err)
+	}
+
+	if err := store.UpsertWorker(context.Background(), "/repo-a", Worker{
+		WorkerID:      "worker-a",
+		CurrentPaneID: "pane-a",
+		Agent:         "codex",
+		State:         "healthy",
+		Issue:         "LAB-901",
+		ClonePath:     "/clones/a",
+		CreatedAt:     now,
+		LastSeenAt:    now,
+	}); err != nil {
+		t.Fatalf("UpsertWorker(/repo-a) error = %v", err)
+	}
+	if err := store.UpsertWorker(context.Background(), "/repo-b", Worker{
+		WorkerID:      "worker-b",
+		CurrentPaneID: "pane-b",
+		Agent:         "claude",
+		State:         "stuck",
+		Issue:         "LAB-902",
+		ClonePath:     "/clones/b",
+		CreatedAt:     now.Add(time.Minute),
+		LastSeenAt:    now.Add(time.Minute),
+	}); err != nil {
+		t.Fatalf("UpsertWorker(/repo-b) error = %v", err)
+	}
+
+	if _, err := store.EnsureClone(context.Background(), "/repo-a", "/clones/a"); err != nil {
+		t.Fatalf("EnsureClone(/repo-a) error = %v", err)
+	}
+	if _, err := store.EnsureClone(context.Background(), "/repo-b", "/clones/b"); err != nil {
+		t.Fatalf("EnsureClone(/repo-b) error = %v", err)
+	}
+	if ok, err := store.TryOccupyClone(context.Background(), "/repo-a", "/clones/a", "LAB-901", "LAB-901"); err != nil {
+		t.Fatalf("TryOccupyClone(/repo-a) error = %v", err)
+	} else if !ok {
+		t.Fatal("TryOccupyClone(/repo-a) = false, want true")
+	}
+
+	tasks, err := store.listTasks(context.Background(), "")
+	if err != nil {
+		t.Fatalf("listTasks(global) error = %v", err)
+	}
+	if got, want := len(tasks), 2; got != want {
+		t.Fatalf("len(listTasks(global)) = %d, want %d", got, want)
+	}
+	if got, want := tasks[0].Project, "/repo-b"; got != want {
+		t.Fatalf("listTasks(global)[0].Project = %q, want %q", got, want)
+	}
+	if got, want := tasks[1].Project, "/repo-a"; got != want {
+		t.Fatalf("listTasks(global)[1].Project = %q, want %q", got, want)
+	}
+
+	workers, err := store.ListWorkers(context.Background(), "")
+	if err != nil {
+		t.Fatalf("ListWorkers(global) error = %v", err)
+	}
+	if got, want := len(workers), 2; got != want {
+		t.Fatalf("len(ListWorkers(global)) = %d, want %d", got, want)
+	}
+	if got, want := workers[0].Project, "/repo-b"; got != want {
+		t.Fatalf("ListWorkers(global)[0].Project = %q, want %q", got, want)
+	}
+	if got, want := workers[1].Project, "/repo-a"; got != want {
+		t.Fatalf("ListWorkers(global)[1].Project = %q, want %q", got, want)
+	}
+
+	clones, err := store.ListClones(context.Background(), "")
+	if err != nil {
+		t.Fatalf("ListClones(global) error = %v", err)
+	}
+	if got, want := len(clones), 2; got != want {
+		t.Fatalf("len(ListClones(global)) = %d, want %d", got, want)
+	}
+
+	status, err := store.ProjectStatus(context.Background(), "")
+	if err != nil {
+		t.Fatalf("ProjectStatus(global) error = %v", err)
+	}
+	if got, want := status.Summary.Tasks, 2; got != want {
+		t.Fatalf("status.Summary.Tasks = %d, want %d", got, want)
+	}
+	if got, want := status.Summary.Active, 1; got != want {
+		t.Fatalf("status.Summary.Active = %d, want %d", got, want)
+	}
+	if got, want := status.Summary.Done, 1; got != want {
+		t.Fatalf("status.Summary.Done = %d, want %d", got, want)
+	}
+	if got, want := status.Summary.Workers, 2; got != want {
+		t.Fatalf("status.Summary.Workers = %d, want %d", got, want)
+	}
+	if got, want := status.Summary.HealthyWorkers, 1; got != want {
+		t.Fatalf("status.Summary.HealthyWorkers = %d, want %d", got, want)
+	}
+	if got, want := status.Summary.StuckWorkers, 1; got != want {
+		t.Fatalf("status.Summary.StuckWorkers = %d, want %d", got, want)
+	}
+	if got, want := status.Summary.Clones, 2; got != want {
+		t.Fatalf("status.Summary.Clones = %d, want %d", got, want)
+	}
+	if got, want := status.Summary.FreeClones, 1; got != want {
+		t.Fatalf("status.Summary.FreeClones = %d, want %d", got, want)
+	}
+}
+
 func TestSQLiteExecWithRetryRetriesBusyError(t *testing.T) {
 	t.Parallel()
 

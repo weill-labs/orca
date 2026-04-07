@@ -162,7 +162,7 @@ func TestPreparePIDStateExistingPIDFile(t *testing.T) {
 				})
 			}
 
-			pidFile := controller.paths.pidFile(projectPath)
+			pidFile := controller.paths.pidFile()
 			if err := os.MkdirAll(filepath.Dir(pidFile), 0o755); err != nil {
 				t.Fatalf("MkdirAll(%q) error = %v", filepath.Dir(pidFile), err)
 			}
@@ -170,7 +170,7 @@ func TestPreparePIDStateExistingPIDFile(t *testing.T) {
 				t.Fatalf("WriteFile(%q) error = %v", pidFile, err)
 			}
 
-			err := controller.preparePIDState(context.Background(), projectPath)
+			err := controller.preparePIDState(context.Background())
 			if !errors.Is(err, tt.wantErr) {
 				t.Fatalf("preparePIDState() error = %v, want %v", err, tt.wantErr)
 			}
@@ -192,6 +192,33 @@ func TestPreparePIDStateExistingPIDFile(t *testing.T) {
 	}
 }
 
+func TestPathsUseGlobalDaemonFiles(t *testing.T) {
+	t.Parallel()
+
+	paths := Paths{
+		ConfigDir: "/tmp/orca",
+		PIDDir:    "/tmp/orca/pids",
+	}
+
+	pidA := paths.pidFile()
+	pidB := paths.pidFile()
+	if got, want := pidA, "/tmp/orca/pids/orca.pid"; got != want {
+		t.Fatalf("pidFile() = %q, want %q", got, want)
+	}
+	if got, want := pidB, "/tmp/orca/pids/orca.pid"; got != want {
+		t.Fatalf("pidFile() = %q, want %q", got, want)
+	}
+
+	socketA := paths.socketFile()
+	socketB := paths.socketFile()
+	if got, want := socketA, "/tmp/orca/orca.sock"; got != want {
+		t.Fatalf("socketFile() = %q, want %q", got, want)
+	}
+	if got, want := socketB, "/tmp/orca/orca.sock"; got != want {
+		t.Fatalf("socketFile() = %q, want %q", got, want)
+	}
+}
+
 func TestStopReturnsContextErrorWhenPollingCancelled(t *testing.T) {
 	store := &fakeStore{}
 	projectPath := testProjectPath(t)
@@ -204,7 +231,7 @@ func TestStopReturnsContextErrorWhenPollingCancelled(t *testing.T) {
 	if err := os.MkdirAll(controller.paths.PIDDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
-	if err := os.WriteFile(controller.paths.pidFile(projectPath), []byte(fmt.Sprintf("%d", pid)), 0o644); err != nil {
+	if err := os.WriteFile(controller.paths.pidFile(), []byte(fmt.Sprintf("%d", pid)), 0o644); err != nil {
 		t.Fatalf("write controller pid file: %v", err)
 	}
 
@@ -244,7 +271,7 @@ func TestStopWithoutForceReturnsTimeoutWhenProcessIgnoresTERM(t *testing.T) {
 	if err := os.MkdirAll(controller.paths.PIDDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
-	pidFile := controller.paths.pidFile(projectPath)
+	pidFile := controller.paths.pidFile()
 	if err := os.WriteFile(pidFile, []byte(fmt.Sprintf("%d", pid)), 0o644); err != nil {
 		t.Fatalf("write controller pid file: %v", err)
 	}
@@ -283,7 +310,7 @@ func TestStopStopsResponsiveProcess(t *testing.T) {
 	if err := os.MkdirAll(controller.paths.PIDDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
-	pidFile := controller.paths.pidFile(projectPath)
+	pidFile := controller.paths.pidFile()
 	if err := os.WriteFile(pidFile, []byte(fmt.Sprintf("%d", pid)), 0o644); err != nil {
 		t.Fatalf("write controller pid file: %v", err)
 	}
@@ -317,7 +344,7 @@ func TestStopForceKillsProcessAfterGracePeriod(t *testing.T) {
 	if err := os.MkdirAll(controller.paths.PIDDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
-	pidFile := controller.paths.pidFile(projectPath)
+	pidFile := controller.paths.pidFile()
 	if err := os.WriteFile(pidFile, []byte(fmt.Sprintf("%d", pid)), 0o644); err != nil {
 		t.Fatalf("write controller pid file: %v", err)
 	}
@@ -366,11 +393,11 @@ func TestLocalControllerAssignAndBatchRPC(t *testing.T) {
 	if err := os.MkdirAll(paths.PIDDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(%q) error = %v", paths.PIDDir, err)
 	}
-	if err := os.WriteFile(paths.pidFile(projectPath), []byte(fmt.Sprintf("%d", os.Getpid())), 0o644); err != nil {
+	if err := os.WriteFile(paths.pidFile(), []byte(fmt.Sprintf("%d", os.Getpid())), 0o644); err != nil {
 		t.Fatalf("WriteFile(pidFile) error = %v", err)
 	}
 
-	socketPath := paths.socketFile(projectPath)
+	socketPath := paths.socketFile()
 	listener, err := net.Listen("unix", socketPath)
 	if err != nil {
 		t.Fatalf("Listen(%q) error = %v", socketPath, err)
@@ -440,7 +467,7 @@ func TestLocalControllerAssignAndBatchRPC(t *testing.T) {
 	if err := json.Unmarshal(assignReq.Params, &assignParams); err != nil {
 		t.Fatalf("json.Unmarshal(assign params) error = %v", err)
 	}
-	if got, want := assignParams, (assignRPCParams{Issue: "LAB-718", Prompt: "Implement controller assign.", Agent: "claude", Title: "Assign title"}); !reflect.DeepEqual(got, want) {
+	if got, want := assignParams, (assignRPCParams{Project: projectPath, Issue: "LAB-718", Prompt: "Implement controller assign.", Agent: "claude", Title: "Assign title"}); !reflect.DeepEqual(got, want) {
 		t.Fatalf("assign params = %#v, want %#v", got, want)
 	}
 
@@ -454,6 +481,9 @@ func TestLocalControllerAssignAndBatchRPC(t *testing.T) {
 	}
 	if got, want := batchParams.Entries, []BatchEntry{{Issue: "LAB-719", Agent: "codex", Prompt: "Implement controller batch.", Title: "Batch title"}}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("batch entries = %#v, want %#v", got, want)
+	}
+	if got, want := batchParams.Project, projectPath; got != want {
+		t.Fatalf("batch project = %q, want %q", got, want)
 	}
 	if got, want := batchParams.Delay, "7s"; got != want {
 		t.Fatalf("batch delay = %q, want %q", got, want)
@@ -544,7 +574,7 @@ func TestLocalControllerBatchErrorBranches(t *testing.T) {
 		if err := os.MkdirAll(paths.PIDDir, 0o755); err != nil {
 			t.Fatalf("MkdirAll(%q) error = %v", paths.PIDDir, err)
 		}
-		if err := os.WriteFile(paths.pidFile(projectPath), []byte(fmt.Sprintf("%d", os.Getpid())), 0o644); err != nil {
+		if err := os.WriteFile(paths.pidFile(), []byte(fmt.Sprintf("%d", os.Getpid())), 0o644); err != nil {
 			t.Fatalf("WriteFile(pidFile) error = %v", err)
 		}
 		_, err = controller.Batch(context.Background(), BatchRequest{

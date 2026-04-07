@@ -43,7 +43,7 @@ func TestRunProcessAssignResumeAndCancelOverUnixSocket(t *testing.T) {
 		PIDDir:    filepath.Join(configDir, "pids"),
 	}
 	stateDB := filepath.Join(configDir, "state.db")
-	pidFile := paths.pidFile(projectPath)
+	pidFile := paths.pidFile()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -57,7 +57,6 @@ func TestRunProcessAssignResumeAndCancelOverUnixSocket(t *testing.T) {
 	go func() {
 		errCh <- runProcess(ctx, ServeRequest{
 			Session: "test-session",
-			Project: projectDir,
 			StateDB: stateDB,
 			PIDFile: pidFile,
 		}, serveDeps{
@@ -76,7 +75,7 @@ func TestRunProcessAssignResumeAndCancelOverUnixSocket(t *testing.T) {
 	}
 	defer store.Close()
 
-	socketPath := paths.socketFile(projectPath)
+	socketPath := paths.socketFile()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		select {
@@ -244,7 +243,7 @@ func TestRunProcessCancelOverUnixSocketIgnoresDeadPane(t *testing.T) {
 		PIDDir:    filepath.Join(configDir, "pids"),
 	}
 	stateDB := filepath.Join(configDir, "state.db")
-	pidFile := paths.pidFile(projectPath)
+	pidFile := paths.pidFile()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -258,7 +257,6 @@ func TestRunProcessCancelOverUnixSocketIgnoresDeadPane(t *testing.T) {
 	go func() {
 		errCh <- runProcess(ctx, ServeRequest{
 			Session: "test-session",
-			Project: projectDir,
 			StateDB: stateDB,
 			PIDFile: pidFile,
 		}, serveDeps{
@@ -277,7 +275,7 @@ func TestRunProcessCancelOverUnixSocketIgnoresDeadPane(t *testing.T) {
 	}
 	defer store.Close()
 
-	socketPath := paths.socketFile(projectPath)
+	socketPath := paths.socketFile()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		select {
@@ -338,7 +336,7 @@ daemonReady:
 		if err != nil {
 			return false
 		}
-		return status.Summary.Cancelled == 1 && status.Summary.Workers == 0 && status.Summary.FreeClones == 1
+		return status.Summary.Cancelled == 1 && status.Summary.Workers == 1 && status.Summary.FreeClones == 1
 	})
 }
 
@@ -373,7 +371,7 @@ func TestRunProcessBatchOverUnixSocket(t *testing.T) {
 		PIDDir:    filepath.Join(configDir, "pids"),
 	}
 	stateDB := filepath.Join(configDir, "state.db")
-	pidFile := paths.pidFile(projectPath)
+	pidFile := paths.pidFile()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -388,7 +386,6 @@ func TestRunProcessBatchOverUnixSocket(t *testing.T) {
 	go func() {
 		errCh <- runProcess(ctx, ServeRequest{
 			Session: "test-session",
-			Project: projectDir,
 			StateDB: stateDB,
 			PIDFile: pidFile,
 		}, serveDeps{
@@ -407,7 +404,7 @@ func TestRunProcessBatchOverUnixSocket(t *testing.T) {
 	}
 	defer store.Close()
 
-	socketPath := paths.socketFile(projectPath)
+	socketPath := paths.socketFile()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		select {

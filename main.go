@@ -27,11 +27,11 @@ type appRunner interface {
 }
 
 type runDependencies struct {
-	resolvePaths      func() (daemon.Paths, error)
-	openStateStore    func(string) (stateStore, error)
-	newController     func(daemon.ControllerOptions) (daemon.Controller, error)
-	newApp            func(cli.Options) appRunner
-	runDaemonProcess  func([]string) error
+	resolvePaths     func() (daemon.Paths, error)
+	openStateStore   func(string) (stateStore, error)
+	newController    func(daemon.ControllerOptions) (daemon.Controller, error)
+	newApp           func(cli.Options) appRunner
+	runDaemonProcess func([]string) error
 }
 
 var defaultRunDependencies = runDependencies{
@@ -82,6 +82,11 @@ func runWithDeps(args []string, stdout, stderr io.Writer, deps runDependencies) 
 		return 0
 	}
 
+	if args[0] == "help" {
+		fmt.Fprintf(stderr, "unknown help topic %q\n", args[1])
+		return 1
+	}
+
 	paths, err := deps.resolvePaths()
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -126,13 +131,11 @@ func runDaemonProcess(args []string) error {
 	fs.SetOutput(io.Discard)
 
 	var session string
-	var projectPath string
 	var leadPane string
 	var stateDB string
 	var pidFile string
 
 	fs.StringVar(&session, "session", "", "daemon session")
-	fs.StringVar(&projectPath, "project", "", "project path")
 	fs.StringVar(&leadPane, "lead-pane", "", "lead pane to split from")
 	fs.StringVar(&stateDB, "state-db", "", "state db path")
 	fs.StringVar(&pidFile, "pid-file", "", "pid file path")
@@ -141,9 +144,6 @@ func runDaemonProcess(args []string) error {
 		return err
 	}
 
-	if projectPath == "" {
-		return fmt.Errorf("__daemon-serve requires --project")
-	}
 	if stateDB == "" {
 		return fmt.Errorf("__daemon-serve requires --state-db")
 	}
@@ -156,7 +156,6 @@ func runDaemonProcess(args []string) error {
 
 	return daemon.RunProcess(ctx, daemon.ServeRequest{
 		Session:  session,
-		Project:  projectPath,
 		LeadPane: leadPane,
 		StateDB:  stateDB,
 		PIDFile:  pidFile,

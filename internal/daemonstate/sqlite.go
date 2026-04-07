@@ -195,6 +195,10 @@ type SQLiteStore struct {
 	now func() time.Time
 }
 
+func isGlobalProject(project string) bool {
+	return strings.TrimSpace(project) == ""
+}
+
 func OpenSQLite(path string) (*SQLiteStore, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("create sqlite directory: %w", err)
@@ -260,6 +264,12 @@ func (s *SQLiteStore) ProjectStatus(ctx context.Context, project string) (Projec
 	daemonStatus, err := s.lookupDaemon(ctx, project)
 	if err != nil {
 		return ProjectStatus{}, err
+	}
+	if daemonStatus == nil && !isGlobalProject(project) {
+		daemonStatus, err = s.lookupDaemon(ctx, "")
+		if err != nil {
+			return ProjectStatus{}, err
+		}
 	}
 	status.Daemon = daemonStatus
 
@@ -331,6 +341,10 @@ func (s *SQLiteStore) TaskStatus(ctx context.Context, project, issue string) (Ta
 }
 
 func (s *SQLiteStore) ListWorkers(ctx context.Context, project string) ([]Worker, error) {
+	if isGlobalProject(project) {
+		return s.allWorkers(ctx)
+	}
+
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT worker_id, current_pane_id, agent_profile, state, issue, clone_path, last_review_count, last_issue_comment_count, review_nudge_count, last_ci_state, ci_nudge_count, ci_failure_poll_count, ci_escalated, last_mergeable_state, nudge_count, last_capture, last_activity_at, created_at, last_seen_at
 		FROM workers
@@ -344,10 +358,11 @@ func (s *SQLiteStore) ListWorkers(ctx context.Context, project string) ([]Worker
 
 	workers := make([]Worker, 0)
 	for rows.Next() {
-		worker, err := scanWorker(rows)
+		worker, err := scanWorker(rows, false)
 		if err != nil {
 			return nil, fmt.Errorf("scan worker: %w", err)
 		}
+		worker.Project = project
 		workers = append(workers, worker)
 	}
 
@@ -365,24 +380,31 @@ func (s *SQLiteStore) WorkerByID(ctx context.Context, project, workerID string) 
 		WHERE project = ? AND worker_id = ?
 	`, project, workerID)
 
-	worker, err := scanWorker(row)
+	worker, err := scanWorker(row, false)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Worker{}, ErrNotFound
 	}
 	if err != nil {
 		return Worker{}, fmt.Errorf("lookup worker by id: %w", err)
 	}
+	worker.Project = project
 	return worker, nil
 }
 
 func (s *SQLiteStore) WorkerByPane(ctx context.Context, project, paneID string) (Worker, error) {
-	row := s.db.QueryRowContext(ctx, `
-		SELECT worker_id, current_pane_id, agent_profile, state, issue, clone_path, last_review_count, last_issue_comment_count, review_nudge_count, last_ci_state, ci_nudge_count, ci_failure_poll_count, ci_escalated, last_mergeable_state, nudge_count, last_capture, last_activity_at, created_at, last_seen_at
+	query := `
+		SELECT project, worker_id, current_pane_id, agent_profile, state, issue, clone_path, last_review_count, last_issue_comment_count, review_nudge_count, last_ci_state, ci_nudge_count, ci_failure_poll_count, ci_escalated, last_mergeable_state, nudge_count, last_capture, last_activity_at, created_at, last_seen_at
 		FROM workers
-		WHERE project = ? AND current_pane_id = ?
-	`, project, paneID)
+		WHERE current_pane_id = ?
+	`
+	args := []any{paneID}
+	if !isGlobalProject(project) {
+		query += ` AND project = ?`
+		args = append(args, project)
+	}
 
-	worker, err := scanWorker(row)
+	row := s.db.QueryRowContext(ctx, query, args...)
+	worker, err := scanWorker(row, true)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Worker{}, ErrNotFound
 	}
@@ -393,6 +415,10 @@ func (s *SQLiteStore) WorkerByPane(ctx context.Context, project, paneID string) 
 }
 
 func (s *SQLiteStore) ListClones(ctx context.Context, project string) ([]Clone, error) {
+	if isGlobalProject(project) {
+		return s.allClones(ctx)
+	}
+
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT path, status, issue, branch, updated_at
 		FROM clones
@@ -423,6 +449,10 @@ func (s *SQLiteStore) ListClones(ctx context.Context, project string) ([]Clone, 
 }
 
 func (s *SQLiteStore) NonTerminalTasks(ctx context.Context, project string) ([]Task, error) {
+	if isGlobalProject(project) {
+		return s.AllNonTerminalTasks(ctx)
+	}
+
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT t.issue, t.status, t.agent, t.prompt, t.worker_id, w.current_pane_id, t.clone_path, t.pr_number, t.created_at, t.updated_at
 		FROM tasks t
@@ -439,10 +469,11 @@ func (s *SQLiteStore) NonTerminalTasks(ctx context.Context, project string) ([]T
 
 	tasks := make([]Task, 0)
 	for rows.Next() {
-		task, err := scanTask(rows)
+		task, err := scanTask(rows, false)
 		if err != nil {
 			return nil, fmt.Errorf("scan non-terminal task: %w", err)
 		}
+		task.Project = project
 		tasks = append(tasks, task)
 	}
 	if err := rows.Err(); err != nil {
@@ -633,7 +664,7 @@ func (s *SQLiteStore) ClaimWorker(ctx context.Context, project string, worker Wo
 		LIMIT 1
 	`, project, worker.Agent)
 
-	claimed, scanErr := scanWorker(row)
+	claimed, scanErr := scanWorker(row, false)
 	switch {
 	case scanErr == nil:
 		claimed.Issue = worker.Issue
@@ -733,7 +764,7 @@ func (s *SQLiteStore) ClaimTask(ctx context.Context, project string, task Task) 
 		WHERE t.project = ? AND t.issue = ?
 	`, project, task.Issue)
 
-	existing, err := scanTask(row)
+	existing, err := scanTask(row, false)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		_, err = tx.ExecContext(ctx, `
@@ -771,6 +802,10 @@ func (s *SQLiteStore) ClaimTask(ctx context.Context, project string, task Task) 
 }
 
 func (s *SQLiteStore) ActiveAssignments(ctx context.Context, project string) ([]Assignment, error) {
+	if isGlobalProject(project) {
+		return s.AllActiveAssignments(ctx)
+	}
+
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT
 			t.issue, t.status, t.agent, t.prompt, t.worker_id, w.current_pane_id, t.clone_path, t.pr_number, t.created_at, t.updated_at,
@@ -789,10 +824,12 @@ func (s *SQLiteStore) ActiveAssignments(ctx context.Context, project string) ([]
 
 	assignments := make([]Assignment, 0)
 	for rows.Next() {
-		assignment, err := scanAssignment(rows)
+		assignment, err := scanAssignment(rows, false)
 		if err != nil {
 			return nil, fmt.Errorf("scan active assignment: %w", err)
 		}
+		assignment.Task.Project = project
+		assignment.Worker.Project = project
 		assignments = append(assignments, assignment)
 	}
 	if err := rows.Err(); err != nil {
@@ -802,18 +839,25 @@ func (s *SQLiteStore) ActiveAssignments(ctx context.Context, project string) ([]
 }
 
 func (s *SQLiteStore) ActiveAssignmentByIssue(ctx context.Context, project, issue string) (Assignment, error) {
-	row := s.db.QueryRowContext(ctx, `
+	query := `
 		SELECT
+			t.project,
 			t.issue, t.status, t.agent, t.prompt, t.worker_id, w.current_pane_id, t.clone_path, t.pr_number, t.created_at, t.updated_at,
 			w.worker_id, w.current_pane_id, w.agent_profile, w.state, w.issue, w.clone_path, w.last_review_count, w.last_issue_comment_count, w.review_nudge_count, w.last_ci_state, w.ci_nudge_count, w.ci_failure_poll_count, w.ci_escalated, w.last_mergeable_state, w.nudge_count, w.last_capture, w.last_activity_at, w.created_at, w.last_seen_at
 		FROM tasks t
 		INNER JOIN workers w
 			ON w.project = t.project
 			AND w.worker_id = t.worker_id
-		WHERE t.project = ? AND t.issue = ? AND t.status = 'active'
-	`, project, issue)
+		WHERE t.issue = ? AND t.status = 'active'
+	`
+	args := []any{issue}
+	if !isGlobalProject(project) {
+		query += ` AND t.project = ?`
+		args = append(args, project)
+	}
 
-	assignment, err := scanAssignment(row)
+	row := s.db.QueryRowContext(ctx, query, args...)
+	assignment, err := scanAssignment(row, true)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Assignment{}, ErrNotFound
 	}
@@ -824,18 +868,25 @@ func (s *SQLiteStore) ActiveAssignmentByIssue(ctx context.Context, project, issu
 }
 
 func (s *SQLiteStore) ActiveAssignmentByPRNumber(ctx context.Context, project string, prNumber int) (Assignment, error) {
-	row := s.db.QueryRowContext(ctx, `
+	query := `
 		SELECT
+			t.project,
 			t.issue, t.status, t.agent, t.prompt, t.worker_id, w.current_pane_id, t.clone_path, t.pr_number, t.created_at, t.updated_at,
 			w.worker_id, w.current_pane_id, w.agent_profile, w.state, w.issue, w.clone_path, w.last_review_count, w.last_issue_comment_count, w.review_nudge_count, w.last_ci_state, w.ci_nudge_count, w.ci_failure_poll_count, w.ci_escalated, w.last_mergeable_state, w.nudge_count, w.last_capture, w.last_activity_at, w.created_at, w.last_seen_at
 		FROM tasks t
 		INNER JOIN workers w
 			ON w.project = t.project
 			AND w.worker_id = t.worker_id
-		WHERE t.project = ? AND t.pr_number = ? AND t.status = 'active'
-	`, project, prNumber)
+		WHERE t.pr_number = ? AND t.status = 'active'
+	`
+	args := []any{prNumber}
+	if !isGlobalProject(project) {
+		query += ` AND t.project = ?`
+		args = append(args, project)
+	}
 
-	assignment, err := scanAssignment(row)
+	row := s.db.QueryRowContext(ctx, query, args...)
+	assignment, err := scanAssignment(row, true)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Assignment{}, ErrNotFound
 	}
@@ -885,11 +936,18 @@ func (s *SQLiteStore) EnqueueMergeEntry(ctx context.Context, entry MergeQueueEnt
 }
 
 func (s *SQLiteStore) MergeEntry(ctx context.Context, project string, prNumber int) (*MergeQueueEntry, error) {
-	row := s.db.QueryRowContext(ctx, `
+	query := `
 		SELECT project, issue, pr_number, status, created_at, updated_at
 		FROM merge_queue
-		WHERE project = ? AND pr_number = ?
-	`, project, prNumber)
+		WHERE pr_number = ?
+	`
+	args := []any{prNumber}
+	if !isGlobalProject(project) {
+		query += ` AND project = ?`
+		args = append(args, project)
+	}
+
+	row := s.db.QueryRowContext(ctx, query, args...)
 
 	entry, err := scanMergeQueueEntry(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -902,6 +960,10 @@ func (s *SQLiteStore) MergeEntry(ctx context.Context, project string, prNumber i
 }
 
 func (s *SQLiteStore) MergeEntries(ctx context.Context, project string) ([]MergeQueueEntry, error) {
+	if isGlobalProject(project) {
+		return s.AllMergeEntries(ctx)
+	}
+
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT project, issue, pr_number, status, created_at, updated_at
 		FROM merge_queue
@@ -1050,15 +1112,29 @@ func (s *SQLiteStore) UpdateTaskStatus(ctx context.Context, project, issue, stat
 }
 
 func (s *SQLiteStore) TasksByPane(ctx context.Context, project, paneID string) ([]Task, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT t.issue, t.status, t.agent, t.prompt, t.worker_id, w.current_pane_id, t.clone_path, t.pr_number, t.created_at, t.updated_at
+	includeProject := isGlobalProject(project)
+	query := `
+		SELECT
+	`
+	if includeProject {
+		query += `		t.project,`
+	}
+	query += `
+			t.issue, t.status, t.agent, t.prompt, t.worker_id, w.current_pane_id, t.clone_path, t.pr_number, t.created_at, t.updated_at
 		FROM tasks t
 		INNER JOIN workers w
 			ON w.project = t.project
 			AND w.worker_id = t.worker_id
-		WHERE t.project = ? AND w.current_pane_id = ?
-		ORDER BY t.created_at ASC, t.updated_at ASC, t.issue ASC
-	`, project, paneID)
+		WHERE w.current_pane_id = ?
+	`
+	args := []any{paneID}
+	if !includeProject {
+		query += ` AND t.project = ?`
+		args = append(args, project)
+	}
+	query += ` ORDER BY t.created_at ASC, t.updated_at ASC, t.issue ASC`
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list tasks by pane: %w", err)
 	}
@@ -1066,9 +1142,12 @@ func (s *SQLiteStore) TasksByPane(ctx context.Context, project, paneID string) (
 
 	tasks := make([]Task, 0)
 	for rows.Next() {
-		task, err := scanTask(rows)
+		task, err := scanTask(rows, includeProject)
 		if err != nil {
 			return nil, fmt.Errorf("scan task by pane: %w", err)
+		}
+		if !includeProject {
+			task.Project = project
 		}
 		tasks = append(tasks, task)
 	}
@@ -1078,6 +1157,146 @@ func (s *SQLiteStore) TasksByPane(ctx context.Context, project, paneID string) (
 	}
 
 	return tasks, nil
+}
+
+func (s *SQLiteStore) AllNonTerminalTasks(ctx context.Context) ([]Task, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT
+			t.project,
+			t.issue, t.status, t.agent, t.prompt, t.worker_id, w.current_pane_id, t.clone_path, t.pr_number, t.created_at, t.updated_at
+		FROM tasks t
+		LEFT JOIN workers w
+			ON w.project = t.project
+			AND w.worker_id = t.worker_id
+		WHERE status IN ('starting', 'active')
+		ORDER BY t.updated_at DESC, t.project ASC, t.issue ASC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("list all non-terminal tasks: %w", err)
+	}
+	defer rows.Close()
+
+	tasks := make([]Task, 0)
+	for rows.Next() {
+		task, err := scanTask(rows, true)
+		if err != nil {
+			return nil, fmt.Errorf("scan all non-terminal task: %w", err)
+		}
+		tasks = append(tasks, task)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate all non-terminal tasks: %w", err)
+	}
+	return tasks, nil
+}
+
+func (s *SQLiteStore) allWorkers(ctx context.Context) ([]Worker, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT project, worker_id, current_pane_id, agent_profile, state, issue, clone_path, last_review_count, last_issue_comment_count, review_nudge_count, last_ci_state, ci_nudge_count, ci_failure_poll_count, ci_escalated, last_mergeable_state, nudge_count, last_capture, last_activity_at, created_at, last_seen_at
+		FROM workers
+		ORDER BY last_seen_at DESC, project ASC, worker_id ASC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("list all workers: %w", err)
+	}
+	defer rows.Close()
+
+	workers := make([]Worker, 0)
+	for rows.Next() {
+		worker, err := scanWorker(rows, true)
+		if err != nil {
+			return nil, fmt.Errorf("scan all worker: %w", err)
+		}
+		workers = append(workers, worker)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate all workers: %w", err)
+	}
+	return workers, nil
+}
+
+func (s *SQLiteStore) allClones(ctx context.Context) ([]Clone, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT path, status, issue, branch, updated_at
+		FROM clones
+		ORDER BY updated_at DESC, path ASC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("list all clones: %w", err)
+	}
+	defer rows.Close()
+
+	clones := make([]Clone, 0)
+	for rows.Next() {
+		var clone Clone
+		var updatedAt string
+		if err := rows.Scan(&clone.Path, &clone.Status, &clone.Issue, &clone.Branch, &updatedAt); err != nil {
+			return nil, fmt.Errorf("scan all clone: %w", err)
+		}
+		clone.UpdatedAt = parseTime(updatedAt)
+		clones = append(clones, clone)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate all clones: %w", err)
+	}
+	return clones, nil
+}
+
+func (s *SQLiteStore) AllActiveAssignments(ctx context.Context) ([]Assignment, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT
+			t.project,
+			t.issue, t.status, t.agent, t.prompt, t.worker_id, w.current_pane_id, t.clone_path, t.pr_number, t.created_at, t.updated_at,
+			w.worker_id, w.current_pane_id, w.agent_profile, w.state, w.issue, w.clone_path, w.last_review_count, w.last_issue_comment_count, w.review_nudge_count, w.last_ci_state, w.ci_nudge_count, w.ci_failure_poll_count, w.ci_escalated, w.last_mergeable_state, w.nudge_count, w.last_capture, w.last_activity_at, w.created_at, w.last_seen_at
+		FROM tasks t
+		INNER JOIN workers w
+			ON w.project = t.project
+			AND w.worker_id = t.worker_id
+		WHERE t.status = 'active'
+		ORDER BY t.updated_at DESC, t.project ASC, t.issue ASC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("list all active assignments: %w", err)
+	}
+	defer rows.Close()
+
+	assignments := make([]Assignment, 0)
+	for rows.Next() {
+		assignment, err := scanAssignment(rows, true)
+		if err != nil {
+			return nil, fmt.Errorf("scan all active assignment: %w", err)
+		}
+		assignments = append(assignments, assignment)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate all active assignments: %w", err)
+	}
+	return assignments, nil
+}
+
+func (s *SQLiteStore) AllMergeEntries(ctx context.Context) ([]MergeQueueEntry, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT project, issue, pr_number, status, created_at, updated_at
+		FROM merge_queue
+		ORDER BY created_at ASC, project ASC, pr_number ASC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("list all merge entries: %w", err)
+	}
+	defer rows.Close()
+
+	entries := make([]MergeQueueEntry, 0)
+	for rows.Next() {
+		entry, err := scanMergeQueueEntry(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan all merge entry: %w", err)
+		}
+		entries = append(entries, entry)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate all merge entries: %w", err)
+	}
+	return entries, nil
 }
 
 func (s *SQLiteStore) AppendEvent(ctx context.Context, event Event) (Event, error) {
@@ -1130,27 +1349,47 @@ func (s *SQLiteStore) lookupDaemon(ctx context.Context, project string) (*Daemon
 }
 
 func (s *SQLiteStore) lookupTask(ctx context.Context, project, issue string) (Task, error) {
-	row := s.db.QueryRowContext(ctx, `
-		SELECT t.issue, t.status, t.agent, t.prompt, t.worker_id, w.current_pane_id, t.clone_path, t.pr_number, t.created_at, t.updated_at
+	includeProject := isGlobalProject(project)
+	query := `
+		SELECT
+	`
+	if includeProject {
+		query += `		t.project,`
+	}
+	query += `
+			t.issue, t.status, t.agent, t.prompt, t.worker_id, w.current_pane_id, t.clone_path, t.pr_number, t.created_at, t.updated_at
 		FROM tasks t
 		LEFT JOIN workers w
 			ON w.project = t.project
 			AND w.worker_id = t.worker_id
-		WHERE t.project = ? AND t.issue = ?
-	`, project, issue)
+		WHERE t.issue = ?
+	`
+	args := []any{issue}
+	if !includeProject {
+		query += ` AND t.project = ?`
+		args = append(args, project)
+	}
 
-	task, err := scanTask(row)
+	row := s.db.QueryRowContext(ctx, query, args...)
+	task, err := scanTask(row, includeProject)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Task{}, ErrNotFound
 		}
 		return Task{}, fmt.Errorf("lookup task: %w", err)
 	}
+	if !includeProject {
+		task.Project = project
+	}
 
 	return task, nil
 }
 
 func (s *SQLiteStore) listTasks(ctx context.Context, project string) ([]Task, error) {
+	if isGlobalProject(project) {
+		return s.allTasks(ctx)
+	}
+
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT t.issue, t.status, t.agent, t.prompt, t.worker_id, w.current_pane_id, t.clone_path, t.pr_number, t.created_at, t.updated_at
 		FROM tasks t
@@ -1167,15 +1406,48 @@ func (s *SQLiteStore) listTasks(ctx context.Context, project string) ([]Task, er
 
 	tasks := make([]Task, 0)
 	for rows.Next() {
-		task, err := scanTask(rows)
+		task, err := scanTask(rows, false)
 		if err != nil {
 			return nil, fmt.Errorf("scan task: %w", err)
 		}
+		task.Project = project
 		tasks = append(tasks, task)
 	}
 
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate tasks: %w", err)
+	}
+
+	return tasks, nil
+}
+
+func (s *SQLiteStore) allTasks(ctx context.Context) ([]Task, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT
+			t.project,
+			t.issue, t.status, t.agent, t.prompt, t.worker_id, w.current_pane_id, t.clone_path, t.pr_number, t.created_at, t.updated_at
+		FROM tasks t
+		LEFT JOIN workers w
+			ON w.project = t.project
+			AND w.worker_id = t.worker_id
+		ORDER BY t.updated_at DESC, t.project ASC, t.issue ASC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("list all tasks: %w", err)
+	}
+	defer rows.Close()
+
+	tasks := make([]Task, 0)
+	for rows.Next() {
+		task, err := scanTask(rows, true)
+		if err != nil {
+			return nil, fmt.Errorf("scan all task: %w", err)
+		}
+		tasks = append(tasks, task)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate all tasks: %w", err)
 	}
 
 	return tasks, nil
@@ -1246,13 +1518,29 @@ type rowScanner interface {
 	Scan(dest ...any) error
 }
 
-func scanTask(scanner rowScanner) (Task, error) {
+func scanTask(scanner rowScanner, includeProject bool) (Task, error) {
 	var task Task
 	var prNumber sql.NullInt64
 	var currentPaneID sql.NullString
 	var createdAt string
 	var updatedAt string
-	if err := scanner.Scan(&task.Issue, &task.Status, &task.Agent, &task.Prompt, &task.WorkerID, &currentPaneID, &task.ClonePath, &prNumber, &createdAt, &updatedAt); err != nil {
+
+	fields := []any{
+		&task.Issue,
+		&task.Status,
+		&task.Agent,
+		&task.Prompt,
+		&task.WorkerID,
+		&currentPaneID,
+		&task.ClonePath,
+		&prNumber,
+		&createdAt,
+		&updatedAt,
+	}
+	if includeProject {
+		fields = append([]any{&task.Project}, fields...)
+	}
+	if err := scanner.Scan(fields...); err != nil {
 		return Task{}, err
 	}
 
@@ -1268,7 +1556,7 @@ func scanTask(scanner rowScanner) (Task, error) {
 	return task, nil
 }
 
-func scanAssignment(scanner rowScanner) (Assignment, error) {
+func scanAssignment(scanner rowScanner, includeProject bool) (Assignment, error) {
 	var task Task
 	var prNumber sql.NullInt64
 	var taskCreatedAt string
@@ -1278,7 +1566,8 @@ func scanAssignment(scanner rowScanner) (Assignment, error) {
 	var lastActivityAt string
 	var workerCreatedAt string
 	var workerLastSeenAt string
-	if err := scanner.Scan(
+
+	fields := []any{
 		&task.Issue,
 		&task.Status,
 		&task.Agent,
@@ -1308,15 +1597,21 @@ func scanAssignment(scanner rowScanner) (Assignment, error) {
 		&lastActivityAt,
 		&workerCreatedAt,
 		&workerLastSeenAt,
-	); err != nil {
+	}
+	if includeProject {
+		fields = append([]any{&task.Project}, fields...)
+	}
+	if err := scanner.Scan(fields...); err != nil {
 		return Assignment{}, err
 	}
+
 	if prNumber.Valid {
 		value := int(prNumber.Int64)
 		task.PRNumber = &value
 	}
 	task.CreatedAt = parseTime(taskCreatedAt)
 	task.UpdatedAt = parseTime(taskUpdatedAt)
+	worker.Project = task.Project
 	worker.CIEscalated = ciEscalated != 0
 	worker.LastActivityAt = parseTime(lastActivityAt)
 	worker.CreatedAt = parseTime(workerCreatedAt)
@@ -1328,13 +1623,14 @@ func scanAssignment(scanner rowScanner) (Assignment, error) {
 	}, nil
 }
 
-func scanWorker(scanner rowScanner) (Worker, error) {
+func scanWorker(scanner rowScanner, includeProject bool) (Worker, error) {
 	var worker Worker
 	var ciEscalated int
 	var lastActivityAt string
 	var createdAt string
 	var lastSeenAt string
-	if err := scanner.Scan(
+
+	fields := []any{
 		&worker.WorkerID,
 		&worker.CurrentPaneID,
 		&worker.Agent,
@@ -1354,9 +1650,14 @@ func scanWorker(scanner rowScanner) (Worker, error) {
 		&lastActivityAt,
 		&createdAt,
 		&lastSeenAt,
-	); err != nil {
+	}
+	if includeProject {
+		fields = append([]any{&worker.Project}, fields...)
+	}
+	if err := scanner.Scan(fields...); err != nil {
 		return Worker{}, err
 	}
+
 	worker.CIEscalated = ciEscalated != 0
 	worker.LastActivityAt = parseTime(lastActivityAt)
 	worker.CreatedAt = parseTime(createdAt)

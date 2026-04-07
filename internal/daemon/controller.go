@@ -222,17 +222,21 @@ func NewLocalController(options ControllerOptions) (*LocalController, error) {
 }
 
 func (c *LocalController) Start(ctx context.Context, req StartRequest) (StartResult, error) {
-	projectPath, err := project.CanonicalPath(req.Project)
+	projectPath, err := canonicalProject(req.Project)
 	if err != nil {
 		return StartResult{}, err
 	}
 
 	session := strings.TrimSpace(req.Session)
 	if session == "" {
-		session = filepath.Base(projectPath)
+		if projectPath != "" {
+			session = filepath.Base(projectPath)
+		} else {
+			session = "orca"
+		}
 	}
 
-	if err := c.preparePIDState(ctx, projectPath); err != nil {
+	if err := c.preparePIDState(ctx); err != nil {
 		return StartResult{}, err
 	}
 
@@ -241,7 +245,7 @@ func (c *LocalController) Start(ctx context.Context, req StartRequest) (StartRes
 		return StartResult{}, err
 	}
 
-	pidFile := c.paths.pidFile(projectPath)
+	pidFile := c.paths.pidFile()
 	if err := os.MkdirAll(filepath.Dir(pidFile), 0o755); err != nil {
 		return StartResult{}, fmt.Errorf("create daemon pid directory: %w", err)
 	}
@@ -256,7 +260,6 @@ func (c *LocalController) Start(ctx context.Context, req StartRequest) (StartRes
 		executable,
 		"__daemon-serve",
 		"--session", session,
-		"--project", projectPath,
 		"--lead-pane", req.LeadPane,
 		"--state-db", c.paths.StateDB,
 		"--pid-file", pidFile,
@@ -272,25 +275,28 @@ func (c *LocalController) Start(ctx context.Context, req StartRequest) (StartRes
 
 	process := cmd.Process
 	pid := process.Pid
+	socketPath := c.paths.socketFile()
 
 	deadline := time.Now().Add(c.startTimeout)
 	for {
-		status, err := c.store.ProjectStatus(ctx, projectPath)
-		if err == nil && status.Daemon != nil && status.Daemon.Status == "running" && status.Daemon.PID == pid {
-			_ = process.Release()
-			return StartResult{
-				Project:   projectPath,
-				Session:   status.Daemon.Session,
-				PID:       pid,
-				StartedAt: status.Daemon.StartedAt,
-			}, nil
+		if alive, err := processAlive(pid); err == nil && alive {
+			if _, err := os.Stat(socketPath); err == nil {
+				_ = process.Release()
+				startedAt := c.now()
+				return StartResult{
+					Project:   projectPath,
+					Session:   session,
+					PID:       pid,
+					StartedAt: startedAt,
+				}, nil
+			}
 		}
 
 		waitErr := waitForPollingInterval(ctx, deadline, 50*time.Millisecond)
 		if waitErr == nil {
 			continue
 		}
-		if cleanupErr := c.cleanupFailedStart(projectPath, pidFile, process); cleanupErr != nil {
+		if cleanupErr := c.cleanupFailedStart(pidFile, process); cleanupErr != nil {
 			return StartResult{}, cleanupErr
 		}
 		if errors.Is(waitErr, amux.ErrWaitDeadlineExceeded) {
@@ -301,12 +307,12 @@ func (c *LocalController) Start(ctx context.Context, req StartRequest) (StartRes
 }
 
 func (c *LocalController) Stop(ctx context.Context, req StopRequest) (StopResult, error) {
-	projectPath, err := project.CanonicalPath(req.Project)
+	projectPath, err := canonicalProject(req.Project)
 	if err != nil {
 		return StopResult{}, err
 	}
 
-	pidFile := c.paths.pidFile(projectPath)
+	pidFile := c.paths.pidFile()
 	pid, err := readPIDFile(pidFile)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -350,7 +356,7 @@ func (c *LocalController) Assign(ctx context.Context, req AssignRequest) (TaskAc
 	if err != nil {
 		return TaskActionResult{}, err
 	}
-	if err := c.requireRunning(ctx, projectPath); err != nil {
+	if err := c.requireRunning(ctx); err != nil {
 		return TaskActionResult{}, err
 	}
 
@@ -358,11 +364,12 @@ func (c *LocalController) Assign(ctx context.Context, req AssignRequest) (TaskAc
 	defer cancel()
 
 	var result TaskActionResult
-	err = callRPC(callCtx, c.paths.socketFile(projectPath), "assign", assignRPCParams{
-		Issue:  strings.TrimSpace(req.Issue),
-		Prompt: req.Prompt,
-		Agent:  strings.TrimSpace(req.Agent),
-		Title:  strings.TrimSpace(req.Title),
+	err = callRPC(callCtx, c.paths.socketFile(), "assign", assignRPCParams{
+		Project: projectPath,
+		Issue:   strings.TrimSpace(req.Issue),
+		Prompt:  req.Prompt,
+		Agent:   strings.TrimSpace(req.Agent),
+		Title:   strings.TrimSpace(req.Title),
 	}, &result)
 	if err != nil {
 		return TaskActionResult{}, err
@@ -381,7 +388,7 @@ func (c *LocalController) Batch(ctx context.Context, req BatchRequest) (BatchRes
 	if req.Delay < 0 {
 		return BatchResult{}, errors.New("batch delay must be non-negative")
 	}
-	if err := c.requireRunning(ctx, projectPath); err != nil {
+	if err := c.requireRunning(ctx); err != nil {
 		return BatchResult{}, err
 	}
 
@@ -389,7 +396,8 @@ func (c *LocalController) Batch(ctx context.Context, req BatchRequest) (BatchRes
 	defer cancel()
 
 	var result BatchResult
-	err = callRPC(callCtx, c.paths.socketFile(projectPath), "batch", batchRPCParams{
+	err = callRPC(callCtx, c.paths.socketFile(), "batch", batchRPCParams{
+		Project: projectPath,
 		Entries: normalizeBatchEntries(req.Entries),
 		Delay:   req.Delay.String(),
 	}, &result)
@@ -404,7 +412,7 @@ func (c *LocalController) Enqueue(ctx context.Context, req EnqueueRequest) (Merg
 	if err != nil {
 		return MergeQueueActionResult{}, err
 	}
-	if err := c.requireRunning(ctx, projectPath); err != nil {
+	if err := c.requireRunning(ctx); err != nil {
 		return MergeQueueActionResult{}, err
 	}
 
@@ -412,7 +420,8 @@ func (c *LocalController) Enqueue(ctx context.Context, req EnqueueRequest) (Merg
 	defer cancel()
 
 	var result MergeQueueActionResult
-	err = callRPC(callCtx, c.paths.socketFile(projectPath), "enqueue", enqueueRPCParams{
+	err = callRPC(callCtx, c.paths.socketFile(), "enqueue", enqueueRPCParams{
+		Project:  projectPath,
 		PRNumber: req.PRNumber,
 	}, &result)
 	if err != nil {
@@ -426,7 +435,7 @@ func (c *LocalController) Cancel(ctx context.Context, req CancelRequest) (TaskAc
 	if err != nil {
 		return TaskActionResult{}, err
 	}
-	if err := c.requireRunning(ctx, projectPath); err != nil {
+	if err := c.requireRunning(ctx); err != nil {
 		return TaskActionResult{}, err
 	}
 
@@ -434,8 +443,9 @@ func (c *LocalController) Cancel(ctx context.Context, req CancelRequest) (TaskAc
 	defer cancel()
 
 	var result TaskActionResult
-	err = callRPC(callCtx, c.paths.socketFile(projectPath), "cancel", cancelRPCParams{
-		Issue: strings.TrimSpace(req.Issue),
+	err = callRPC(callCtx, c.paths.socketFile(), "cancel", cancelRPCParams{
+		Project: projectPath,
+		Issue:   strings.TrimSpace(req.Issue),
 	}, &result)
 	if err != nil {
 		return TaskActionResult{}, err
@@ -448,7 +458,7 @@ func (c *LocalController) Resume(ctx context.Context, req ResumeRequest) (TaskAc
 	if err != nil {
 		return TaskActionResult{}, err
 	}
-	if err := c.requireRunning(ctx, projectPath); err != nil {
+	if err := c.requireRunning(ctx); err != nil {
 		return TaskActionResult{}, err
 	}
 
@@ -456,9 +466,10 @@ func (c *LocalController) Resume(ctx context.Context, req ResumeRequest) (TaskAc
 	defer cancel()
 
 	var result TaskActionResult
-	err = callRPC(callCtx, c.paths.socketFile(projectPath), "resume", resumeRPCParams{
-		Issue:  strings.TrimSpace(req.Issue),
-		Prompt: strings.TrimSpace(req.Prompt),
+	err = callRPC(callCtx, c.paths.socketFile(), "resume", resumeRPCParams{
+		Project: projectPath,
+		Issue:   strings.TrimSpace(req.Issue),
+		Prompt:  strings.TrimSpace(req.Prompt),
 	}, &result)
 	if err != nil {
 		return TaskActionResult{}, err
@@ -466,8 +477,8 @@ func (c *LocalController) Resume(ctx context.Context, req ResumeRequest) (TaskAc
 	return result, nil
 }
 
-func (c *LocalController) preparePIDState(ctx context.Context, projectPath string) error {
-	pidFile := c.paths.pidFile(projectPath)
+func (c *LocalController) preparePIDState(ctx context.Context) error {
+	pidFile := c.paths.pidFile()
 	pid, err := readPIDFile(pidFile)
 	if err == nil {
 		alive, aliveErr := processAlive(pid)
@@ -479,14 +490,14 @@ func (c *LocalController) preparePIDState(ctx context.Context, projectPath strin
 		}
 
 		_ = os.Remove(pidFile)
-		_ = c.store.MarkDaemonStopped(ctx, projectPath, c.now())
+		_ = c.store.MarkDaemonStopped(ctx, "", c.now())
 		return nil
 	}
 	if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 
-	status, err := c.store.ProjectStatus(ctx, projectPath)
+	status, err := c.store.ProjectStatus(ctx, "")
 	if err != nil {
 		return err
 	}
@@ -498,15 +509,14 @@ func (c *LocalController) preparePIDState(ctx context.Context, projectPath strin
 		if alive {
 			return ErrDaemonAlreadyRunning
 		}
-
-		_ = c.store.MarkDaemonStopped(ctx, projectPath, c.now())
+		_ = c.store.MarkDaemonStopped(ctx, "", c.now())
 	}
 
 	return nil
 }
 
-func (c *LocalController) requireRunning(ctx context.Context, projectPath string) error {
-	pidFile := c.paths.pidFile(projectPath)
+func (c *LocalController) requireRunning(ctx context.Context) error {
+	pidFile := c.paths.pidFile()
 	pid, err := readPIDFile(pidFile)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -521,15 +531,7 @@ func (c *LocalController) requireRunning(ctx context.Context, projectPath string
 	}
 	if !alive {
 		_ = os.Remove(pidFile)
-		_ = c.store.MarkDaemonStopped(ctx, projectPath, c.now())
-		return ErrDaemonNotRunning
-	}
-
-	status, err := c.store.ProjectStatus(ctx, projectPath)
-	if err != nil {
-		return err
-	}
-	if status.Daemon == nil || status.Daemon.Status != "running" {
+		_ = c.store.MarkDaemonStopped(ctx, "", c.now())
 		return ErrDaemonNotRunning
 	}
 
@@ -606,7 +608,7 @@ func waitForDaemonExit(ctx context.Context, pid int, timeout time.Duration) erro
 func (c *LocalController) finalizeStoppedDaemon(ctx context.Context, projectPath string, pid int, pidFile string) StopResult {
 	stoppedAt := c.now()
 	_ = os.Remove(pidFile)
-	_ = c.store.MarkDaemonStopped(ctx, projectPath, stoppedAt)
+	_ = c.store.MarkDaemonStopped(ctx, "", stoppedAt)
 	return StopResult{
 		Project:   projectPath,
 		PID:       pid,
@@ -614,7 +616,7 @@ func (c *LocalController) finalizeStoppedDaemon(ctx context.Context, projectPath
 	}
 }
 
-func (c *LocalController) cleanupFailedStart(projectPath, pidFile string, process *os.Process) error {
+func (c *LocalController) cleanupFailedStart(pidFile string, process *os.Process) error {
 	if process != nil {
 		if err := process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
 			return fmt.Errorf("kill timed-out daemon process: %w", err)
@@ -628,16 +630,23 @@ func (c *LocalController) cleanupFailedStart(projectPath, pidFile string, proces
 	defer cancel()
 
 	_ = os.Remove(pidFile)
-	_ = c.store.MarkDaemonStopped(cleanupCtx, projectPath, c.now())
+	_ = c.store.MarkDaemonStopped(cleanupCtx, "", c.now())
 	return nil
 }
 
-func (p Paths) pidFile(projectPath string) string {
-	return filepath.Join(p.PIDDir, projectHash(projectPath)+".pid")
+func (p Paths) pidFile() string {
+	return filepath.Join(p.PIDDir, "orca.pid")
 }
 
-func (p Paths) socketFile(projectPath string) string {
-	return socketFileForProject(p.ConfigDir, projectPath)
+func (p Paths) socketFile() string {
+	return socketFile(p.ConfigDir)
+}
+
+func canonicalProject(projectPath string) (string, error) {
+	if strings.TrimSpace(projectPath) == "" {
+		return "", nil
+	}
+	return project.CanonicalPath(projectPath)
 }
 
 var _ Controller = (*LocalController)(nil)

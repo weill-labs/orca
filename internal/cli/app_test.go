@@ -471,6 +471,77 @@ func TestAppRunStartDefaultsSessionFromAMUXSessionEnv(t *testing.T) {
 	}
 }
 
+func TestAppRunStartGlobalFlagSkipsProjectResolution(t *testing.T) {
+	t.Parallel()
+
+	d := &fakeDaemon{
+		startResult: daemon.StartResult{
+			Session:   "from-env",
+			PID:       321,
+			StartedAt: time.Now().UTC(),
+		},
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	app := New(Options{
+		Daemon:  d,
+		State:   &fakeState{},
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		Version: "build-123",
+		Cwd: func() (string, error) {
+			return "", errors.New("cwd should not be resolved for --global")
+		},
+	})
+
+	if err := app.Run(context.Background(), []string{"start", "--global"}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if d.startRequest == nil {
+		t.Fatal("expected start to be called")
+	}
+	if got := d.startRequest.Project; got != "" {
+		t.Fatalf("start project = %q, want empty for --global", got)
+	}
+}
+
+func TestAppRunStopGlobalFlagSkipsProjectResolution(t *testing.T) {
+	t.Parallel()
+
+	d := &fakeDaemon{
+		stopResult: daemon.StopResult{
+			PID:       321,
+			StoppedAt: time.Now().UTC(),
+		},
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	app := New(Options{
+		Daemon:  d,
+		State:   &fakeState{},
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		Version: "build-123",
+		Cwd: func() (string, error) {
+			return "", errors.New("cwd should not be resolved for --global")
+		},
+	})
+
+	if err := app.Run(context.Background(), []string{"stop", "--global"}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if d.stopRequest == nil {
+		t.Fatal("expected stop to be called")
+	}
+	if got := d.stopRequest.Project; got != "" {
+		t.Fatalf("stop project = %q, want empty for --global", got)
+	}
+}
+
 func TestAppRunSpawnDefaultsSessionFromAMUXSessionEnv(t *testing.T) {
 	repoRoot := newRepoRoot(t)
 	cwdPath := filepath.Join(repoRoot, "internal", "cli")

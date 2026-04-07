@@ -84,6 +84,44 @@ func newDefaultGitHubClient(project string, commands CommandRunner) gitHubClient
 	})
 }
 
+func (d *Daemon) githubForProject(projectPath string) gitHubClient {
+	if d.github != nil && d.project == projectPath {
+		return d.github
+	}
+
+	d.githubMu.Lock()
+	defer d.githubMu.Unlock()
+
+	if d.githubClients == nil {
+		d.githubClients = make(map[string]gitHubClient)
+	}
+	if client, ok := d.githubClients[projectPath]; ok {
+		return client
+	}
+
+	client := d.newGitHubClient(projectPath)
+	d.githubClients[projectPath] = client
+	return client
+}
+
+func (d *Daemon) newGitHubClient(projectPath string) gitHubClient {
+	base, ok := d.github.(*gitHubCLIClient)
+	if !ok {
+		return newDefaultGitHubClient(projectPath, d.commands)
+	}
+
+	return newGitHubCLIClient(gitHubCLIClientConfig{
+		project:        projectPath,
+		commands:       d.commands,
+		now:            base.now,
+		sleep:          base.sleep,
+		minInterval:    base.minInterval,
+		initialBackoff: base.initialBackoff,
+		maxBackoff:     base.maxBackoff,
+		maxAttempts:    base.maxAttempts,
+	})
+}
+
 func (c *gitHubCLIClient) lookupPRNumber(ctx context.Context, branch string) (int, error) {
 	output, err := c.run(ctx, "pr", "list", "--head", branch, "--json", "number")
 	if err != nil {

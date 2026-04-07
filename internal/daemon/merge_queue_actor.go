@@ -7,14 +7,12 @@ import (
 )
 
 type mergeQueueActor struct {
-	project  string
 	commands CommandRunner
 	updates  chan<- MergeQueueUpdate
 }
 
-func newMergeQueueActor(project string, commands CommandRunner, updates chan<- MergeQueueUpdate) *mergeQueueActor {
+func newMergeQueueActor(_ string, commands CommandRunner, updates chan<- MergeQueueUpdate) *mergeQueueActor {
 	return &mergeQueueActor{
-		project:  project,
 		commands: commands,
 		updates:  updates,
 	}
@@ -62,7 +60,7 @@ func (a *mergeQueueActor) processQueue(ctx context.Context, msg ProcessQueue) {
 }
 
 func (a *mergeQueueActor) processRebase(ctx context.Context, entry MergeQueueEntry) {
-	if err := a.rebaseQueuedPR(ctx, entry.PRNumber); err != nil {
+	if err := a.rebaseQueuedPR(ctx, entry); err != nil {
 		a.sendUpdate(ctx, MergeQueueUpdate{
 			Entry:         entry,
 			Delete:        true,
@@ -78,7 +76,7 @@ func (a *mergeQueueActor) processRebase(ctx context.Context, entry MergeQueueEnt
 }
 
 func (a *mergeQueueActor) processAwaitingChecks(ctx context.Context, entry MergeQueueEntry) {
-	ciState, err := lookupPRChecksState(ctx, a.commands, a.project, entry.PRNumber)
+	ciState, err := lookupPRChecksState(ctx, a.commands, entry.Project, entry.PRNumber)
 	if err != nil {
 		entry.Status = MergeQueueStatusAwaitingChecks
 		a.sendUpdate(ctx, MergeQueueUpdate{Entry: entry})
@@ -89,7 +87,7 @@ func (a *mergeQueueActor) processAwaitingChecks(ctx context.Context, entry Merge
 	case ciStatePass, ciStateSkipping:
 		entry.Status = MergeQueueStatusMerging
 		a.sendUpdate(ctx, MergeQueueUpdate{Entry: entry})
-		if err := a.mergeQueuedPR(ctx, entry.PRNumber); err != nil {
+		if err := a.mergeQueuedPR(ctx, entry); err != nil {
 			a.sendUpdate(ctx, MergeQueueUpdate{
 				Entry:         entry,
 				Delete:        true,
@@ -124,13 +122,13 @@ func (a *mergeQueueActor) sendUpdate(ctx context.Context, update MergeQueueUpdat
 	}
 }
 
-func (a *mergeQueueActor) rebaseQueuedPR(ctx context.Context, prNumber int) error {
-	_, err := a.commands.Run(ctx, a.project, "gh", "pr", "update-branch", fmt.Sprintf("%d", prNumber), "--rebase")
+func (a *mergeQueueActor) rebaseQueuedPR(ctx context.Context, entry MergeQueueEntry) error {
+	_, err := a.commands.Run(ctx, entry.Project, "gh", "pr", "update-branch", fmt.Sprintf("%d", entry.PRNumber), "--rebase")
 	return err
 }
 
-func (a *mergeQueueActor) mergeQueuedPR(ctx context.Context, prNumber int) error {
-	_, err := a.commands.Run(ctx, a.project, "gh", "pr", "merge", fmt.Sprintf("%d", prNumber), "--squash")
+func (a *mergeQueueActor) mergeQueuedPR(ctx context.Context, entry MergeQueueEntry) error {
+	_, err := a.commands.Run(ctx, entry.Project, "gh", "pr", "merge", fmt.Sprintf("%d", entry.PRNumber), "--squash")
 	return err
 }
 
@@ -153,15 +151,18 @@ func (d *Daemon) dispatchMergeQueue(ctx context.Context) {
 			return
 		}
 
-		merged, err := d.isPRMerged(ctx, entry.PRNumber)
+		merged, err := d.isPRMerged(ctx, entry.Project, entry.PRNumber)
 		if err == nil && merged {
-			_ = d.state.DeleteMergeEntry(ctx, d.project, entry.PRNumber)
+			_ = d.state.DeleteMergeEntry(ctx, entry.Project, entry.PRNumber)
 			continue
 		}
 
-		if _, err := d.state.ActiveAssignmentByPRNumber(ctx, d.project, entry.PRNumber); err != nil {
-			d.emit(ctx, d.mergeQueueEvent(nil, EventPRLandingFailed, entry.PRNumber, fmt.Sprintf("PR #%d is no longer tracked by an active assignment", entry.PRNumber), d.now()))
-			_ = d.state.DeleteMergeEntry(ctx, d.project, entry.PRNumber)
+		_, err = d.state.ActiveAssignmentByPRNumber(ctx, entry.Project, entry.PRNumber)
+		if err != nil {
+			event := d.mergeQueueEvent(nil, EventPRLandingFailed, entry.PRNumber, fmt.Sprintf("PR #%d is no longer tracked by an active assignment", entry.PRNumber), d.now())
+			event.Project = entry.Project
+			d.emit(ctx, event)
+			_ = d.state.DeleteMergeEntry(ctx, entry.Project, entry.PRNumber)
 			continue
 		}
 
@@ -212,7 +213,7 @@ func (d *Daemon) applyMergeQueueUpdate(ctx context.Context, update MergeQueueUpd
 			persistenceErr = err
 		}
 	} else {
-		if err := d.state.DeleteMergeEntry(ctx, d.project, update.Entry.PRNumber); err != nil && !errors.Is(err, ErrTaskNotFound) {
+		if err := d.state.DeleteMergeEntry(ctx, update.Entry.Project, update.Entry.PRNumber); err != nil && !errors.Is(err, ErrTaskNotFound) {
 			persistenceErr = err
 		}
 	}
@@ -224,9 +225,11 @@ func (d *Daemon) applyMergeQueueUpdate(ctx context.Context, update MergeQueueUpd
 		return
 	}
 
-	active, err := d.state.ActiveAssignmentByPRNumber(ctx, d.project, update.Entry.PRNumber)
+	active, err := d.state.ActiveAssignmentByPRNumber(ctx, update.Entry.Project, update.Entry.PRNumber)
 	if err != nil {
-		d.emit(ctx, d.mergeQueueEvent(nil, update.EventType, update.Entry.PRNumber, update.EventMessage, d.now()))
+		event := d.mergeQueueEvent(nil, update.EventType, update.Entry.PRNumber, update.EventMessage, d.now())
+		event.Project = update.Entry.Project
+		d.emit(ctx, event)
 		return
 	}
 

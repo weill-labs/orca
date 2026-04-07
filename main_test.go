@@ -96,11 +96,11 @@ func TestRunVersionAndUnknownHelpTopic(t *testing.T) {
 		wantBuildCommit string
 	}{
 		{
-			name:         "version command",
-			args:         []string{"version"},
-			wantExitCode: 0,
-			wantStdout:   "orca build-804\n",
-			wantStderr:   "",
+			name:            "version command",
+			args:            []string{"version"},
+			wantExitCode:    0,
+			wantStdout:      "orca build-804\n",
+			wantStderr:      "",
 			wantBuildCommit: "build-804",
 		},
 		{
@@ -152,18 +152,13 @@ func TestRunDaemonProcessValidation(t *testing.T) {
 			wantErr: "flag provided but not defined",
 		},
 		{
-			name:    "missing project",
-			args:    []string{"--state-db", "/tmp/orca.db", "--pid-file", "/tmp/orca.pid"},
-			wantErr: "__daemon-serve requires --project",
-		},
-		{
 			name:    "missing state db",
-			args:    []string{"--project", "/tmp/project", "--pid-file", "/tmp/orca.pid"},
+			args:    []string{"--pid-file", "/tmp/orca.pid"},
 			wantErr: "__daemon-serve requires --state-db",
 		},
 		{
 			name:    "missing pid file",
-			args:    []string{"--project", "/tmp/project", "--state-db", "/tmp/orca.db"},
+			args:    []string{"--state-db", "/tmp/orca.db"},
 			wantErr: "__daemon-serve requires --pid-file",
 		},
 	}
@@ -184,6 +179,18 @@ func TestRunDaemonProcessValidation(t *testing.T) {
 	}
 }
 
+func TestRunDaemonProcessRejectsLegacyProjectFlag(t *testing.T) {
+	t.Parallel()
+
+	err := runDaemonProcess([]string{"--project", "/tmp/project", "--state-db", "/tmp/orca.db", "--pid-file", "/tmp/orca.pid"})
+	if err == nil {
+		t.Fatal("runDaemonProcess() error = nil, want parse error")
+	}
+	if !strings.Contains(err.Error(), "flag provided but not defined") {
+		t.Fatalf("runDaemonProcess() error = %v, want parse error for legacy --project", err)
+	}
+}
+
 func TestRunWithDepsCoversProcessSetupBranches(t *testing.T) {
 	t.Parallel()
 
@@ -197,11 +204,11 @@ func TestRunWithDepsCoversProcessSetupBranches(t *testing.T) {
 		assert       func(t *testing.T, store *stubStateStore, app *stubAppRunner)
 	}{
 		{
-			name: "daemon serve dispatches through dependency",
-			args: []string{"__daemon-serve", "--project", "/tmp/project"},
+			name: "daemon serve dispatches without requiring project flag",
+			args: []string{"__daemon-serve", "--state-db", "/tmp/orca.db", "--pid-file", "/tmp/orca.pid"},
 			deps: runDependencies{
 				runDaemonProcess: func(args []string) error {
-					if got, want := strings.Join(args, " "), "--project /tmp/project"; got != want {
+					if got, want := strings.Join(args, " "), "--state-db /tmp/orca.db --pid-file /tmp/orca.pid"; got != want {
 						t.Fatalf("daemon args = %q, want %q", got, want)
 					}
 					return nil

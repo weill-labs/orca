@@ -3,12 +3,13 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 )
 
 type TaskMonitor struct {
 	daemon *Daemon
-	issue  string
+	key    string
 
 	inbox    chan taskMonitorRequest
 	stopCh   chan struct{}
@@ -42,15 +43,15 @@ type taskMonitorRequest struct {
 }
 
 type taskMonitorResult struct {
-	issue   string
+	key     string
 	monitor *TaskMonitor
 	update  TaskStateUpdate
 }
 
-func newTaskMonitor(daemon *Daemon, issue string) *TaskMonitor {
+func newTaskMonitor(daemon *Daemon, key string) *TaskMonitor {
 	monitor := &TaskMonitor{
 		daemon: daemon,
-		issue:  issue,
+		key:    key,
 		inbox:  make(chan taskMonitorRequest),
 		stopCh: make(chan struct{}),
 		doneCh: make(chan struct{}),
@@ -69,7 +70,7 @@ func (m *TaskMonitor) run() {
 		case request := <-m.inbox:
 			update := m.handle(request.ctx, request.kind, request.active)
 			request.response <- taskMonitorResult{
-				issue:   m.issue,
+				key:     m.key,
 				monitor: m,
 				update:  update,
 			}
@@ -120,7 +121,12 @@ func (m *TaskMonitor) wait() {
 }
 
 func (d *Daemon) ensureTaskMonitor(issue string) *TaskMonitor {
-	if issue == "" {
+	return d.ensureTaskMonitorForProject(d.project, issue)
+}
+
+func (d *Daemon) ensureTaskMonitorForProject(projectPath, issue string) *TaskMonitor {
+	key := taskMonitorKey(projectPath, issue)
+	if key == "" {
 		return nil
 	}
 
@@ -130,22 +136,23 @@ func (d *Daemon) ensureTaskMonitor(issue string) *TaskMonitor {
 	if d.taskMonitors == nil {
 		d.taskMonitors = make(map[string]*TaskMonitor)
 	}
-	if monitor := d.taskMonitors[issue]; monitor != nil {
+	if monitor := d.taskMonitors[key]; monitor != nil {
 		return monitor
 	}
 
-	monitor := newTaskMonitor(d, issue)
-	d.taskMonitors[issue] = monitor
+	monitor := newTaskMonitor(d, key)
+	d.taskMonitors[key] = monitor
 	return monitor
 }
 
 func (d *Daemon) syncTaskMonitors(assignments []ActiveAssignment) map[string]*TaskMonitor {
 	desired := make(map[string]struct{}, len(assignments))
 	for _, active := range assignments {
-		if active.Task.Issue == "" {
+		key := taskMonitorKey(active.Task.Project, active.Task.Issue)
+		if key == "" {
 			continue
 		}
-		desired[active.Task.Issue] = struct{}{}
+		desired[key] = struct{}{}
 	}
 
 	d.taskMonitorMu.Lock()
@@ -154,22 +161,22 @@ func (d *Daemon) syncTaskMonitors(assignments []ActiveAssignment) map[string]*Ta
 	}
 
 	monitors := make(map[string]*TaskMonitor, len(desired))
-	for issue := range desired {
-		monitor := d.taskMonitors[issue]
+	for key := range desired {
+		monitor := d.taskMonitors[key]
 		if monitor == nil {
-			monitor = newTaskMonitor(d, issue)
-			d.taskMonitors[issue] = monitor
+			monitor = newTaskMonitor(d, key)
+			d.taskMonitors[key] = monitor
 		}
-		monitors[issue] = monitor
+		monitors[key] = monitor
 	}
 
 	var stale []*TaskMonitor
-	for issue, monitor := range d.taskMonitors {
-		if _, ok := desired[issue]; ok {
+	for key, monitor := range d.taskMonitors {
+		if _, ok := desired[key]; ok {
 			continue
 		}
 		stale = append(stale, monitor)
-		delete(d.taskMonitors, issue)
+		delete(d.taskMonitors, key)
 	}
 	d.taskMonitorMu.Unlock()
 
@@ -189,13 +196,18 @@ func (d *Daemon) refreshTaskMonitors(ctx context.Context) {
 }
 
 func (d *Daemon) stopTaskMonitor(issue string) {
-	if issue == "" {
+	d.stopTaskMonitorForProject(d.project, issue)
+}
+
+func (d *Daemon) stopTaskMonitorForProject(projectPath, issue string) {
+	key := taskMonitorKey(projectPath, issue)
+	if key == "" {
 		return
 	}
 
 	d.taskMonitorMu.Lock()
-	monitor := d.taskMonitors[issue]
-	delete(d.taskMonitors, issue)
+	monitor := d.taskMonitors[key]
+	delete(d.taskMonitors, key)
 	d.taskMonitorMu.Unlock()
 
 	if monitor != nil {
@@ -229,17 +241,17 @@ func (d *Daemon) taskMonitorCount() int {
 	return len(d.taskMonitors)
 }
 
-func (d *Daemon) isCurrentTaskMonitor(issue string, monitor *TaskMonitor) bool {
+func (d *Daemon) isCurrentTaskMonitor(key string, monitor *TaskMonitor) bool {
 	d.taskMonitorMu.Lock()
 	defer d.taskMonitorMu.Unlock()
-	return d.taskMonitors[issue] == monitor
+	return d.taskMonitors[key] == monitor
 }
 
 func (d *Daemon) dispatchTaskMonitorChecks(ctx context.Context, assignments []ActiveAssignment, kind taskMonitorCheckKind) []taskMonitorResult {
 	monitors := d.syncTaskMonitors(assignments)
 	responses := make([]<-chan taskMonitorResult, 0, len(assignments))
 	for _, active := range assignments {
-		monitor := monitors[active.Task.Issue]
+		monitor := monitors[taskMonitorKey(active.Task.Project, active.Task.Issue)]
 		if monitor == nil {
 			continue
 		}
@@ -265,7 +277,7 @@ func (d *Daemon) dispatchTaskMonitorChecks(ctx context.Context, assignments []Ac
 
 func (d *Daemon) applyTaskMonitorResults(ctx context.Context, results []taskMonitorResult) {
 	for _, result := range results {
-		if !d.isCurrentTaskMonitor(result.issue, result.monitor) {
+		if !d.isCurrentTaskMonitor(result.key, result.monitor) {
 			continue
 		}
 		d.applyTaskStateUpdate(ctx, result.update)
@@ -284,7 +296,7 @@ func (d *Daemon) applyTaskStateUpdate(ctx context.Context, update TaskStateUpdat
 		}
 
 		message := "pull request merged"
-		if err := d.setIssueStatus(ctx, active.Task.Issue, IssueStateDone); err != nil {
+		if err := d.setIssueStatus(ctx, active.Task.Project, active.Task.Issue, IssueStateDone); err != nil {
 			message = fmt.Sprintf("pull request merged (failed to update Linear issue status: %v)", err)
 		}
 
@@ -320,7 +332,7 @@ func (d *Daemon) assignmentEvent(active ActiveAssignment, profile AgentProfile, 
 	event := Event{
 		Time:         d.now(),
 		Type:         eventType,
-		Project:      d.project,
+		Project:      active.Task.Project,
 		Issue:        active.Task.Issue,
 		PaneID:       active.Task.PaneID,
 		PaneName:     assignmentPaneName(active.Task, active.Worker),
@@ -335,4 +347,12 @@ func (d *Daemon) assignmentEvent(active ActiveAssignment, profile AgentProfile, 
 		event.AgentProfile = active.Task.AgentProfile
 	}
 	return event
+}
+
+func taskMonitorKey(projectPath, issue string) string {
+	issue = strings.TrimSpace(issue)
+	if issue == "" {
+		return ""
+	}
+	return strings.TrimSpace(projectPath) + "\x00" + issue
 }

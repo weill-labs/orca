@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestDaemonStartFailsMissingPaneAssignmentsAndReleasesClone(t *testing.T) {
@@ -103,6 +104,72 @@ func TestDaemonStartResumesMonitoringLiveAssignments(t *testing.T) {
 	}
 	if got := deps.pool.releasedClones(); len(got) != 0 {
 		t.Fatalf("released clones = %#v, want none", got)
+	}
+}
+
+func TestGlobalDaemonStartUsesTaskProjectForWorkerLookup(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	seedActiveAssignment(t, deps, "LAB-900", "pane-1")
+	deps.amux.captureSequence("pane-1", []string{"updated output"})
+
+	d, err := New(Options{
+		Project:          "",
+		Session:          "test-session",
+		PIDPath:          deps.pidPath,
+		Config:           deps.config,
+		State:            deps.state,
+		Pool:             deps.pool,
+		Amux:             deps.amux,
+		IssueTracker:     deps.issueTracker,
+		Commands:         deps.commands,
+		Events:           deps.events,
+		Now:              deps.clock.Now,
+		NewTicker:        deps.tickers.NewTicker,
+		Sleep:            deps.sleep,
+		CaptureInterval:  5 * time.Second,
+		PollInterval:     30 * time.Second,
+		MergeGracePeriod: 2 * time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	d.github = newGitHubCLIClient(gitHubCLIClientConfig{
+		project:     "",
+		commands:    deps.commands,
+		now:         deps.clock.Now,
+		sleep:       noSleep,
+		maxAttempts: 1,
+	})
+
+	task, ok := deps.state.task("LAB-900")
+	if !ok {
+		t.Fatal("task missing before startup reconciliation")
+	}
+
+	d.reconcileTaskOnStartup(context.Background(), task)
+
+	worker, ok := deps.state.worker("pane-1")
+	if !ok {
+		t.Fatal("worker missing after global startup reconciliation")
+	}
+	if got, want := worker.LastCapture, ""; got != want {
+		t.Fatalf("worker.LastCapture = %q, want %q without monitor tick", got, want)
+	}
+
+	task, ok = deps.state.task("LAB-900")
+	if !ok {
+		t.Fatal("task missing after startup reconciliation")
+	}
+	if _, ok := deps.state.worker("pane-1"); !ok {
+		t.Fatal("worker missing after startup reconciliation")
+	}
+	if got, want := task.Status, TaskStatusActive; got != want {
+		t.Fatalf("task.Status = %q, want %q", got, want)
+	}
+	if got, want := deps.amux.captureCount("pane-1"), 1; got != want {
+		t.Fatalf("capture count = %d, want %d", got, want)
 	}
 }
 
