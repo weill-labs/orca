@@ -59,6 +59,7 @@ type Daemon struct {
 	mergeQueueInbox   chan ProcessQueue
 	mergeQueueUpdates chan MergeQueueUpdate
 	mergeQueueDone    chan struct{}
+	monitorRuns       sync.WaitGroup
 	taskMonitorMu     sync.Mutex
 	taskMonitors      map[string]*TaskMonitor
 }
