@@ -23,7 +23,6 @@ func (d *Daemon) runLoop(ctx context.Context, done chan struct{}) {
 	defer pollTick.Stop()
 	captureTickCh := captureTick.C()
 	pollTickCh := pollTick.C()
-	monitorDone := make(chan monitorTickKind, 2)
 	captureInFlight := false
 	pollInFlight := false
 
@@ -31,15 +30,6 @@ func (d *Daemon) runLoop(ctx context.Context, done chan struct{}) {
 		select {
 		case <-ctx.Done():
 			return
-		case kind := <-monitorDone:
-			switch kind {
-			case monitorTickCapture:
-				drainMonitorTicks(captureTickCh)
-				captureInFlight = false
-			case monitorTickPoll:
-				drainMonitorTicks(pollTickCh)
-				pollInFlight = false
-			}
 		case update := <-d.mergeQueueUpdates:
 			d.applyMergeQueueUpdate(ctx, update)
 		case <-captureTickCh:
@@ -47,17 +37,17 @@ func (d *Daemon) runLoop(ctx context.Context, done chan struct{}) {
 				continue
 			}
 			captureInFlight = true
-			d.startMonitorTick(monitorDone, monitorTickCapture, func() {
-				d.runCaptureTick(ctx)
-			})
+			d.runCaptureTick(ctx)
+			drainMonitorTicks(captureTickCh)
+			captureInFlight = false
 		case <-pollTickCh:
 			if pollInFlight {
 				continue
 			}
 			pollInFlight = true
-			d.startMonitorTick(monitorDone, monitorTickPoll, func() {
-				d.runPollTick(ctx)
-			})
+			d.runPollTick(ctx)
+			drainMonitorTicks(pollTickCh)
+			pollInFlight = false
 		}
 	}
 }
