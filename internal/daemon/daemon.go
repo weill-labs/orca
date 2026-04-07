@@ -57,6 +57,9 @@ type Daemon struct {
 	mergeQueueInbox   chan ProcessQueue
 	mergeQueueUpdates chan MergeQueueUpdate
 	mergeQueueDone    chan struct{}
+	monitorRuns       sync.WaitGroup
+	captureTickRun    atomic.Bool
+	pollTickRun       atomic.Bool
 	taskMonitorMu     sync.Mutex
 	taskMonitors      map[string]*TaskMonitor
 }

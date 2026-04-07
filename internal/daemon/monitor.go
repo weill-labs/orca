@@ -1,9 +1,13 @@
 package daemon
 
-import "context"
+import (
+	"context"
+	"sync/atomic"
+)
 
 func (d *Daemon) runLoop(ctx context.Context, done chan struct{}) {
 	defer close(done)
+	defer d.waitForMonitorRuns()
 	defer d.stopAllTaskMonitors(true)
 
 	captureTick := d.newTicker(d.captureInterval)
@@ -18,11 +22,32 @@ func (d *Daemon) runLoop(ctx context.Context, done chan struct{}) {
 		case update := <-d.mergeQueueUpdates:
 			d.applyMergeQueueUpdate(ctx, update)
 		case <-captureTick.C():
-			d.runCaptureTick(ctx)
+			d.startMonitorRun(&d.captureTickRun, func() {
+				d.runCaptureTick(ctx)
+			})
 		case <-pollTick.C():
-			d.runPollTick(ctx)
+			d.startMonitorRun(&d.pollTickRun, func() {
+				d.runPollTick(ctx)
+			})
 		}
 	}
+}
+
+func (d *Daemon) startMonitorRun(inFlight *atomic.Bool, run func()) {
+	if !inFlight.CompareAndSwap(false, true) {
+		return
+	}
+
+	d.monitorRuns.Add(1)
+	go func() {
+		defer d.monitorRuns.Done()
+		defer inFlight.Store(false)
+		run()
+	}()
+}
+
+func (d *Daemon) waitForMonitorRuns() {
+	d.monitorRuns.Wait()
 }
 
 func (d *Daemon) runCaptureTick(ctx context.Context) {
