@@ -31,7 +31,9 @@ func (d *Daemon) assign(ctx context.Context, projectPath, issue, prompt, agentPr
 
 	profile, err := d.config.AgentProfile(ctx, agentProfile)
 	if err != nil {
-		return fmt.Errorf("load agent profile %q: %w", agentProfile, err)
+		err = fmt.Errorf("load agent profile %q: %w", agentProfile, err)
+		d.emitAssignFailure(ctx, projectPath, issue, "", strings.TrimSpace(agentProfile), Clone{}, Pane{}, 0, err)
+		return err
 	}
 	if profile.Name == "" {
 		profile.Name = agentProfile
@@ -39,6 +41,7 @@ func (d *Daemon) assign(ctx context.Context, projectPath, issue, prompt, agentPr
 	profile = enforceLifecycleProfile(profile)
 
 	if err := d.validateAssignment(ctx, projectPath, issue, prompt); err != nil {
+		d.emitAssignFailure(ctx, projectPath, issue, "", profile.Name, Clone{}, Pane{}, 0, err)
 		return err
 	}
 	prompt = wrapAssignmentPrompt(profile, prompt)
@@ -46,7 +49,9 @@ func (d *Daemon) assign(ctx context.Context, projectPath, issue, prompt, agentPr
 	assignmentBranch := issue
 	prNumber, err := d.lookupOpenPRNumber(ctx, projectPath, assignmentBranch)
 	if err != nil {
-		return fmt.Errorf("check open PRs for %s: %w", issue, err)
+		err = fmt.Errorf("check open PRs for %s: %w", issue, err)
+		d.emitAssignFailure(ctx, projectPath, issue, "", profile.Name, Clone{}, Pane{}, 0, err)
+		return err
 	}
 	adoptingOpenPR := prNumber > 0
 
@@ -65,6 +70,7 @@ func (d *Daemon) assign(ctx context.Context, projectPath, issue, prompt, agentPr
 	}
 	previousTask, err := d.state.ClaimTask(ctx, claimedTask)
 	if err != nil {
+		d.emitAssignFailure(ctx, projectPath, issue, "", profile.Name, Clone{}, Pane{}, prNumber, err)
 		return err
 	}
 	restoreReservation := func() {
@@ -82,7 +88,9 @@ func (d *Daemon) assign(ctx context.Context, projectPath, issue, prompt, agentPr
 	})
 	if err != nil {
 		restoreReservation()
-		return fmt.Errorf("claim worker: %w", err)
+		err = fmt.Errorf("claim worker: %w", err)
+		d.emitAssignFailure(ctx, projectPath, issue, "", profile.Name, Clone{}, Pane{}, prNumber, err)
+		return err
 	}
 	restoreWorkerClaim := func() {
 		_ = d.releaseWorkerClaim(context.WithoutCancel(ctx), claimedWorker)
@@ -92,7 +100,9 @@ func (d *Daemon) assign(ctx context.Context, projectPath, issue, prompt, agentPr
 	if err != nil {
 		restoreWorkerClaim()
 		restoreReservation()
-		return fmt.Errorf("acquire clone: %w", err)
+		err = fmt.Errorf("acquire clone: %w", err)
+		d.emitAssignFailure(ctx, projectPath, issue, claimedWorker.WorkerID, profile.Name, Clone{}, Pane{}, prNumber, err)
+		return err
 	}
 
 	prepareClone := d.prepareClone
@@ -103,7 +113,9 @@ func (d *Daemon) assign(ctx context.Context, projectPath, issue, prompt, agentPr
 		_ = d.pool.Release(ctx, projectPath, clone)
 		restoreWorkerClaim()
 		restoreReservation()
-		return fmt.Errorf("prepare clone: %w", err)
+		err = fmt.Errorf("prepare clone: %w", err)
+		d.emitAssignFailure(ctx, projectPath, issue, claimedWorker.WorkerID, profile.Name, clone, Pane{}, prNumber, err)
+		return err
 	}
 	clone.CurrentBranch = assignmentBranch
 	clone.AssignedTask = issue
@@ -113,7 +125,9 @@ func (d *Daemon) assign(ctx context.Context, projectPath, issue, prompt, agentPr
 		_ = d.cleanupCloneAndReleaseForProject(ctx, projectPath, clone, issue)
 		restoreWorkerClaim()
 		restoreReservation()
-		return fmt.Errorf("spawn pane: %w", err)
+		err = fmt.Errorf("spawn pane: %w", err)
+		d.emitAssignFailure(ctx, projectPath, issue, claimedWorker.WorkerID, profile.Name, clone, Pane{}, prNumber, err)
+		return err
 	}
 
 	metadata, err := d.assignmentPaneMetadata(ctx, projectPath, pane.ID, profile.Name, assignmentBranch, issue, d.resolveAssignmentTitle(ctx, issue, firstTitle(title)), prNumber)
@@ -121,14 +135,18 @@ func (d *Daemon) assign(ctx context.Context, projectPath, issue, prompt, agentPr
 		_ = d.rollbackAssignmentForProject(ctx, projectPath, clone, pane, issue)
 		restoreWorkerClaim()
 		restoreReservation()
-		return fmt.Errorf("build pane metadata: %w", err)
+		err = fmt.Errorf("build pane metadata: %w", err)
+		d.emitAssignFailure(ctx, projectPath, issue, claimedWorker.WorkerID, profile.Name, clone, pane, prNumber, err)
+		return err
 	}
 
 	if err := d.setPaneMetadata(ctx, pane.ID, metadata); err != nil {
 		_ = d.rollbackAssignmentForProject(ctx, projectPath, clone, pane, issue)
 		restoreWorkerClaim()
 		restoreReservation()
-		return fmt.Errorf("set pane metadata: %w", err)
+		err = fmt.Errorf("set pane metadata: %w", err)
+		d.emitAssignFailure(ctx, projectPath, issue, claimedWorker.WorkerID, profile.Name, clone, pane, prNumber, err)
+		return err
 	}
 
 	task := claimedTask
@@ -232,6 +250,24 @@ func (d *Daemon) validateAssignment(ctx context.Context, projectPath, issue, pro
 	return nil
 }
 
+func (d *Daemon) emitAssignFailure(ctx context.Context, projectPath, issue, workerID, profileName string, clone Clone, pane Pane, prNumber int, err error) {
+	d.emit(ctx, Event{
+		Time:         d.now(),
+		Type:         EventTaskAssignFailed,
+		Project:      projectPath,
+		Issue:        issue,
+		WorkerID:     workerID,
+		PaneID:       pane.ID,
+		PaneName:     pane.Name,
+		CloneName:    clone.Name,
+		ClonePath:    clone.Path,
+		Branch:       issue,
+		AgentProfile: profileName,
+		PRNumber:     prNumber,
+		Message:      err.Error(),
+	})
+}
+
 func validateAssignmentPrompt(prompt string) error {
 	if autonomousBacklogPromptPattern.MatchString(prompt) {
 		return errors.New("assignment prompt cannot ask the worker to pick backlog work autonomously; assign a specific issue instead")
@@ -240,19 +276,7 @@ func validateAssignmentPrompt(prompt string) error {
 }
 
 func (d *Daemon) failPendingAssignment(ctx context.Context, projectPath, issue string, clone Clone, pane Pane, worker Worker, profile AgentProfile, err error, releaseReservation func()) {
-	d.emit(ctx, Event{
-		Time:         d.now(),
-		Type:         EventTaskAssignFailed,
-		Project:      projectPath,
-		Issue:        issue,
-		WorkerID:     worker.WorkerID,
-		PaneID:       pane.ID,
-		CloneName:    clone.Name,
-		ClonePath:    clone.Path,
-		Branch:       issue,
-		AgentProfile: profile.Name,
-		Message:      err.Error(),
-	})
+	d.emitAssignFailure(ctx, projectPath, issue, worker.WorkerID, profile.Name, clone, pane, 0, err)
 	_ = d.rollbackAssignmentForProject(ctx, projectPath, clone, pane, issue)
 	if releaseErr := d.releaseWorkerClaim(context.WithoutCancel(ctx), worker); releaseErr != nil && !errors.Is(releaseErr, ErrWorkerNotFound) {
 		_ = releaseErr
