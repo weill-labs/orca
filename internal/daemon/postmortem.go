@@ -104,19 +104,19 @@ func (d *Daemon) finishAssignmentWithMessage(ctx context.Context, active ActiveA
 	}
 
 	if status != TaskStatusFailed {
-		result = errors.Join(result, d.ensurePostmortem(cleanupCtx, active))
+		result = errors.Join(result, ignoreCancelMissingPaneError(status, d.ensurePostmortem(cleanupCtx, active)))
 		if active.Task.PaneID != "" {
 			metadata, err := d.completionPaneMetadata(cleanupCtx, active, merged)
 			if err != nil {
 				result = errors.Join(result, err)
 			} else {
-				result = errors.Join(result, d.setPaneMetadata(cleanupCtx, active.Task.PaneID, metadata))
+				result = errors.Join(result, ignoreCancelMissingPaneError(status, d.setPaneMetadata(cleanupCtx, active.Task.PaneID, metadata)))
 			}
 		}
 	}
 
 	if status == TaskStatusCancelled {
-		if err := d.amux.KillPane(cleanupCtx, active.Task.PaneID); err != nil && !paneAlreadyGone(err) {
+		if err := ignoreCancelMissingPaneError(status, d.amux.KillPane(cleanupCtx, active.Task.PaneID)); err != nil {
 			result = errors.Join(result, err)
 		}
 	}
@@ -177,5 +177,12 @@ func paneAlreadyGone(err error) bool {
 	}
 
 	message := strings.ToLower(strings.TrimSpace(err.Error()))
-	return strings.Contains(message, "pane") && (strings.Contains(message, "not found") || strings.Contains(message, "missing"))
+	return strings.Contains(message, "pane") && (strings.Contains(message, "not found") || strings.Contains(message, "missing") || strings.Contains(message, "no such"))
+}
+
+func ignoreCancelMissingPaneError(status string, err error) error {
+	if status == TaskStatusCancelled && paneAlreadyGone(err) {
+		return nil
+	}
+	return err
 }
