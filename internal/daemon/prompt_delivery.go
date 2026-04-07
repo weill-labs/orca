@@ -14,6 +14,9 @@ const (
 	codexPromptDeliveryRetry = 10
 )
 
+// Codex can occasionally miss the initial prompt delivery. The full failure path
+// intentionally waits through 11 content checks and 10 idle settles so Orca only
+// rolls back after exhausting explicit retries.
 func (d *Daemon) confirmPromptDelivery(ctx context.Context, paneID string, profile AgentProfile) error {
 	if !strings.EqualFold(profile.Name, "codex") {
 		return nil
