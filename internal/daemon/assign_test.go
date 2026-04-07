@@ -607,6 +607,68 @@ func TestAssignRejectsAutonomousBacklogPickingPromptBeforePRLookupOrCloneAcquire
 	}
 }
 
+func TestAssignLogsFailureWhenCloneAcquireFails(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	deps.pool.acquired = map[string]bool{deps.pool.clone.Path: true}
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	err := d.Assign(ctx, "LAB-689", "Implement daemon core", "codex")
+	if err == nil {
+		t.Fatal("Assign() succeeded, want clone acquire error")
+	}
+	if !strings.Contains(err.Error(), "acquire clone") {
+		t.Fatalf("Assign() error = %v, want clone acquire context", err)
+	}
+	if got, want := deps.events.countType(EventTaskAssignFailed), 1; got != want {
+		t.Fatalf("assign failure events = %d, want %d", got, want)
+	}
+	if message := deps.events.lastMessage(EventTaskAssignFailed); !strings.Contains(message, "acquire clone: clone already acquired") {
+		t.Fatalf("assign failure message = %q, want clone acquire context", message)
+	}
+}
+
+func TestAssignLogsFailureWhenSpawnFails(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	deps.amux.spawnErr = errors.New("spawn failed")
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	err := d.Assign(ctx, "LAB-689", "Implement daemon core", "codex")
+	if err == nil {
+		t.Fatal("Assign() succeeded, want spawn error")
+	}
+	if !strings.Contains(err.Error(), "spawn pane") {
+		t.Fatalf("Assign() error = %v, want spawn context", err)
+	}
+	if got, want := deps.events.countType(EventTaskAssignFailed), 1; got != want {
+		t.Fatalf("assign failure events = %d, want %d", got, want)
+	}
+	if message := deps.events.lastMessage(EventTaskAssignFailed); !strings.Contains(message, "spawn pane: spawn failed") {
+		t.Fatalf("assign failure message = %q, want spawn context", message)
+	}
+}
+
 func TestValidateAssignmentPrompt(t *testing.T) {
 	t.Parallel()
 

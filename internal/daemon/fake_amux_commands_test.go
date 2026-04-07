@@ -16,6 +16,7 @@ type fakeAmux struct {
 	spawnPane             Pane
 	spawnResults          []Pane
 	spawnPanes            []Pane
+	spawnErr              error
 	paneExists            map[string]bool
 	paneExistsErr         error
 	listPanes             []Pane
@@ -70,6 +71,9 @@ func (a *fakeAmux) Spawn(ctx context.Context, req SpawnRequest) (Pane, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.spawnRequests = append(a.spawnRequests, req)
+	if a.spawnErr != nil {
+		return Pane{}, a.spawnErr
+	}
 	if a.metadata == nil {
 		a.metadata = make(map[string]map[string]string)
 	}
