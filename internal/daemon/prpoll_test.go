@@ -75,7 +75,7 @@ func TestPRMergePollingSendsWrapUpAndCleansClone(t *testing.T) {
 		t.Fatalf("kill calls = %#v, want none", got)
 	}
 	deps.amux.requireSentKeys(t, "pane-1", []string{
-		"Implement daemon core\n",
+		wrappedCodexPrompt("Implement daemon core") + "\n",
 		"PR merged, wrap up.",
 		"$postmortem\n",
 	})
@@ -438,7 +438,7 @@ func TestPRMergeablePollingNudgesWorkerOnConflictTransitions(t *testing.T) {
 	}
 
 	deps.amux.requireSentKeys(t, "pane-1", []string{
-		"Implement daemon core\n",
+		wrappedCodexPrompt("Implement daemon core") + "\n",
 		conflictNudgePrompt + "\n",
 		conflictNudgePrompt + "\n",
 	})
@@ -509,7 +509,7 @@ func TestPRMergeablePollingRetriesConflictNudgeAfterWaitIdleFailure(t *testing.T
 	})
 
 	deps.amux.requireSentKeys(t, "pane-1", []string{
-		"Implement daemon core\n",
+		wrappedCodexPrompt("Implement daemon core") + "\n",
 		conflictNudgePrompt,
 		conflictNudgePrompt + "\n",
 	})

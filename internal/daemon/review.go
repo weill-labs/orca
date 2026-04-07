@@ -62,6 +62,10 @@ func (d *Daemon) checkTaskCapture(ctx context.Context, active ActiveAssignment) 
 	output := snapshot.Output()
 	d.recordWorkerOutput(&update, profile, output, now)
 
+	if d.shouldNudgeIdleWorkerToOpenPR(update.Active, output, now) {
+		d.nudgeIdleWorkerToOpenPR(ctx, &update, profile, now)
+		return update
+	}
 	if d.matchesStuckPattern(profile, output) {
 		d.nudgeOrEscalate(ctx, &update, profile, "matched stuck text pattern", now)
 		return update

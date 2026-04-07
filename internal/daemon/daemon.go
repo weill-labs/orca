@@ -291,6 +291,7 @@ func (d *Daemon) assign(ctx context.Context, projectPath, issue, prompt, agentPr
 		profile.Name = agentProfile
 	}
 	profile = enforceLifecycleProfile(profile)
+	prompt = wrapAssignmentPrompt(profile, prompt)
 
 	if err := d.validateAssignment(ctx, projectPath, issue, prompt); err != nil {
 		return err
