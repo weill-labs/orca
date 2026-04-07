@@ -373,6 +373,82 @@ func TestFinishAssignmentCancelledIgnoresMissingPaneCleanupErrors(t *testing.T) 
 	}
 }
 
+func TestFinishAssignmentCancelledIgnoresMissingPaneWaitIdleAfterPostmortemSend(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	d := deps.newDaemon(t)
+	active := newPostmortemAssignment(deps)
+	active.Task.Status = TaskStatusActive
+	seedFinishAssignmentState(t, deps, active)
+
+	var operations []string
+	deps.amux.sendKeysHook = func(_ string, keys []string) {
+		operations = append(operations, "send:"+strings.Join(keys, "|"))
+	}
+	deps.amux.waitIdleHook = func(_ string, timeout, _ time.Duration) {
+		operations = append(operations, "wait:"+timeout.String())
+	}
+	deps.amux.setMetadataHook = func(_ string, metadata map[string]string) {
+		operations = append(operations, "metadata:"+metadata["status"])
+	}
+	deps.amux.killHook = func(paneID string) {
+		operations = append(operations, "kill:"+paneID)
+	}
+	deps.amux.waitIdleErr = errors.New("amux wait idle pane-1: exit status 1: pane missing")
+
+	if err := d.finishAssignmentWithMessage(context.Background(), active, TaskStatusCancelled, EventTaskCancelled, false, ""); err != nil {
+		t.Fatalf("finishAssignmentWithMessage() error = %v, want nil", err)
+	}
+
+	if got, want := operations, []string{
+		"send:$postmortem|Enter",
+		"wait:2m0s",
+		"metadata:done",
+		"kill:pane-1",
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("operations = %#v, want %#v", got, want)
+	}
+}
+
+func TestFinishAssignmentCancelledPropagatesNonPaneCleanupError(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	d := deps.newDaemon(t)
+	active := newPostmortemAssignment(deps)
+	active.Task.Status = TaskStatusActive
+	seedFinishAssignmentState(t, deps, active)
+
+	deps.amux.waitIdleErr = errors.New("wait idle timed out")
+
+	err := d.finishAssignmentWithMessage(context.Background(), active, TaskStatusCancelled, EventTaskCancelled, false, "")
+	if err == nil || !strings.Contains(err.Error(), "wait idle timed out") {
+		t.Fatalf("finishAssignmentWithMessage() error = %v, want substring %q", err, "wait idle timed out")
+	}
+
+	task, taskErr := deps.state.TaskByIssue(context.Background(), d.project, active.Task.Issue)
+	if taskErr != nil {
+		t.Fatalf("TaskByIssue() error = %v", taskErr)
+	}
+	if got := task.Status; got != TaskStatusCancelled {
+		t.Fatalf("task status = %q, want %q", got, TaskStatusCancelled)
+	}
+
+	if _, workerErr := deps.state.WorkerByPane(context.Background(), d.project, active.Task.PaneID); !errors.Is(workerErr, ErrWorkerNotFound) {
+		t.Fatalf("WorkerByPane() error = %v, want ErrWorkerNotFound", workerErr)
+	}
+
+	if got, want := deps.pool.releasedClones(), []Clone{{
+		Name:          active.Task.CloneName,
+		Path:          active.Task.ClonePath,
+		CurrentBranch: active.Task.Branch,
+		AssignedTask:  active.Task.Branch,
+	}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("released clones = %#v, want %#v", got, want)
+	}
+}
+
 func TestFinishAssignmentPreservesHistoricalTrackedMetadata(t *testing.T) {
 	t.Parallel()
 
