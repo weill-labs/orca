@@ -24,6 +24,7 @@ type TaskStateUpdate struct {
 	PaneMetadataRemovals []string
 	Events               []Event
 	PRMerged             bool
+	nudges               []taskMonitorNudge
 }
 
 type taskMonitorCheckKind int
@@ -258,6 +259,7 @@ func (d *Daemon) dispatchTaskMonitorChecks(ctx context.Context, assignments []Ac
 			results = append(results, result)
 		}
 	}
+	d.executeTaskMonitorNudges(ctx, results)
 	return results
 }
 

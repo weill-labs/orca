@@ -10,18 +10,20 @@ func (d *Daemon) nudgeOrEscalate(ctx context.Context, update *TaskStateUpdate, p
 	previousHealth := update.Active.Worker.Health
 
 	if update.Active.Worker.NudgeCount < profile.MaxNudgeRetries {
-		if err := d.amux.SendKeys(ctx, update.Active.Task.PaneID, profile.NudgeCommand); err != nil {
-			return
-		}
+		update.queueNudge(func(ctx context.Context, d *Daemon, update *TaskStateUpdate) {
+			if err := d.amux.SendKeys(ctx, update.Active.Task.PaneID, profile.NudgeCommand); err != nil {
+				return
+			}
 
-		update.Active.Worker.Health = WorkerHealthStuck
-		update.Active.Worker.UpdatedAt = now
-		update.Active.Worker.NudgeCount++
-		update.WorkerChanged = true
+			update.Active.Worker.Health = WorkerHealthStuck
+			update.Active.Worker.UpdatedAt = now
+			update.Active.Worker.NudgeCount++
+			update.WorkerChanged = true
 
-		event := d.assignmentEvent(update.Active, profile, EventWorkerNudged, reason)
-		event.Retry = update.Active.Worker.NudgeCount
-		update.Events = append(update.Events, event)
+			event := d.assignmentEvent(update.Active, profile, EventWorkerNudged, reason)
+			event.Retry = update.Active.Worker.NudgeCount
+			update.Events = append(update.Events, event)
+		})
 		return
 	}
 
