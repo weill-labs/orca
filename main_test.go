@@ -153,12 +153,12 @@ func TestRunDaemonProcessValidation(t *testing.T) {
 		},
 		{
 			name:    "missing state db",
-			args:    []string{"--project", "/tmp/project", "--pid-file", "/tmp/orca.pid"},
+			args:    []string{"--pid-file", "/tmp/orca.pid"},
 			wantErr: "__daemon-serve requires --state-db",
 		},
 		{
 			name:    "missing pid file",
-			args:    []string{"--project", "/tmp/project", "--state-db", "/tmp/orca.db"},
+			args:    []string{"--state-db", "/tmp/orca.db"},
 			wantErr: "__daemon-serve requires --pid-file",
 		},
 	}
@@ -217,10 +217,10 @@ func TestRunWithDepsCoversProcessSetupBranches(t *testing.T) {
 	}{
 		{
 			name: "daemon serve dispatches through dependency",
-			args: []string{"__daemon-serve", "--project", "/tmp/project"},
+			args: []string{"__daemon-serve", "--state-db", "/tmp/orca.db", "--pid-file", "/tmp/orca.pid"},
 			deps: runDependencies{
 				runDaemonProcess: func(args []string) error {
-					if got, want := strings.Join(args, " "), "--project /tmp/project"; got != want {
+					if got, want := strings.Join(args, " "), "--state-db /tmp/orca.db --pid-file /tmp/orca.pid"; got != want {
 						t.Fatalf("daemon args = %q, want %q", got, want)
 					}
 					return nil

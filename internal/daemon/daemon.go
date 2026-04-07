@@ -42,6 +42,8 @@ type Daemon struct {
 	issueTracker     IssueTracker
 	commands         CommandRunner
 	github           gitHubClient
+	githubMu         sync.Mutex
+	githubClients    map[string]gitHubClient
 	events           EventSink
 	now              func() time.Time
 	newTicker        func(time.Duration) Ticker
@@ -128,6 +130,7 @@ func New(opts Options) (*Daemon, error) {
 		issueTracker:     opts.IssueTracker,
 		commands:         opts.Commands,
 		github:           newDefaultGitHubClient(opts.Project, opts.Commands),
+		githubClients:    make(map[string]gitHubClient),
 		events:           opts.Events,
 		now:              opts.Now,
 		newTicker:        opts.NewTicker,

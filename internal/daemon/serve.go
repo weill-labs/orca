@@ -22,7 +22,6 @@ const orcaPoolSubdir = ".orca/pool"
 
 type ServeRequest struct {
 	Session  string
-	Project  string
 	LeadPane string
 	StateDB  string
 	PIDFile  string
@@ -72,7 +71,7 @@ func runProcess(ctx context.Context, req ServeRequest, deps serveDeps) error {
 
 	socketPath := deps.socketPath
 	if socketPath == "" {
-		socketPath = socketFileForProject(filepath.Dir(req.StateDB), "")
+		socketPath = socketFile(filepath.Dir(req.StateDB))
 	}
 
 	listener, err := listenUnixSocket(socketPath)

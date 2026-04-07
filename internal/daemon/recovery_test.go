@@ -111,9 +111,6 @@ func TestGlobalDaemonStartUsesTaskProjectForWorkerLookup(t *testing.T) {
 	t.Parallel()
 
 	deps := newTestDeps(t)
-	captureTicker := newFakeTicker()
-	pollTicker := newFakeTicker()
-	deps.tickers.enqueue(captureTicker, pollTicker)
 	seedActiveAssignment(t, deps, "LAB-900", "pane-1")
 	deps.amux.captureSequence("pane-1", []string{"updated output"})
 
@@ -146,28 +143,30 @@ func TestGlobalDaemonStartUsesTaskProjectForWorkerLookup(t *testing.T) {
 		maxAttempts: 1,
 	})
 
-	if err := d.Start(context.Background()); err != nil {
-		t.Fatalf("Start() error = %v", err)
-	}
-	t.Cleanup(func() {
-		_ = d.Stop(context.Background())
-	})
-
-	captureTicker.tick(deps.clock.Now())
-	waitFor(t, "capture resume", func() bool {
-		worker, ok := deps.state.worker("pane-1")
-		return ok && worker.LastCapture == "updated output"
-	})
-
 	task, ok := deps.state.task("LAB-900")
 	if !ok {
-		t.Fatal("task missing after startup")
+		t.Fatal("task missing before startup reconciliation")
+	}
+
+	d.reconcileTaskOnStartup(context.Background(), task)
+
+	worker, ok := deps.state.worker("pane-1")
+	if !ok {
+		t.Fatal("worker missing after global startup reconciliation")
+	}
+	if got, want := worker.LastCapture, ""; got != want {
+		t.Fatalf("worker.LastCapture = %q, want %q without monitor tick", got, want)
+	}
+
+	task, ok = deps.state.task("LAB-900")
+	if _, ok := deps.state.worker("pane-1"); !ok {
+		t.Fatal("worker missing after startup reconciliation")
 	}
 	if got, want := task.Status, TaskStatusActive; got != want {
 		t.Fatalf("task.Status = %q, want %q", got, want)
 	}
-	if _, ok := deps.state.worker("pane-1"); !ok {
-		t.Fatal("worker missing after global startup reconciliation")
+	if got, want := deps.amux.captureCount("pane-1"), 1; got != want {
+		t.Fatalf("capture count = %d, want %d", got, want)
 	}
 }
 

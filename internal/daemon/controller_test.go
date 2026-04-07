@@ -162,7 +162,7 @@ func TestPreparePIDStateExistingPIDFile(t *testing.T) {
 				})
 			}
 
-			pidFile := controller.paths.pidFile(projectPath)
+			pidFile := controller.paths.pidFile()
 			if err := os.MkdirAll(filepath.Dir(pidFile), 0o755); err != nil {
 				t.Fatalf("MkdirAll(%q) error = %v", filepath.Dir(pidFile), err)
 			}
@@ -200,22 +200,22 @@ func TestPathsUseGlobalDaemonFiles(t *testing.T) {
 		PIDDir:    "/tmp/orca/pids",
 	}
 
-	pidA := paths.pidFile("/repo-a")
-	pidB := paths.pidFile("/repo-b")
+	pidA := paths.pidFile()
+	pidB := paths.pidFile()
 	if got, want := pidA, "/tmp/orca/pids/orca.pid"; got != want {
-		t.Fatalf("pidFile(/repo-a) = %q, want %q", got, want)
+		t.Fatalf("pidFile() = %q, want %q", got, want)
 	}
 	if got, want := pidB, "/tmp/orca/pids/orca.pid"; got != want {
-		t.Fatalf("pidFile(/repo-b) = %q, want %q", got, want)
+		t.Fatalf("pidFile() = %q, want %q", got, want)
 	}
 
-	socketA := paths.socketFile("/repo-a")
-	socketB := paths.socketFile("/repo-b")
+	socketA := paths.socketFile()
+	socketB := paths.socketFile()
 	if got, want := socketA, "/tmp/orca/orca.sock"; got != want {
-		t.Fatalf("socketFile(/repo-a) = %q, want %q", got, want)
+		t.Fatalf("socketFile() = %q, want %q", got, want)
 	}
 	if got, want := socketB, "/tmp/orca/orca.sock"; got != want {
-		t.Fatalf("socketFile(/repo-b) = %q, want %q", got, want)
+		t.Fatalf("socketFile() = %q, want %q", got, want)
 	}
 }
 
@@ -231,7 +231,7 @@ func TestStopReturnsContextErrorWhenPollingCancelled(t *testing.T) {
 	if err := os.MkdirAll(controller.paths.PIDDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
-	if err := os.WriteFile(controller.paths.pidFile(projectPath), []byte(fmt.Sprintf("%d", pid)), 0o644); err != nil {
+	if err := os.WriteFile(controller.paths.pidFile(), []byte(fmt.Sprintf("%d", pid)), 0o644); err != nil {
 		t.Fatalf("write controller pid file: %v", err)
 	}
 
@@ -271,7 +271,7 @@ func TestStopWithoutForceReturnsTimeoutWhenProcessIgnoresTERM(t *testing.T) {
 	if err := os.MkdirAll(controller.paths.PIDDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
-	pidFile := controller.paths.pidFile(projectPath)
+	pidFile := controller.paths.pidFile()
 	if err := os.WriteFile(pidFile, []byte(fmt.Sprintf("%d", pid)), 0o644); err != nil {
 		t.Fatalf("write controller pid file: %v", err)
 	}
@@ -310,7 +310,7 @@ func TestStopStopsResponsiveProcess(t *testing.T) {
 	if err := os.MkdirAll(controller.paths.PIDDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
-	pidFile := controller.paths.pidFile(projectPath)
+	pidFile := controller.paths.pidFile()
 	if err := os.WriteFile(pidFile, []byte(fmt.Sprintf("%d", pid)), 0o644); err != nil {
 		t.Fatalf("write controller pid file: %v", err)
 	}
@@ -344,7 +344,7 @@ func TestStopForceKillsProcessAfterGracePeriod(t *testing.T) {
 	if err := os.MkdirAll(controller.paths.PIDDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
-	pidFile := controller.paths.pidFile(projectPath)
+	pidFile := controller.paths.pidFile()
 	if err := os.WriteFile(pidFile, []byte(fmt.Sprintf("%d", pid)), 0o644); err != nil {
 		t.Fatalf("write controller pid file: %v", err)
 	}
@@ -393,11 +393,11 @@ func TestLocalControllerAssignAndBatchRPC(t *testing.T) {
 	if err := os.MkdirAll(paths.PIDDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(%q) error = %v", paths.PIDDir, err)
 	}
-	if err := os.WriteFile(paths.pidFile(projectPath), []byte(fmt.Sprintf("%d", os.Getpid())), 0o644); err != nil {
+	if err := os.WriteFile(paths.pidFile(), []byte(fmt.Sprintf("%d", os.Getpid())), 0o644); err != nil {
 		t.Fatalf("WriteFile(pidFile) error = %v", err)
 	}
 
-	socketPath := paths.socketFile(projectPath)
+	socketPath := paths.socketFile()
 	listener, err := net.Listen("unix", socketPath)
 	if err != nil {
 		t.Fatalf("Listen(%q) error = %v", socketPath, err)
@@ -574,7 +574,7 @@ func TestLocalControllerBatchErrorBranches(t *testing.T) {
 		if err := os.MkdirAll(paths.PIDDir, 0o755); err != nil {
 			t.Fatalf("MkdirAll(%q) error = %v", paths.PIDDir, err)
 		}
-		if err := os.WriteFile(paths.pidFile(projectPath), []byte(fmt.Sprintf("%d", os.Getpid())), 0o644); err != nil {
+		if err := os.WriteFile(paths.pidFile(), []byte(fmt.Sprintf("%d", os.Getpid())), 0o644); err != nil {
 			t.Fatalf("WriteFile(pidFile) error = %v", err)
 		}
 		_, err = controller.Batch(context.Background(), BatchRequest{

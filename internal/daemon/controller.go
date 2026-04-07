@@ -245,7 +245,7 @@ func (c *LocalController) Start(ctx context.Context, req StartRequest) (StartRes
 		return StartResult{}, err
 	}
 
-	pidFile := c.paths.pidFile(projectPath)
+	pidFile := c.paths.pidFile()
 	if err := os.MkdirAll(filepath.Dir(pidFile), 0o755); err != nil {
 		return StartResult{}, fmt.Errorf("create daemon pid directory: %w", err)
 	}
@@ -275,7 +275,7 @@ func (c *LocalController) Start(ctx context.Context, req StartRequest) (StartRes
 
 	process := cmd.Process
 	pid := process.Pid
-	socketPath := c.paths.socketFile(projectPath)
+	socketPath := c.paths.socketFile()
 
 	deadline := time.Now().Add(c.startTimeout)
 	for {
@@ -312,7 +312,7 @@ func (c *LocalController) Stop(ctx context.Context, req StopRequest) (StopResult
 		return StopResult{}, err
 	}
 
-	pidFile := c.paths.pidFile(projectPath)
+	pidFile := c.paths.pidFile()
 	pid, err := readPIDFile(pidFile)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -364,7 +364,7 @@ func (c *LocalController) Assign(ctx context.Context, req AssignRequest) (TaskAc
 	defer cancel()
 
 	var result TaskActionResult
-	err = callRPC(callCtx, c.paths.socketFile(projectPath), "assign", assignRPCParams{
+	err = callRPC(callCtx, c.paths.socketFile(), "assign", assignRPCParams{
 		Project: projectPath,
 		Issue:   strings.TrimSpace(req.Issue),
 		Prompt:  req.Prompt,
@@ -396,7 +396,7 @@ func (c *LocalController) Batch(ctx context.Context, req BatchRequest) (BatchRes
 	defer cancel()
 
 	var result BatchResult
-	err = callRPC(callCtx, c.paths.socketFile(projectPath), "batch", batchRPCParams{
+	err = callRPC(callCtx, c.paths.socketFile(), "batch", batchRPCParams{
 		Project: projectPath,
 		Entries: normalizeBatchEntries(req.Entries),
 		Delay:   req.Delay.String(),
@@ -420,7 +420,7 @@ func (c *LocalController) Enqueue(ctx context.Context, req EnqueueRequest) (Merg
 	defer cancel()
 
 	var result MergeQueueActionResult
-	err = callRPC(callCtx, c.paths.socketFile(projectPath), "enqueue", enqueueRPCParams{
+	err = callRPC(callCtx, c.paths.socketFile(), "enqueue", enqueueRPCParams{
 		Project:  projectPath,
 		PRNumber: req.PRNumber,
 	}, &result)
@@ -443,7 +443,7 @@ func (c *LocalController) Cancel(ctx context.Context, req CancelRequest) (TaskAc
 	defer cancel()
 
 	var result TaskActionResult
-	err = callRPC(callCtx, c.paths.socketFile(projectPath), "cancel", cancelRPCParams{
+	err = callRPC(callCtx, c.paths.socketFile(), "cancel", cancelRPCParams{
 		Project: projectPath,
 		Issue:   strings.TrimSpace(req.Issue),
 	}, &result)
@@ -466,7 +466,7 @@ func (c *LocalController) Resume(ctx context.Context, req ResumeRequest) (TaskAc
 	defer cancel()
 
 	var result TaskActionResult
-	err = callRPC(callCtx, c.paths.socketFile(projectPath), "resume", resumeRPCParams{
+	err = callRPC(callCtx, c.paths.socketFile(), "resume", resumeRPCParams{
 		Project: projectPath,
 		Issue:   strings.TrimSpace(req.Issue),
 		Prompt:  strings.TrimSpace(req.Prompt),
@@ -478,7 +478,7 @@ func (c *LocalController) Resume(ctx context.Context, req ResumeRequest) (TaskAc
 }
 
 func (c *LocalController) preparePIDState(ctx context.Context, _ ...string) error {
-	pidFile := c.paths.pidFile("")
+	pidFile := c.paths.pidFile()
 	pid, err := readPIDFile(pidFile)
 	if err == nil {
 		alive, aliveErr := processAlive(pid)
@@ -516,7 +516,7 @@ func (c *LocalController) preparePIDState(ctx context.Context, _ ...string) erro
 }
 
 func (c *LocalController) requireRunning(ctx context.Context) error {
-	pidFile := c.paths.pidFile("")
+	pidFile := c.paths.pidFile()
 	pid, err := readPIDFile(pidFile)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -634,12 +634,12 @@ func (c *LocalController) cleanupFailedStart(pidFile string, process *os.Process
 	return nil
 }
 
-func (p Paths) pidFile(projectPath string) string {
+func (p Paths) pidFile() string {
 	return filepath.Join(p.PIDDir, "orca.pid")
 }
 
-func (p Paths) socketFile(projectPath string) string {
-	return socketFileForProject(p.ConfigDir, projectPath)
+func (p Paths) socketFile() string {
+	return socketFile(p.ConfigDir)
 }
 
 func canonicalProject(projectPath string) (string, error) {
