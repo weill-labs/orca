@@ -179,6 +179,43 @@ func TestRunDaemonProcessValidation(t *testing.T) {
 	}
 }
 
+func TestRunDaemonProcessPassesBuildCommit(t *testing.T) {
+	t.Parallel()
+
+	previousBuildCommit := BuildCommit
+	previousRunDaemonServe := runDaemonServe
+	BuildCommit = "build-851"
+	t.Cleanup(func() {
+		BuildCommit = previousBuildCommit
+		runDaemonServe = previousRunDaemonServe
+	})
+
+	var gotRequest daemon.ServeRequest
+	runDaemonServe = func(_ context.Context, req daemon.ServeRequest) error {
+		gotRequest = req
+		return nil
+	}
+
+	err := runDaemonProcess([]string{
+		"--session", "alpha",
+		"--lead-pane", "pane-1",
+		"--state-db", "/tmp/orca.db",
+		"--pid-file", "/tmp/orca.pid",
+	})
+	if err != nil {
+		t.Fatalf("runDaemonProcess() error = %v", err)
+	}
+	if got, want := gotRequest.BuildCommit, "build-851"; got != want {
+		t.Fatalf("ServeRequest.BuildCommit = %q, want %q", got, want)
+	}
+	if got, want := gotRequest.Session, "alpha"; got != want {
+		t.Fatalf("ServeRequest.Session = %q, want %q", got, want)
+	}
+	if got, want := gotRequest.LeadPane, "pane-1"; got != want {
+		t.Fatalf("ServeRequest.LeadPane = %q, want %q", got, want)
+	}
+}
+
 func TestRunDaemonProcessRejectsLegacyProjectFlag(t *testing.T) {
 	t.Parallel()
 

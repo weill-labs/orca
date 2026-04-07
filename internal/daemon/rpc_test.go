@@ -78,6 +78,51 @@ func TestCallRPCAndHelpers(t *testing.T) {
 	}
 }
 
+func TestProjectStatusRPC(t *testing.T) {
+	t.Parallel()
+
+	projectPath := filepath.Join(t.TempDir(), "project")
+	paths := Paths{ConfigDir: t.TempDir()}
+	socketPath := paths.socketFile(projectPath)
+
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("Listen(%q) error = %v", socketPath, err)
+	}
+	defer listener.Close()
+
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+
+		var req rpcRequest
+		if err := json.NewDecoder(conn).Decode(&req); err != nil {
+			return
+		}
+		_ = json.NewEncoder(conn).Encode(rpcSuccess(req.ID, ProjectStatusRPCResult{
+			ProjectStatus: state.ProjectStatus{
+				Project: projectPath,
+				Daemon:  &state.DaemonStatus{Status: "running"},
+			},
+			BuildCommit: "abc1234",
+		}))
+	}()
+
+	result, err := ProjectStatusRPC(context.Background(), paths, projectPath)
+	if err != nil {
+		t.Fatalf("ProjectStatusRPC() error = %v", err)
+	}
+	if got, want := result.Project, projectPath; got != want {
+		t.Fatalf("result.Project = %q, want %q", got, want)
+	}
+	if got, want := result.BuildCommit, "abc1234"; got != want {
+		t.Fatalf("result.BuildCommit = %q, want %q", got, want)
+	}
+}
+
 func TestAssignTypesIncludeTitleField(t *testing.T) {
 	t.Parallel()
 
