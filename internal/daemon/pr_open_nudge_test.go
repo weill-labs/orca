@@ -25,6 +25,11 @@ func TestOutputIndicatesTestsPassed(t *testing.T) {
 			want:   true,
 		},
 		{
+			name:   "ignores conversational ok line",
+			output: "ok let me push the changes",
+			want:   false,
+		},
+		{
 			name:   "ignores ordinary worker output",
 			output: "working on the next helper now",
 			want:   false,

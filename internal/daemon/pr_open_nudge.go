@@ -14,7 +14,7 @@ const (
 
 var (
 	goTestPassPattern = regexp.MustCompile(`(?m)^PASS$`)
-	goTestOKPattern   = regexp.MustCompile(`(?m)^ok\s+`)
+	goTestOKPattern   = regexp.MustCompile(`(?m)^ok\s+\S+(?:\s+\d+(?:\.\d+)?s|\s+\(cached\))$`)
 )
 
 func outputIndicatesTestsPassed(output string) bool {
