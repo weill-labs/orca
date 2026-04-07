@@ -62,7 +62,7 @@ If a PR is already open and `git fetch origin main` or `git pull` advances `orig
 
 PR title and description are the permanent record of why a change was made. Write them for a reviewer seeing the diff for the first time.
 
-**Title**: State what changed in imperative mood, under 70 characters. Example: "Timestamp crash checkpoint filenames to prevent overwriting". Omit ticket prefixes like `LAB-314:` — link tickets in the description body instead.
+**Title**: Start with the issue ID, then state what changed in imperative mood, under 70 characters. Example: "LAB-314: Timestamp crash checkpoint filenames to prevent overwriting".
 
 **Description** must include four sections:
 
