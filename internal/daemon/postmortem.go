@@ -91,6 +91,7 @@ func (d *Daemon) finishAssignment(ctx context.Context, active ActiveAssignment, 
 
 func (d *Daemon) finishAssignmentWithMessage(ctx context.Context, active ActiveAssignment, status, eventType string, merged bool, message string) error {
 	var result error
+	cancelled := status == TaskStatusCancelled
 	cleanupCtx := context.WithoutCancel(ctx)
 	d.stopTaskMonitor(active.Task.Issue)
 
@@ -104,19 +105,27 @@ func (d *Daemon) finishAssignmentWithMessage(ctx context.Context, active ActiveA
 	}
 
 	if status != TaskStatusFailed {
-		result = errors.Join(result, d.ensurePostmortem(cleanupCtx, active))
+		postmortemErr := d.ensurePostmortem(cleanupCtx, active)
+		if cancelled {
+			postmortemErr = ignorePaneAlreadyGoneError(postmortemErr)
+		}
+		result = errors.Join(result, postmortemErr)
 		if active.Task.PaneID != "" {
 			metadata, err := d.completionPaneMetadata(cleanupCtx, active, merged)
 			if err != nil {
 				result = errors.Join(result, err)
 			} else {
-				result = errors.Join(result, d.setPaneMetadata(cleanupCtx, active.Task.PaneID, metadata))
+				metadataErr := d.setPaneMetadata(cleanupCtx, active.Task.PaneID, metadata)
+				if cancelled {
+					metadataErr = ignorePaneAlreadyGoneError(metadataErr)
+				}
+				result = errors.Join(result, metadataErr)
 			}
 		}
 	}
 
-	if status == TaskStatusCancelled {
-		if err := d.amux.KillPane(cleanupCtx, active.Task.PaneID); err != nil && !paneAlreadyGone(err) {
+	if cancelled {
+		if err := ignorePaneAlreadyGoneError(d.amux.KillPane(cleanupCtx, active.Task.PaneID)); err != nil {
 			result = errors.Join(result, err)
 		}
 	}
@@ -177,5 +186,14 @@ func paneAlreadyGone(err error) bool {
 	}
 
 	message := strings.ToLower(strings.TrimSpace(err.Error()))
-	return strings.Contains(message, "pane") && (strings.Contains(message, "not found") || strings.Contains(message, "missing"))
+	return strings.Contains(message, "pane not found") ||
+		strings.Contains(message, "pane missing") ||
+		strings.Contains(message, "no such pane")
+}
+
+func ignorePaneAlreadyGoneError(err error) error {
+	if paneAlreadyGone(err) {
+		return nil
+	}
+	return err
 }
