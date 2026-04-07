@@ -20,6 +20,7 @@ import (
 
 const defaultAgent = "claude"
 const amuxSessionEnvVar = "AMUX_SESSION"
+const amuxPaneEnvVar = "AMUX_PANE"
 
 const usageText = `orca: agent orchestration daemon
 usage: orca <command>
@@ -218,7 +219,7 @@ func (a *App) runStart(ctx context.Context, args []string) error {
 	var jsonOutput bool
 	fs.StringVar(&session, "session", "", "amux session name (defaults to AMUX_SESSION)")
 	fs.StringVar(&projectPath, "project", "", "project path")
-	fs.StringVar(&leadPane, "lead-pane", "", "pane to split workers from")
+	fs.StringVar(&leadPane, "lead-pane", "", "deprecated: fallback pane to split workers from")
 	fs.BoolVar(&global, "global", false, "operate on the machine-wide daemon")
 	fs.BoolVar(&jsonOutput, "json", false, "emit JSON output")
 
@@ -363,6 +364,7 @@ func (a *App) runAssign(ctx context.Context, args []string) error {
 	fs := newFlagSet("assign")
 	var prompt string
 	var agent string
+	var callerPane string
 	var projectPath string
 	var jsonOutput bool
 	fs.StringVar(&prompt, "prompt", "", "task prompt")
@@ -377,6 +379,7 @@ func (a *App) runAssign(ctx context.Context, args []string) error {
 	if strings.TrimSpace(prompt) == "" {
 		return fmt.Errorf("assign requires --prompt")
 	}
+	callerPane = strings.TrimSpace(os.Getenv(amuxPaneEnvVar))
 
 	projectPath, err = a.resolveProject(projectPath)
 	if err != nil {
@@ -384,10 +387,11 @@ func (a *App) runAssign(ctx context.Context, args []string) error {
 	}
 
 	result, err := a.daemon.Assign(ctx, daemon.AssignRequest{
-		Project: projectPath,
-		Issue:   issue,
-		Prompt:  prompt,
-		Agent:   agent,
+		Project:    projectPath,
+		Issue:      issue,
+		Prompt:     prompt,
+		Agent:      agent,
+		CallerPane: callerPane,
 	})
 	if err != nil {
 		return err

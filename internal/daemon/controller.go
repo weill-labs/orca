@@ -76,11 +76,12 @@ type StopResult struct {
 }
 
 type AssignRequest struct {
-	Project string
-	Issue   string
-	Prompt  string
-	Agent   string
-	Title   string
+	Project    string
+	Issue      string
+	Prompt     string
+	Agent      string
+	CallerPane string
+	Title      string
 }
 
 type BatchEntry struct {
@@ -365,11 +366,12 @@ func (c *LocalController) Assign(ctx context.Context, req AssignRequest) (TaskAc
 
 	var result TaskActionResult
 	err = callRPC(callCtx, c.paths.socketFile(), "assign", assignRPCParams{
-		Project: projectPath,
-		Issue:   strings.TrimSpace(req.Issue),
-		Prompt:  req.Prompt,
-		Agent:   strings.TrimSpace(req.Agent),
-		Title:   strings.TrimSpace(req.Title),
+		Project:    projectPath,
+		Issue:      strings.TrimSpace(req.Issue),
+		Prompt:     req.Prompt,
+		Agent:      strings.TrimSpace(req.Agent),
+		CallerPane: strings.TrimSpace(req.CallerPane),
+		Title:      strings.TrimSpace(req.Title),
 	}, &result)
 	if err != nil {
 		return TaskActionResult{}, err

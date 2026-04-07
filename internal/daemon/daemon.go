@@ -271,10 +271,14 @@ func (d *Daemon) Stop(ctx context.Context) error {
 }
 
 func (d *Daemon) Assign(ctx context.Context, issue, prompt, agentProfile string, title ...string) error {
-	return d.assign(ctx, d.project, issue, prompt, agentProfile, title...)
+	return d.assign(ctx, d.project, issue, prompt, agentProfile, "", title...)
 }
 
-func (d *Daemon) assign(ctx context.Context, projectPath, issue, prompt, agentProfile string, title ...string) error {
+func (d *Daemon) AssignWithCallerPane(ctx context.Context, issue, prompt, agentProfile, callerPane string, title ...string) error {
+	return d.assign(ctx, d.project, issue, prompt, agentProfile, callerPane, title...)
+}
+
+func (d *Daemon) assign(ctx context.Context, projectPath, issue, prompt, agentProfile, callerPane string, title ...string) error {
 	if err := d.requireStarted(); err != nil {
 		return err
 	}
@@ -305,6 +309,7 @@ func (d *Daemon) assign(ctx context.Context, projectPath, issue, prompt, agentPr
 		Issue:        issue,
 		Status:       TaskStatusStarting,
 		Prompt:       prompt,
+		CallerPane:   strings.TrimSpace(callerPane),
 		Branch:       assignmentBranch,
 		AgentProfile: profile.Name,
 		PRNumber:     prNumber,
@@ -356,13 +361,7 @@ func (d *Daemon) assign(ctx context.Context, projectPath, issue, prompt, agentPr
 	clone.CurrentBranch = assignmentBranch
 	clone.AssignedTask = issue
 
-	pane, err := d.amux.Spawn(ctx, SpawnRequest{
-		Session: d.session,
-		AtPane:  d.leadPane,
-		Name:    claimedWorker.WorkerID,
-		CWD:     clone.Path,
-		Command: profile.StartCommand,
-	})
+	pane, err := d.spawnWorkerPane(ctx, claimedTask, claimedWorker.WorkerID, clone.Path, profile)
 	if err != nil {
 		_ = d.cleanupCloneAndReleaseForProject(ctx, projectPath, clone, issue)
 		restoreWorkerClaim()
