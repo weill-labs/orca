@@ -60,7 +60,10 @@ func TestConfirmPromptDeliveryReturnsWaitIdleErrorOnRetry(t *testing.T) {
 	t.Parallel()
 
 	deps := newTestDeps(t)
-	deps.amux.waitContentResults = []error{amuxapi.ErrWaitContentTimeout}
+	deps.amux.waitContentResults = []error{
+		amuxapi.ErrWaitContentTimeout,
+		amuxapi.ErrWaitContentTimeout,
+	}
 	deps.amux.waitIdleErr = errors.New("idle failed")
 	d := deps.newDaemon(t)
 

@@ -31,6 +31,11 @@ func (d *Daemon) confirmPromptDelivery(ctx context.Context, paneID string, profi
 				return fmt.Errorf("retry prompt delivery: %w", err)
 			}
 			if err := d.amux.WaitIdle(ctx, paneID, defaultAgentHandshakeTimeout); err != nil {
+				if waitErr := d.amux.WaitContent(ctx, paneID, codexWorkingText, defaultAgentHandshakeTimeout); waitErr == nil {
+					return nil
+				} else if !errors.Is(waitErr, amuxapi.ErrWaitContentTimeout) {
+					return fmt.Errorf("wait for %q after retry idle failure: %w", codexWorkingText, waitErr)
+				}
 				return fmt.Errorf("wait for prompt retry idle: %w", err)
 			}
 			continue
