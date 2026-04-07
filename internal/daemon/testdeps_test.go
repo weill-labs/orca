@@ -110,6 +110,12 @@ func waitFor(t *testing.T, name string, condition func() bool) {
 	t.Fatalf("timed out waiting for %s", name)
 }
 
+func nextTestWorkerID(deps *testDeps) string {
+	deps.state.mu.Lock()
+	defer deps.state.mu.Unlock()
+	return nextFakeWorkerID(deps.state.workers, "/tmp/project")
+}
+
 type fakeClock struct {
 	mu  sync.Mutex
 	now time.Time

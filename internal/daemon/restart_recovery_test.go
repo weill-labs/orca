@@ -290,7 +290,7 @@ func seedRecoverableAssignment(t *testing.T, deps *testDeps, status, issue, pane
 	t.Helper()
 
 	now := deps.clock.Now()
-	workerID := nextFakeWorkerID(deps.state.workers, "/tmp/project")
+	workerID := nextTestWorkerID(deps)
 	deps.state.putTaskForTest(Task{
 		Project:      "/tmp/project",
 		Issue:        issue,
