@@ -587,6 +587,65 @@ func TestAppRunSpawnDefaultsSessionFromAMUXSessionEnv(t *testing.T) {
 	}
 }
 
+func TestAppRunAssignDefaultsCallerPaneFromAMUXPaneEnv(t *testing.T) {
+	repoRoot := newRepoRoot(t)
+	cwdPath := filepath.Join(repoRoot, "internal", "cli")
+	if err := os.MkdirAll(cwdPath, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", cwdPath, err)
+	}
+
+	t.Setenv("AMUX_PANE", "pane-13")
+
+	d := &fakeDaemon{
+		assignResult: daemon.TaskActionResult{
+			Project:   repoRoot,
+			Issue:     "LAB-932",
+			Status:    "queued",
+			Agent:     "codex",
+			UpdatedAt: time.Now().UTC(),
+		},
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	app := New(Options{
+		Daemon:  d,
+		State:   &fakeState{},
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		Version: "build-123",
+		Cwd: func() (string, error) {
+			return cwdPath, nil
+		},
+	})
+
+	if err := app.Run(context.Background(), []string{"assign", "LAB-932", "--prompt", "Replace lead pane with caller pane"}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if d.assignRequest == nil {
+		t.Fatal("expected assign to be called")
+	}
+	if got, want := d.assignRequest.CallerPane, "pane-13"; got != want {
+		t.Fatalf("assign caller pane = %q, want %q", got, want)
+	}
+	if stderr.String() != "" {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+}
+
+func TestHelpTextOmitsDeprecatedLeadPaneFromStartUsage(t *testing.T) {
+	t.Parallel()
+
+	usage, ok := HelpText([]string{"start", "--help"})
+	if !ok {
+		t.Fatal("HelpText(start --help) = not handled, want handled")
+	}
+	if strings.Contains(usage, "--lead-pane") {
+		t.Fatalf("start help unexpectedly mentions deprecated --lead-pane: %q", usage)
+	}
+}
+
 func TestAppRunParseErrors(t *testing.T) {
 	t.Parallel()
 

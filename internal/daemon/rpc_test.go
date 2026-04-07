@@ -98,6 +98,26 @@ func TestAssignTypesIncludeTitleField(t *testing.T) {
 	}
 }
 
+func TestAssignTypesIncludeCallerPaneField(t *testing.T) {
+	t.Parallel()
+
+	assignRequestField, ok := reflect.TypeOf(AssignRequest{}).FieldByName("CallerPane")
+	if !ok {
+		t.Fatal("AssignRequest missing CallerPane field")
+	}
+	if got, want := assignRequestField.Type.Kind(), reflect.String; got != want {
+		t.Fatalf("AssignRequest.CallerPane kind = %v, want %v", got, want)
+	}
+
+	assignRPCField, ok := reflect.TypeOf(assignRPCParams{}).FieldByName("CallerPane")
+	if !ok {
+		t.Fatal("assignRPCParams missing CallerPane field")
+	}
+	if got, want := assignRPCField.Tag.Get("json"), "caller_pane"; got != want {
+		t.Fatalf("assignRPCParams.CallerPane json tag = %q, want %q", got, want)
+	}
+}
+
 func TestResumeTypesIncludePromptField(t *testing.T) {
 	t.Parallel()
 
