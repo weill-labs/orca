@@ -64,6 +64,38 @@ func TestGitHubCLIClientAppliesMinimumIntervalBetweenCalls(t *testing.T) {
 	}
 }
 
+func TestDaemonGitHubForProjectCachesClientsPerProject(t *testing.T) {
+	t.Parallel()
+
+	commands := newFakeCommands()
+	globalClient := newGitHubCLIClient(gitHubCLIClientConfig{
+		project:     "",
+		commands:    commands,
+		sleep:       noSleep,
+		maxAttempts: 1,
+	})
+	d := &Daemon{
+		project:  "",
+		commands: commands,
+		github:   globalClient,
+	}
+
+	first := d.githubForProject("/tmp/project-a")
+	second := d.githubForProject("/tmp/project-a")
+	if first != second {
+		t.Fatal("githubForProject() returned different clients for the same project")
+	}
+
+	third := d.githubForProject("/tmp/project-b")
+	if first == third {
+		t.Fatal("githubForProject() reused a client for a different project")
+	}
+
+	if got := d.githubForProject(""); got != globalClient {
+		t.Fatal("githubForProject(\"\") did not reuse the daemon global client")
+	}
+}
+
 func TestGitHubCLIClientRetriesRateLimitedRequestsWithBackoff(t *testing.T) {
 	t.Parallel()
 

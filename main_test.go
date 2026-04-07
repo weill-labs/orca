@@ -191,6 +191,18 @@ func TestRunDaemonProcessAllowsMissingProjectForGlobalDaemon(t *testing.T) {
 	}
 }
 
+func TestRunDaemonProcessRejectsLegacyProjectFlag(t *testing.T) {
+	t.Parallel()
+
+	err := runDaemonProcess([]string{"--project", "/tmp/project", "--state-db", "/tmp/orca.db", "--pid-file", "/tmp/orca.pid"})
+	if err == nil {
+		t.Fatal("runDaemonProcess() error = nil, want parse error")
+	}
+	if !strings.Contains(err.Error(), "flag provided but not defined") {
+		t.Fatalf("runDaemonProcess() error = %v, want parse error for legacy --project", err)
+	}
+}
+
 func TestRunWithDepsCoversProcessSetupBranches(t *testing.T) {
 	t.Parallel()
 
