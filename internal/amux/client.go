@@ -22,6 +22,7 @@ type Client interface {
 	Spawn(ctx context.Context, req SpawnRequest) (Pane, error)
 	PaneExists(ctx context.Context, paneID string) (bool, error)
 	ListPanes(ctx context.Context) ([]Pane, error)
+	Metadata(ctx context.Context, paneID string) (map[string]string, error)
 	SendKeys(ctx context.Context, paneID string, keys ...string) error
 	Capture(ctx context.Context, paneID string) (string, error)
 	CapturePane(ctx context.Context, paneID string) (PaneCapture, error)
@@ -206,6 +207,15 @@ func (c *CLIClient) CaptureHistory(ctx context.Context, paneID string) (PaneCapt
 		return PaneCapture{}, err
 	}
 	return pane.toPaneCapture(), nil
+}
+
+// Metadata returns pane metadata as normalized key=value pairs.
+func (c *CLIClient) Metadata(ctx context.Context, paneID string) (map[string]string, error) {
+	output, err := c.run(ctx, c.session, "meta", "get", paneID)
+	if err != nil {
+		return nil, err
+	}
+	return parsePaneMetadata(string(output))
 }
 
 // PaneExists verifies whether a pane can still be resolved by stable pane ID.
@@ -463,6 +473,29 @@ func paneMissing(errInfo *captureCommandError) bool {
 func waitContentTimedOut(output []byte) bool {
 	message := strings.ToLower(strings.TrimSpace(string(output)))
 	return strings.Contains(message, "timeout waiting for")
+}
+
+func parsePaneMetadata(output string) (map[string]string, error) {
+	trimmed := strings.TrimSpace(output)
+	if trimmed == "" {
+		return map[string]string{}, nil
+	}
+
+	lines := strings.Split(trimmed, "\n")
+	metadata := make(map[string]string, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		key, value, ok := strings.Cut(line, "=")
+		if !ok || strings.TrimSpace(key) == "" {
+			return nil, fmt.Errorf("parse pane metadata row: %q", line)
+		}
+		metadata[key] = value
+	}
+	return metadata, nil
 }
 
 func parsePaneList(output string) ([]Pane, error) {

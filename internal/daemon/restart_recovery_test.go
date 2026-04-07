@@ -225,6 +225,45 @@ func TestDaemonStartReconcilesNonTerminalAssignments(t *testing.T) {
 	}
 }
 
+func TestDaemonStartReconcilesEscalatedWorkerHealthFromPaneMetadata(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	seedRecoverableAssignment(t, deps, TaskStatusActive, "LAB-850", "pane-1")
+	deps.amux.metadata = map[string]map[string]string{
+		"pane-1": {
+			"agent_profile": "codex",
+			"status":        "escalated",
+		},
+	}
+	deps.amux.capturePaneSequence("pane-1", []PaneCapture{{Content: []string{"still running"}}})
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	waitFor(t, "metadata reconciliation", func() bool {
+		worker, ok := deps.state.worker("pane-1")
+		return ok && worker.Health == WorkerHealthEscalated
+	})
+
+	worker, ok := deps.state.worker("pane-1")
+	if !ok {
+		t.Fatal("worker missing after startup reconciliation")
+	}
+	if got, want := worker.Health, WorkerHealthEscalated; got != want {
+		t.Fatalf("worker.Health = %q, want %q", got, want)
+	}
+	if got, want := deps.events.countType(EventWorkerEscalated), 0; got != want {
+		t.Fatalf("worker escalated events = %d, want %d", got, want)
+	}
+}
+
 func seedRecoverableAssignment(t *testing.T, deps *testDeps, status, issue, paneID string) {
 	t.Helper()
 

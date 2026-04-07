@@ -40,6 +40,7 @@ type fakeAmux struct {
 	captures              map[string][]string
 	paneCaptures          map[string][]PaneCapture
 	paneExistsCalls       []string
+	metadataCalls         []string
 	captureCalls          map[string]int
 	historyCaptures       map[string][]PaneCapture
 	historyCaptureCalls   map[string]int
@@ -121,6 +122,16 @@ func (a *fakeAmux) PaneExists(ctx context.Context, paneID string) (bool, error) 
 		}
 	}
 	return true, nil
+}
+
+func (a *fakeAmux) Metadata(ctx context.Context, paneID string) (map[string]string, error) {
+	if a.rejectCanceledContext && ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.metadataCalls = append(a.metadataCalls, paneID)
+	return copyMetadataMap(a.metadata[paneID]), nil
 }
 
 func (a *fakeAmux) SetMetadata(ctx context.Context, paneID string, metadata map[string]string) error {
@@ -499,6 +510,17 @@ func clonePaneCapture(capture PaneCapture) PaneCapture {
 		Exited:         capture.Exited,
 		ExitedSince:    capture.ExitedSince,
 	}
+}
+
+func copyMetadataMap(metadata map[string]string) map[string]string {
+	if len(metadata) == 0 {
+		return map[string]string{}
+	}
+	copied := make(map[string]string, len(metadata))
+	for key, value := range metadata {
+		copied[key] = value
+	}
+	return copied
 }
 
 func paneCaptureFromOutput(output string) PaneCapture {
