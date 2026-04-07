@@ -160,13 +160,7 @@ func (d *Daemon) resumeWithFreshPaneForProject(ctx context.Context, projectPath 
 		paneName = "worker-" + task.Issue
 	}
 
-	pane, err := d.amux.Spawn(ctx, SpawnRequest{
-		Session: d.session,
-		AtPane:  d.leadPane,
-		Name:    paneName,
-		CWD:     clonePath,
-		Command: profile.StartCommand,
-	})
+	pane, err := d.spawnWorkerPane(ctx, task, paneName, clonePath, profile)
 	if err != nil {
 		return fmt.Errorf("spawn pane: %w", err)
 	}

@@ -111,6 +111,7 @@ func TestSQLiteStateAdapterRoundTrip(t *testing.T) {
 		Project:      "/repo",
 		Issue:        "LAB-718",
 		Status:       TaskStatusActive,
+		CallerPane:   "pane-13",
 		PaneID:       "pane-1",
 		ClonePath:    "/clone",
 		AgentProfile: "codex",
@@ -126,6 +127,9 @@ func TestSQLiteStateAdapterRoundTrip(t *testing.T) {
 	}
 	if got, want := task.PRNumber, 17; got != want {
 		t.Fatalf("task.PRNumber = %d, want %d", got, want)
+	}
+	if got, want := task.CallerPane, "pane-13"; got != want {
+		t.Fatalf("task.CallerPane = %q, want %q", got, want)
 	}
 	if _, err := adapter.TaskByIssue(context.Background(), "/repo", "missing"); !errors.Is(err, ErrTaskNotFound) {
 		t.Fatalf("TaskByIssue() missing error = %v, want ErrTaskNotFound", err)

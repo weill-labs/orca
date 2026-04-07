@@ -146,7 +146,7 @@ func (d *Daemon) checkTaskReviewPoll(ctx context.Context, active ActiveAssignmen
 	if update.Active.Worker.ReviewNudgeCount >= maxReviewNudges {
 		d.persistReviewWorkerState(&update.Active.Worker, reviewCount, commentCount, now)
 		update.WorkerChanged = true
-		d.notifyLeadPaneReviewEscalation(ctx, update.Active, blockingReviewFeedback(payload.ReviewDecision, payload.Reviews, payload.Comments))
+		d.notifyCallerPaneReviewEscalation(ctx, update.Active, blockingReviewFeedback(payload.ReviewDecision, payload.Reviews, payload.Comments))
 
 		event := d.assignmentEvent(update.Active, profile, EventWorkerReviewEscalated, fmt.Sprintf("review nudges exhausted after %d attempts; lead intervention required", update.Active.Worker.ReviewNudgeCount))
 		event.Retry = update.Active.Worker.ReviewNudgeCount
@@ -299,13 +299,13 @@ func formatBlockingReviewFeedback(prNumber int, feedback []prFeedback) string {
 	return builder.String()
 }
 
-func (d *Daemon) notifyLeadPaneReviewEscalation(ctx context.Context, active ActiveAssignment, feedback []prFeedback) {
-	leadPane := strings.TrimSpace(d.leadPane)
-	if leadPane == "" || len(feedback) == 0 {
+func (d *Daemon) notifyCallerPaneReviewEscalation(ctx context.Context, active ActiveAssignment, feedback []prFeedback) {
+	targetPane := d.taskPaneTarget(active.Task)
+	if targetPane == "" || len(feedback) == 0 {
 		return
 	}
 
-	_ = d.amux.SendKeys(ctx, leadPane, formatLeadReviewEscalation(active, feedback), "Enter")
+	_ = d.amux.SendKeys(ctx, targetPane, formatLeadReviewEscalation(active, feedback), "Enter")
 }
 
 func formatLeadReviewEscalation(active ActiveAssignment, feedback []prFeedback) string {

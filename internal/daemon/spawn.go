@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/weill-labs/orca/internal/amux"
@@ -95,4 +96,21 @@ func (c *LocalController) spawnRuntime(projectPath, session string) (*pool.Manag
 		return nil, nil, fmt.Errorf("create pool manager: %w", err)
 	}
 	return manager, amuxClient, nil
+}
+
+func (d *Daemon) taskPaneTarget(task Task) string {
+	if callerPane := strings.TrimSpace(task.CallerPane); callerPane != "" {
+		return callerPane
+	}
+	return strings.TrimSpace(d.leadPane)
+}
+
+func (d *Daemon) spawnWorkerPane(ctx context.Context, task Task, paneName, clonePath string, profile AgentProfile) (Pane, error) {
+	return d.amux.Spawn(ctx, SpawnRequest{
+		Session: d.session,
+		AtPane:  d.taskPaneTarget(task),
+		Name:    paneName,
+		CWD:     clonePath,
+		Command: profile.StartCommand,
+	})
 }

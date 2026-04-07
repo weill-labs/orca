@@ -214,7 +214,7 @@ func TestPRReviewPollingEscalatesAfterThreeNudgesAndResetsAfterApprovalCycle(t *
 	})
 }
 
-func TestPRReviewPollingNotifiesLeadPaneWhenReviewNudgesAreExhausted(t *testing.T) {
+func TestPRReviewPollingNotifiesCallerPaneWhenReviewNudgesAreExhausted(t *testing.T) {
 	t.Parallel()
 
 	deps := newTestDeps(t)
@@ -243,7 +243,7 @@ func TestPRReviewPollingNotifiesLeadPaneWhenReviewNudgesAreExhausted(t *testing.
 	}, nil), nil)
 
 	d := deps.newDaemon(t)
-	d.leadPane = "lead-pane"
+	d.leadPane = "fallback-lead-pane"
 	ctx := context.Background()
 	if err := d.Start(ctx); err != nil {
 		t.Fatalf("Start() error = %v", err)
@@ -252,8 +252,8 @@ func TestPRReviewPollingNotifiesLeadPaneWhenReviewNudgesAreExhausted(t *testing.
 		_ = d.Stop(context.Background())
 	})
 
-	if err := d.Assign(ctx, "LAB-689", "Implement daemon core", "codex"); err != nil {
-		t.Fatalf("Assign() error = %v", err)
+	if err := d.AssignWithCallerPane(ctx, "LAB-689", "Implement daemon core", "codex", "caller-pane-13"); err != nil {
+		t.Fatalf("AssignWithCallerPane() error = %v", err)
 	}
 	makeWorkerIdleForReviewNudge(deps)
 
@@ -282,11 +282,11 @@ func TestPRReviewPollingNotifiesLeadPaneWhenReviewNudgesAreExhausted(t *testing.
 		worker, ok := deps.state.worker("pane-1")
 		return ok &&
 			worker.LastReviewCount == 4 &&
-			deps.amux.countKey("lead-pane", leadNotification) == 1 &&
+			deps.amux.countKey("caller-pane-13", leadNotification) == 1 &&
 			deps.events.countType(EventWorkerReviewEscalated) == 1
 	})
 
-	deps.amux.requireSentKeys(t, "lead-pane", []string{leadNotification})
+	deps.amux.requireSentKeys(t, "caller-pane-13", []string{leadNotification})
 }
 
 func TestPRReviewPollingDefersReviewNudgeUntilWorkerAppearsIdle(t *testing.T) {

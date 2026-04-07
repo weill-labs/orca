@@ -64,7 +64,7 @@ func (d *Daemon) Batch(ctx context.Context, req BatchRequest) (BatchResult, erro
 	}
 
 	for i, entry := range entries {
-		if err := d.assign(ctx, projectPath, entry.Issue, entry.Prompt, entry.Agent, entry.Title); err != nil {
+		if err := d.assign(ctx, projectPath, entry.Issue, entry.Prompt, entry.Agent, "", entry.Title); err != nil {
 			return BatchResult{}, fmt.Errorf("assign %s: %w", entry.Issue, err)
 		}
 

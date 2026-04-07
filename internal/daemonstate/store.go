@@ -66,6 +66,7 @@ type Task struct {
 	Status        string    `json:"status"`
 	Agent         string    `json:"agent"`
 	Prompt        string    `json:"prompt,omitempty"`
+	CallerPane    string    `json:"caller_pane,omitempty"`
 	WorkerID      string    `json:"worker_id,omitempty"`
 	CurrentPaneID string    `json:"current_pane_id,omitempty"`
 	ClonePath     string    `json:"clone_path,omitempty"`

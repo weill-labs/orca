@@ -434,11 +434,12 @@ func TestLocalControllerAssignAndBatchRPC(t *testing.T) {
 	}
 
 	assignResult, err := controller.Assign(context.Background(), AssignRequest{
-		Project: projectPath,
-		Issue:   "  LAB-718  ",
-		Prompt:  "Implement controller assign.",
-		Agent:   "  claude  ",
-		Title:   "  Assign title  ",
+		Project:    projectPath,
+		Issue:      "  LAB-718  ",
+		Prompt:     "Implement controller assign.",
+		Agent:      "  claude  ",
+		CallerPane: "  pane-13  ",
+		Title:      "  Assign title  ",
 	})
 	if err != nil {
 		t.Fatalf("Assign() error = %v", err)
@@ -467,7 +468,14 @@ func TestLocalControllerAssignAndBatchRPC(t *testing.T) {
 	if err := json.Unmarshal(assignReq.Params, &assignParams); err != nil {
 		t.Fatalf("json.Unmarshal(assign params) error = %v", err)
 	}
-	if got, want := assignParams, (assignRPCParams{Project: projectPath, Issue: "LAB-718", Prompt: "Implement controller assign.", Agent: "claude", Title: "Assign title"}); !reflect.DeepEqual(got, want) {
+	if got, want := assignParams, (assignRPCParams{
+		Project:    projectPath,
+		Issue:      "LAB-718",
+		Prompt:     "Implement controller assign.",
+		Agent:      "claude",
+		CallerPane: "pane-13",
+		Title:      "Assign title",
+	}); !reflect.DeepEqual(got, want) {
 		t.Fatalf("assign params = %#v, want %#v", got, want)
 	}
 
