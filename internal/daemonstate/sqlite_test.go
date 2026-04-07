@@ -219,6 +219,130 @@ func TestSQLiteStoreLifecycleAndQueries(t *testing.T) {
 	}
 }
 
+func TestSQLiteStoreMigratesPaneKeyedWorkersToStableWorkerIDs(t *testing.T) {
+	t.Parallel()
+
+	project := "/repo"
+	dbPath := filepath.Join(t.TempDir(), "state.db")
+
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("sql.Open() error = %v", err)
+	}
+
+	legacyUpdatedAt := formatTime(time.Date(2026, 4, 2, 10, 0, 0, 0, time.UTC))
+	legacyCreatedAt := formatTime(time.Date(2026, 4, 2, 10, 5, 0, 0, time.UTC))
+	statements := []string{
+		`CREATE TABLE tasks (
+			project TEXT NOT NULL,
+			issue TEXT NOT NULL,
+			status TEXT NOT NULL,
+			agent TEXT NOT NULL,
+			prompt TEXT NOT NULL DEFAULT '',
+			worker_id TEXT NOT NULL DEFAULT '',
+			clone_path TEXT NOT NULL DEFAULT '',
+			pr_number INTEGER,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			PRIMARY KEY (project, issue)
+		)`,
+		`CREATE TABLE workers (
+			project TEXT NOT NULL,
+			pane_id TEXT NOT NULL,
+			agent TEXT NOT NULL,
+			state TEXT NOT NULL,
+			issue TEXT NOT NULL DEFAULT '',
+			clone_path TEXT NOT NULL DEFAULT '',
+			updated_at TEXT NOT NULL,
+			PRIMARY KEY (project, pane_id)
+		)`,
+		`CREATE TABLE events (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			project TEXT NOT NULL,
+			kind TEXT NOT NULL,
+			issue TEXT NOT NULL DEFAULT '',
+			message TEXT NOT NULL,
+			payload TEXT,
+			created_at TEXT NOT NULL
+		)`,
+	}
+	for _, statement := range statements {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatalf("db.Exec(%q) error = %v", statement, err)
+		}
+	}
+
+	if _, err := db.Exec(`
+		INSERT INTO tasks(project, issue, status, agent, prompt, worker_id, clone_path, created_at, updated_at)
+		VALUES(?, ?, 'active', 'codex', 'Implement worker identity', 'pane-9', '/tmp/clone-01', ?, ?)
+	`, project, "LAB-894", legacyCreatedAt, legacyUpdatedAt); err != nil {
+		t.Fatalf("insert task error = %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO workers(project, pane_id, agent, state, issue, clone_path, updated_at)
+		VALUES(?, 'pane-9', 'codex', 'healthy', 'LAB-894', '/tmp/clone-01', ?)
+	`, project, legacyUpdatedAt); err != nil {
+		t.Fatalf("insert worker error = %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO events(project, kind, issue, message, payload, created_at)
+		VALUES(?, 'task.assigned', 'LAB-894', 'assigned', '{"type":"task.assigned","issue":"LAB-894","pane_id":"pane-9"}', ?)
+	`, project, legacyCreatedAt); err != nil {
+		t.Fatalf("insert event error = %v", err)
+	}
+
+	if err := db.Close(); err != nil {
+		t.Fatalf("db.Close() error = %v", err)
+	}
+
+	store, err := OpenSQLite(dbPath)
+	if err != nil {
+		t.Fatalf("OpenSQLite() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	})
+
+	workers, err := store.ListWorkers(context.Background(), project)
+	if err != nil {
+		t.Fatalf("ListWorkers() error = %v", err)
+	}
+	if got, want := len(workers), 1; got != want {
+		t.Fatalf("len(workers) = %d, want %d", got, want)
+	}
+	if got, want := workers[0].WorkerID, "worker-01"; got != want {
+		t.Fatalf("workers[0].WorkerID = %q, want %q", got, want)
+	}
+	if got, want := workers[0].CurrentPaneID, "pane-9"; got != want {
+		t.Fatalf("workers[0].CurrentPaneID = %q, want %q", got, want)
+	}
+	if got, want := workers[0].CreatedAt, parseTime(legacyUpdatedAt); !got.Equal(want) {
+		t.Fatalf("workers[0].CreatedAt = %v, want %v", got, want)
+	}
+	if got, want := workers[0].LastSeenAt, parseTime(legacyUpdatedAt); !got.Equal(want) {
+		t.Fatalf("workers[0].LastSeenAt = %v, want %v", got, want)
+	}
+
+	taskStatus, err := store.TaskStatus(context.Background(), project, "LAB-894")
+	if err != nil {
+		t.Fatalf("TaskStatus() error = %v", err)
+	}
+	if got, want := taskStatus.Task.WorkerID, "worker-01"; got != want {
+		t.Fatalf("taskStatus.Task.WorkerID = %q, want %q", got, want)
+	}
+	if got, want := taskStatus.Task.CurrentPaneID, "pane-9"; got != want {
+		t.Fatalf("taskStatus.Task.CurrentPaneID = %q, want %q", got, want)
+	}
+	if got, want := len(taskStatus.Events), 1; got != want {
+		t.Fatalf("len(taskStatus.Events) = %d, want %d", got, want)
+	}
+	if got, want := taskStatus.Events[0].WorkerID, "worker-01"; got != want {
+		t.Fatalf("taskStatus.Events[0].WorkerID = %q, want %q", got, want)
+	}
+}
+
 func TestSQLiteStoreNotFoundAndHelpers(t *testing.T) {
 	t.Parallel()
 

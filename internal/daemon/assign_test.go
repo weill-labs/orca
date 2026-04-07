@@ -46,6 +46,119 @@ func TestAssignEnforcesCodexYoloFlag(t *testing.T) {
 	}
 }
 
+func TestAssignCreatesStableWorkerIdentityAndCloneGitIdentity(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-894", "Implement stable workers", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	waitFor(t, "task registration", func() bool {
+		task, ok := deps.state.task("LAB-894")
+		return ok && task.Status == TaskStatusActive
+	})
+
+	task, ok := deps.state.task("LAB-894")
+	if !ok {
+		t.Fatal("task not stored in state")
+	}
+	if got, want := task.WorkerID, "worker-01"; got != want {
+		t.Fatalf("task.WorkerID = %q, want %q", got, want)
+	}
+	if got, want := task.PaneID, "pane-1"; got != want {
+		t.Fatalf("task.PaneID = %q, want %q", got, want)
+	}
+
+	worker, ok := deps.state.worker("worker-01")
+	if !ok {
+		t.Fatal("worker not stored in state")
+	}
+	if got, want := worker.WorkerID, "worker-01"; got != want {
+		t.Fatalf("worker.WorkerID = %q, want %q", got, want)
+	}
+	if got, want := worker.PaneID, "pane-1"; got != want {
+		t.Fatalf("worker.PaneID = %q, want %q", got, want)
+	}
+
+	if got, want := len(deps.amux.spawnRequests), 1; got != want {
+		t.Fatalf("len(spawnRequests) = %d, want %d", got, want)
+	}
+	if got, want := deps.amux.spawnRequests[0].Name, "worker-01"; got != want {
+		t.Fatalf("spawn.Name = %q, want %q", got, want)
+	}
+
+	wantGit := []commandCall{
+		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"checkout", "main"}},
+		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"pull"}},
+		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"config", "user.name", "Orca worker-01"}},
+		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"config", "user.email", "worker-01@orca.local"}},
+		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"checkout", "-B", "LAB-894"}},
+	}
+	if got := deps.commands.callsByName("git"); !reflect.DeepEqual(got, wantGit) {
+		t.Fatalf("git calls = %#v, want %#v", got, wantGit)
+	}
+}
+
+func TestAssignReusesIdleWorkerIdentity(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	if err := deps.state.PutWorker(context.Background(), Worker{
+		Project:      "/tmp/project",
+		WorkerID:     "worker-01",
+		PaneName:     "worker-01",
+		AgentProfile: "codex",
+		Health:       WorkerHealthHealthy,
+		CreatedAt:    deps.clock.Now().Add(-time.Hour),
+		LastSeenAt:   deps.clock.Now().Add(-time.Minute),
+	}); err != nil {
+		t.Fatalf("PutWorker() error = %v", err)
+	}
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-895", "Reuse stable workers", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	waitFor(t, "task registration", func() bool {
+		task, ok := deps.state.task("LAB-895")
+		return ok && task.Status == TaskStatusActive
+	})
+
+	task, ok := deps.state.task("LAB-895")
+	if !ok {
+		t.Fatal("task not stored in state")
+	}
+	if got, want := task.WorkerID, "worker-01"; got != want {
+		t.Fatalf("task.WorkerID = %q, want %q", got, want)
+	}
+	if got, want := deps.amux.spawnRequests[0].Name, "worker-01"; got != want {
+		t.Fatalf("spawn.Name = %q, want %q", got, want)
+	}
+}
+
 func TestAssignResolvesPaneTitle(t *testing.T) {
 	t.Parallel()
 
