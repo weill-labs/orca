@@ -388,6 +388,98 @@ func TestAppRunDispatchesCommands(t *testing.T) {
 	}
 }
 
+func TestAppRunStatusDaemonVersionAnnotation(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		installedCommit string
+		daemonCommit    string
+		rpcErr          error
+		wantLine        string
+		wantNotContains string
+	}{
+		{
+			name:            "different commits show warning",
+			installedCommit: "def5678",
+			daemonCommit:    "abc1234",
+			wantLine:        "daemon: running (version abc1234, installed def5678 — restart recommended)\n",
+		},
+		{
+			name:            "matching commits omit warning",
+			installedCommit: "abc1234",
+			daemonCommit:    "abc1234",
+			wantLine:        "daemon: running\n",
+			wantNotContains: "restart recommended",
+		},
+		{
+			name:            "rpc failure falls back to plain running status",
+			installedCommit: "def5678",
+			rpcErr:          errors.New("daemon unavailable"),
+			wantLine:        "daemon: running\n",
+			wantNotContains: "restart recommended",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			projectPath := t.TempDir()
+			if err := os.Mkdir(filepath.Join(projectPath, ".git"), 0o755); err != nil {
+				t.Fatalf("Mkdir(.git) error = %v", err)
+			}
+
+			projectStatus := state.ProjectStatus{
+				Project: projectPath,
+				Daemon: &state.DaemonStatus{
+					Status:  "running",
+					Session: "alpha",
+					PID:     42,
+				},
+			}
+
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			app := New(Options{
+				Daemon: &fakeDaemon{},
+				State: &fakeState{
+					projectStatus: projectStatus,
+				},
+				Stdout:  &stdout,
+				Stderr:  &stderr,
+				Version: tt.installedCommit,
+				Cwd: func() (string, error) {
+					return projectPath, nil
+				},
+				ProjectStatusRPC: func(context.Context, string) (daemon.ProjectStatusRPCResult, error) {
+					if tt.rpcErr != nil {
+						return daemon.ProjectStatusRPCResult{}, tt.rpcErr
+					}
+					return daemon.ProjectStatusRPCResult{
+						ProjectStatus: projectStatus,
+						BuildCommit:   tt.daemonCommit,
+					}, nil
+				},
+			})
+
+			if err := app.Run(context.Background(), []string{"status"}); err != nil {
+				t.Fatalf("Run(status) error = %v", err)
+			}
+			if got := stdout.String(); !strings.Contains(got, tt.wantLine) {
+				t.Fatalf("stdout = %q, want substring %q", got, tt.wantLine)
+			}
+			if tt.wantNotContains != "" && strings.Contains(stdout.String(), tt.wantNotContains) {
+				t.Fatalf("stdout = %q, want no substring %q", stdout.String(), tt.wantNotContains)
+			}
+			if stderr.Len() != 0 {
+				t.Fatalf("stderr = %q, want empty", stderr.String())
+			}
+		})
+	}
+}
+
 func TestAppRunAssignRejectsRemovedTitleFlag(t *testing.T) {
 	t.Parallel()
 
@@ -1128,7 +1220,7 @@ func TestWriteProjectStatusAndTaskStatus(t *testing.T) {
 							UpdatedAt: now,
 						},
 					},
-				})
+				}, "", "")
 			},
 			wants: []string{
 				"project: repo",
@@ -1145,7 +1237,7 @@ func TestWriteProjectStatusAndTaskStatus(t *testing.T) {
 			write: func(buf *bytes.Buffer) error {
 				return writeProjectStatus(buf, state.ProjectStatus{
 					Project: "repo",
-				})
+				}, "", "")
 			},
 			wants: []string{
 				"project: repo",
@@ -1164,7 +1256,7 @@ func TestWriteProjectStatusAndTaskStatus(t *testing.T) {
 					Tasks: []state.Task{
 						{Issue: "LAB-805"},
 					},
-				})
+				}, "", "")
 			},
 			wants: []string{
 				"project: repo",

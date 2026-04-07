@@ -14,8 +14,10 @@ import (
 	state "github.com/weill-labs/orca/internal/daemonstate"
 )
 
-// BuildCommit is set by goreleaser at build time.
+// BuildCommit is set at build time.
 var BuildCommit string
+
+var runDaemonServe = daemon.RunProcess
 
 type stateStore interface {
 	state.Store
@@ -80,6 +82,10 @@ func runWithDeps(args []string, stdout, stderr io.Writer, deps runDependencies) 
 	if args[0] == "version" {
 		fmt.Fprintf(stdout, "orca %s\n", resolvedBuildCommit())
 		return 0
+	}
+	if args[0] == "help" {
+		fmt.Fprintln(stderr, fmt.Errorf("unknown help topic %q", args[1]))
+		return 1
 	}
 
 	if args[0] == "help" {
@@ -154,11 +160,12 @@ func runDaemonProcess(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	return daemon.RunProcess(ctx, daemon.ServeRequest{
-		Session:  session,
-		LeadPane: leadPane,
-		StateDB:  stateDB,
-		PIDFile:  pidFile,
+	return runDaemonServe(ctx, daemon.ServeRequest{
+		Session:     session,
+		LeadPane:    leadPane,
+		StateDB:     stateDB,
+		PIDFile:     pidFile,
+		BuildCommit: resolvedBuildCommit(),
 	})
 }
 
