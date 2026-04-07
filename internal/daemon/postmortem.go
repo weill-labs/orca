@@ -91,6 +91,7 @@ func (d *Daemon) finishAssignment(ctx context.Context, active ActiveAssignment, 
 
 func (d *Daemon) finishAssignmentWithMessage(ctx context.Context, active ActiveAssignment, status, eventType string, merged bool, message string) error {
 	var result error
+	cancelled := status == TaskStatusCancelled
 	cleanupCtx := context.WithoutCancel(ctx)
 	d.stopTaskMonitor(active.Task.Issue)
 
@@ -104,19 +105,19 @@ func (d *Daemon) finishAssignmentWithMessage(ctx context.Context, active ActiveA
 	}
 
 	if status != TaskStatusFailed {
-		result = errors.Join(result, ignoreCancelMissingPaneError(status, d.ensurePostmortem(cleanupCtx, active)))
+		result = errors.Join(result, ignoreCancelledPaneError(cancelled, d.ensurePostmortem(cleanupCtx, active)))
 		if active.Task.PaneID != "" {
 			metadata, err := d.completionPaneMetadata(cleanupCtx, active, merged)
 			if err != nil {
 				result = errors.Join(result, err)
 			} else {
-				result = errors.Join(result, ignoreCancelMissingPaneError(status, d.setPaneMetadata(cleanupCtx, active.Task.PaneID, metadata)))
+				result = errors.Join(result, ignoreCancelledPaneError(cancelled, d.setPaneMetadata(cleanupCtx, active.Task.PaneID, metadata)))
 			}
 		}
 	}
 
-	if status == TaskStatusCancelled {
-		if err := ignoreCancelMissingPaneError(status, d.amux.KillPane(cleanupCtx, active.Task.PaneID)); err != nil {
+	if cancelled {
+		if err := ignoreCancelledPaneError(cancelled, d.amux.KillPane(cleanupCtx, active.Task.PaneID)); err != nil {
 			result = errors.Join(result, err)
 		}
 	}
@@ -180,8 +181,8 @@ func paneAlreadyGone(err error) bool {
 	return strings.Contains(message, "pane") && (strings.Contains(message, "not found") || strings.Contains(message, "missing") || strings.Contains(message, "no such"))
 }
 
-func ignoreCancelMissingPaneError(status string, err error) error {
-	if status == TaskStatusCancelled && paneAlreadyGone(err) {
+func ignoreCancelledPaneError(cancelled bool, err error) error {
+	if cancelled && paneAlreadyGone(err) {
 		return nil
 	}
 	return err
