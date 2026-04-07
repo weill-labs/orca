@@ -43,7 +43,7 @@ commands:
 
 // Keep these summaries aligned with the per-command FlagSet definitions below.
 var commandUsage = map[string]string{
-	"start": `usage: orca start [--session SESSION] [--project PATH] [--lead-pane PANE] [--global] [--json]
+	"start": `usage: orca start [--session SESSION] [--project PATH] [--global] [--json]
 
 Start the orca daemon.`,
 	"stop": `usage: orca stop [--project PATH] [--force] [--global] [--json]
