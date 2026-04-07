@@ -2,7 +2,14 @@ package daemon
 
 import (
 	"context"
-	"sync/atomic"
+	"time"
+)
+
+type monitorTickKind int
+
+const (
+	monitorTickCapture monitorTickKind = iota
+	monitorTickPoll
 )
 
 func (d *Daemon) runLoop(ctx context.Context, done chan struct{}) {
@@ -14,40 +21,68 @@ func (d *Daemon) runLoop(ctx context.Context, done chan struct{}) {
 	defer captureTick.Stop()
 	pollTick := d.newTicker(d.pollInterval)
 	defer pollTick.Stop()
+	captureTickCh := captureTick.C()
+	pollTickCh := pollTick.C()
+	monitorDone := make(chan monitorTickKind, 2)
+	captureInFlight := false
+	pollInFlight := false
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case kind := <-monitorDone:
+			switch kind {
+			case monitorTickCapture:
+				drainMonitorTicks(captureTickCh)
+				captureInFlight = false
+			case monitorTickPoll:
+				drainMonitorTicks(pollTickCh)
+				pollInFlight = false
+			}
 		case update := <-d.mergeQueueUpdates:
 			d.applyMergeQueueUpdate(ctx, update)
-		case <-captureTick.C():
-			d.startMonitorRun(&d.captureTickRun, func() {
+		case <-captureTickCh:
+			if captureInFlight {
+				continue
+			}
+			captureInFlight = true
+			d.startMonitorTick(monitorDone, monitorTickCapture, func() {
 				d.runCaptureTick(ctx)
 			})
-		case <-pollTick.C():
-			d.startMonitorRun(&d.pollTickRun, func() {
+		case <-pollTickCh:
+			if pollInFlight {
+				continue
+			}
+			pollInFlight = true
+			d.startMonitorTick(monitorDone, monitorTickPoll, func() {
 				d.runPollTick(ctx)
 			})
 		}
 	}
 }
 
-func (d *Daemon) startMonitorRun(inFlight *atomic.Bool, run func()) {
-	if !inFlight.CompareAndSwap(false, true) {
-		return
-	}
-
+func (d *Daemon) startMonitorTick(done chan<- monitorTickKind, kind monitorTickKind, run func()) {
 	d.monitorRuns.Add(1)
 	go func() {
 		defer d.monitorRuns.Done()
-		defer inFlight.Store(false)
 		run()
+		done <- kind
 	}()
 }
 
 func (d *Daemon) waitForMonitorRuns() {
 	d.monitorRuns.Wait()
+}
+
+func drainMonitorTicks(tickCh <-chan time.Time) {
+	for {
+		select {
+		case <-tickCh:
+		default:
+			return
+		}
+	}
 }
 
 func (d *Daemon) runCaptureTick(ctx context.Context) {
