@@ -183,7 +183,7 @@ func TestHandleRPCConnAndDispatchStatusBranches(t *testing.T) {
 
 	client, server := net.Pipe()
 	defer client.Close()
-	go handleRPCConn(context.Background(), server, nil, nil, "/repo")
+	go handleRPCConn(context.Background(), server, nil, nil, "/repo", "")
 
 	if _, err := client.Write([]byte("not-json\n")); err != nil {
 		t.Fatalf("Write() error = %v", err)
@@ -310,7 +310,7 @@ func TestHandleRPCConnSetsReadDeadline(t *testing.T) {
 
 	conn := &deadlineConn{}
 	start := time.Now()
-	handleRPCConn(context.Background(), conn, nil, nil, "/repo")
+	handleRPCConn(context.Background(), conn, nil, nil, "/repo", "")
 
 	if conn.readDeadline.IsZero() {
 		t.Fatal("read deadline was not set")

@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	state "github.com/weill-labs/orca/internal/daemonstate"
 )
 
 const jsonRPCVersion = "2.0"
@@ -72,6 +74,11 @@ type enqueueRPCParams struct {
 type statusRPCParams struct {
 	Project string `json:"project"`
 	Issue   string `json:"issue,omitempty"`
+}
+
+type ProjectStatusRPCResult struct {
+	state.ProjectStatus
+	BuildCommit string `json:"build_commit,omitempty"`
 }
 
 func socketFile(configDir string) string {
@@ -139,6 +146,14 @@ func callRPC(ctx context.Context, socketPath, method string, params any, result 
 	}
 
 	return nil
+}
+
+func ProjectStatusRPC(ctx context.Context, paths Paths, projectPath string) (ProjectStatusRPCResult, error) {
+	var result ProjectStatusRPCResult
+	if err := callRPC(ctx, paths.socketFile(), "status", statusRPCParams{Project: projectPath}, &result); err != nil {
+		return ProjectStatusRPCResult{}, err
+	}
+	return result, nil
 }
 
 func rpcSuccess(id json.RawMessage, result any) rpcResponse {

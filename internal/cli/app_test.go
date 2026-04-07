@@ -392,6 +392,9 @@ func TestAppRunStatusWarnsWhenDaemonBinaryDiffers(t *testing.T) {
 	t.Parallel()
 
 	projectPath := t.TempDir()
+	if err := os.Mkdir(filepath.Join(projectPath, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
@@ -1121,7 +1124,7 @@ func TestWriteProjectStatusAndTaskStatus(t *testing.T) {
 							UpdatedAt: now,
 						},
 					},
-				})
+				}, "", "")
 			},
 			wants: []string{
 				"project: repo",
@@ -1138,7 +1141,7 @@ func TestWriteProjectStatusAndTaskStatus(t *testing.T) {
 			write: func(buf *bytes.Buffer) error {
 				return writeProjectStatus(buf, state.ProjectStatus{
 					Project: "repo",
-				})
+				}, "", "")
 			},
 			wants: []string{
 				"project: repo",
@@ -1157,7 +1160,7 @@ func TestWriteProjectStatusAndTaskStatus(t *testing.T) {
 					Tasks: []state.Task{
 						{Issue: "LAB-805"},
 					},
-				})
+				}, "", "")
 			},
 			wants: []string{
 				"project: repo",

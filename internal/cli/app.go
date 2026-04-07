@@ -89,20 +89,22 @@ Print version.`,
 var errInvalidOptions = errors.New("cli: invalid options")
 
 type Options struct {
-	Daemon  daemon.Controller
-	State   state.Reader
-	Stdout  io.Writer
-	Stderr  io.Writer
-	Version string
-	Cwd     func() (string, error)
+	Daemon           daemon.Controller
+	State            state.Reader
+	Stdout           io.Writer
+	Stderr           io.Writer
+	Version          string
+	Cwd              func() (string, error)
+	ProjectStatusRPC func(context.Context, string) (daemon.ProjectStatusRPCResult, error)
 }
 
 type App struct {
-	daemon  daemon.Controller
-	state   state.Reader
-	stdout  io.Writer
-	version string
-	cwd     func() (string, error)
+	daemon           daemon.Controller
+	state            state.Reader
+	stdout           io.Writer
+	version          string
+	cwd              func() (string, error)
+	projectStatusRPC func(context.Context, string) (daemon.ProjectStatusRPCResult, error)
 }
 
 func UsageText() string {
@@ -157,12 +159,24 @@ func New(options Options) *App {
 		version = "dev"
 	}
 
+	projectStatusRPC := options.ProjectStatusRPC
+	if projectStatusRPC == nil {
+		projectStatusRPC = func(ctx context.Context, projectPath string) (daemon.ProjectStatusRPCResult, error) {
+			paths, err := daemon.ResolvePaths()
+			if err != nil {
+				return daemon.ProjectStatusRPCResult{}, err
+			}
+			return daemon.ProjectStatusRPC(ctx, paths, projectPath)
+		}
+	}
+
 	return &App{
-		daemon:  options.Daemon,
-		state:   options.State,
-		stdout:  options.Stdout,
-		version: version,
-		cwd:     options.Cwd,
+		daemon:           options.Daemon,
+		state:            options.State,
+		stdout:           options.Stdout,
+		version:          version,
+		cwd:              options.Cwd,
+		projectStatusRPC: projectStatusRPC,
 	}
 }
 
@@ -336,14 +350,14 @@ func (a *App) runStatus(ctx context.Context, args []string) error {
 	}
 
 	if issue == "" {
-		status, err := a.state.ProjectStatus(ctx, projectPath)
+		status, daemonBuildCommit, err := a.projectStatus(ctx, projectPath)
 		if err != nil {
 			return err
 		}
 		if jsonOutput {
 			return writeJSON(a.stdout, status)
 		}
-		return writeProjectStatus(a.stdout, status)
+		return writeProjectStatus(a.stdout, status, daemonBuildCommit, a.version)
 	}
 
 	taskStatus, err := a.state.TaskStatus(ctx, projectPath, issue)
@@ -801,10 +815,31 @@ func writeJSON(w io.Writer, value any) error {
 	return encoder.Encode(value)
 }
 
-func writeProjectStatus(w io.Writer, status state.ProjectStatus) error {
+func (a *App) projectStatus(ctx context.Context, projectPath string) (state.ProjectStatus, string, error) {
+	status, err := a.state.ProjectStatus(ctx, projectPath)
+	if err != nil {
+		return state.ProjectStatus{}, "", err
+	}
+	if status.Daemon == nil || status.Daemon.Status != "running" {
+		return status, "", nil
+	}
+
+	rpcStatus, err := a.projectStatusRPC(ctx, projectPath)
+	if err != nil {
+		return status, "", nil
+	}
+	return rpcStatus.ProjectStatus, strings.TrimSpace(rpcStatus.BuildCommit), nil
+}
+
+func writeProjectStatus(w io.Writer, status state.ProjectStatus, daemonBuildCommit, installedBuildCommit string) error {
 	daemonState := "stopped"
 	if status.Daemon != nil && status.Daemon.Status != "" {
 		daemonState = status.Daemon.Status
+	}
+	daemonBuildCommit = strings.TrimSpace(daemonBuildCommit)
+	installedBuildCommit = strings.TrimSpace(installedBuildCommit)
+	if daemonState == "running" && daemonBuildCommit != "" && installedBuildCommit != "" && daemonBuildCommit != installedBuildCommit {
+		daemonState = fmt.Sprintf("%s (version %s, installed %s — restart recommended)", daemonState, daemonBuildCommit, installedBuildCommit)
 	}
 
 	if _, err := fmt.Fprintf(w, "project: %s\n", status.Project); err != nil {

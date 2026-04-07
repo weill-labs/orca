@@ -21,10 +21,11 @@ import (
 const orcaPoolSubdir = ".orca/pool"
 
 type ServeRequest struct {
-	Session  string
-	LeadPane string
-	StateDB  string
-	PIDFile  string
+	Session     string
+	LeadPane    string
+	StateDB     string
+	PIDFile     string
+	BuildCommit string
 }
 
 type serveDeps struct {
@@ -121,7 +122,7 @@ func runProcess(ctx context.Context, req ServeRequest, deps serveDeps) error {
 
 	serverErrCh := make(chan error, 1)
 	go func() {
-		serverErrCh <- serveRPC(ctx, listener, instance, store)
+		serverErrCh <- serveRPC(ctx, listener, instance, store, req.BuildCommit)
 	}()
 
 	var serverErr error
@@ -160,7 +161,7 @@ func listenUnixSocket(socketPath string) (net.Listener, error) {
 	return listener, nil
 }
 
-func serveRPC(ctx context.Context, listener net.Listener, instance *Daemon, store *state.SQLiteStore) error {
+func serveRPC(ctx context.Context, listener net.Listener, instance *Daemon, store *state.SQLiteStore, buildCommit string) error {
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
@@ -170,11 +171,11 @@ func serveRPC(ctx context.Context, listener net.Listener, instance *Daemon, stor
 			return fmt.Errorf("accept daemon socket connection: %w", err)
 		}
 
-		go handleRPCConn(ctx, conn, instance, store)
+		go handleRPCConn(ctx, conn, instance, store, buildCommit)
 	}
 }
 
-func handleRPCConn(ctx context.Context, conn net.Conn, instance *Daemon, store *state.SQLiteStore, defaultProject ...string) {
+func handleRPCConn(ctx context.Context, conn net.Conn, instance *Daemon, store *state.SQLiteStore, buildCommit string, defaultProject ...string) {
 	defer conn.Close()
 	if err := conn.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
 		_ = json.NewEncoder(conn).Encode(rpcFailure(nil, -32000, fmt.Errorf("set read deadline: %w", err)))
@@ -187,11 +188,11 @@ func handleRPCConn(ctx context.Context, conn net.Conn, instance *Daemon, store *
 		return
 	}
 
-	response := dispatchRPCRequest(ctx, request, instance, store, defaultProject...)
+	response := dispatchRPCRequest(ctx, request, instance, store, buildCommit, defaultProject...)
 	_ = json.NewEncoder(conn).Encode(response)
 }
 
-func dispatchRPCRequest(ctx context.Context, request rpcRequest, instance *Daemon, store *state.SQLiteStore, defaultProject ...string) rpcResponse {
+func dispatchRPCRequest(ctx context.Context, request rpcRequest, instance *Daemon, store *state.SQLiteStore, buildCommit string, defaultProject ...string) rpcResponse {
 	switch request.Method {
 	case "assign":
 		var params assignRPCParams
@@ -304,7 +305,10 @@ func dispatchRPCRequest(ctx context.Context, request rpcRequest, instance *Daemo
 			if err != nil {
 				return rpcFailure(request.ID, -32000, err)
 			}
-			return rpcSuccess(request.ID, status)
+			return rpcSuccess(request.ID, ProjectStatusRPCResult{
+				ProjectStatus: status,
+				BuildCommit:   buildCommit,
+			})
 		}
 
 		status, err := store.TaskStatus(ctx, projectPath, params.Issue)

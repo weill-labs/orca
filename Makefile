@@ -1,11 +1,14 @@
 .PHONY: setup install vet test test-race test-flakes bench coverage release-dry-run verify
 
+BUILD_COMMIT ?= $(shell git rev-parse --short=7 HEAD)
+GO_LDFLAGS := -ldflags "-X main.BuildCommit=$(BUILD_COMMIT)"
+
 setup: ## Configure git hooks and install tools
 	git config core.hooksPath .githooks
 	@echo "Hooks activated from .githooks/"
 
 install: ## Install orca
-	go build -trimpath -o ~/.local/bin/orca .
+	go build -trimpath $(GO_LDFLAGS) -o ~/.local/bin/orca .
 
 vet: ## Run go vet
 	go vet ./...
