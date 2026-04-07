@@ -180,11 +180,25 @@ func TestBatchRejectsNegativeDelay(t *testing.T) {
 	}
 }
 
-func TestBatchPropagatesAssignError(t *testing.T) {
+func TestBatchContinuesAfterAssignErrorAndLogsFailure(t *testing.T) {
 	t.Parallel()
 
 	deps := newTestDeps(t)
 	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+
+	cloneTwoPath := filepath.Join(filepath.Dir(deps.pool.clone.Path), "clone-02")
+	if err := os.MkdirAll(cloneTwoPath, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", cloneTwoPath, err)
+	}
+	deps.pool.clones = []Clone{
+		deps.pool.clone,
+		{Name: "clone-02", Path: cloneTwoPath},
+	}
+	deps.amux.spawnResults = []Pane{
+		{ID: "pane-1", Name: "worker-1"},
+		{ID: "pane-2", Name: "worker-2"},
+	}
+
 	d := deps.newDaemon(t)
 	ctx := context.Background()
 
@@ -195,11 +209,36 @@ func TestBatchPropagatesAssignError(t *testing.T) {
 		_ = d.Stop(context.Background())
 	})
 
-	_, err := d.Batch(ctx, BatchRequest{
-		Entries: []BatchEntry{{Issue: "LAB-689", Agent: "missing", Prompt: "Implement daemon core"}},
+	result, err := d.Batch(ctx, BatchRequest{
+		Entries: []BatchEntry{
+			{Issue: "LAB-689", Agent: "codex", Prompt: "Implement daemon core"},
+			{Issue: "LAB-690", Agent: "missing", Prompt: "Implement missing profile handling"},
+			{Issue: "LAB-691", Agent: "codex", Prompt: "Implement merge queue"},
+		},
 	})
-	if err == nil || !strings.Contains(err.Error(), `assign LAB-689: load agent profile "missing"`) {
-		t.Fatalf("Batch() error = %v, want assign error", err)
+	if err != nil {
+		t.Fatalf("Batch() error = %v", err)
+	}
+	if got, want := len(result.Results), 2; got != want {
+		t.Fatalf("result count = %d, want %d", got, want)
+	}
+	if got, want := []string{result.Results[0].Issue, result.Results[1].Issue}, []string{"LAB-689", "LAB-691"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("result issues = %#v, want %#v", got, want)
+	}
+	if got, want := deps.pool.acquireCallCount(), 2; got != want {
+		t.Fatalf("pool acquire calls = %d, want %d", got, want)
+	}
+	if got, want := len(deps.amux.spawnRequests), 2; got != want {
+		t.Fatalf("spawn requests = %d, want %d", got, want)
+	}
+	if _, ok := deps.state.task("LAB-690"); ok {
+		t.Fatal("failed task stored")
+	}
+	if got, want := deps.events.countType(EventTaskAssignFailed), 1; got != want {
+		t.Fatalf("assign failure events = %d, want %d", got, want)
+	}
+	if message := deps.events.lastMessage(EventTaskAssignFailed); !strings.Contains(message, `load agent profile "missing"`) {
+		t.Fatalf("assign failure message = %q, want missing profile context", message)
 	}
 }
 
