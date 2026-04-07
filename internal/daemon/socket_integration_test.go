@@ -336,7 +336,7 @@ daemonReady:
 		if err != nil {
 			return false
 		}
-		return status.Summary.Cancelled == 1 && status.Summary.Workers == 0 && status.Summary.FreeClones == 1
+		return status.Summary.Cancelled == 1 && status.Summary.Workers == 1 && status.Summary.FreeClones == 1
 	})
 }
 

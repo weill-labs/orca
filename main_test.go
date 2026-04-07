@@ -179,18 +179,6 @@ func TestRunDaemonProcessValidation(t *testing.T) {
 	}
 }
 
-func TestRunDaemonProcessAllowsMissingProjectForGlobalDaemon(t *testing.T) {
-	t.Parallel()
-
-	err := runDaemonProcess([]string{"--state-db", "/tmp/orca.db", "--pid-file", "/tmp/orca.pid"})
-	if err == nil {
-		t.Fatal("runDaemonProcess() error = nil, want signal/setup error")
-	}
-	if strings.Contains(err.Error(), "__daemon-serve requires --project") {
-		t.Fatalf("runDaemonProcess() error = %v, want missing project to be allowed", err)
-	}
-}
-
 func TestRunDaemonProcessRejectsLegacyProjectFlag(t *testing.T) {
 	t.Parallel()
 
@@ -216,7 +204,7 @@ func TestRunWithDepsCoversProcessSetupBranches(t *testing.T) {
 		assert       func(t *testing.T, store *stubStateStore, app *stubAppRunner)
 	}{
 		{
-			name: "daemon serve dispatches through dependency",
+			name: "daemon serve dispatches without requiring project flag",
 			args: []string{"__daemon-serve", "--state-db", "/tmp/orca.db", "--pid-file", "/tmp/orca.pid"},
 			deps: runDependencies{
 				runDaemonProcess: func(args []string) error {
