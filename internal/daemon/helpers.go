@@ -115,6 +115,14 @@ func strikethroughTaskTitle(title string) string {
 	return ansiStrikethroughOn + title + ansiStrikethroughOff
 }
 
+func (d *Daemon) paneTaskTitle(ctx context.Context, paneID, issue string) (string, error) {
+	metadata, err := d.amux.Metadata(ctx, paneID)
+	if err != nil {
+		return "", fmt.Errorf("load pane metadata: %w", err)
+	}
+	return resolveTaskTitle(issue, metadata["task"]), nil
+}
+
 func firstTitle(values []string) string {
 	if len(values) == 0 {
 		return ""
@@ -350,14 +358,14 @@ func (d *Daemon) completionPaneMetadata(ctx context.Context, active ActiveAssign
 		return nil, err
 	}
 
-	existing, err := d.amux.Metadata(ctx, active.Task.PaneID)
+	taskTitle, err := d.paneTaskTitle(ctx, active.Task.PaneID, active.Task.Issue)
 	if err != nil {
-		return nil, fmt.Errorf("load pane metadata: %w", err)
+		return nil, err
 	}
 
 	return mergeMetadata(map[string]string{
 		"status": "done",
-		"task":   strikethroughTaskTitle(resolveTaskTitle(active.Task.Issue, existing["task"])),
+		"task":   strikethroughTaskTitle(taskTitle),
 	}, tracked), nil
 }
 
