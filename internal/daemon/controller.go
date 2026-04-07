@@ -477,7 +477,7 @@ func (c *LocalController) Resume(ctx context.Context, req ResumeRequest) (TaskAc
 	return result, nil
 }
 
-func (c *LocalController) preparePIDState(ctx context.Context, _ ...string) error {
+func (c *LocalController) preparePIDState(ctx context.Context) error {
 	pidFile := c.paths.pidFile()
 	pid, err := readPIDFile(pidFile)
 	if err == nil {

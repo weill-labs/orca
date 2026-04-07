@@ -170,7 +170,7 @@ func TestPreparePIDStateExistingPIDFile(t *testing.T) {
 				t.Fatalf("WriteFile(%q) error = %v", pidFile, err)
 			}
 
-			err := controller.preparePIDState(context.Background(), projectPath)
+			err := controller.preparePIDState(context.Background())
 			if !errors.Is(err, tt.wantErr) {
 				t.Fatalf("preparePIDState() error = %v, want %v", err, tt.wantErr)
 			}

@@ -157,7 +157,7 @@ func (d *Daemon) dispatchMergeQueue(ctx context.Context) {
 			continue
 		}
 
-		active, err := d.state.ActiveAssignmentByPRNumber(ctx, entry.Project, entry.PRNumber)
+		_, err = d.state.ActiveAssignmentByPRNumber(ctx, entry.Project, entry.PRNumber)
 		if err != nil {
 			event := d.mergeQueueEvent(nil, EventPRLandingFailed, entry.PRNumber, fmt.Sprintf("PR #%d is no longer tracked by an active assignment", entry.PRNumber), d.now())
 			event.Project = entry.Project
@@ -165,7 +165,6 @@ func (d *Daemon) dispatchMergeQueue(ctx context.Context) {
 			_ = d.state.DeleteMergeEntry(ctx, entry.Project, entry.PRNumber)
 			continue
 		}
-		_ = active
 
 		switch entry.Status {
 		case MergeQueueStatusCheckingCI, MergeQueueStatusRebasing, MergeQueueStatusMerging:
