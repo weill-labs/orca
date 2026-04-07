@@ -251,6 +251,36 @@ func TestCLIClientSpawnDoesNotInspectSessionLayout(t *testing.T) {
 	}
 }
 
+func TestCLIClientSpawnCleansUpByStablePaneRefOnSetupFailure(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeRunner{
+		queue: []runnerResult{
+			{output: []byte("Spawned worker-LAB-901 in pane 9\n")},
+			{err: errors.New("exit status 1")},
+			{},
+		},
+	}
+	client := newTestClient(Config{Session: "orca-dev"}, runner)
+
+	_, err := client.Spawn(context.Background(), SpawnRequest{
+		Name:    "worker-LAB-901",
+		Command: "codex --yolo",
+	})
+	if err == nil || !strings.Contains(err.Error(), "send command to pane") {
+		t.Fatalf("Spawn() error = %v, want send command failure", err)
+	}
+
+	wantCmds := []recordedCommand{
+		{name: "amux", args: []string{"-s", "orca-dev", "spawn", "--root", "--name", "worker-LAB-901"}},
+		{name: "amux", args: []string{"-s", "orca-dev", "send-keys", "worker-LAB-901", "--delay-final", "250ms", "codex --yolo"}},
+		{name: "amux", args: []string{"-s", "orca-dev", "kill", "worker-LAB-901"}},
+	}
+	if !reflect.DeepEqual(runner.calls, wantCmds) {
+		t.Fatalf("Spawn() commands = %#v, want %#v", runner.calls, wantCmds)
+	}
+}
+
 func TestCLIClientSendKeys(t *testing.T) {
 	t.Parallel()
 

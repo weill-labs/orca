@@ -2,7 +2,9 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -145,6 +147,41 @@ func TestDaemonStartNormalizesLegacyNumericPaneRefs(t *testing.T) {
 	}
 	if got := deps.amux.captureCount("7"); got != 0 {
 		t.Fatalf("legacy capture count = %d, want 0", got)
+	}
+}
+
+func TestDaemonStartEscalatesWhenPaneRefNormalizationFails(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	seedActiveAssignment(t, deps, "LAB-856", "7")
+	state := &resumeStateStub{
+		fakeState:    deps.state,
+		putWorkerErr: errors.New("put worker failed"),
+	}
+
+	d := newResumeCoverageDaemon(t, deps, state, deps.amux)
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	deps.events.requireTypes(t, EventDaemonStarted, EventWorkerEscalated)
+	event, ok := deps.events.lastEventOfType(EventWorkerEscalated)
+	if !ok {
+		t.Fatal("worker escalation event missing")
+	}
+	if !strings.Contains(event.Message, "worker pane normalization failed on daemon startup") {
+		t.Fatalf("event.Message = %q, want normalization failure context", event.Message)
+	}
+	if !strings.Contains(event.Message, "put worker failed") {
+		t.Fatalf("event.Message = %q, want put worker failure", event.Message)
+	}
+	if got := len(deps.amux.paneExistsCalls); got != 0 {
+		t.Fatalf("pane exists calls = %d, want 0 after normalization failure", got)
 	}
 }
 

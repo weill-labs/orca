@@ -308,6 +308,53 @@ func TestResumeNormalizesLegacyNumericPaneRefBeforePaneChecks(t *testing.T) {
 	}
 }
 
+func TestResumeReturnsNormalizationErrorWithoutWorker(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	seedActiveAssignment(t, deps, "LAB-757", "7")
+
+	task, ok := deps.state.task("LAB-757")
+	if !ok {
+		t.Fatal("seeded task missing")
+	}
+	task.Status = TaskStatusCancelled
+	task.UpdatedAt = deps.clock.Now()
+	if err := deps.state.PutTask(context.Background(), task); err != nil {
+		t.Fatalf("PutTask() error = %v", err)
+	}
+	if err := deps.state.DeleteWorker(context.Background(), task.Project, task.PaneID); err != nil {
+		t.Fatalf("DeleteWorker() error = %v", err)
+	}
+
+	state := &resumeStateStub{
+		fakeState:  deps.state,
+		putTaskErr: errors.New("put task failed"),
+	}
+	d := newResumeCoverageDaemon(t, deps, state, deps.amux)
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	resumer, ok := any(d).(daemonResumer)
+	if !ok {
+		t.Fatal("Daemon does not implement Resume")
+	}
+
+	err := resumer.Resume(ctx, "LAB-757", "")
+	if err == nil || !strings.Contains(err.Error(), "normalize task pane ref: put task failed") {
+		t.Fatalf("Resume() error = %v, want normalization task error", err)
+	}
+	if got := len(deps.amux.paneExistsCalls); got != 0 {
+		t.Fatalf("pane exists calls = %d, want 0 after normalization failure", got)
+	}
+}
+
 func TestResumeRejectsInvalidStatesAndMissingTasks(t *testing.T) {
 	t.Run("not started", func(t *testing.T) {
 		t.Parallel()
