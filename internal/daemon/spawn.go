@@ -102,7 +102,7 @@ func (d *Daemon) taskPaneTarget(task Task) string {
 	if callerPane := strings.TrimSpace(task.CallerPane); callerPane != "" {
 		return callerPane
 	}
-	return d.leadPane
+	return strings.TrimSpace(d.leadPane)
 }
 
 func (d *Daemon) spawnWorkerPane(ctx context.Context, task Task, paneName, clonePath string, profile AgentProfile) (Pane, error) {

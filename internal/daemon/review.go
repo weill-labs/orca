@@ -300,7 +300,7 @@ func formatBlockingReviewFeedback(prNumber int, feedback []prFeedback) string {
 }
 
 func (d *Daemon) notifyCallerPaneReviewEscalation(ctx context.Context, active ActiveAssignment, feedback []prFeedback) {
-	targetPane := strings.TrimSpace(d.taskPaneTarget(active.Task))
+	targetPane := d.taskPaneTarget(active.Task)
 	if targetPane == "" || len(feedback) == 0 {
 		return
 	}
