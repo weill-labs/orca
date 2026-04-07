@@ -61,6 +61,7 @@ type ProjectStatus struct {
 }
 
 type Task struct {
+	Project       string    `json:"project,omitempty"`
 	Issue         string    `json:"issue"`
 	Status        string    `json:"status"`
 	Agent         string    `json:"agent"`
@@ -84,6 +85,7 @@ type Assignment struct {
 }
 
 type Worker struct {
+	Project               string    `json:"project,omitempty"`
 	WorkerID              string    `json:"worker_id"`
 	CurrentPaneID         string    `json:"current_pane_id,omitempty"`
 	Agent                 string    `json:"agent"`

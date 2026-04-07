@@ -396,7 +396,7 @@ func TestSQLiteStoreAllActiveQueriesAcrossProjects(t *testing.T) {
 			Issue:     "LAB-901",
 			Status:    "active",
 			Agent:     "codex",
-			WorkerID:  "pane-a",
+			WorkerID:  "worker-a",
 			ClonePath: "/clones/a",
 			CreatedAt: now,
 			UpdatedAt: now,
@@ -405,7 +405,7 @@ func TestSQLiteStoreAllActiveQueriesAcrossProjects(t *testing.T) {
 			Issue:     "LAB-902",
 			Status:    "starting",
 			Agent:     "codex",
-			WorkerID:  "pane-b",
+			WorkerID:  "worker-b",
 			ClonePath: "/clones/b",
 			CreatedAt: now,
 			UpdatedAt: now.Add(time.Minute),
@@ -414,7 +414,7 @@ func TestSQLiteStoreAllActiveQueriesAcrossProjects(t *testing.T) {
 			Issue:     "LAB-903",
 			Status:    "done",
 			Agent:     "codex",
-			WorkerID:  "pane-c",
+			WorkerID:  "worker-c",
 			ClonePath: "/clones/c",
 			CreatedAt: now,
 			UpdatedAt: now.Add(2 * time.Minute),
@@ -430,23 +430,27 @@ func TestSQLiteStoreAllActiveQueriesAcrossProjects(t *testing.T) {
 	}
 
 	if err := store.UpsertWorker(context.Background(), "/repo-a", Worker{
-		PaneID:    "pane-a",
-		Agent:     "codex",
-		State:     "healthy",
-		Issue:     "LAB-901",
-		ClonePath: "/clones/a",
-		UpdatedAt: now,
+		WorkerID:      "worker-a",
+		CurrentPaneID: "pane-a",
+		Agent:         "codex",
+		State:         "healthy",
+		Issue:         "LAB-901",
+		ClonePath:     "/clones/a",
+		CreatedAt:     now,
+		LastSeenAt:    now,
 	}); err != nil {
 		t.Fatalf("UpsertWorker(/repo-a) error = %v", err)
 	}
 
 	if err := store.UpsertWorker(context.Background(), "/repo-b", Worker{
-		PaneID:    "pane-b",
-		Agent:     "codex",
-		State:     "healthy",
-		Issue:     "LAB-902",
-		ClonePath: "/clones/b",
-		UpdatedAt: now.Add(time.Minute),
+		WorkerID:      "worker-b",
+		CurrentPaneID: "pane-b",
+		Agent:         "codex",
+		State:         "healthy",
+		Issue:         "LAB-902",
+		ClonePath:     "/clones/b",
+		CreatedAt:     now.Add(time.Minute),
+		LastSeenAt:    now.Add(time.Minute),
 	}); err != nil {
 		t.Fatalf("UpsertWorker(/repo-b) error = %v", err)
 	}

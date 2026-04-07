@@ -42,13 +42,13 @@ commands:
 
 // Keep these summaries aligned with the per-command FlagSet definitions below.
 var commandUsage = map[string]string{
-	"start": `usage: orca start [--session SESSION] [--project PATH] [--lead-pane PANE] [--json]
+	"start": `usage: orca start [--session SESSION] [--project PATH] [--lead-pane PANE] [--global] [--json]
 
 Start the orca daemon.`,
-	"stop": `usage: orca stop [--project PATH] [--force] [--json]
+	"stop": `usage: orca stop [--project PATH] [--force] [--global] [--json]
 
 Stop the orca daemon.`,
-	"status": `usage: orca status [ISSUE] [--project PATH] [--json]
+	"status": `usage: orca status [ISSUE] [--project PATH] [--global] [--json]
 
 Show daemon and task status.`,
 	"assign": `usage: orca assign ISSUE --prompt TEXT [--agent NAME] [--project PATH] [--json]
@@ -214,10 +214,12 @@ func (a *App) runStart(ctx context.Context, args []string) error {
 	var session string
 	var projectPath string
 	var leadPane string
+	var global bool
 	var jsonOutput bool
 	fs.StringVar(&session, "session", "", "amux session name (defaults to AMUX_SESSION)")
 	fs.StringVar(&projectPath, "project", "", "project path")
 	fs.StringVar(&leadPane, "lead-pane", "", "pane to split workers from")
+	fs.BoolVar(&global, "global", false, "operate on the machine-wide daemon")
 	fs.BoolVar(&jsonOutput, "json", false, "emit JSON output")
 
 	if err := parseFlags(fs, args); err != nil {
@@ -227,9 +229,13 @@ func (a *App) runStart(ctx context.Context, args []string) error {
 		return fmt.Errorf("start does not accept positional arguments")
 	}
 
-	resolvedProject, err := a.resolveProject(projectPath)
-	if err != nil {
-		return err
+	resolvedProject := ""
+	if !global {
+		var err error
+		resolvedProject, err = a.resolveProject(projectPath)
+		if err != nil {
+			return err
+		}
 	}
 
 	if strings.TrimSpace(session) == "" {
@@ -249,6 +255,10 @@ func (a *App) runStart(ctx context.Context, args []string) error {
 		return writeJSON(a.stdout, result)
 	}
 
+	if result.Project == "" {
+		_, err = fmt.Fprintf(a.stdout, "started global daemon (session %s, pid %d)\n", result.Session, result.PID)
+		return err
+	}
 	_, err = fmt.Fprintf(a.stdout, "started daemon for %s (session %s, pid %d)\n", result.Project, result.Session, result.PID)
 	return err
 }
@@ -257,9 +267,12 @@ func (a *App) runStop(ctx context.Context, args []string) error {
 	fs := newFlagSet("stop")
 	var projectPath string
 	var force bool
+	var global bool
 	var jsonOutput bool
+	var err error
 	fs.StringVar(&projectPath, "project", "", "project path")
 	fs.BoolVar(&force, "force", false, "escalate to SIGKILL after the grace period")
+	fs.BoolVar(&global, "global", false, "operate on the machine-wide daemon")
 	fs.BoolVar(&jsonOutput, "json", false, "emit JSON output")
 
 	if err := parseFlags(fs, args); err != nil {
@@ -269,9 +282,11 @@ func (a *App) runStop(ctx context.Context, args []string) error {
 		return fmt.Errorf("stop does not accept positional arguments")
 	}
 
-	projectPath, err := a.resolveProject(projectPath)
-	if err != nil {
-		return err
+	if !global {
+		projectPath, err = a.resolveProject(projectPath)
+		if err != nil {
+			return err
+		}
 	}
 
 	result, err := a.daemon.Stop(ctx, daemon.StopRequest{
@@ -286,6 +301,10 @@ func (a *App) runStop(ctx context.Context, args []string) error {
 		return writeJSON(a.stdout, result)
 	}
 
+	if result.Project == "" {
+		_, err = fmt.Fprintf(a.stdout, "stopped global daemon (pid %d)\n", result.PID)
+		return err
+	}
 	_, err = fmt.Fprintf(a.stdout, "stopped daemon for %s (pid %d)\n", result.Project, result.PID)
 	return err
 }
@@ -293,8 +312,10 @@ func (a *App) runStop(ctx context.Context, args []string) error {
 func (a *App) runStatus(ctx context.Context, args []string) error {
 	fs := newFlagSet("status")
 	var projectPath string
+	var global bool
 	var jsonOutput bool
 	fs.StringVar(&projectPath, "project", "", "project path")
+	fs.BoolVar(&global, "global", false, "show machine-wide daemon status")
 	fs.BoolVar(&jsonOutput, "json", false, "emit JSON output")
 
 	issue, err := parseOptionalSinglePositional(fs, args)
@@ -302,9 +323,16 @@ func (a *App) runStatus(ctx context.Context, args []string) error {
 		return err
 	}
 
-	projectPath, err = a.resolveProject(projectPath)
-	if err != nil {
-		return err
+	if global {
+		if issue != "" {
+			return fmt.Errorf("status ISSUE cannot be combined with --global")
+		}
+		projectPath = ""
+	} else {
+		projectPath, err = a.resolveProject(projectPath)
+		if err != nil {
+			return err
+		}
 	}
 
 	if issue == "" {

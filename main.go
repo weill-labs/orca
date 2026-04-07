@@ -27,11 +27,11 @@ type appRunner interface {
 }
 
 type runDependencies struct {
-	resolvePaths      func() (daemon.Paths, error)
-	openStateStore    func(string) (stateStore, error)
-	newController     func(daemon.ControllerOptions) (daemon.Controller, error)
-	newApp            func(cli.Options) appRunner
-	runDaemonProcess  func([]string) error
+	resolvePaths     func() (daemon.Paths, error)
+	openStateStore   func(string) (stateStore, error)
+	newController    func(daemon.ControllerOptions) (daemon.Controller, error)
+	newApp           func(cli.Options) appRunner
+	runDaemonProcess func([]string) error
 }
 
 var defaultRunDependencies = runDependencies{
@@ -141,9 +141,6 @@ func runDaemonProcess(args []string) error {
 		return err
 	}
 
-	if projectPath == "" {
-		return fmt.Errorf("__daemon-serve requires --project")
-	}
 	if stateDB == "" {
 		return fmt.Errorf("__daemon-serve requires --state-db")
 	}

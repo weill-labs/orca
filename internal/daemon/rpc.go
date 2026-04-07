@@ -43,32 +43,38 @@ type rpcError struct {
 }
 
 type assignRPCParams struct {
-	Issue  string `json:"issue"`
-	Prompt string `json:"prompt"`
-	Agent  string `json:"agent"`
-	Title  string `json:"title"`
+	Project string `json:"project"`
+	Issue   string `json:"issue"`
+	Prompt  string `json:"prompt"`
+	Agent   string `json:"agent"`
+	Title   string `json:"title"`
 }
 
 type batchRPCParams struct {
+	Project string       `json:"project"`
 	Entries []BatchEntry `json:"entries"`
 	Delay   string       `json:"delay"`
 }
 
 type cancelRPCParams struct {
-	Issue string `json:"issue"`
+	Project string `json:"project"`
+	Issue   string `json:"issue"`
 }
 
 type resumeRPCParams struct {
-	Issue  string `json:"issue"`
-	Prompt string `json:"prompt"`
+	Project string `json:"project"`
+	Issue   string `json:"issue"`
+	Prompt  string `json:"prompt"`
 }
 
 type enqueueRPCParams struct {
-	PRNumber int `json:"pr_number"`
+	Project  string `json:"project"`
+	PRNumber int    `json:"pr_number"`
 }
 
 type statusRPCParams struct {
-	Issue string `json:"issue,omitempty"`
+	Project string `json:"project"`
+	Issue   string `json:"issue,omitempty"`
 }
 
 func projectHash(projectPath string) string {
@@ -78,9 +84,8 @@ func projectHash(projectPath string) string {
 
 func socketFileForProject(configDir, projectPath string) string {
 	candidates := []string{
-		filepath.Join(configDir, fmt.Sprintf("orca-%s.sock", projectHash(projectPath))),
-		filepath.Join(configDir, fmt.Sprintf("orca-%s.sock", shortProjectHash(projectPath, socketHashByteCount))),
-		filepath.Join(os.TempDir(), fmt.Sprintf("orca-%s.sock", shortProjectHash(projectPath, socketHashByteCount))),
+		filepath.Join(configDir, "orca.sock"),
+		filepath.Join(os.TempDir(), "orca.sock"),
 	}
 	for _, candidate := range candidates {
 		if len(candidate) <= unixSocketPathMax {

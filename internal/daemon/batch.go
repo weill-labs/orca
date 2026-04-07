@@ -52,18 +52,23 @@ func (d *Daemon) Batch(ctx context.Context, req BatchRequest) (BatchResult, erro
 		return BatchResult{}, errors.New("batch delay must be non-negative")
 	}
 
+	projectPath := req.Project
+	if projectPath == "" {
+		projectPath = d.project
+	}
+
 	entries := normalizeBatchEntries(req.Entries)
 	result := BatchResult{
-		Project: d.project,
+		Project: projectPath,
 		Results: make([]TaskActionResult, 0, len(entries)),
 	}
 
 	for i, entry := range entries {
-		if err := d.Assign(ctx, entry.Issue, entry.Prompt, entry.Agent, entry.Title); err != nil {
+		if err := d.assign(ctx, projectPath, entry.Issue, entry.Prompt, entry.Agent, entry.Title); err != nil {
 			return BatchResult{}, fmt.Errorf("assign %s: %w", entry.Issue, err)
 		}
 
-		taskResult, err := d.taskActionResult(ctx, entry.Issue)
+		taskResult, err := d.taskActionResult(ctx, projectPath, entry.Issue)
 		if err != nil {
 			return BatchResult{}, fmt.Errorf("load task %s: %w", entry.Issue, err)
 		}
@@ -80,14 +85,14 @@ func (d *Daemon) Batch(ctx context.Context, req BatchRequest) (BatchResult, erro
 	return result, nil
 }
 
-func (d *Daemon) taskActionResult(ctx context.Context, issue string) (TaskActionResult, error) {
-	task, err := d.state.TaskByIssue(ctx, d.project, issue)
+func (d *Daemon) taskActionResult(ctx context.Context, projectPath, issue string) (TaskActionResult, error) {
+	task, err := d.state.TaskByIssue(ctx, projectPath, issue)
 	if err != nil {
 		return TaskActionResult{}, err
 	}
 
 	return TaskActionResult{
-		Project:   d.project,
+		Project:   projectPath,
 		Issue:     task.Issue,
 		Status:    task.Status,
 		Agent:     task.AgentProfile,

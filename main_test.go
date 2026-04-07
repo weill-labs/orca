@@ -96,11 +96,11 @@ func TestRunVersionAndUnknownHelpTopic(t *testing.T) {
 		wantBuildCommit string
 	}{
 		{
-			name:         "version command",
-			args:         []string{"version"},
-			wantExitCode: 0,
-			wantStdout:   "orca build-804\n",
-			wantStderr:   "",
+			name:            "version command",
+			args:            []string{"version"},
+			wantExitCode:    0,
+			wantStdout:      "orca build-804\n",
+			wantStderr:      "",
 			wantBuildCommit: "build-804",
 		},
 		{
@@ -150,11 +150,6 @@ func TestRunDaemonProcessValidation(t *testing.T) {
 			name:    "flag parse error",
 			args:    []string{"--unknown"},
 			wantErr: "flag provided but not defined",
-		},
-		{
-			name:    "missing project",
-			args:    []string{"--state-db", "/tmp/orca.db", "--pid-file", "/tmp/orca.pid"},
-			wantErr: "__daemon-serve requires --project",
 		},
 		{
 			name:    "missing state db",

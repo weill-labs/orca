@@ -66,7 +66,7 @@ func (d *Daemon) handleExitedPaneCapture(ctx context.Context, active ActiveAssig
 	d.emit(ctx, Event{
 		Time:         now,
 		Type:         EventWorkerEscalated,
-		Project:      d.project,
+		Project:      active.Task.Project,
 		Issue:        active.Task.Issue,
 		PaneID:       active.Task.PaneID,
 		PaneName:     active.Task.PaneName,

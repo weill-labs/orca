@@ -19,7 +19,7 @@ func (d *Daemon) handleQueuedPRFailure(ctx context.Context, active ActiveAssignm
 }
 
 func (d *Daemon) handlePRMergeablePoll(ctx context.Context, update *TaskStateUpdate, profile AgentProfile) {
-	state, ok, err := d.lookupPRMergeableState(ctx, update.Active.Task.PRNumber)
+	state, ok, err := d.lookupPRMergeableState(ctx, update.Active.Task.Project, update.Active.Task.PRNumber)
 	if err != nil || !ok {
 		return
 	}
@@ -47,8 +47,8 @@ func (d *Daemon) handlePRMergeablePoll(ctx context.Context, update *TaskStateUpd
 	})
 }
 
-func (d *Daemon) lookupPRMergeableState(ctx context.Context, prNumber int) (string, bool, error) {
-	output, err := d.commands.Run(ctx, d.project, "gh", "pr", "view", fmt.Sprintf("%d", prNumber), "--json", "mergeable")
+func (d *Daemon) lookupPRMergeableState(ctx context.Context, projectPath string, prNumber int) (string, bool, error) {
+	output, err := d.commands.Run(ctx, projectPath, "gh", "pr", "view", fmt.Sprintf("%d", prNumber), "--json", "mergeable")
 	if err != nil {
 		return "", false, err
 	}

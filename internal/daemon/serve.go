@@ -42,11 +42,6 @@ func RunProcess(ctx context.Context, req ServeRequest) error {
 }
 
 func runProcess(ctx context.Context, req ServeRequest, deps serveDeps) error {
-	projectPath, err := project.CanonicalPath(req.Project)
-	if err != nil {
-		return err
-	}
-
 	store, err := state.OpenSQLite(req.StateDB)
 	if err != nil {
 		return err
@@ -58,33 +53,11 @@ func runProcess(ctx context.Context, req ServeRequest, deps serveDeps) error {
 		detectOrigin = config.DetectOrigin
 	}
 
-	origin, err := detectOrigin(projectPath)
-	if err != nil {
-		return fmt.Errorf("detect origin: %w", err)
-	}
-
-	poolDir := filepath.Join(projectPath, orcaPoolSubdir)
-	if err := os.MkdirAll(poolDir, 0o755); err != nil {
-		return fmt.Errorf("create pool directory: %w", err)
-	}
-
 	amuxClient := deps.amux
 	if amuxClient == nil {
 		amuxClient = amux.NewClient(amux.Config{
 			Session: req.Session,
 		})
-	}
-
-	managerOptions := []pool.Option{
-		pool.WithCWDUsageChecker(amuxCWDUsageChecker{amux: amuxClient}),
-	}
-	if deps.poolRunner != nil {
-		managerOptions = append(managerOptions, pool.WithRunner(deps.poolRunner))
-	}
-	poolCfg := internalPoolConfig{poolDir: poolDir, origin: origin}
-	manager, err := pool.New(projectPath, poolCfg, store, managerOptions...)
-	if err != nil {
-		return fmt.Errorf("create pool manager: %w", err)
 	}
 
 	commandRunner := deps.commands
@@ -99,7 +72,7 @@ func runProcess(ctx context.Context, req ServeRequest, deps serveDeps) error {
 
 	socketPath := deps.socketPath
 	if socketPath == "" {
-		socketPath = socketFileForProject(filepath.Dir(req.StateDB), projectPath)
+		socketPath = socketFileForProject(filepath.Dir(req.StateDB), "")
 	}
 
 	listener, err := listenUnixSocket(socketPath)
@@ -112,14 +85,15 @@ func runProcess(ctx context.Context, req ServeRequest, deps serveDeps) error {
 	}()
 
 	daemonState := newSQLiteStateAdapter(store)
+	daemonPool := newMultiProjectPool(store, detectOrigin, amuxClient, deps.poolRunner)
 	instance, err := New(Options{
-		Project:          projectPath,
+		Project:          "",
 		Session:          req.Session,
 		LeadPane:         req.LeadPane,
 		PIDPath:          req.PIDFile,
 		Config:           builtinConfigProvider{},
 		State:            daemonState,
-		Pool:             pool.NewAdapter(manager),
+		Pool:             daemonPool,
 		Amux:             amuxClient,
 		IssueTracker:     issueTracker,
 		Commands:         commandRunner,
@@ -135,7 +109,7 @@ func runProcess(ctx context.Context, req ServeRequest, deps serveDeps) error {
 	}
 
 	startedAt := time.Now().UTC()
-	if err := store.UpsertDaemon(ctx, projectPath, state.DaemonStatus{
+	if err := store.UpsertDaemon(ctx, "", state.DaemonStatus{
 		Session:   req.Session,
 		PID:       os.Getpid(),
 		Status:    "running",
@@ -148,7 +122,7 @@ func runProcess(ctx context.Context, req ServeRequest, deps serveDeps) error {
 
 	serverErrCh := make(chan error, 1)
 	go func() {
-		serverErrCh <- serveRPC(ctx, listener, instance, store, projectPath)
+		serverErrCh <- serveRPC(ctx, listener, instance, store)
 	}()
 
 	var serverErr error
@@ -160,7 +134,7 @@ func runProcess(ctx context.Context, req ServeRequest, deps serveDeps) error {
 	}
 
 	stopErr := instance.Stop(context.Background())
-	markStoppedErr := store.MarkDaemonStopped(context.Background(), projectPath, time.Now().UTC())
+	markStoppedErr := store.MarkDaemonStopped(context.Background(), "", time.Now().UTC())
 
 	if serverErr != nil && !errors.Is(serverErr, net.ErrClosed) {
 		return errors.Join(serverErr, stopErr, markStoppedErr)
@@ -187,7 +161,7 @@ func listenUnixSocket(socketPath string) (net.Listener, error) {
 	return listener, nil
 }
 
-func serveRPC(ctx context.Context, listener net.Listener, instance *Daemon, store *state.SQLiteStore, projectPath string) error {
+func serveRPC(ctx context.Context, listener net.Listener, instance *Daemon, store *state.SQLiteStore) error {
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
@@ -197,11 +171,11 @@ func serveRPC(ctx context.Context, listener net.Listener, instance *Daemon, stor
 			return fmt.Errorf("accept daemon socket connection: %w", err)
 		}
 
-		go handleRPCConn(ctx, conn, instance, store, projectPath)
+		go handleRPCConn(ctx, conn, instance, store)
 	}
 }
 
-func handleRPCConn(ctx context.Context, conn net.Conn, instance *Daemon, store *state.SQLiteStore, projectPath string) {
+func handleRPCConn(ctx context.Context, conn net.Conn, instance *Daemon, store *state.SQLiteStore, defaultProject ...string) {
 	defer conn.Close()
 	if err := conn.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
 		_ = json.NewEncoder(conn).Encode(rpcFailure(nil, -32000, fmt.Errorf("set read deadline: %w", err)))
@@ -214,18 +188,22 @@ func handleRPCConn(ctx context.Context, conn net.Conn, instance *Daemon, store *
 		return
 	}
 
-	response := dispatchRPCRequest(ctx, request, instance, store, projectPath)
+	response := dispatchRPCRequest(ctx, request, instance, store, defaultProject...)
 	_ = json.NewEncoder(conn).Encode(response)
 }
 
-func dispatchRPCRequest(ctx context.Context, request rpcRequest, instance *Daemon, store *state.SQLiteStore, projectPath string) rpcResponse {
+func dispatchRPCRequest(ctx context.Context, request rpcRequest, instance *Daemon, store *state.SQLiteStore, defaultProject ...string) rpcResponse {
 	switch request.Method {
 	case "assign":
 		var params assignRPCParams
 		if err := decodeRPCParams(request.Params, &params); err != nil {
 			return rpcFailure(request.ID, -32602, fmt.Errorf("decode assign params: %w", err))
 		}
-		if err := instance.Assign(ctx, params.Issue, params.Prompt, params.Agent, params.Title); err != nil {
+		projectPath, ok, failure := requireRPCProject(request.ID, params.Project, defaultProject...)
+		if !ok {
+			return failure
+		}
+		if err := instance.assign(ctx, projectPath, params.Issue, params.Prompt, params.Agent, params.Title); err != nil {
 			return rpcFailure(request.ID, -32000, err)
 		}
 
@@ -239,6 +217,10 @@ func dispatchRPCRequest(ctx context.Context, request rpcRequest, instance *Daemo
 		if err := decodeRPCParams(request.Params, &params); err != nil {
 			return rpcFailure(request.ID, -32602, fmt.Errorf("decode batch params: %w", err))
 		}
+		projectPath, ok, failure := requireRPCProject(request.ID, params.Project, defaultProject...)
+		if !ok {
+			return failure
+		}
 		delay := time.Duration(0)
 		if raw := strings.TrimSpace(params.Delay); raw != "" {
 			parsedDelay, err := time.ParseDuration(raw)
@@ -249,6 +231,7 @@ func dispatchRPCRequest(ctx context.Context, request rpcRequest, instance *Daemo
 		}
 
 		result, err := instance.Batch(ctx, BatchRequest{
+			Project: projectPath,
 			Entries: params.Entries,
 			Delay:   delay,
 		})
@@ -261,7 +244,11 @@ func dispatchRPCRequest(ctx context.Context, request rpcRequest, instance *Daemo
 		if err := decodeRPCParams(request.Params, &params); err != nil {
 			return rpcFailure(request.ID, -32602, fmt.Errorf("decode cancel params: %w", err))
 		}
-		if err := instance.Cancel(ctx, params.Issue); err != nil {
+		projectPath, ok, failure := requireRPCProject(request.ID, params.Project, defaultProject...)
+		if !ok {
+			return failure
+		}
+		if err := instance.cancel(ctx, projectPath, params.Issue); err != nil {
 			return rpcFailure(request.ID, -32000, err)
 		}
 
@@ -275,7 +262,11 @@ func dispatchRPCRequest(ctx context.Context, request rpcRequest, instance *Daemo
 		if err := decodeRPCParams(request.Params, &params); err != nil {
 			return rpcFailure(request.ID, -32602, fmt.Errorf("decode resume params: %w", err))
 		}
-		if err := instance.Resume(ctx, params.Issue, params.Prompt); err != nil {
+		projectPath, ok, failure := requireRPCProject(request.ID, params.Project, defaultProject...)
+		if !ok {
+			return failure
+		}
+		if err := instance.resume(ctx, projectPath, params.Issue, params.Prompt); err != nil {
 			return rpcFailure(request.ID, -32000, err)
 		}
 
@@ -289,8 +280,12 @@ func dispatchRPCRequest(ctx context.Context, request rpcRequest, instance *Daemo
 		if err := decodeRPCParams(request.Params, &params); err != nil {
 			return rpcFailure(request.ID, -32602, fmt.Errorf("decode enqueue params: %w", err))
 		}
+		projectPath, ok, failure := requireRPCProject(request.ID, params.Project, defaultProject...)
+		if !ok {
+			return failure
+		}
 
-		result, err := instance.Enqueue(ctx, params.PRNumber)
+		result, err := instance.enqueue(ctx, projectPath, params.PRNumber)
 		if err != nil {
 			return rpcFailure(request.ID, -32000, err)
 		}
@@ -300,6 +295,10 @@ func dispatchRPCRequest(ctx context.Context, request rpcRequest, instance *Daemo
 		var params statusRPCParams
 		if err := decodeRPCParams(request.Params, &params); err != nil {
 			return rpcFailure(request.ID, -32602, fmt.Errorf("decode status params: %w", err))
+		}
+		projectPath, failure := resolveRPCProject(request.ID, params.Project, defaultProject...)
+		if failure.Error != nil {
+			return failure
 		}
 		if params.Issue == "" {
 			status, err := store.ProjectStatus(ctx, projectPath)
@@ -332,4 +331,30 @@ func taskActionResultForIssue(ctx context.Context, store *state.SQLiteStore, pro
 		Agent:     taskStatus.Task.Agent,
 		UpdatedAt: taskStatus.Task.UpdatedAt,
 	}, nil
+}
+
+func resolveRPCProject(id json.RawMessage, rawProject string, defaultProject ...string) (string, rpcResponse) {
+	projectPath := strings.TrimSpace(rawProject)
+	if projectPath == "" && len(defaultProject) > 0 {
+		return strings.TrimSpace(defaultProject[0]), rpcSuccess(id, nil)
+	}
+	if projectPath == "" {
+		return "", rpcSuccess(id, nil)
+	}
+	resolvedProject, err := project.CanonicalPath(projectPath)
+	if err != nil {
+		return "", rpcFailure(id, -32602, fmt.Errorf("resolve project: %w", err))
+	}
+	return resolvedProject, rpcSuccess(id, nil)
+}
+
+func requireRPCProject(id json.RawMessage, rawProject string, defaultProject ...string) (string, bool, rpcResponse) {
+	projectPath, response := resolveRPCProject(id, rawProject, defaultProject...)
+	if response.Error != nil {
+		return "", false, response
+	}
+	if projectPath == "" {
+		return "", false, rpcFailure(id, -32602, fmt.Errorf("project is required"))
+	}
+	return projectPath, true, rpcResponse{}
 }

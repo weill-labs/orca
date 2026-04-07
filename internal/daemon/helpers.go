@@ -39,19 +39,27 @@ type trackedPRRef struct {
 }
 
 func (d *Daemon) rollbackAssignment(ctx context.Context, clone Clone, pane Pane, branch string) error {
+	return d.rollbackAssignmentForProject(ctx, d.project, clone, pane, branch)
+}
+
+func (d *Daemon) rollbackAssignmentForProject(ctx context.Context, projectPath string, clone Clone, pane Pane, branch string) error {
 	result := d.amux.KillPane(ctx, pane.ID)
-	result = errors.Join(result, d.cleanupCloneAndRelease(ctx, clone, branch))
+	result = errors.Join(result, d.cleanupCloneAndReleaseForProject(ctx, projectPath, clone, branch))
 	return result
 }
 
 func (d *Daemon) cleanupCloneAndRelease(ctx context.Context, clone Clone, branch string) error {
+	return d.cleanupCloneAndReleaseForProject(ctx, d.project, clone, branch)
+}
+
+func (d *Daemon) cleanupCloneAndReleaseForProject(ctx context.Context, projectPath string, clone Clone, branch string) error {
 	if clone.CurrentBranch == "" {
 		clone.CurrentBranch = branch
 	}
 	if clone.AssignedTask == "" {
 		clone.AssignedTask = branch
 	}
-	return d.pool.Release(ctx, d.project, clone)
+	return d.pool.Release(ctx, projectPath, clone)
 }
 
 func workerGitIdentity(workerID string) (name string, email string) {
@@ -346,8 +354,8 @@ func trackedPRsForPane(tasks []Task, currentIssue string, currentPR int, current
 	return refs, includeKey
 }
 
-func (d *Daemon) trackedPaneMetadata(ctx context.Context, paneID, currentIssue string, currentIssueStatus trackedStatus, currentPR int, currentPRStatus *trackedStatus) (map[string]string, error) {
-	tasks, err := d.state.TasksByPane(ctx, d.project, paneID)
+func (d *Daemon) trackedPaneMetadata(ctx context.Context, projectPath, paneID, currentIssue string, currentIssueStatus trackedStatus, currentPR int, currentPRStatus *trackedStatus) (map[string]string, error) {
+	tasks, err := d.state.TasksByPane(ctx, projectPath, paneID)
 	if err != nil {
 		return nil, fmt.Errorf("load pane task history: %w", err)
 	}
@@ -375,14 +383,14 @@ func (d *Daemon) trackedPaneMetadata(ctx context.Context, paneID, currentIssue s
 	return metadata, nil
 }
 
-func (d *Daemon) assignmentPaneMetadata(ctx context.Context, paneID, agentProfile, branch, issue, task string, prNumber int) (map[string]string, error) {
+func (d *Daemon) assignmentPaneMetadata(ctx context.Context, projectPath, paneID, agentProfile, branch, issue, task string, prNumber int) (map[string]string, error) {
 	var prStatus *trackedStatus
 	if prNumber > 0 {
 		status := trackedStatusActive
 		prStatus = &status
 	}
 
-	tracked, err := d.trackedPaneMetadata(ctx, paneID, issue, trackedStatusActive, prNumber, prStatus)
+	tracked, err := d.trackedPaneMetadata(ctx, projectPath, paneID, issue, trackedStatusActive, prNumber, prStatus)
 	if err != nil {
 		return nil, err
 	}
@@ -391,7 +399,7 @@ func (d *Daemon) assignmentPaneMetadata(ctx context.Context, paneID, agentProfil
 
 func (d *Daemon) prPaneMetadata(ctx context.Context, active ActiveAssignment, prNumber int) (map[string]string, error) {
 	status := trackedStatusActive
-	return d.trackedPaneMetadata(ctx, active.Task.PaneID, active.Task.Issue, trackedStatusActive, prNumber, &status)
+	return d.trackedPaneMetadata(ctx, active.Task.Project, active.Task.PaneID, active.Task.Issue, trackedStatusActive, prNumber, &status)
 }
 
 func (d *Daemon) completionPaneMetadata(ctx context.Context, active ActiveAssignment, merged bool) (map[string]string, error) {
@@ -403,7 +411,7 @@ func (d *Daemon) completionPaneMetadata(ctx context.Context, active ActiveAssign
 		prNumber = active.Task.PRNumber
 	}
 
-	tracked, err := d.trackedPaneMetadata(ctx, active.Task.PaneID, active.Task.Issue, trackedStatusCompleted, prNumber, prStatus)
+	tracked, err := d.trackedPaneMetadata(ctx, active.Task.Project, active.Task.PaneID, active.Task.Issue, trackedStatusCompleted, prNumber, prStatus)
 	if err != nil {
 		return nil, err
 	}
@@ -436,7 +444,7 @@ func (d *Daemon) resolveAssignmentTitle(ctx context.Context, issue string, title
 	return resolveTaskTitle(issue, issueTitle)
 }
 
-func (d *Daemon) setIssueStatus(ctx context.Context, issue, state string) error {
+func (d *Daemon) setIssueStatus(ctx context.Context, projectPath, issue, state string) error {
 	if d.issueTracker == nil {
 		return nil
 	}
@@ -448,7 +456,7 @@ func (d *Daemon) setIssueStatus(ctx context.Context, issue, state string) error 
 		d.emit(ctx, Event{
 			Time:    d.now(),
 			Type:    EventIssueStatusSkipped,
-			Project: d.project,
+			Project: projectPath,
 			Issue:   issue,
 			Message: fmt.Sprintf("skipped Linear issue status update to %q: %v", state, err),
 		})
@@ -472,7 +480,6 @@ func (d *Daemon) mergeQueueEvent(active *ActiveAssignment, eventType string, prN
 	event := Event{
 		Time:     at,
 		Type:     eventType,
-		Project:  d.project,
 		PRNumber: prNumber,
 		Message:  message,
 	}
@@ -480,6 +487,7 @@ func (d *Daemon) mergeQueueEvent(active *ActiveAssignment, eventType string, prN
 		return event
 	}
 
+	event.Project = active.Task.Project
 	event.Issue = active.Task.Issue
 	event.WorkerID = active.Task.WorkerID
 	event.PaneID = active.Task.PaneID

@@ -350,7 +350,7 @@ func TestSocketFileForProjectFallsBackWhenConfigDirIsTooLong(t *testing.T) {
 	projectPath := filepath.Join(t.TempDir(), "project")
 
 	socketPath := socketFileForProject(configDir, projectPath)
-	if got, want := socketPath, filepath.Join(configDir, "orca.sock"); got != want {
+	if got, want := socketPath, filepath.Join(os.TempDir(), "orca.sock"); got != want {
 		t.Fatalf("socketFileForProject() = %q, want %q", got, want)
 	}
 	if got := len(socketPath); got > unixSocketPathMax {

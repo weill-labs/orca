@@ -48,7 +48,7 @@ func (d *Daemon) ensurePostmortem(ctx context.Context, active ActiveAssignment) 
 	d.emit(ctx, Event{
 		Time:         d.now(),
 		Type:         EventWorkerPostmortem,
-		Project:      d.project,
+		Project:      active.Task.Project,
 		Issue:        active.Task.Issue,
 		WorkerID:     active.Worker.WorkerID,
 		PaneID:       active.Task.PaneID,
@@ -94,7 +94,7 @@ func (d *Daemon) finishAssignmentWithMessage(ctx context.Context, active ActiveA
 	var result error
 	cancelled := status == TaskStatusCancelled
 	cleanupCtx := context.WithoutCancel(ctx)
-	d.stopTaskMonitor(active.Task.Issue)
+	d.stopTaskMonitorForProject(active.Task.Project, active.Task.Issue)
 
 	if merged {
 		if err := d.amux.SendKeys(cleanupCtx, active.Task.PaneID, mergedWrapUpPrompt); err != nil {
@@ -138,14 +138,14 @@ func (d *Daemon) finishAssignmentWithMessage(ctx context.Context, active ActiveA
 	if clone.Name == "" && clone.Path != "" {
 		clone.Name = filepath.Base(clone.Path)
 	}
-	result = errors.Join(result, d.cleanupCloneAndRelease(cleanupCtx, clone, active.Task.Branch))
+	result = errors.Join(result, d.cleanupCloneAndReleaseForProject(cleanupCtx, active.Task.Project, clone, active.Task.Branch))
 
 	active.Task.Status = status
 	active.Task.UpdatedAt = d.now()
 	result = errors.Join(result, d.state.PutTask(cleanupCtx, active.Task))
 	result = errors.Join(result, d.releaseWorkerClaim(cleanupCtx, active.Worker))
 	if active.Task.PRNumber > 0 {
-		if err := d.state.DeleteMergeEntry(cleanupCtx, d.project, active.Task.PRNumber); err != nil && !errors.Is(err, ErrTaskNotFound) {
+		if err := d.state.DeleteMergeEntry(cleanupCtx, active.Task.Project, active.Task.PRNumber); err != nil && !errors.Is(err, ErrTaskNotFound) {
 			result = errors.Join(result, err)
 		}
 	}
@@ -167,7 +167,7 @@ func (d *Daemon) finishAssignmentWithMessage(ctx context.Context, active ActiveA
 	d.emit(cleanupCtx, Event{
 		Time:         d.now(),
 		Type:         eventType,
-		Project:      d.project,
+		Project:      active.Task.Project,
 		Issue:        active.Task.Issue,
 		WorkerID:     active.Worker.WorkerID,
 		PaneID:       active.Task.PaneID,

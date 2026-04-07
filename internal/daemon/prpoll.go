@@ -7,18 +7,22 @@ import (
 )
 
 func (d *Daemon) Enqueue(ctx context.Context, prNumber int) (MergeQueueActionResult, error) {
+	return d.enqueue(ctx, d.project, prNumber)
+}
+
+func (d *Daemon) enqueue(ctx context.Context, projectPath string, prNumber int) (MergeQueueActionResult, error) {
 	if err := d.requireStarted(); err != nil {
 		return MergeQueueActionResult{}, err
 	}
 
-	active, err := d.state.ActiveAssignmentByPRNumber(ctx, d.project, prNumber)
+	active, err := d.state.ActiveAssignmentByPRNumber(ctx, projectPath, prNumber)
 	if err != nil {
 		return MergeQueueActionResult{}, fmt.Errorf("PR #%d is not associated with an active assignment", prNumber)
 	}
 
 	now := d.now()
 	position, err := d.state.EnqueueMerge(ctx, MergeQueueEntry{
-		Project:   d.project,
+		Project:   projectPath,
 		Issue:     active.Task.Issue,
 		PRNumber:  prNumber,
 		Status:    MergeQueueStatusQueued,
@@ -36,7 +40,7 @@ func (d *Daemon) Enqueue(ctx context.Context, prNumber int) (MergeQueueActionRes
 	d.emit(ctx, d.mergeQueueEvent(&active, EventPREnqueued, prNumber, "pull request queued for landing", now))
 
 	return MergeQueueActionResult{
-		Project:   d.project,
+		Project:   projectPath,
 		PRNumber:  prNumber,
 		Status:    "queued",
 		Position:  position,
@@ -52,7 +56,7 @@ func (d *Daemon) checkTaskPRPoll(ctx context.Context, active ActiveAssignment) T
 	}
 
 	if update.Active.Task.PRNumber == 0 {
-		prNumber, err := d.lookupPRNumber(ctx, update.Active.Task.Branch)
+		prNumber, err := d.lookupPRNumber(ctx, update.Active.Task.Project, update.Active.Task.Branch)
 		if err != nil {
 			return update
 		}
@@ -72,13 +76,13 @@ func (d *Daemon) checkTaskPRPoll(ctx context.Context, active ActiveAssignment) T
 	if update.Active.Task.PRNumber == 0 {
 		return update
 	}
-	if entry, err := d.state.MergeEntry(ctx, d.project, update.Active.Task.PRNumber); err == nil && entry != nil {
+	if entry, err := d.state.MergeEntry(ctx, update.Active.Task.Project, update.Active.Task.PRNumber); err == nil && entry != nil {
 		return update
 	}
 
 	d.handlePRChecksPoll(ctx, &update, profile)
 
-	merged, err := d.isPRMerged(ctx, update.Active.Task.PRNumber)
+	merged, err := d.isPRMerged(ctx, update.Active.Task.Project, update.Active.Task.PRNumber)
 	if err != nil || !merged {
 		d.handlePRMergeablePoll(ctx, &update, profile)
 		reviewUpdate := d.checkTaskReviewPoll(ctx, update.Active, profile)
@@ -102,14 +106,14 @@ func mergeTaskStateUpdates(base, next TaskStateUpdate) TaskStateUpdate {
 	return merged
 }
 
-func (d *Daemon) lookupPRNumber(ctx context.Context, branch string) (int, error) {
-	return d.github.lookupPRNumber(ctx, branch)
+func (d *Daemon) lookupPRNumber(ctx context.Context, projectPath, branch string) (int, error) {
+	return d.githubForProject(projectPath).lookupPRNumber(ctx, branch)
 }
 
-func (d *Daemon) lookupOpenPRNumber(ctx context.Context, branch string) (int, error) {
-	return d.github.lookupOpenPRNumber(ctx, branch)
+func (d *Daemon) lookupOpenPRNumber(ctx context.Context, projectPath, branch string) (int, error) {
+	return d.githubForProject(projectPath).lookupOpenPRNumber(ctx, branch)
 }
 
-func (d *Daemon) isPRMerged(ctx context.Context, prNumber int) (bool, error) {
-	return d.github.isPRMerged(ctx, prNumber)
+func (d *Daemon) isPRMerged(ctx context.Context, projectPath string, prNumber int) (bool, error) {
+	return d.githubForProject(projectPath).isPRMerged(ctx, prNumber)
 }

@@ -77,6 +77,9 @@ func newSQLiteStateAdapter(store *state.SQLiteStore) *sqliteStateAdapter {
 }
 
 func convertStateTask(project string, task state.Task) Task {
+	if task.Project != "" {
+		project = task.Project
+	}
 	out := Task{
 		Project:      project,
 		Issue:        task.Issue,
@@ -298,7 +301,7 @@ func (a *sqliteStateAdapter) WorkerByID(ctx context.Context, project, workerID s
 	}
 
 	return Worker{
-		Project:               project,
+		Project:               firstNonEmpty(worker.Project, project),
 		WorkerID:              worker.WorkerID,
 		PaneID:                worker.CurrentPaneID,
 		PaneName:              worker.WorkerID,
@@ -333,7 +336,7 @@ func (a *sqliteStateAdapter) WorkerByPane(ctx context.Context, project, paneID s
 	}
 
 	return Worker{
-		Project:               project,
+		Project:               firstNonEmpty(worker.Project, project),
 		WorkerID:              worker.WorkerID,
 		PaneID:                worker.CurrentPaneID,
 		PaneName:              worker.WorkerID,
@@ -381,7 +384,7 @@ func (a *sqliteStateAdapter) ListWorkers(ctx context.Context, project string) ([
 	out := make([]Worker, 0, len(workers))
 	for _, worker := range workers {
 		out = append(out, Worker{
-			Project:               project,
+			Project:               firstNonEmpty(worker.Project, project),
 			WorkerID:              worker.WorkerID,
 			PaneID:                worker.CurrentPaneID,
 			PaneName:              worker.WorkerID,
@@ -534,6 +537,9 @@ func (a *sqliteStateAdapter) RecordEvent(ctx context.Context, event Event) error
 }
 
 func convertAssignment(project string, assignment state.Assignment) ActiveAssignment {
+	if assignment.Task.Project != "" {
+		project = assignment.Task.Project
+	}
 	task := Task{
 		Project:      project,
 		Issue:        assignment.Task.Issue,
@@ -556,7 +562,7 @@ func convertAssignment(project string, assignment state.Assignment) ActiveAssign
 	}
 
 	worker := Worker{
-		Project:               project,
+		Project:               firstNonEmpty(assignment.Worker.Project, project),
 		WorkerID:              assignment.Worker.WorkerID,
 		PaneID:                assignment.Worker.CurrentPaneID,
 		PaneName:              assignment.Worker.WorkerID,
@@ -584,6 +590,15 @@ func convertAssignment(project string, assignment state.Assignment) ActiveAssign
 		Task:   task,
 		Worker: worker,
 	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 type execCommandRunner struct{}

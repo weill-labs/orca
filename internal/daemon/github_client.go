@@ -84,6 +84,13 @@ func newDefaultGitHubClient(project string, commands CommandRunner) gitHubClient
 	})
 }
 
+func (d *Daemon) githubForProject(projectPath string) gitHubClient {
+	if d.github != nil && d.project == projectPath {
+		return d.github
+	}
+	return newDefaultGitHubClient(projectPath, d.commands)
+}
+
 func (c *gitHubCLIClient) lookupPRNumber(ctx context.Context, branch string) (int, error) {
 	output, err := c.run(ctx, "pr", "list", "--head", branch, "--json", "number")
 	if err != nil {

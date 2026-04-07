@@ -87,13 +87,13 @@ func (d *Daemon) emitHandshakeEvent(ctx context.Context, paneID string, profile 
 	event := Event{
 		Time:         d.now(),
 		Type:         EventWorkerHandshake,
-		Project:      d.project,
 		PaneID:       paneID,
 		AgentProfile: profile.Name,
 		Message:      message,
 	}
 
 	if worker, err := d.state.WorkerByPane(ctx, d.project, paneID); err == nil {
+		event.Project = worker.Project
 		event.Issue = worker.Issue
 		event.WorkerID = worker.WorkerID
 		event.PaneName = worker.PaneName
@@ -104,6 +104,9 @@ func (d *Daemon) emitHandshakeEvent(ctx context.Context, paneID string, profile 
 
 	if tasks, err := d.state.TasksByPane(ctx, d.project, paneID); err == nil && len(tasks) > 0 {
 		task := tasks[len(tasks)-1]
+		if event.Project == "" {
+			event.Project = task.Project
+		}
 		if event.Issue == "" {
 			event.Issue = task.Issue
 		}
@@ -119,6 +122,9 @@ func (d *Daemon) emitHandshakeEvent(ctx context.Context, paneID string, profile 
 		if event.AgentProfile == "" {
 			event.AgentProfile = task.AgentProfile
 		}
+	}
+	if event.Project == "" {
+		event.Project = d.project
 	}
 
 	d.emit(ctx, event)
