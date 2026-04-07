@@ -70,3 +70,20 @@ func TestConfirmPromptDeliveryReturnsWaitIdleErrorOnRetry(t *testing.T) {
 	}
 	deps.amux.requireSentKeys(t, "pane-1", []string{"Enter"})
 }
+
+func TestConfirmPromptDeliverySucceedsWhenWorkingAppearsAfterRetryIdleError(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.amux.waitContentResults = []error{
+		amuxapi.ErrWaitContentTimeout,
+		nil,
+	}
+	deps.amux.waitIdleErr = errors.New("idle failed")
+	d := deps.newDaemon(t)
+
+	if err := d.confirmPromptDelivery(context.Background(), "pane-1", AgentProfile{Name: "codex"}); err != nil {
+		t.Fatalf("confirmPromptDelivery() error = %v", err)
+	}
+	deps.amux.requireSentKeys(t, "pane-1", []string{"Enter"})
+}
