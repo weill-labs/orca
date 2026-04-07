@@ -388,6 +388,58 @@ func TestAppRunDispatchesCommands(t *testing.T) {
 	}
 }
 
+func TestAppRunStatusWarnsWhenDaemonBinaryDiffers(t *testing.T) {
+	t.Parallel()
+
+	projectPath := t.TempDir()
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	app := New(Options{
+		Daemon: &fakeDaemon{},
+		State: &fakeState{
+			projectStatus: state.ProjectStatus{
+				Project: projectPath,
+				Daemon: &state.DaemonStatus{
+					Status:  "running",
+					Session: "alpha",
+					PID:     42,
+				},
+			},
+		},
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		Version: "def5678",
+		Cwd: func() (string, error) {
+			return projectPath, nil
+		},
+		ProjectStatusRPC: func(context.Context, string) (daemon.ProjectStatusRPCResult, error) {
+			return daemon.ProjectStatusRPCResult{
+				ProjectStatus: state.ProjectStatus{
+					Project: projectPath,
+					Daemon: &state.DaemonStatus{
+						Status:  "running",
+						Session: "alpha",
+						PID:     42,
+					},
+				},
+				BuildCommit: "abc1234",
+			}, nil
+		},
+	})
+
+	if err := app.Run(context.Background(), []string{"status"}); err != nil {
+		t.Fatalf("Run(status) error = %v", err)
+	}
+
+	if got, want := stdout.String(), "daemon: running (version abc1234, installed def5678 — restart recommended)\n"; !strings.Contains(got, want) {
+		t.Fatalf("stdout = %q, want substring %q", got, want)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+}
+
 func TestAppRunAssignRejectsRemovedTitleFlag(t *testing.T) {
 	t.Parallel()
 

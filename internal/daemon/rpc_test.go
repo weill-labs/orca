@@ -211,16 +211,27 @@ func TestHandleRPCConnAndDispatchStatusBranches(t *testing.T) {
 	projectStatus := dispatchRPCRequest(context.Background(), rpcRequest{
 		ID:     json.RawMessage(`1`),
 		Method: "status",
-	}, nil, store, project)
+	}, nil, store, project, "build-804")
 	if projectStatus.Error != nil {
 		t.Fatalf("dispatch status project error = %#v", projectStatus.Error)
+	}
+	projectStatusPayload, err := json.Marshal(projectStatus.Result)
+	if err != nil {
+		t.Fatalf("Marshal(project status result) error = %v", err)
+	}
+	var projectStatusResult map[string]any
+	if err := json.Unmarshal(projectStatusPayload, &projectStatusResult); err != nil {
+		t.Fatalf("Unmarshal(project status result) error = %v", err)
+	}
+	if got, want := projectStatusResult["build_commit"], "build-804"; got != want {
+		t.Fatalf("project status build_commit = %v, want %q", got, want)
 	}
 
 	taskStatus := dispatchRPCRequest(context.Background(), rpcRequest{
 		ID:     json.RawMessage(`1`),
 		Method: "status",
 		Params: mustJSON(t, statusRPCParams{Issue: "LAB-718"}),
-	}, nil, store, project)
+	}, nil, store, project, "build-804")
 	if taskStatus.Error != nil {
 		t.Fatalf("dispatch status issue error = %#v", taskStatus.Error)
 	}
@@ -229,7 +240,7 @@ func TestHandleRPCConnAndDispatchStatusBranches(t *testing.T) {
 		ID:     json.RawMessage(`1`),
 		Method: "assign",
 		Params: mustJSON(t, assignRPCParams{Issue: "LAB-718", Agent: "codex"}),
-	}, &Daemon{}, store, project)
+	}, &Daemon{}, store, project, "build-804")
 	if assignErr.Error == nil {
 		t.Fatalf("dispatch assign error response = %#v, want error", assignErr)
 	}
@@ -241,7 +252,7 @@ func TestHandleRPCConnAndDispatchStatusBranches(t *testing.T) {
 			Entries: []BatchEntry{{Issue: "LAB-718", Agent: "codex", Prompt: "Implement batch IPC."}},
 			Delay:   "5s",
 		}),
-	}, &Daemon{}, store, project)
+	}, &Daemon{}, store, project, "build-804")
 	if batchErr.Error == nil {
 		t.Fatalf("dispatch batch error response = %#v, want error", batchErr)
 	}
@@ -250,7 +261,7 @@ func TestHandleRPCConnAndDispatchStatusBranches(t *testing.T) {
 		ID:     json.RawMessage(`1`),
 		Method: "assign",
 		Params: json.RawMessage(`{"issue":`),
-	}, &Daemon{}, store, project)
+	}, &Daemon{}, store, project, "build-804")
 	if badParams.Error == nil || badParams.Error.Code != -32602 {
 		t.Fatalf("dispatch bad params response = %#v", badParams)
 	}
@@ -259,7 +270,7 @@ func TestHandleRPCConnAndDispatchStatusBranches(t *testing.T) {
 		ID:     json.RawMessage(`1`),
 		Method: "batch",
 		Params: json.RawMessage(`{"entries":`),
-	}, &Daemon{}, store, project)
+	}, &Daemon{}, store, project, "build-804")
 	if badBatchParams.Error == nil || badBatchParams.Error.Code != -32602 {
 		t.Fatalf("dispatch bad batch params response = %#v", badBatchParams)
 	}
@@ -271,7 +282,7 @@ func TestHandleRPCConnAndDispatchStatusBranches(t *testing.T) {
 			Entries: []BatchEntry{{Issue: "LAB-718", Agent: "codex", Prompt: "Implement batch IPC."}},
 			Delay:   "not-a-duration",
 		}),
-	}, &Daemon{}, store, project)
+	}, &Daemon{}, store, project, "build-804")
 	if badBatchDelay.Error == nil || badBatchDelay.Error.Code != -32602 {
 		t.Fatalf("dispatch bad batch delay response = %#v", badBatchDelay)
 	}
@@ -280,7 +291,7 @@ func TestHandleRPCConnAndDispatchStatusBranches(t *testing.T) {
 		ID:     json.RawMessage(`1`),
 		Method: "enqueue",
 		Params: mustJSON(t, enqueueRPCParams{PRNumber: 42}),
-	}, &Daemon{}, store, project)
+	}, &Daemon{}, store, project, "build-804")
 	if enqueueErr.Error == nil {
 		t.Fatalf("dispatch enqueue error response = %#v, want error", enqueueErr)
 	}
@@ -288,7 +299,7 @@ func TestHandleRPCConnAndDispatchStatusBranches(t *testing.T) {
 	unknown := dispatchRPCRequest(context.Background(), rpcRequest{
 		ID:     json.RawMessage(`1`),
 		Method: "missing",
-	}, nil, store, project)
+	}, nil, store, project, "build-804")
 	if unknown.Error == nil || unknown.Error.Code != -32601 {
 		t.Fatalf("dispatch unknown response = %#v", unknown)
 	}
