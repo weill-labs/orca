@@ -192,12 +192,7 @@ func TestAssignRetriesCodexPromptUntilWorkingAppears(t *testing.T) {
 
 	deps := newTestDeps(t)
 	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
-	deps.amux.waitContentResults = []error{
-		amuxapi.ErrWaitContentTimeout,
-		amuxapi.ErrWaitContentTimeout,
-		amuxapi.ErrWaitContentTimeout,
-		nil,
-	}
+	deps.amux.waitContentResults = append(waitContentTimeouts(3), nil)
 	d := deps.newDaemon(t)
 	ctx := context.Background()
 
@@ -245,20 +240,7 @@ func TestAssignRollsBackWhenCodexPromptNeverShowsWorking(t *testing.T) {
 
 	deps := newTestDeps(t)
 	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
-	deps.amux.waitContentResults = []error{
-		amuxapi.ErrWaitContentTimeout,
-		amuxapi.ErrWaitContentTimeout,
-		amuxapi.ErrWaitContentTimeout,
-		amuxapi.ErrWaitContentTimeout,
-		amuxapi.ErrWaitContentTimeout,
-		amuxapi.ErrWaitContentTimeout,
-		amuxapi.ErrWaitContentTimeout,
-		amuxapi.ErrWaitContentTimeout,
-		amuxapi.ErrWaitContentTimeout,
-		amuxapi.ErrWaitContentTimeout,
-		amuxapi.ErrWaitContentTimeout,
-		amuxapi.ErrWaitContentTimeout,
-	}
+	deps.amux.waitContentResults = waitContentTimeouts(12)
 	d := deps.newDaemon(t)
 	ctx := context.Background()
 
@@ -403,6 +385,14 @@ func TestAssignRejectsConcurrentDuplicateIssueBeforeCloneAcquire(t *testing.T) {
 	if err := <-firstErr; err != nil {
 		t.Fatalf("first Assign() error = %v", err)
 	}
+}
+
+func waitContentTimeouts(count int) []error {
+	timeouts := make([]error, count)
+	for i := range timeouts {
+		timeouts[i] = amuxapi.ErrWaitContentTimeout
+	}
+	return timeouts
 }
 
 func TestAssignRejectsIssueAlreadyActiveInStateBeforeCloneAcquire(t *testing.T) {
