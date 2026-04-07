@@ -11,6 +11,13 @@ type Pane struct {
 	CWD  string `json:"cwd,omitempty"`
 }
 
+func (p Pane) Ref() string {
+	if name := strings.TrimSpace(p.Name); name != "" {
+		return name
+	}
+	return strings.TrimSpace(p.ID)
+}
+
 type SpawnRequest struct {
 	Session string `json:"session,omitempty"`
 	AtPane  string `json:"at_pane,omitempty"`

@@ -246,6 +246,144 @@ func TestAssignAllocatesCloneStartsAgentAndRegistersState(t *testing.T) {
 	deps.events.requireTypes(t, EventDaemonStarted, EventTaskAssigned)
 }
 
+func TestAssignStoresStablePaneNameReference(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	deps.amux.spawnPane = Pane{ID: "worker-LAB-854", Name: "worker-LAB-854"}
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-854", "Fix pane references", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	waitFor(t, "task registration", func() bool {
+		task, ok := deps.state.task("LAB-854")
+		return ok && task.Status == TaskStatusActive
+	})
+
+	task, ok := deps.state.task("LAB-854")
+	if !ok {
+		t.Fatal("task not stored in state")
+	}
+	if got, want := task.PaneID, "worker-LAB-854"; got != want {
+		t.Fatalf("task.PaneID = %q, want %q", got, want)
+	}
+
+	worker, ok := deps.state.worker("worker-LAB-854")
+	if !ok {
+		t.Fatal("worker not stored with stable pane ref")
+	}
+	if got, want := worker.PaneID, "worker-LAB-854"; got != want {
+		t.Fatalf("worker.PaneID = %q, want %q", got, want)
+	}
+
+	deps.amux.requireMetadata(t, "worker-LAB-854", map[string]string{
+		"agent_profile":  "codex",
+		"branch":         "LAB-854",
+		"task":           "LAB-854",
+		"tracked_issues": `[{"id":"LAB-854","status":"active"}]`,
+	})
+	deps.amux.requireSentKeys(t, "worker-LAB-854", []string{"Fix pane references\n"})
+}
+
+func TestDaemonStartNormalizesLeadPaneToStableName(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	deps.amux.listPanes = []Pane{{ID: "7", Name: "lead-pane-stable"}}
+	d := deps.newDaemon(t)
+	d.leadPane = "7"
+	ctx := context.Background()
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if got, want := d.leadPane, "lead-pane-stable"; got != want {
+		t.Fatalf("leadPane = %q, want %q", got, want)
+	}
+
+	if err := d.Assign(ctx, "LAB-855", "Verify lead pane normalization", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	waitFor(t, "spawn request", func() bool {
+		return len(deps.amux.spawnRequests) == 1
+	})
+
+	if got, want := deps.amux.spawnRequests[0].AtPane, "lead-pane-stable"; got != want {
+		t.Fatalf("spawn.AtPane = %q, want %q", got, want)
+	}
+}
+
+func TestNormalizeLeadPaneFallbacks(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		leadPane  string
+		listPanes []Pane
+		listErr   error
+		want      string
+	}{
+		{
+			name: "leaves empty lead pane unchanged",
+			want: "",
+		},
+		{
+			name:     "keeps numeric lead pane when list fails",
+			leadPane: "7",
+			listErr:  errors.New("amux unavailable"),
+			want:     "7",
+		},
+		{
+			name:      "keeps numeric lead pane when no stable name matches",
+			leadPane:  "7",
+			listPanes: []Pane{{ID: "8", Name: "worker-LAB-999"}},
+			want:      "7",
+		},
+		{
+			name:      "ignores panes without names",
+			leadPane:  "7",
+			listPanes: []Pane{{ID: "7"}},
+			want:      "7",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			deps := newTestDeps(t)
+			deps.amux.listPanes = append([]Pane(nil), tt.listPanes...)
+			deps.amux.listPanesErr = tt.listErr
+
+			d := deps.newDaemon(t)
+			d.leadPane = tt.leadPane
+			d.normalizeLeadPane(context.Background())
+
+			if got := d.leadPane; got != tt.want {
+				t.Fatalf("leadPane = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestNewOmitsLegacyPostmortemFields(t *testing.T) {
 	deps := newTestDeps(t)
 	daemon, err := New(Options{

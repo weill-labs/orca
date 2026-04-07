@@ -233,6 +233,128 @@ func TestResumeRespawnsCancelledTaskInExistingClone(t *testing.T) {
 	}
 }
 
+func TestResumeNormalizesLegacyNumericPaneRefBeforePaneChecks(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	seedActiveAssignment(t, deps, "LAB-757", "7")
+
+	task, ok := deps.state.task("LAB-757")
+	if !ok {
+		t.Fatal("seeded task missing")
+	}
+	task.Status = TaskStatusCancelled
+	task.UpdatedAt = deps.clock.Now()
+	if err := deps.state.PutTask(context.Background(), task); err != nil {
+		t.Fatalf("PutTask() error = %v", err)
+	}
+
+	deps.amux.paneExists = map[string]bool{
+		"7":              false,
+		"worker-LAB-757": true,
+	}
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+	deps.amux.mu.Lock()
+	deps.amux.paneExistsCalls = nil
+	deps.amux.captureCalls = nil
+	deps.amux.waitIdleCalls = nil
+	deps.amux.mu.Unlock()
+
+	resumer, ok := any(d).(daemonResumer)
+	if !ok {
+		t.Fatal("Daemon does not implement Resume")
+	}
+
+	if err := resumer.Resume(ctx, "LAB-757", ""); err != nil {
+		t.Fatalf("Resume() error = %v", err)
+	}
+
+	if got, want := deps.amux.paneExistsCalls, []string{"worker-LAB-757"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("pane exists calls = %#v, want %#v", got, want)
+	}
+	deps.amux.requireSentKeys(t, "worker-LAB-757", []string{"codex --yolo\n", "Implement startup recovery\n"})
+	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
+		{PaneID: "worker-LAB-757", Timeout: defaultAgentHandshakeTimeout},
+		{PaneID: "worker-LAB-757", Timeout: defaultAgentHandshakeTimeout, Settle: 2 * time.Second},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("waitIdle calls = %#v, want %#v", got, want)
+	}
+
+	resumedTask, ok := deps.state.task("LAB-757")
+	if !ok {
+		t.Fatal("task missing after resume")
+	}
+	if got, want := resumedTask.PaneID, "worker-LAB-757"; got != want {
+		t.Fatalf("task.PaneID = %q, want %q", got, want)
+	}
+	worker, ok := deps.state.worker("worker-LAB-757")
+	if !ok {
+		t.Fatal("worker missing after resume normalization")
+	}
+	if got, want := worker.PaneID, "worker-LAB-757"; got != want {
+		t.Fatalf("worker.PaneID = %q, want %q", got, want)
+	}
+	if _, ok := deps.state.worker("7"); ok {
+		t.Fatal("legacy numeric worker ref retained after resume")
+	}
+}
+
+func TestResumeReturnsNormalizationErrorWithoutWorker(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	seedActiveAssignment(t, deps, "LAB-757", "7")
+
+	task, ok := deps.state.task("LAB-757")
+	if !ok {
+		t.Fatal("seeded task missing")
+	}
+	task.Status = TaskStatusCancelled
+	task.UpdatedAt = deps.clock.Now()
+	if err := deps.state.PutTask(context.Background(), task); err != nil {
+		t.Fatalf("PutTask() error = %v", err)
+	}
+	if err := deps.state.DeleteWorker(context.Background(), task.Project, task.PaneID); err != nil {
+		t.Fatalf("DeleteWorker() error = %v", err)
+	}
+
+	state := &resumeStateStub{
+		fakeState:  deps.state,
+		putTaskErr: errors.New("put task failed"),
+	}
+	d := newResumeCoverageDaemon(t, deps, state, deps.amux)
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	resumer, ok := any(d).(daemonResumer)
+	if !ok {
+		t.Fatal("Daemon does not implement Resume")
+	}
+
+	err := resumer.Resume(ctx, "LAB-757", "")
+	if err == nil || !strings.Contains(err.Error(), "normalize task pane ref: put task failed") {
+		t.Fatalf("Resume() error = %v, want normalization task error", err)
+	}
+	if got := len(deps.amux.paneExistsCalls); got != 0 {
+		t.Fatalf("pane exists calls = %d, want 0 after normalization failure", got)
+	}
+}
+
 func TestResumeRejectsInvalidStatesAndMissingTasks(t *testing.T) {
 	t.Run("not started", func(t *testing.T) {
 		t.Parallel()
