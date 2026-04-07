@@ -401,6 +401,10 @@ func (d *Daemon) Assign(ctx context.Context, issue, prompt, agentProfile string,
 		d.failPendingAssignment(ctx, issue, clone, pane, profile, err, restoreReservation)
 		return fmt.Errorf("send prompt: %w", err)
 	}
+	if err := d.confirmPromptDelivery(ctx, pane.ID, profile); err != nil {
+		d.failPendingAssignment(ctx, issue, clone, pane, profile, err, restoreReservation)
+		return fmt.Errorf("send prompt: %w", err)
+	}
 	if err := d.setIssueStatus(ctx, issue, IssueStateInProgress); err != nil {
 		d.failPendingAssignment(ctx, issue, clone, pane, profile, err, restoreReservation)
 		return fmt.Errorf("set issue status: %w", err)

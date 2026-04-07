@@ -52,13 +52,13 @@ func TestAssignResolvesPaneTitle(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name         string
-		issue        string
-		title        string
-		linearTitle  string
-		linearErr    error
-		wantTask     string
-		wantLookups  []string
+		name        string
+		issue       string
+		title       string
+		linearTitle string
+		linearErr   error
+		wantTask    string
+		wantLookups []string
 	}{
 		{
 			name:        "uses provided title as-is",
@@ -218,10 +218,9 @@ func TestAssignRetriesCodexPromptUntilWorkingAppears(t *testing.T) {
 	})
 
 	deps.amux.requireSentKeys(t, "pane-1", []string{
-		"Verify prompt delivery",
-		"Enter",
-		"Enter",
-		"Enter",
+		"Verify prompt delivery\n",
+		"\n",
+		"\n",
 	})
 	if got, want := deps.amux.waitContentCalls, []waitContentCall{
 		{PaneID: "pane-1", Substring: "do you trust", Timeout: defaultTrustPromptTimeout},
