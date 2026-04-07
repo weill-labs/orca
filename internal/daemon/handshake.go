@@ -95,6 +95,7 @@ func (d *Daemon) emitHandshakeEvent(ctx context.Context, paneID string, profile 
 
 	if worker, err := d.state.WorkerByPane(ctx, d.project, paneID); err == nil {
 		event.Issue = worker.Issue
+		event.WorkerID = worker.WorkerID
 		event.PaneName = worker.PaneName
 		if event.AgentProfile == "" {
 			event.AgentProfile = worker.AgentProfile
@@ -105,6 +106,9 @@ func (d *Daemon) emitHandshakeEvent(ctx context.Context, paneID string, profile 
 		task := tasks[len(tasks)-1]
 		if event.Issue == "" {
 			event.Issue = task.Issue
+		}
+		if event.WorkerID == "" {
+			event.WorkerID = task.WorkerID
 		}
 		if event.PaneName == "" {
 			event.PaneName = task.PaneName

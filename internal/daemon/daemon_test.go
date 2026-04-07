@@ -199,9 +199,12 @@ func TestAssignAllocatesCloneStartsAgentAndRegistersState(t *testing.T) {
 		t.Fatalf("task.Branch = %q, want %q", got, want)
 	}
 
-	worker, ok := deps.state.worker("pane-1")
+	worker, ok := deps.state.worker("worker-01")
 	if !ok {
 		t.Fatal("worker not stored in state")
+	}
+	if got, want := worker.WorkerID, "worker-01"; got != want {
+		t.Fatalf("worker.WorkerID = %q, want %q", got, want)
 	}
 	if got, want := worker.AgentProfile, "codex"; got != want {
 		t.Fatalf("worker.AgentProfile = %q, want %q", got, want)
@@ -215,6 +218,8 @@ func TestAssignAllocatesCloneStartsAgentAndRegistersState(t *testing.T) {
 	wantGit := []commandCall{
 		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"checkout", "main"}},
 		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"pull"}},
+		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"config", "user.name", "Orca worker-01"}},
+		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"config", "user.email", "worker-01@orca.local"}},
 		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"checkout", "-B", "LAB-689"}},
 	}
 	if got := deps.commands.callsByName("git"); !reflect.DeepEqual(got, wantGit) {

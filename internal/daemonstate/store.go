@@ -61,15 +61,16 @@ type ProjectStatus struct {
 }
 
 type Task struct {
-	Issue     string    `json:"issue"`
-	Status    string    `json:"status"`
-	Agent     string    `json:"agent"`
-	Prompt    string    `json:"prompt,omitempty"`
-	WorkerID  string    `json:"worker_id,omitempty"`
-	ClonePath string    `json:"clone_path,omitempty"`
-	PRNumber  *int      `json:"pr_number,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	Issue         string    `json:"issue"`
+	Status        string    `json:"status"`
+	Agent         string    `json:"agent"`
+	Prompt        string    `json:"prompt,omitempty"`
+	WorkerID      string    `json:"worker_id,omitempty"`
+	CurrentPaneID string    `json:"current_pane_id,omitempty"`
+	ClonePath     string    `json:"clone_path,omitempty"`
+	PRNumber      *int      `json:"pr_number,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 type TaskStatus struct {
@@ -83,7 +84,8 @@ type Assignment struct {
 }
 
 type Worker struct {
-	PaneID                string    `json:"pane_id"`
+	WorkerID              string    `json:"worker_id"`
+	CurrentPaneID         string    `json:"current_pane_id,omitempty"`
 	Agent                 string    `json:"agent"`
 	State                 string    `json:"state"`
 	Issue                 string    `json:"issue,omitempty"`
@@ -99,7 +101,8 @@ type Worker struct {
 	NudgeCount            int       `json:"nudge_count,omitempty"`
 	LastCapture           string    `json:"last_capture,omitempty"`
 	LastActivityAt        time.Time `json:"last_activity_at,omitempty"`
-	UpdatedAt             time.Time `json:"updated_at"`
+	CreatedAt             time.Time `json:"created_at"`
+	LastSeenAt            time.Time `json:"last_seen_at"`
 }
 
 type MergeQueueEntry struct {
@@ -124,6 +127,7 @@ type Event struct {
 	Project   string          `json:"project"`
 	Kind      string          `json:"kind"`
 	Issue     string          `json:"issue,omitempty"`
+	WorkerID  string          `json:"worker_id,omitempty"`
 	Message   string          `json:"message"`
 	Payload   json.RawMessage `json:"payload,omitempty"`
 	CreatedAt time.Time       `json:"created_at"`

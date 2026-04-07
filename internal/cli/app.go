@@ -863,11 +863,11 @@ func writeWorkers(w io.Writer, workers []state.Worker) error {
 	}
 
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	if _, err := fmt.Fprintln(tw, "PANE\tAGENT\tSTATE\tISSUE\tCLONE\tUPDATED"); err != nil {
+	if _, err := fmt.Fprintln(tw, "WORKER\tPANE\tAGENT\tSTATE\tISSUE\tCLONE\tLAST SEEN"); err != nil {
 		return err
 	}
 	for _, worker := range workers {
-		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", worker.PaneID, fallback(worker.Agent), fallback(worker.State), fallback(worker.Issue), fallback(worker.ClonePath), formatTimestamp(worker.UpdatedAt)); err != nil {
+		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", fallback(worker.WorkerID), fallback(worker.CurrentPaneID), fallback(worker.Agent), fallback(worker.State), fallback(worker.Issue), fallback(worker.ClonePath), formatTimestamp(worker.LastSeenAt)); err != nil {
 			return err
 		}
 	}

@@ -72,7 +72,7 @@ func TestSQLiteStoreLifecycleAndQueries(t *testing.T) {
 		Status:    "active",
 		Agent:     "codex",
 		Prompt:    "Implement socket IPC",
-		WorkerID:  "pane-1",
+		WorkerID:  "worker-01",
 		ClonePath: clonePath,
 		PRNumber:  &prNumber,
 	}); err != nil {
@@ -80,21 +80,23 @@ func TestSQLiteStoreLifecycleAndQueries(t *testing.T) {
 	}
 
 	if err := store.UpsertWorker(context.Background(), project, Worker{
-		PaneID:    "pane-1",
-		Agent:     "codex",
-		State:     "healthy",
-		Issue:     "LAB-718",
-		ClonePath: clonePath,
+		WorkerID:      "worker-01",
+		CurrentPaneID: "pane-1",
+		Agent:         "codex",
+		State:         "healthy",
+		Issue:         "LAB-718",
+		ClonePath:     clonePath,
 	}); err != nil {
 		t.Fatalf("UpsertWorker() error = %v", err)
 	}
 
 	firstEvent, err := store.AppendEvent(context.Background(), Event{
-		Project: project,
-		Kind:    "task.assigned",
-		Issue:   "LAB-718",
-		Message: "LAB-718 assigned",
-		Payload: []byte(`{"pane":"pane-1"}`),
+		Project:  project,
+		Kind:     "task.assigned",
+		Issue:    "LAB-718",
+		WorkerID: "worker-01",
+		Message:  "LAB-718 assigned",
+		Payload:  []byte(`{"pane":"pane-1"}`),
 	})
 	if err != nil {
 		t.Fatalf("AppendEvent() error = %v", err)
@@ -193,10 +195,10 @@ func TestSQLiteStoreLifecycleAndQueries(t *testing.T) {
 		t.Fatalf("updatedTask.Status = %q, want %q", got, want)
 	}
 
-	if err := store.DeleteWorker(context.Background(), project, "pane-1"); err != nil {
+	if err := store.DeleteWorker(context.Background(), project, "worker-01"); err != nil {
 		t.Fatalf("DeleteWorker() error = %v", err)
 	}
-	if err := store.DeleteWorker(context.Background(), project, "pane-1"); !errors.Is(err, ErrNotFound) {
+	if err := store.DeleteWorker(context.Background(), project, "worker-01"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("DeleteWorker() second error = %v, want ErrNotFound", err)
 	}
 
@@ -476,7 +478,8 @@ func TestSQLiteStorePersistsWorkerMonitorStateAndMergeQueue(t *testing.T) {
 	now := time.Date(2026, 4, 3, 9, 30, 0, 0, time.UTC)
 
 	if err := store.UpsertWorker(context.Background(), project, Worker{
-		PaneID:                "pane-1",
+		WorkerID:              "worker-01",
+		CurrentPaneID:         "pane-1",
 		Agent:                 "codex",
 		State:                 "escalated",
 		Issue:                 "LAB-735",
@@ -492,7 +495,8 @@ func TestSQLiteStorePersistsWorkerMonitorStateAndMergeQueue(t *testing.T) {
 		NudgeCount:            3,
 		LastCapture:           "permission prompt",
 		LastActivityAt:        now,
-		UpdatedAt:             now,
+		CreatedAt:             now,
+		LastSeenAt:            now,
 	}); err != nil {
 		t.Fatalf("UpsertWorker() error = %v", err)
 	}
@@ -622,7 +626,7 @@ func TestSQLiteStoreWorkerByPaneAndNonTerminalTasks(t *testing.T) {
 			Status:    "starting",
 			Agent:     "codex",
 			Prompt:    "Recover startup",
-			WorkerID:  "pane-1",
+			WorkerID:  "worker-01",
 			ClonePath: "/clones/clone-01",
 			CreatedAt: now,
 			UpdatedAt: now,
@@ -632,7 +636,7 @@ func TestSQLiteStoreWorkerByPaneAndNonTerminalTasks(t *testing.T) {
 			Status:    "active",
 			Agent:     "codex",
 			Prompt:    "Keep running",
-			WorkerID:  "pane-2",
+			WorkerID:  "worker-02",
 			ClonePath: "/clones/clone-02",
 			PRNumber:  &prNumber,
 			CreatedAt: now,
@@ -643,7 +647,7 @@ func TestSQLiteStoreWorkerByPaneAndNonTerminalTasks(t *testing.T) {
 			Status:    "done",
 			Agent:     "codex",
 			Prompt:    "Finished",
-			WorkerID:  "pane-3",
+			WorkerID:  "worker-03",
 			ClonePath: "/clones/clone-03",
 			CreatedAt: now,
 			UpdatedAt: now.Add(2 * time.Minute),
@@ -655,7 +659,8 @@ func TestSQLiteStoreWorkerByPaneAndNonTerminalTasks(t *testing.T) {
 	}
 
 	if err := store.UpsertWorker(context.Background(), project, Worker{
-		PaneID:                "pane-2",
+		WorkerID:              "worker-02",
+		CurrentPaneID:         "pane-2",
 		Agent:                 "codex",
 		State:                 "escalated",
 		Issue:                 "LAB-741",
@@ -671,7 +676,8 @@ func TestSQLiteStoreWorkerByPaneAndNonTerminalTasks(t *testing.T) {
 		NudgeCount:            3,
 		LastCapture:           "permission prompt",
 		LastActivityAt:        now,
-		UpdatedAt:             now.Add(time.Minute),
+		CreatedAt:             now,
+		LastSeenAt:            now.Add(time.Minute),
 	}); err != nil {
 		t.Fatalf("UpsertWorker() error = %v", err)
 	}

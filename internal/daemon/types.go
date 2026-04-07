@@ -88,6 +88,7 @@ type ConfigProvider interface {
 
 type StateStore interface {
 	ClaimTask(ctx context.Context, task Task) (*Task, error)
+	ClaimWorker(ctx context.Context, worker Worker) (Worker, error)
 	RestoreTask(ctx context.Context, project, issue string, previous *Task) error
 	PutTask(ctx context.Context, task Task) error
 	DeleteTask(ctx context.Context, project, issue string) error
@@ -95,8 +96,10 @@ type StateStore interface {
 	TasksByPane(ctx context.Context, project, paneID string) ([]Task, error)
 	NonTerminalTasks(ctx context.Context, project string) ([]Task, error)
 	PutWorker(ctx context.Context, worker Worker) error
+	WorkerByID(ctx context.Context, project, workerID string) (Worker, error)
 	WorkerByPane(ctx context.Context, project, paneID string) (Worker, error)
-	DeleteWorker(ctx context.Context, project, paneID string) error
+	DeleteWorker(ctx context.Context, project, workerID string) error
+	ListWorkers(ctx context.Context, project string) ([]Worker, error)
 	ActiveAssignments(ctx context.Context, project string) ([]ActiveAssignment, error)
 	ActiveAssignmentByIssue(ctx context.Context, project, issue string) (ActiveAssignment, error)
 	ActiveAssignmentByPRNumber(ctx context.Context, project string, prNumber int) (ActiveAssignment, error)
@@ -170,6 +173,7 @@ type Task struct {
 	Issue        string    `json:"issue,omitempty"`
 	Status       string    `json:"status,omitempty"`
 	Prompt       string    `json:"prompt,omitempty"`
+	WorkerID     string    `json:"worker_id,omitempty"`
 	PaneID       string    `json:"pane_id,omitempty"`
 	PaneName     string    `json:"pane_name,omitempty"`
 	CloneName    string    `json:"clone_name,omitempty"`
@@ -183,6 +187,7 @@ type Task struct {
 
 type Worker struct {
 	Project               string    `json:"project,omitempty"`
+	WorkerID              string    `json:"worker_id,omitempty"`
 	PaneID                string    `json:"pane_id,omitempty"`
 	PaneName              string    `json:"pane_name,omitempty"`
 	Issue                 string    `json:"issue,omitempty"`
@@ -200,6 +205,8 @@ type Worker struct {
 	NudgeCount            int       `json:"nudge_count,omitempty"`
 	LastCapture           string    `json:"last_capture,omitempty"`
 	LastActivityAt        time.Time `json:"last_activity_at,omitempty"`
+	CreatedAt             time.Time `json:"created_at,omitempty"`
+	LastSeenAt            time.Time `json:"last_seen_at,omitempty"`
 	UpdatedAt             time.Time `json:"updated_at,omitempty"`
 }
 
@@ -235,6 +242,7 @@ type Event struct {
 	Type         string    `json:"type"`
 	Project      string    `json:"project,omitempty"`
 	Issue        string    `json:"issue,omitempty"`
+	WorkerID     string    `json:"worker_id,omitempty"`
 	PaneID       string    `json:"pane_id,omitempty"`
 	PaneName     string    `json:"pane_name,omitempty"`
 	CloneName    string    `json:"clone_name,omitempty"`

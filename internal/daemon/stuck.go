@@ -16,7 +16,7 @@ func (d *Daemon) nudgeOrEscalate(ctx context.Context, update *TaskStateUpdate, p
 			}
 
 			update.Active.Worker.Health = WorkerHealthStuck
-			update.Active.Worker.UpdatedAt = now
+			update.Active.Worker.LastSeenAt = now
 			update.Active.Worker.NudgeCount++
 			update.WorkerChanged = true
 
@@ -32,7 +32,7 @@ func (d *Daemon) nudgeOrEscalate(ctx context.Context, update *TaskStateUpdate, p
 	}
 
 	update.Active.Worker.Health = WorkerHealthEscalated
-	update.Active.Worker.UpdatedAt = now
+	update.Active.Worker.LastSeenAt = now
 	update.WorkerChanged = true
 	if update.Active.Task.PaneID != "" {
 		update.PaneMetadata = mergeMetadata(update.PaneMetadata, map[string]string{"status": "escalated"})

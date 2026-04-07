@@ -178,8 +178,12 @@ func TestAssignRollsBackOnAgentHandshakeFailure(t *testing.T) {
 	if _, ok := deps.state.task("LAB-720"); ok {
 		t.Fatal("task stored despite handshake rollback")
 	}
-	if _, ok := deps.state.worker("pane-1"); ok {
-		t.Fatal("worker stored despite handshake rollback")
+	worker, ok := deps.state.worker("worker-01")
+	if !ok {
+		t.Fatal("worker missing after handshake rollback")
+	}
+	if got := worker.PaneID; got != "" {
+		t.Fatalf("worker.PaneID = %q, want empty after rollback", got)
 	}
 
 	deps.amux.requireSentKeys(t, "pane-1", nil)
@@ -190,6 +194,8 @@ func TestAssignRollsBackOnAgentHandshakeFailure(t *testing.T) {
 	wantGit := []commandCall{
 		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"checkout", "main"}},
 		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"pull"}},
+		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"config", "user.name", "Orca worker-01"}},
+		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"config", "user.email", "worker-01@orca.local"}},
 		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"checkout", "-B", "LAB-720"}},
 	}
 	if got := deps.commands.callsByName("git"); !reflect.DeepEqual(got, wantGit) {

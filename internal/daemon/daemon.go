@@ -314,8 +314,26 @@ func (d *Daemon) Assign(ctx context.Context, issue, prompt, agentProfile string,
 		_ = d.state.RestoreTask(context.WithoutCancel(ctx), d.project, issue, previousTask)
 	}
 
+	claimedWorker, err := d.state.ClaimWorker(ctx, Worker{
+		Project:      d.project,
+		Issue:        issue,
+		AgentProfile: profile.Name,
+		Health:       WorkerHealthHealthy,
+		CreatedAt:    now,
+		LastSeenAt:   now,
+		UpdatedAt:    now,
+	})
+	if err != nil {
+		restoreReservation()
+		return fmt.Errorf("claim worker: %w", err)
+	}
+	restoreWorkerClaim := func() {
+		_ = d.releaseWorkerClaim(context.WithoutCancel(ctx), claimedWorker)
+	}
+
 	clone, err := d.pool.Acquire(ctx, d.project, issue)
 	if err != nil {
+		restoreWorkerClaim()
 		restoreReservation()
 		return fmt.Errorf("acquire clone: %w", err)
 	}
@@ -324,8 +342,9 @@ func (d *Daemon) Assign(ctx context.Context, issue, prompt, agentProfile string,
 	if adoptingOpenPR {
 		prepareClone = d.prepareAdoptedClone
 	}
-	if err := prepareClone(ctx, clone.Path, assignmentBranch); err != nil {
+	if err := prepareClone(ctx, clone.Path, assignmentBranch, claimedWorker.WorkerID); err != nil {
 		_ = d.pool.Release(ctx, d.project, clone)
+		restoreWorkerClaim()
 		restoreReservation()
 		return fmt.Errorf("prepare clone: %w", err)
 	}
@@ -335,12 +354,13 @@ func (d *Daemon) Assign(ctx context.Context, issue, prompt, agentProfile string,
 	pane, err := d.amux.Spawn(ctx, SpawnRequest{
 		Session: d.session,
 		AtPane:  d.leadPane,
-		Name:    "worker-" + issue,
+		Name:    claimedWorker.WorkerID,
 		CWD:     clone.Path,
 		Command: profile.StartCommand,
 	})
 	if err != nil {
 		_ = d.cleanupCloneAndRelease(ctx, clone, issue)
+		restoreWorkerClaim()
 		restoreReservation()
 		return fmt.Errorf("spawn pane: %w", err)
 	}
@@ -348,68 +368,84 @@ func (d *Daemon) Assign(ctx context.Context, issue, prompt, agentProfile string,
 	metadata, err := d.assignmentPaneMetadata(ctx, pane.ID, profile.Name, assignmentBranch, issue, d.resolveAssignmentTitle(ctx, issue, firstTitle(title)), prNumber)
 	if err != nil {
 		_ = d.rollbackAssignment(ctx, clone, pane, issue)
+		restoreWorkerClaim()
 		restoreReservation()
 		return fmt.Errorf("build pane metadata: %w", err)
 	}
 
 	if err := d.setPaneMetadata(ctx, pane.ID, metadata); err != nil {
 		_ = d.rollbackAssignment(ctx, clone, pane, issue)
+		restoreWorkerClaim()
 		restoreReservation()
 		return fmt.Errorf("set pane metadata: %w", err)
 	}
 
 	task := claimedTask
+	task.WorkerID = claimedWorker.WorkerID
 	task.PaneID = pane.ID
-	task.PaneName = pane.Name
+	task.PaneName = claimedWorker.WorkerID
 	task.CloneName = clone.Name
 	task.ClonePath = clone.Path
 	task.UpdatedAt = d.now()
 	worker := Worker{
-		Project:        d.project,
-		PaneID:         pane.ID,
-		PaneName:       pane.Name,
-		Issue:          issue,
-		ClonePath:      clone.Path,
-		AgentProfile:   profile.Name,
-		Health:         WorkerHealthHealthy,
-		LastActivityAt: now,
-		UpdatedAt:      now,
+		Project:               d.project,
+		WorkerID:              claimedWorker.WorkerID,
+		PaneID:                pane.ID,
+		PaneName:              claimedWorker.WorkerID,
+		Issue:                 issue,
+		ClonePath:             clone.Path,
+		AgentProfile:          profile.Name,
+		Health:                WorkerHealthHealthy,
+		LastReviewCount:       0,
+		LastIssueCommentCount: 0,
+		ReviewNudgeCount:      0,
+		LastCIState:           "",
+		CINudgeCount:          0,
+		CIFailurePollCount:    0,
+		CIEscalated:           false,
+		LastMergeableState:    "",
+		NudgeCount:            0,
+		LastCapture:           "",
+		CreatedAt:             claimedWorker.CreatedAt,
+		LastActivityAt:        now,
+		LastSeenAt:            now,
+		UpdatedAt:             now,
 	}
 	if err := d.state.PutTask(ctx, task); err != nil {
-		d.failPendingAssignment(ctx, issue, clone, pane, profile, err, restoreReservation)
+		d.failPendingAssignment(ctx, issue, clone, pane, worker, profile, err, restoreReservation)
 		return fmt.Errorf("store pending task: %w", err)
 	}
 	if err := d.state.PutWorker(ctx, worker); err != nil {
-		d.failPendingAssignment(ctx, issue, clone, pane, profile, err, restoreReservation)
+		d.failPendingAssignment(ctx, issue, clone, pane, worker, profile, err, restoreReservation)
 		return fmt.Errorf("store pending worker: %w", err)
 	}
 
 	if err := d.agentHandshake(ctx, pane.ID, profile); err != nil {
-		d.failPendingAssignment(ctx, issue, clone, pane, profile, err, restoreReservation)
+		d.failPendingAssignment(ctx, issue, clone, pane, worker, profile, err, restoreReservation)
 		return fmt.Errorf("agent handshake: %w", err)
 	}
 
 	if err := d.amux.SendKeys(ctx, pane.ID, prompt); err != nil {
-		d.failPendingAssignment(ctx, issue, clone, pane, profile, err, restoreReservation)
+		d.failPendingAssignment(ctx, issue, clone, pane, worker, profile, err, restoreReservation)
 		return fmt.Errorf("send prompt: %w", err)
 	}
 	if err := d.amux.WaitIdleSettle(ctx, pane.ID, defaultAgentHandshakeTimeout, defaultPromptSettleDuration); err != nil {
-		d.failPendingAssignment(ctx, issue, clone, pane, profile, err, restoreReservation)
+		d.failPendingAssignment(ctx, issue, clone, pane, worker, profile, err, restoreReservation)
 		return fmt.Errorf("send prompt: %w", err)
 	}
 	if err := d.amux.SendKeys(ctx, pane.ID, "Enter"); err != nil {
-		d.failPendingAssignment(ctx, issue, clone, pane, profile, err, restoreReservation)
+		d.failPendingAssignment(ctx, issue, clone, pane, worker, profile, err, restoreReservation)
 		return fmt.Errorf("send prompt: %w", err)
 	}
 	if err := d.setIssueStatus(ctx, issue, IssueStateInProgress); err != nil {
-		d.failPendingAssignment(ctx, issue, clone, pane, profile, err, restoreReservation)
+		d.failPendingAssignment(ctx, issue, clone, pane, worker, profile, err, restoreReservation)
 		return fmt.Errorf("set issue status: %w", err)
 	}
 
 	task.Status = TaskStatusActive
 	task.UpdatedAt = d.now()
 	if err := d.state.PutTask(ctx, task); err != nil {
-		d.failPendingAssignment(ctx, issue, clone, pane, profile, err, restoreReservation)
+		d.failPendingAssignment(ctx, issue, clone, pane, worker, profile, err, restoreReservation)
 		return fmt.Errorf("store task: %w", err)
 	}
 	d.ensureTaskMonitor(issue)
@@ -419,8 +455,9 @@ func (d *Daemon) Assign(ctx context.Context, issue, prompt, agentProfile string,
 		Type:         EventTaskAssigned,
 		Project:      d.project,
 		Issue:        issue,
+		WorkerID:     claimedWorker.WorkerID,
 		PaneID:       pane.ID,
-		PaneName:     pane.Name,
+		PaneName:     claimedWorker.WorkerID,
 		CloneName:    clone.Name,
 		ClonePath:    clone.Path,
 		Branch:       assignmentBranch,
@@ -455,12 +492,13 @@ func validateAssignmentPrompt(prompt string) error {
 	return nil
 }
 
-func (d *Daemon) failPendingAssignment(ctx context.Context, issue string, clone Clone, pane Pane, profile AgentProfile, err error, releaseReservation func()) {
+func (d *Daemon) failPendingAssignment(ctx context.Context, issue string, clone Clone, pane Pane, worker Worker, profile AgentProfile, err error, releaseReservation func()) {
 	d.emit(ctx, Event{
 		Time:         d.now(),
 		Type:         EventTaskAssignFailed,
 		Project:      d.project,
 		Issue:        issue,
+		WorkerID:     worker.WorkerID,
 		PaneID:       pane.ID,
 		CloneName:    clone.Name,
 		ClonePath:    clone.Path,
@@ -469,8 +507,8 @@ func (d *Daemon) failPendingAssignment(ctx context.Context, issue string, clone 
 		Message:      err.Error(),
 	})
 	_ = d.rollbackAssignment(ctx, clone, pane, issue)
-	if deleteErr := d.state.DeleteWorker(context.WithoutCancel(ctx), d.project, pane.ID); deleteErr != nil && !errors.Is(deleteErr, ErrWorkerNotFound) {
-		_ = deleteErr
+	if releaseErr := d.releaseWorkerClaim(context.WithoutCancel(ctx), worker); releaseErr != nil && !errors.Is(releaseErr, ErrWorkerNotFound) {
+		_ = releaseErr
 	}
 	releaseReservation()
 }

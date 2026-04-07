@@ -265,7 +265,7 @@ func TestAppRunDispatchesCommands(t *testing.T) {
 			args: func(_, _ string) []string { return []string{"workers", "--json"} },
 			prepareState: func(s *fakeState) {
 				s.workers = []state.Worker{
-					{PaneID: "pane-3", Agent: "codex", State: "healthy", Issue: "LAB-690", ClonePath: "/clones/orca01", UpdatedAt: now},
+					{WorkerID: "worker-03", CurrentPaneID: "pane-3", Agent: "codex", State: "healthy", Issue: "LAB-690", ClonePath: "/clones/orca01", CreatedAt: now, LastSeenAt: now},
 				}
 			},
 			assert: func(t *testing.T, _ *fakeDaemon, s *fakeState, stdout, _ string, repoRoot, _ string) {
@@ -273,7 +273,7 @@ func TestAppRunDispatchesCommands(t *testing.T) {
 				if s.workersProject != repoRoot {
 					t.Fatalf("expected workers lookup for %q, got %q", repoRoot, s.workersProject)
 				}
-				if !strings.Contains(stdout, "\"pane_id\":\"pane-3\"") {
+				if !strings.Contains(stdout, "\"worker_id\":\"worker-03\"") || !strings.Contains(stdout, "\"current_pane_id\":\"pane-3\"") {
 					t.Fatalf("expected json worker output, got %q", stdout)
 				}
 			},
@@ -636,7 +636,7 @@ func TestAppRunOutputModes(t *testing.T) {
 			daemon: &fakeDaemon{},
 			state: &fakeState{
 				workers: []state.Worker{
-					{PaneID: "pane-3", Agent: "codex", State: "healthy", Issue: "LAB-690", ClonePath: "/clones/orca01", UpdatedAt: now},
+					{WorkerID: "worker-03", CurrentPaneID: "pane-3", Agent: "codex", State: "healthy", Issue: "LAB-690", ClonePath: "/clones/orca01", CreatedAt: now, LastSeenAt: now},
 				},
 			},
 			assert: func(t *testing.T, stdout string, _ *fakeDaemon, s *fakeState) {

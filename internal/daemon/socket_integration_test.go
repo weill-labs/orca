@@ -136,7 +136,7 @@ daemonReady:
 	if got := taskStatus.Task.ClonePath; got != wantClonePath {
 		t.Fatalf("task.ClonePath = %q, want %q", got, wantClonePath)
 	}
-	if got, want := taskStatus.Task.WorkerID, "pane-1"; got != want {
+	if got, want := taskStatus.Task.WorkerID, "worker-01"; got != want {
 		t.Fatalf("task.WorkerID = %q, want %q", got, want)
 	}
 
@@ -191,7 +191,7 @@ daemonReady:
 		if err != nil {
 			return false
 		}
-		return status.Summary.Cancelled == 1 && status.Summary.Workers == 0 && status.Summary.FreeClones == 1
+		return status.Summary.Cancelled == 1 && status.Summary.Workers == 1 && status.Summary.FreeClones == 1
 	})
 
 	if got, want := amuxClient.killCalls, []string{"pane-1"}; len(got) != len(want) || got[0] != want[0] {

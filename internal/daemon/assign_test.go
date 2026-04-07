@@ -163,13 +163,13 @@ func TestAssignResolvesPaneTitle(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name         string
-		issue        string
-		title        string
-		linearTitle  string
-		linearErr    error
-		wantTask     string
-		wantLookups  []string
+		name        string
+		issue       string
+		title       string
+		linearTitle string
+		linearErr   error
+		wantTask    string
+		wantLookups []string
 	}{
 		{
 			name:        "uses provided title as-is",
@@ -269,8 +269,12 @@ func TestAssignRollsBackOnPromptSendFailure(t *testing.T) {
 	if _, ok := deps.state.task("LAB-689"); ok {
 		t.Fatal("task stored despite rollback")
 	}
-	if _, ok := deps.state.worker("pane-1"); ok {
-		t.Fatal("worker stored despite rollback")
+	worker, ok := deps.state.worker("worker-01")
+	if !ok {
+		t.Fatal("worker missing after rollback")
+	}
+	if got := worker.PaneID; got != "" {
+		t.Fatalf("worker.PaneID = %q, want empty after rollback", got)
 	}
 
 	if got, want := deps.pool.releasedClones(), []Clone{{
@@ -289,6 +293,8 @@ func TestAssignRollsBackOnPromptSendFailure(t *testing.T) {
 	wantGit := []commandCall{
 		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"checkout", "main"}},
 		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"pull"}},
+		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"config", "user.name", "Orca worker-01"}},
+		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"config", "user.email", "worker-01@orca.local"}},
 		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"checkout", "-B", "LAB-689"}},
 	}
 	if got := deps.commands.callsByName("git"); !reflect.DeepEqual(got, wantGit) {
@@ -325,8 +331,12 @@ func TestAssignRollsBackOnIssueStatusFailureAfterPersistingStartingState(t *test
 	if _, ok := deps.state.task("LAB-743"); ok {
 		t.Fatal("task stored despite issue status rollback")
 	}
-	if _, ok := deps.state.worker("pane-1"); ok {
-		t.Fatal("worker stored despite issue status rollback")
+	worker, ok := deps.state.worker("worker-01")
+	if !ok {
+		t.Fatal("worker missing after issue status rollback")
+	}
+	if got := worker.PaneID; got != "" {
+		t.Fatalf("worker.PaneID = %q, want empty after rollback", got)
 	}
 	if got, want := deps.pool.releasedClones(), []Clone{{
 		Name:          deps.pool.clone.Name,
@@ -395,22 +405,28 @@ func TestAssignRejectsIssueAlreadyActiveInStateBeforeCloneAcquire(t *testing.T) 
 	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
 	d := deps.newDaemon(t)
 	ctx := context.Background()
-	deps.state.tasks["LAB-689"] = Task{
+	deps.state.putTaskForTest(Task{
 		Project:      "/tmp/project",
 		Issue:        "LAB-689",
 		Status:       TaskStatusActive,
+		WorkerID:     "worker-01",
 		PaneID:       "pane-existing",
+		PaneName:     "worker-01",
 		ClonePath:    "/tmp/existing-clone",
 		Branch:       "LAB-689",
 		AgentProfile: "codex",
-	}
-	deps.state.workers["pane-existing"] = Worker{
+	})
+	if err := deps.state.PutWorker(context.Background(), Worker{
 		Project:      "/tmp/project",
+		WorkerID:     "worker-01",
 		PaneID:       "pane-existing",
+		PaneName:     "worker-01",
 		Issue:        "LAB-689",
 		ClonePath:    "/tmp/existing-clone",
 		AgentProfile: "codex",
 		Health:       WorkerHealthHealthy,
+	}); err != nil {
+		t.Fatalf("PutWorker() error = %v", err)
 	}
 
 	if err := d.Start(ctx); err != nil {
@@ -565,6 +581,8 @@ func TestAssignAdoptsOpenPRAndPrepopulatesTask(t *testing.T) {
 
 	wantGit := []commandCall{
 		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"fetch", "origin"}},
+		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"config", "user.name", "Orca worker-01"}},
+		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"config", "user.email", "worker-01@orca.local"}},
 		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"checkout", "-B", "LAB-689", "origin/LAB-689"}},
 	}
 	if got := deps.commands.callsByName("git"); !reflect.DeepEqual(got, wantGit) {
