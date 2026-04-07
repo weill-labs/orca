@@ -1,6 +1,6 @@
 .PHONY: setup install vet test test-race test-flakes bench coverage release-dry-run verify
 
-BUILD_COMMIT ?= $(shell git rev-parse --short=7 HEAD)
+BUILD_COMMIT ?= $(shell git rev-parse --short=7 HEAD 2>/dev/null || echo dev)
 GO_LDFLAGS := -ldflags "-X main.BuildCommit=$(BUILD_COMMIT)"
 
 setup: ## Configure git hooks and install tools

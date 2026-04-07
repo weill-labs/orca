@@ -161,13 +161,7 @@ func New(options Options) *App {
 
 	projectStatusRPC := options.ProjectStatusRPC
 	if projectStatusRPC == nil {
-		projectStatusRPC = func(ctx context.Context, projectPath string) (daemon.ProjectStatusRPCResult, error) {
-			paths, err := daemon.ResolvePaths()
-			if err != nil {
-				return daemon.ProjectStatusRPCResult{}, err
-			}
-			return daemon.ProjectStatusRPC(ctx, paths, projectPath)
-		}
+		projectStatusRPC = defaultProjectStatusRPC
 	}
 
 	return &App{
@@ -832,20 +826,10 @@ func (a *App) projectStatus(ctx context.Context, projectPath string) (state.Proj
 }
 
 func writeProjectStatus(w io.Writer, status state.ProjectStatus, daemonBuildCommit, installedBuildCommit string) error {
-	daemonState := "stopped"
-	if status.Daemon != nil && status.Daemon.Status != "" {
-		daemonState = status.Daemon.Status
-	}
-	daemonBuildCommit = strings.TrimSpace(daemonBuildCommit)
-	installedBuildCommit = strings.TrimSpace(installedBuildCommit)
-	if daemonState == "running" && daemonBuildCommit != "" && installedBuildCommit != "" && daemonBuildCommit != installedBuildCommit {
-		daemonState = fmt.Sprintf("%s (version %s, installed %s — restart recommended)", daemonState, daemonBuildCommit, installedBuildCommit)
-	}
-
 	if _, err := fmt.Fprintf(w, "project: %s\n", status.Project); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(w, "daemon: %s\n", daemonState); err != nil {
+	if _, err := fmt.Fprintf(w, "daemon: %s\n", daemonStatusText(status, daemonBuildCommit, installedBuildCommit)); err != nil {
 		return err
 	}
 	if status.Daemon != nil {
@@ -882,6 +866,29 @@ func writeProjectStatus(w io.Writer, status state.ProjectStatus, daemonBuildComm
 		}
 	}
 	return tw.Flush()
+}
+
+func defaultProjectStatusRPC(ctx context.Context, projectPath string) (daemon.ProjectStatusRPCResult, error) {
+	paths, err := daemon.ResolvePaths()
+	if err != nil {
+		return daemon.ProjectStatusRPCResult{}, err
+	}
+	return daemon.ProjectStatusRPC(ctx, paths, projectPath)
+}
+
+func daemonStatusText(status state.ProjectStatus, daemonBuildCommit, installedBuildCommit string) string {
+	daemonState := "stopped"
+	if status.Daemon != nil && status.Daemon.Status != "" {
+		daemonState = status.Daemon.Status
+	}
+
+	daemonBuildCommit = strings.TrimSpace(daemonBuildCommit)
+	installedBuildCommit = strings.TrimSpace(installedBuildCommit)
+	if daemonState != "running" || daemonBuildCommit == "" || installedBuildCommit == "" || daemonBuildCommit == installedBuildCommit {
+		return daemonState
+	}
+
+	return fmt.Sprintf("%s (version %s, installed %s — restart recommended)", daemonState, daemonBuildCommit, installedBuildCommit)
 }
 
 func writeTaskStatus(w io.Writer, taskStatus state.TaskStatus) error {
