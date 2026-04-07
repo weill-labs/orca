@@ -238,12 +238,12 @@ func TestFinishAssignmentMergedCleanupSetsDoneMetadataAfterPostmortem(t *testing
 		"agent_profile":  "codex",
 		"branch":         "LAB-689",
 		"status":         "done",
-		"task":           "LAB-689",
+		"task":           "\x1b[9mLAB-689\x1b[29m",
 		"tracked_issues": `[{"id":"LAB-689","status":"completed"}]`,
 	})
 }
 
-func TestFinishAssignmentCancelledSetsDoneMetadataBeforeKill(t *testing.T) {
+func TestFinishAssignmentCancelledStrikesTaskTitleBeforeKill(t *testing.T) {
 	t.Parallel()
 
 	deps := newTestDeps(t)
@@ -251,6 +251,7 @@ func TestFinishAssignmentCancelledSetsDoneMetadataBeforeKill(t *testing.T) {
 	active := newPostmortemAssignment(deps)
 	active.Task.Status = TaskStatusActive
 	seedFinishAssignmentState(t, deps, active)
+	deps.amux.metadata[active.Task.PaneID]["task"] = "Queue merge queue"
 
 	var operations []string
 	deps.amux.sendKeysHook = func(_ string, keys []string) {
@@ -285,7 +286,7 @@ func TestFinishAssignmentCancelledSetsDoneMetadataBeforeKill(t *testing.T) {
 		"agent_profile":  "codex",
 		"branch":         "LAB-689",
 		"status":         "done",
-		"task":           "LAB-689",
+		"task":           "\x1b[9mQueue merge queue\x1b[29m",
 		"tracked_issues": `[{"id":"LAB-689","status":"completed"}]`,
 	})
 }
@@ -493,7 +494,7 @@ func TestFinishAssignmentPreservesHistoricalTrackedMetadata(t *testing.T) {
 		"agent_profile":  "codex",
 		"branch":         "LAB-689",
 		"status":         "done",
-		"task":           "LAB-689",
+		"task":           "\x1b[9mLAB-689\x1b[29m",
 		"tracked_issues": `[{"id":"LAB-688","status":"completed"},{"id":"LAB-689","status":"completed"}]`,
 		"tracked_prs":    `[{"number":41,"status":"completed"},{"number":42,"status":"completed"}]`,
 	})

@@ -16,6 +16,11 @@ import (
 
 var linearIssueIdentifierPattern = regexp.MustCompile(`^[A-Z][A-Z0-9]*-\d+$`)
 
+const (
+	ansiStrikethroughOn  = "\x1b[9m"
+	ansiStrikethroughOff = "\x1b[29m"
+)
+
 type trackedStatus string
 
 const (
@@ -150,6 +155,22 @@ func resolveTaskTitle(issue, title string) string {
 		return title
 	}
 	return strings.TrimSpace(issue)
+}
+
+func strikethroughTaskTitle(title string) string {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return ""
+	}
+	return ansiStrikethroughOn + title + ansiStrikethroughOff
+}
+
+func (d *Daemon) paneTaskTitle(ctx context.Context, paneID, issue string) (string, error) {
+	metadata, err := d.amux.Metadata(ctx, paneID)
+	if err != nil {
+		return "", fmt.Errorf("load pane metadata: %w", err)
+	}
+	return resolveTaskTitle(issue, metadata["task"]), nil
 }
 
 func firstTitle(values []string) string {
@@ -386,7 +407,16 @@ func (d *Daemon) completionPaneMetadata(ctx context.Context, active ActiveAssign
 	if err != nil {
 		return nil, err
 	}
-	return mergeMetadata(map[string]string{"status": "done"}, tracked), nil
+
+	taskTitle, err := d.paneTaskTitle(ctx, active.Task.PaneID, active.Task.Issue)
+	if err != nil {
+		return nil, err
+	}
+
+	return mergeMetadata(map[string]string{
+		"status": "done",
+		"task":   strikethroughTaskTitle(taskTitle),
+	}, tracked), nil
 }
 
 func (d *Daemon) setPaneMetadata(ctx context.Context, paneID string, metadata map[string]string) error {

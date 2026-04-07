@@ -11,6 +11,8 @@ import (
 )
 
 func TestPRMergePollingSendsWrapUpAndCleansClone(t *testing.T) {
+	t.Parallel()
+
 	deps := newTestDeps(t)
 	captureTicker := newFakeTicker()
 	prTicker := newFakeTicker()
@@ -31,7 +33,9 @@ func TestPRMergePollingSendsWrapUpAndCleansClone(t *testing.T) {
 		_ = d.Stop(context.Background())
 	})
 
-	if err := d.Assign(ctx, "LAB-689", "Implement daemon core", "codex"); err != nil {
+	const paneTitle = "Merge queue title"
+
+	if err := d.Assign(ctx, "LAB-689", "Implement daemon core", "codex", paneTitle); err != nil {
 		t.Fatalf("Assign() error = %v", err)
 	}
 
@@ -80,7 +84,7 @@ func TestPRMergePollingSendsWrapUpAndCleansClone(t *testing.T) {
 		"agent_profile":  "codex",
 		"branch":         "LAB-689",
 		"status":         "done",
-		"task":           "LAB-689",
+		"task":           "\x1b[9m" + paneTitle + "\x1b[29m",
 		"tracked_issues": `[{"id":"LAB-689","status":"completed"}]`,
 		"tracked_prs":    `[{"number":42,"status":"completed"}]`,
 	})
