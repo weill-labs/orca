@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	amuxapi "github.com/weill-labs/orca/internal/amux"
 )
 
 func TestAssignEnforcesCodexYoloFlag(t *testing.T) {
@@ -50,13 +52,13 @@ func TestAssignResolvesPaneTitle(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name         string
-		issue        string
-		title        string
-		linearTitle  string
-		linearErr    error
-		wantTask     string
-		wantLookups  []string
+		name        string
+		issue       string
+		title       string
+		linearTitle string
+		linearErr   error
+		wantTask    string
+		wantLookups []string
 	}{
 		{
 			name:        "uses provided title as-is",
@@ -185,6 +187,116 @@ func TestAssignRollsBackOnPromptSendFailure(t *testing.T) {
 	deps.events.requireTypes(t, EventDaemonStarted, EventTaskAssignFailed)
 }
 
+func TestAssignRetriesCodexPromptUntilWorkingAppears(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	deps.amux.waitContentResults = append(waitContentTimeouts(3), nil)
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-898", "Verify prompt delivery", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	waitFor(t, "task registration", func() bool {
+		task, ok := deps.state.task("LAB-898")
+		return ok && task.Status == TaskStatusActive
+	})
+
+	deps.amux.requireSentKeys(t, "pane-1", []string{
+		"Verify prompt delivery\n",
+		"\n",
+		"\n",
+	})
+	if got, want := deps.amux.waitContentCalls, []waitContentCall{
+		{PaneID: "pane-1", Substring: "do you trust", Timeout: defaultTrustPromptTimeout},
+		{PaneID: "pane-1", Substring: "Working", Timeout: defaultAgentHandshakeTimeout},
+		{PaneID: "pane-1", Substring: "Working", Timeout: defaultAgentHandshakeTimeout},
+		{PaneID: "pane-1", Substring: "Working", Timeout: defaultAgentHandshakeTimeout},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("waitContent calls = %#v, want %#v", got, want)
+	}
+	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
+		{PaneID: "pane-1", Timeout: defaultAgentHandshakeTimeout},
+		{PaneID: "pane-1", Timeout: defaultAgentHandshakeTimeout, Settle: defaultPromptSettleDuration},
+		{PaneID: "pane-1", Timeout: defaultAgentHandshakeTimeout},
+		{PaneID: "pane-1", Timeout: defaultAgentHandshakeTimeout},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("waitIdle calls = %#v, want %#v", got, want)
+	}
+}
+
+func TestAssignRollsBackWhenCodexPromptNeverShowsWorking(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	deps.amux.waitContentResults = waitContentTimeouts(12)
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-898", "Verify prompt delivery", "codex"); err == nil {
+		t.Fatal("Assign() succeeded, want error")
+	} else if !strings.Contains(err.Error(), "send prompt") {
+		t.Fatalf("Assign() error = %v, want send prompt context", err)
+	}
+
+	if _, ok := deps.state.task("LAB-898"); ok {
+		t.Fatal("task stored despite prompt delivery rollback")
+	}
+	if _, ok := deps.state.worker("pane-1"); ok {
+		t.Fatal("worker stored despite prompt delivery rollback")
+	}
+	if got, want := deps.pool.releasedClones(), []Clone{{
+		Name:          deps.pool.clone.Name,
+		Path:          deps.pool.clone.Path,
+		CurrentBranch: "LAB-898",
+		AssignedTask:  "LAB-898",
+	}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("released clones = %#v, want %#v", got, want)
+	}
+	if got, want := deps.amux.killCalls, []string{"pane-1"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("kill calls = %#v, want %#v", got, want)
+	}
+	if got, want := deps.amux.waitContentCalls, []waitContentCall{
+		{PaneID: "pane-1", Substring: "do you trust", Timeout: defaultTrustPromptTimeout},
+		{PaneID: "pane-1", Substring: "Working", Timeout: defaultAgentHandshakeTimeout},
+		{PaneID: "pane-1", Substring: "Working", Timeout: defaultAgentHandshakeTimeout},
+		{PaneID: "pane-1", Substring: "Working", Timeout: defaultAgentHandshakeTimeout},
+		{PaneID: "pane-1", Substring: "Working", Timeout: defaultAgentHandshakeTimeout},
+		{PaneID: "pane-1", Substring: "Working", Timeout: defaultAgentHandshakeTimeout},
+		{PaneID: "pane-1", Substring: "Working", Timeout: defaultAgentHandshakeTimeout},
+		{PaneID: "pane-1", Substring: "Working", Timeout: defaultAgentHandshakeTimeout},
+		{PaneID: "pane-1", Substring: "Working", Timeout: defaultAgentHandshakeTimeout},
+		{PaneID: "pane-1", Substring: "Working", Timeout: defaultAgentHandshakeTimeout},
+		{PaneID: "pane-1", Substring: "Working", Timeout: defaultAgentHandshakeTimeout},
+		{PaneID: "pane-1", Substring: "Working", Timeout: defaultAgentHandshakeTimeout},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("waitContent calls = %#v, want %#v", got, want)
+	}
+	if got, want := deps.amux.countKey("pane-1", "\n"), 10; got != want {
+		t.Fatalf("retry enter count = %d, want %d", got, want)
+	}
+
+	deps.events.requireTypes(t, EventDaemonStarted, EventTaskAssignFailed)
+}
+
 func TestAssignRollsBackOnIssueStatusFailureAfterPersistingStartingState(t *testing.T) {
 	t.Parallel()
 
@@ -273,6 +385,14 @@ func TestAssignRejectsConcurrentDuplicateIssueBeforeCloneAcquire(t *testing.T) {
 	if err := <-firstErr; err != nil {
 		t.Fatalf("first Assign() error = %v", err)
 	}
+}
+
+func waitContentTimeouts(count int) []error {
+	timeouts := make([]error, count)
+	for i := range timeouts {
+		timeouts[i] = amuxapi.ErrWaitContentTimeout
+	}
+	return timeouts
 }
 
 func TestAssignRejectsIssueAlreadyActiveInStateBeforeCloneAcquire(t *testing.T) {

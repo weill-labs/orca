@@ -50,6 +50,7 @@ func TestAssignConfirmsCodexTrustPromptBeforeSendingPrompt(t *testing.T) {
 	if got, want := deps.amux.waitContentCalls, []waitContentCall{
 		{PaneID: "pane-1", Substring: "do you trust", Timeout: defaultTrustPromptTimeout},
 		{PaneID: "pane-1", Substring: "do you trust", Timeout: defaultTrustPromptTimeout},
+		{PaneID: "pane-1", Substring: codexWorkingText, Timeout: defaultAgentHandshakeTimeout},
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("waitContent calls = %#v, want %#v", got, want)
 	}
@@ -91,6 +92,7 @@ func TestAssignDoesNotBlindlyConfirmWhenTrustPromptNotPresent(t *testing.T) {
 	deps.amux.requireSentKeys(t, "pane-1", []string{"Implement handshake\n"})
 	if got, want := deps.amux.waitContentCalls, []waitContentCall{
 		{PaneID: "pane-1", Substring: "do you trust", Timeout: defaultTrustPromptTimeout},
+		{PaneID: "pane-1", Substring: codexWorkingText, Timeout: defaultAgentHandshakeTimeout},
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("waitContent calls = %#v, want %#v", got, want)
 	}
@@ -141,6 +143,7 @@ func TestAssignResumesCodexBeforeSendingPrompt(t *testing.T) {
 		{PaneID: "pane-1", Substring: "do you trust", Timeout: defaultTrustPromptTimeout},
 		{PaneID: "pane-1", Substring: "›", Timeout: defaultAgentHandshakeTimeout},
 		{PaneID: "pane-1", Substring: "do you trust", Timeout: defaultTrustPromptTimeout},
+		{PaneID: "pane-1", Substring: codexWorkingText, Timeout: defaultAgentHandshakeTimeout},
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("waitContent calls = %#v, want %#v", got, want)
 	}
@@ -567,22 +570,25 @@ func TestAssignAllowsConcurrentTrustPromptWaitsAcrossPanes(t *testing.T) {
 	}
 	deps.amux.captureSequence("pane-1", []string{"Codex is ready."})
 	deps.amux.captureSequence("pane-2", []string{"Codex is ready."})
-	deps.amux.waitContentResults = []error{
-		amuxapi.ErrWaitContentTimeout,
-		amuxapi.ErrWaitContentTimeout,
-	}
-
 	firstWaitContentEntered := make(chan struct{})
 	releaseFirstWaitContent := make(chan struct{})
 	secondWaitContentEntered := make(chan struct{}, 1)
 	var firstWaitContent sync.Once
 	var secondWaitContent sync.Once
 	deps.amux.waitContentHook = func(paneID, substring string, timeout time.Duration) {
-		if substring != "do you trust" {
-			t.Errorf("wait content substring = %q, want %q", substring, "do you trust")
-		}
-		if timeout != defaultTrustPromptTimeout {
-			t.Errorf("wait content timeout = %v, want %v", timeout, defaultTrustPromptTimeout)
+		switch substring {
+		case "do you trust":
+			if timeout != defaultTrustPromptTimeout {
+				t.Errorf("wait content timeout = %v, want %v", timeout, defaultTrustPromptTimeout)
+			}
+		case codexWorkingText:
+			if timeout != defaultAgentHandshakeTimeout {
+				t.Errorf("wait content timeout = %v, want %v", timeout, defaultAgentHandshakeTimeout)
+			}
+			return
+		default:
+			t.Errorf("wait content substring = %q, want trust prompt or %q", substring, codexWorkingText)
+			return
 		}
 		switch paneID {
 		case "pane-1":
@@ -642,10 +648,10 @@ func TestAssignAllowsConcurrentTrustPromptWaitsAcrossPanes(t *testing.T) {
 		t.Fatalf("second Assign() error = %v", err)
 	}
 
-	if got, want := deps.amux.waitContentCount("pane-1"), 1; got != want {
+	if got, want := deps.amux.waitContentCount("pane-1"), 2; got != want {
 		t.Fatalf("pane-1 waitContent count = %d, want %d", got, want)
 	}
-	if got, want := deps.amux.waitContentCount("pane-2"), 1; got != want {
+	if got, want := deps.amux.waitContentCount("pane-2"), 2; got != want {
 		t.Fatalf("pane-2 waitContent count = %d, want %d", got, want)
 	}
 }

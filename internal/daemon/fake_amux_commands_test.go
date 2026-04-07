@@ -352,6 +352,9 @@ func (a *fakeAmux) WaitContent(ctx context.Context, paneID, substring string, ti
 		a.waitContentResults = a.waitContentResults[1:]
 		return err
 	}
+	if substring == codexWorkingText {
+		return nil
+	}
 	if a.waitContentErr == nil {
 		return amuxapi.ErrWaitContentTimeout
 	}
