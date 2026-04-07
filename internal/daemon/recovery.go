@@ -29,12 +29,20 @@ func (d *Daemon) reconcileTaskOnStartup(ctx context.Context, task Task) {
 		return
 	}
 
-	projectPath := task.Project
-	if projectPath == "" {
-		projectPath = d.project
+	projectPath := d.projectPathForTask(task)
+	workerID := strings.TrimSpace(task.WorkerID)
+	if workerID == "" {
+		workerID = strings.TrimSpace(task.PaneName)
 	}
 
-	worker, err := d.state.WorkerByID(ctx, projectPath, task.WorkerID)
+	var worker Worker
+	var err error
+	if workerID != "" {
+		worker, err = d.state.WorkerByID(ctx, projectPath, workerID)
+	}
+	if workerID == "" || errors.Is(err, ErrWorkerNotFound) {
+		worker, err = d.state.WorkerByPane(ctx, projectPath, paneID)
+	}
 	if err != nil {
 		_ = d.failTaskWithoutWorker(ctx, task, "persisted worker missing on daemon startup")
 		return

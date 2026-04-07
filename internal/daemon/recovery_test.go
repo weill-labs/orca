@@ -159,6 +159,9 @@ func TestGlobalDaemonStartUsesTaskProjectForWorkerLookup(t *testing.T) {
 	}
 
 	task, ok = deps.state.task("LAB-900")
+	if !ok {
+		t.Fatal("task missing after startup reconciliation")
+	}
 	if _, ok := deps.state.worker("pane-1"); !ok {
 		t.Fatal("worker missing after startup reconciliation")
 	}
