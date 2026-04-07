@@ -385,6 +385,121 @@ func TestSQLiteStoreNotFoundAndHelpers(t *testing.T) {
 	}
 }
 
+func TestSQLiteStoreAllActiveQueriesAcrossProjects(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	now := time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC)
+
+	for _, task := range []Task{
+		{
+			Issue:     "LAB-901",
+			Status:    "active",
+			Agent:     "codex",
+			WorkerID:  "pane-a",
+			ClonePath: "/clones/a",
+			CreatedAt: now,
+			UpdatedAt: now,
+		},
+		{
+			Issue:     "LAB-902",
+			Status:    "starting",
+			Agent:     "codex",
+			WorkerID:  "pane-b",
+			ClonePath: "/clones/b",
+			CreatedAt: now,
+			UpdatedAt: now.Add(time.Minute),
+		},
+		{
+			Issue:     "LAB-903",
+			Status:    "done",
+			Agent:     "codex",
+			WorkerID:  "pane-c",
+			ClonePath: "/clones/c",
+			CreatedAt: now,
+			UpdatedAt: now.Add(2 * time.Minute),
+		},
+	} {
+		project := "/repo-a"
+		if task.Issue == "LAB-902" {
+			project = "/repo-b"
+		}
+		if err := store.UpsertTask(context.Background(), project, task); err != nil {
+			t.Fatalf("UpsertTask(%s) error = %v", task.Issue, err)
+		}
+	}
+
+	if err := store.UpsertWorker(context.Background(), "/repo-a", Worker{
+		PaneID:    "pane-a",
+		Agent:     "codex",
+		State:     "healthy",
+		Issue:     "LAB-901",
+		ClonePath: "/clones/a",
+		UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("UpsertWorker(/repo-a) error = %v", err)
+	}
+
+	if err := store.UpsertWorker(context.Background(), "/repo-b", Worker{
+		PaneID:    "pane-b",
+		Agent:     "codex",
+		State:     "healthy",
+		Issue:     "LAB-902",
+		ClonePath: "/clones/b",
+		UpdatedAt: now.Add(time.Minute),
+	}); err != nil {
+		t.Fatalf("UpsertWorker(/repo-b) error = %v", err)
+	}
+
+	if _, err := store.EnqueueMergeEntry(context.Background(), MergeQueueEntry{
+		Project:   "/repo-a",
+		Issue:     "LAB-901",
+		PRNumber:  41,
+		Status:    "queued",
+		CreatedAt: now,
+		UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("EnqueueMergeEntry(/repo-a) error = %v", err)
+	}
+	if _, err := store.EnqueueMergeEntry(context.Background(), MergeQueueEntry{
+		Project:   "/repo-b",
+		Issue:     "LAB-902",
+		PRNumber:  42,
+		Status:    "awaiting_checks",
+		CreatedAt: now.Add(time.Minute),
+		UpdatedAt: now.Add(time.Minute),
+	}); err != nil {
+		t.Fatalf("EnqueueMergeEntry(/repo-b) error = %v", err)
+	}
+
+	tasks, err := store.AllNonTerminalTasks(context.Background())
+	if err != nil {
+		t.Fatalf("AllNonTerminalTasks() error = %v", err)
+	}
+	if got, want := len(tasks), 2; got != want {
+		t.Fatalf("len(AllNonTerminalTasks()) = %d, want %d", got, want)
+	}
+
+	assignments, err := store.AllActiveAssignments(context.Background())
+	if err != nil {
+		t.Fatalf("AllActiveAssignments() error = %v", err)
+	}
+	if got, want := len(assignments), 1; got != want {
+		t.Fatalf("len(AllActiveAssignments()) = %d, want %d", got, want)
+	}
+	if got, want := assignments[0].Task.Issue, "LAB-901"; got != want {
+		t.Fatalf("AllActiveAssignments()[0].Task.Issue = %q, want %q", got, want)
+	}
+
+	entries, err := store.AllMergeEntries(context.Background())
+	if err != nil {
+		t.Fatalf("AllMergeEntries() error = %v", err)
+	}
+	if got, want := len(entries), 2; got != want {
+		t.Fatalf("len(AllMergeEntries()) = %d, want %d", got, want)
+	}
+}
+
 func TestSQLiteExecWithRetryRetriesBusyError(t *testing.T) {
 	t.Parallel()
 

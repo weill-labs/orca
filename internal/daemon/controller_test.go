@@ -192,6 +192,33 @@ func TestPreparePIDStateExistingPIDFile(t *testing.T) {
 	}
 }
 
+func TestPathsUseGlobalDaemonFiles(t *testing.T) {
+	t.Parallel()
+
+	paths := Paths{
+		ConfigDir: "/tmp/orca",
+		PIDDir:    "/tmp/orca/pids",
+	}
+
+	pidA := paths.pidFile("/repo-a")
+	pidB := paths.pidFile("/repo-b")
+	if got, want := pidA, "/tmp/orca/pids/orca.pid"; got != want {
+		t.Fatalf("pidFile(/repo-a) = %q, want %q", got, want)
+	}
+	if got, want := pidB, "/tmp/orca/pids/orca.pid"; got != want {
+		t.Fatalf("pidFile(/repo-b) = %q, want %q", got, want)
+	}
+
+	socketA := paths.socketFile("/repo-a")
+	socketB := paths.socketFile("/repo-b")
+	if got, want := socketA, "/tmp/orca/orca.sock"; got != want {
+		t.Fatalf("socketFile(/repo-a) = %q, want %q", got, want)
+	}
+	if got, want := socketB, "/tmp/orca/orca.sock"; got != want {
+		t.Fatalf("socketFile(/repo-b) = %q, want %q", got, want)
+	}
+}
+
 func TestStopReturnsContextErrorWhenPollingCancelled(t *testing.T) {
 	store := &fakeStore{}
 	projectPath := testProjectPath(t)

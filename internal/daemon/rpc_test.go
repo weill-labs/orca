@@ -146,6 +146,38 @@ func TestBatchTypesIncludeEntriesAndDelayFields(t *testing.T) {
 	}
 }
 
+func TestRPCParamsIncludeProjectField(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		value    any
+		typeName string
+	}{
+		{name: "assign", value: assignRPCParams{}, typeName: "assignRPCParams"},
+		{name: "batch", value: batchRPCParams{}, typeName: "batchRPCParams"},
+		{name: "cancel", value: cancelRPCParams{}, typeName: "cancelRPCParams"},
+		{name: "resume", value: resumeRPCParams{}, typeName: "resumeRPCParams"},
+		{name: "enqueue", value: enqueueRPCParams{}, typeName: "enqueueRPCParams"},
+		{name: "status", value: statusRPCParams{}, typeName: "statusRPCParams"},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			field, ok := reflect.TypeOf(tt.value).FieldByName("Project")
+			if !ok {
+				t.Fatalf("%s missing Project field", tt.typeName)
+			}
+			if got, want := field.Tag.Get("json"), "project"; got != want {
+				t.Fatalf("%s.Project json tag = %q, want %q", tt.typeName, got, want)
+			}
+		})
+	}
+}
+
 func TestHandleRPCConnAndDispatchStatusBranches(t *testing.T) {
 	t.Parallel()
 
@@ -318,6 +350,9 @@ func TestSocketFileForProjectFallsBackWhenConfigDirIsTooLong(t *testing.T) {
 	projectPath := filepath.Join(t.TempDir(), "project")
 
 	socketPath := socketFileForProject(configDir, projectPath)
+	if got, want := socketPath, filepath.Join(configDir, "orca.sock"); got != want {
+		t.Fatalf("socketFileForProject() = %q, want %q", got, want)
+	}
 	if got := len(socketPath); got > unixSocketPathMax {
 		t.Fatalf("socket path length = %d, want <= %d (%q)", got, unixSocketPathMax, socketPath)
 	}
