@@ -154,7 +154,7 @@ func TestResumeRespawnsCancelledTaskInExistingClone(t *testing.T) {
 		t.Fatalf("DeleteWorker() error = %v", err)
 	}
 
-	deps.amux.spawnPane = Pane{ID: "pane-2", Name: "worker-01"}
+	deps.amux.spawnPane = Pane{ID: "pane-2", Name: "worker-LAB-757"}
 	deps.amux.paneExists = map[string]bool{"pane-9": false}
 
 	d := deps.newDaemon(t)
@@ -188,6 +188,9 @@ func TestResumeRespawnsCancelledTaskInExistingClone(t *testing.T) {
 	}
 	if got, want := spawn.Command, "codex --yolo"; got != want {
 		t.Fatalf("spawn command = %q, want %q", got, want)
+	}
+	if got, want := spawn.Name, "worker-LAB-757"; got != want {
+		t.Fatalf("spawn name = %q, want %q", got, want)
 	}
 	deps.amux.requireSentKeys(t, "pane-2", []string{"Resume work after the cancellation\n"})
 	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
