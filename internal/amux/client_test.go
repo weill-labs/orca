@@ -137,22 +137,22 @@ func TestCLIClientSpawn(t *testing.T) {
 			},
 			req: SpawnRequest{
 				AtPane:  "lead-pane",
-				Name:    "worker-LAB-99",
+				Name:    "w-LAB-99",
 				CWD:     "/tmp/clone-5",
 				Command: "codex --yolo",
 			},
 			queue: []runnerResult{
-				{output: []byte("Split vertical: new pane worker-LAB-99\n")},
+				{output: []byte("Split vertical: new pane w-LAB-99\n")},
 			},
 			wantCmds: []recordedCommand{
-				{name: "amux", args: []string{"-s", "main", "spawn", "--at", "lead-pane", "--name", "worker-LAB-99"}},
-				{name: "amux", args: []string{"-s", "main", "send-keys", "worker-LAB-99", "--delay-final", "250ms", "cd '/tmp/clone-5'"}},
-				{name: "amux", args: []string{"-s", "main", "send-keys", "worker-LAB-99", "--delay-final", "250ms", "Enter"}},
-				{name: "amux", args: []string{"-s", "main", "wait", "idle", "worker-LAB-99", "--timeout", "5s"}},
-				{name: "amux", args: []string{"-s", "main", "send-keys", "worker-LAB-99", "--delay-final", "250ms", "codex --yolo"}},
-				{name: "amux", args: []string{"-s", "main", "send-keys", "worker-LAB-99", "--delay-final", "250ms", "Enter"}},
+				{name: "amux", args: []string{"-s", "main", "spawn", "--at", "lead-pane", "--name", "w-LAB-99"}},
+				{name: "amux", args: []string{"-s", "main", "send-keys", "w-LAB-99", "--delay-final", "250ms", "cd '/tmp/clone-5'"}},
+				{name: "amux", args: []string{"-s", "main", "send-keys", "w-LAB-99", "--delay-final", "250ms", "Enter"}},
+				{name: "amux", args: []string{"-s", "main", "wait", "idle", "w-LAB-99", "--timeout", "5s"}},
+				{name: "amux", args: []string{"-s", "main", "send-keys", "w-LAB-99", "--delay-final", "250ms", "codex --yolo"}},
+				{name: "amux", args: []string{"-s", "main", "send-keys", "w-LAB-99", "--delay-final", "250ms", "Enter"}},
 			},
-			wantPane: Pane{ID: "worker-LAB-99", Name: "worker-LAB-99"},
+			wantPane: Pane{ID: "w-LAB-99", Name: "w-LAB-99"},
 		},
 		{
 			name: "returns runner error on spawn failure",
@@ -256,7 +256,7 @@ func TestCLIClientSpawnCleansUpByStablePaneRefOnSetupFailure(t *testing.T) {
 
 	runner := &fakeRunner{
 		queue: []runnerResult{
-			{output: []byte("Spawned worker-LAB-901 in pane 9\n")},
+			{output: []byte("Spawned w-LAB-901 in pane 9\n")},
 			{err: errors.New("exit status 1")},
 			{},
 		},
@@ -264,7 +264,7 @@ func TestCLIClientSpawnCleansUpByStablePaneRefOnSetupFailure(t *testing.T) {
 	client := newTestClient(Config{Session: "orca-dev"}, runner)
 
 	_, err := client.Spawn(context.Background(), SpawnRequest{
-		Name:    "worker-LAB-901",
+		Name:    "w-LAB-901",
 		Command: "codex --yolo",
 	})
 	if err == nil || !strings.Contains(err.Error(), "send command to pane") {
@@ -272,9 +272,9 @@ func TestCLIClientSpawnCleansUpByStablePaneRefOnSetupFailure(t *testing.T) {
 	}
 
 	wantCmds := []recordedCommand{
-		{name: "amux", args: []string{"-s", "orca-dev", "spawn", "--root", "--name", "worker-LAB-901"}},
-		{name: "amux", args: []string{"-s", "orca-dev", "send-keys", "worker-LAB-901", "--delay-final", "250ms", "codex --yolo"}},
-		{name: "amux", args: []string{"-s", "orca-dev", "kill", "worker-LAB-901"}},
+		{name: "amux", args: []string{"-s", "orca-dev", "spawn", "--root", "--name", "w-LAB-901"}},
+		{name: "amux", args: []string{"-s", "orca-dev", "send-keys", "w-LAB-901", "--delay-final", "250ms", "codex --yolo"}},
+		{name: "amux", args: []string{"-s", "orca-dev", "kill", "w-LAB-901"}},
 	}
 	if !reflect.DeepEqual(runner.calls, wantCmds) {
 		t.Fatalf("Spawn() commands = %#v, want %#v", runner.calls, wantCmds)
@@ -362,16 +362,16 @@ func TestCLIClientListPanes(t *testing.T) {
 
 	listOutput := strings.Join([]string{
 		fmt.Sprintf("%-6s %-20s %-15s %-30s %-9s %-10s %-12s %s", "PANE", "NAME", "HOST", "BRANCH", "IDLE", "WINDOW", "TASK", "META"),
-		fmt.Sprintf("%-6s %-20s %-15s %-30s %-9s %-10s %-12s %s", "*1", "worker-LAB-711", "local", "LAB-711", "--", "main", "LAB-711", "agent=codex"),
-		fmt.Sprintf("%-6s %-20s %-15s %-30s %-9s %-10s %-12s %s", "2", "worker-LAB-712", "local", "LAB-712", "--", "main", "LAB-712", "agent=codex"),
+		fmt.Sprintf("%-6s %-20s %-15s %-30s %-9s %-10s %-12s %s", "*1", "w-LAB-711", "local", "LAB-711", "--", "main", "LAB-711", "agent=codex"),
+		fmt.Sprintf("%-6s %-20s %-15s %-30s %-9s %-10s %-12s %s", "2", "w-LAB-712", "local", "LAB-712", "--", "main", "LAB-712", "agent=codex"),
 		"",
 	}, "\n")
 
 	runner := &fakeRunner{
 		queue: []runnerResult{
 			{output: []byte(listOutput)},
-			{output: []byte(`{"id":1,"name":"worker-LAB-711","cwd":"/tmp/orca01"}`)},
-			{output: []byte(`{"id":2,"name":"worker-LAB-712","cwd":"/tmp/orca02"}`)},
+			{output: []byte(`{"id":1,"name":"w-LAB-711","cwd":"/tmp/orca01"}`)},
+			{output: []byte(`{"id":2,"name":"w-LAB-712","cwd":"/tmp/orca02"}`)},
 		},
 	}
 	client := newTestClient(Config{Session: "orca-dev"}, runner)
@@ -382,8 +382,8 @@ func TestCLIClientListPanes(t *testing.T) {
 	}
 
 	wantPanes := []Pane{
-		{ID: "1", Name: "worker-LAB-711", CWD: "/tmp/orca01", Window: "main"},
-		{ID: "2", Name: "worker-LAB-712", CWD: "/tmp/orca02", Window: "main"},
+		{ID: "1", Name: "w-LAB-711", CWD: "/tmp/orca01", Window: "main"},
+		{ID: "2", Name: "w-LAB-712", CWD: "/tmp/orca02", Window: "main"},
 	}
 	if !reflect.DeepEqual(panes, wantPanes) {
 		t.Fatalf("ListPanes() = %#v, want %#v", panes, wantPanes)
@@ -391,8 +391,8 @@ func TestCLIClientListPanes(t *testing.T) {
 
 	wantCmds := []recordedCommand{
 		{name: "amux", args: []string{"-s", "orca-dev", "list", "--no-cwd"}},
-		{name: "amux", args: []string{"-s", "orca-dev", "capture", "--format", "json", "worker-LAB-711"}},
-		{name: "amux", args: []string{"-s", "orca-dev", "capture", "--format", "json", "worker-LAB-712"}},
+		{name: "amux", args: []string{"-s", "orca-dev", "capture", "--format", "json", "w-LAB-711"}},
+		{name: "amux", args: []string{"-s", "orca-dev", "capture", "--format", "json", "w-LAB-712"}},
 	}
 	if !reflect.DeepEqual(runner.calls, wantCmds) {
 		t.Fatalf("ListPanes() commands = %#v, want %#v", runner.calls, wantCmds)
@@ -403,7 +403,7 @@ func TestCLIClientListPanesErrorsAndFallbacks(t *testing.T) {
 	t.Parallel()
 
 	validHeader := fmt.Sprintf("%-6s %-20s %-15s %-30s %-9s %-10s %-12s %s", "PANE", "NAME", "HOST", "BRANCH", "IDLE", "WINDOW", "TASK", "META")
-	validRow := fmt.Sprintf("%-6s %-20s %-15s %-30s %-9s %-10s %-12s %s", "1", "worker-LAB-711", "local", "LAB-711", "--", "main", "LAB-711", "agent=codex")
+	validRow := fmt.Sprintf("%-6s %-20s %-15s %-30s %-9s %-10s %-12s %s", "1", "w-LAB-711", "local", "LAB-711", "--", "main", "LAB-711", "agent=codex")
 
 	tests := []struct {
 		name      string
@@ -433,7 +433,7 @@ func TestCLIClientListPanesErrorsAndFallbacks(t *testing.T) {
 					{output: []byte(`{"error":{"message":"denied"}}`)},
 				},
 			},
-			wantErr: "capture pane worker-LAB-711: capture failed: denied",
+			wantErr: "capture pane w-LAB-711: capture failed: denied",
 		},
 		{
 			name: "skips missing panes",
@@ -444,7 +444,7 @@ func TestCLIClientListPanesErrorsAndFallbacks(t *testing.T) {
 				},
 			},
 			wantPanes: []Pane{
-				{ID: "1", Name: "worker-LAB-711", Window: "main"},
+				{ID: "1", Name: "w-LAB-711", Window: "main"},
 			},
 		},
 		{
@@ -456,7 +456,7 @@ func TestCLIClientListPanesErrorsAndFallbacks(t *testing.T) {
 				},
 			},
 			wantPanes: []Pane{
-				{ID: "1", Name: "worker-LAB-711", Window: "main"},
+				{ID: "1", Name: "w-LAB-711", Window: "main"},
 			},
 		},
 		{
@@ -468,7 +468,7 @@ func TestCLIClientListPanesErrorsAndFallbacks(t *testing.T) {
 				},
 			},
 			wantPanes: []Pane{
-				{ID: "1", Name: "worker-LAB-711", CWD: "/tmp/orca01", Window: "main"},
+				{ID: "1", Name: "w-LAB-711", CWD: "/tmp/orca01", Window: "main"},
 			},
 		},
 	}
@@ -537,7 +537,7 @@ func TestCLIClientPaneExists(t *testing.T) {
 	}{
 		{
 			name:   "returns true for live pane",
-			output: `{"id":1,"name":"worker-LAB-711","cwd":"/tmp/orca01"}`,
+			output: `{"id":1,"name":"w-LAB-711","cwd":"/tmp/orca01"}`,
 			want:   true,
 		},
 		{
@@ -631,19 +631,19 @@ func TestParsePaneList(t *testing.T) {
 			output: strings.Join([]string{
 				header,
 				fmt.Sprintf("%-6s %-20s %-15s %-30s %-9s %-10s %-12s %s", "*7", "pane-7", "local", "main", "--", "orca", "", "lead"),
-				fmt.Sprintf("%-6s %-20s %-15s %-30s %-9s %-10s %-12s %s", "8", "worker-LAB-712", "local", "LAB-712", "--", "main", "LAB-712", "agent=codex"),
+				fmt.Sprintf("%-6s %-20s %-15s %-30s %-9s %-10s %-12s %s", "8", "w-LAB-712", "local", "LAB-712", "--", "main", "LAB-712", "agent=codex"),
 				"",
 			}, "\n"),
 			want: []Pane{
 				{ID: "7", Name: "pane-7", Window: "orca", Lead: true},
-				{ID: "8", Name: "worker-LAB-712", Window: "main"},
+				{ID: "8", Name: "w-LAB-712", Window: "main"},
 			},
 		},
 		{
 			name: "rejects row without pane id",
 			output: strings.Join([]string{
 				header,
-				fmt.Sprintf("%-6s %-20s %-15s %-30s %-9s %-10s %-12s %s", "", "worker-LAB-711", "local", "LAB-711", "--", "main", "LAB-711", "agent=codex"),
+				fmt.Sprintf("%-6s %-20s %-15s %-30s %-9s %-10s %-12s %s", "", "w-LAB-711", "local", "LAB-711", "--", "main", "LAB-711", "agent=codex"),
 				"",
 			}, "\n"),
 			wantErr: "parse pane id from list row",
