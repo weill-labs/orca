@@ -150,7 +150,7 @@ func TestResumeFreshPaneContinuesWhenLinearIssueLookupReturnsEntityNotFound(t *t
 		t.Fatalf("DeleteWorker() error = %v", err)
 	}
 
-	deps.amux.spawnPane = Pane{ID: "pane-2", Name: "worker-fix-resume-sequence"}
+	deps.amux.spawnPane = Pane{ID: "pane-2", Name: "w-fix-resume-sequence"}
 	deps.amux.paneExists = map[string]bool{"pane-9": false}
 	deps.issueTracker.errors = map[string]error{
 		IssueStateInProgress: fmt.Errorf("lookup issue %s: %w", issue, linear.ErrEntityNotFound),

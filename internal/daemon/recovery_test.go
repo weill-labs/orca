@@ -201,6 +201,9 @@ func TestDaemonStartNormalizesLegacyNumericPaneRefs(t *testing.T) {
 	if got, want := task.WorkerID, "worker-01"; got != want {
 		t.Fatalf("task.WorkerID = %q, want %q", got, want)
 	}
+	if got, want := task.PaneName, "w-LAB-854"; got != want {
+		t.Fatalf("task.PaneName = %q, want %q", got, want)
+	}
 
 	worker, ok := deps.state.worker("worker-01")
 	if !ok {
@@ -208,6 +211,9 @@ func TestDaemonStartNormalizesLegacyNumericPaneRefs(t *testing.T) {
 	}
 	if got, want := worker.PaneID, "7"; got != want {
 		t.Fatalf("worker.PaneID = %q, want %q", got, want)
+	}
+	if got, want := worker.PaneName, "w-LAB-854"; got != want {
+		t.Fatalf("worker.PaneName = %q, want %q", got, want)
 	}
 
 	if got, want := deps.amux.paneExistsCalls, []string{"7"}; !reflect.DeepEqual(got, want) {

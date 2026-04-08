@@ -256,7 +256,7 @@ func TestAssignStoresStablePaneNameReference(t *testing.T) {
 
 	deps := newTestDeps(t)
 	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
-	deps.amux.spawnPane = Pane{ID: "worker-LAB-854", Name: "worker-LAB-854"}
+	deps.amux.spawnPane = Pane{ID: "w-LAB-854", Name: "w-LAB-854"}
 	d := deps.newDaemon(t)
 	ctx := context.Background()
 
@@ -280,25 +280,31 @@ func TestAssignStoresStablePaneNameReference(t *testing.T) {
 	if !ok {
 		t.Fatal("task not stored in state")
 	}
-	if got, want := task.PaneID, "worker-LAB-854"; got != want {
+	if got, want := task.PaneID, "w-LAB-854"; got != want {
 		t.Fatalf("task.PaneID = %q, want %q", got, want)
 	}
+	if got, want := task.PaneName, "w-LAB-854"; got != want {
+		t.Fatalf("task.PaneName = %q, want %q", got, want)
+	}
 
-	worker, ok := deps.state.worker("worker-LAB-854")
+	worker, ok := deps.state.worker("w-LAB-854")
 	if !ok {
 		t.Fatal("worker not stored with stable pane ref")
 	}
-	if got, want := worker.PaneID, "worker-LAB-854"; got != want {
+	if got, want := worker.PaneID, "w-LAB-854"; got != want {
 		t.Fatalf("worker.PaneID = %q, want %q", got, want)
 	}
+	if got, want := worker.PaneName, "w-LAB-854"; got != want {
+		t.Fatalf("worker.PaneName = %q, want %q", got, want)
+	}
 
-	deps.amux.requireMetadata(t, "worker-LAB-854", map[string]string{
+	deps.amux.requireMetadata(t, "w-LAB-854", map[string]string{
 		"agent_profile":  "codex",
 		"branch":         "LAB-854",
 		"task":           "LAB-854",
 		"tracked_issues": `[{"id":"LAB-854","status":"active"}]`,
 	})
-	deps.amux.requireSentKeys(t, "worker-LAB-854", []string{wrappedCodexPrompt("Fix pane references") + "\n"})
+	deps.amux.requireSentKeys(t, "w-LAB-854", []string{wrappedCodexPrompt("Fix pane references") + "\n"})
 }
 
 func TestDaemonStartNormalizesLeadPaneToStableName(t *testing.T) {
@@ -437,7 +443,7 @@ func TestNormalizeLeadPaneFallbacks(t *testing.T) {
 		{
 			name:      "keeps numeric lead pane when no stable name matches",
 			leadPane:  "7",
-			listPanes: []Pane{{ID: "8", Name: "worker-LAB-999"}},
+			listPanes: []Pane{{ID: "8", Name: "w-LAB-999"}},
 			want:      "7",
 		},
 		{

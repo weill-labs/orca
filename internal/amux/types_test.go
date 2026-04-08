@@ -10,7 +10,7 @@ func TestPaneRef(t *testing.T) {
 		pane Pane
 		want string
 	}{
-		{name: "prefers pane name", pane: Pane{ID: "7", Name: "worker-LAB-854"}, want: "worker-LAB-854"},
+		{name: "prefers pane name", pane: Pane{ID: "7", Name: "w-LAB-854"}, want: "w-LAB-854"},
 		{name: "falls back to pane id", pane: Pane{ID: "7", Name: "   "}, want: "7"},
 	}
 

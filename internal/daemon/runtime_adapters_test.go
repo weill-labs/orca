@@ -125,6 +125,9 @@ func TestSQLiteStateAdapterRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TaskByIssue() error = %v", err)
 	}
+	if got, want := task.PaneName, "w-LAB-718"; got != want {
+		t.Fatalf("task.PaneName = %q, want %q", got, want)
+	}
 	if got, want := task.PRNumber, 17; got != want {
 		t.Fatalf("task.PRNumber = %d, want %d", got, want)
 	}
@@ -252,11 +255,17 @@ func TestSQLiteStateAdapterNonTerminalTasksAndWorkerByPane(t *testing.T) {
 	if got, want := tasks[0].PRNumber, 42; got != want {
 		t.Fatalf("tasks[0].PRNumber = %d, want %d", got, want)
 	}
+	if got, want := tasks[0].PaneName, "w-LAB-741"; got != want {
+		t.Fatalf("tasks[0].PaneName = %q, want %q", got, want)
+	}
 	if got, want := tasks[0].CloneName, "clone-02"; got != want {
 		t.Fatalf("tasks[0].CloneName = %q, want %q", got, want)
 	}
 	if got, want := tasks[1].Issue, "LAB-740"; got != want {
 		t.Fatalf("tasks[1].Issue = %q, want %q", got, want)
+	}
+	if got, want := tasks[1].PaneName, "w-LAB-740"; got != want {
+		t.Fatalf("tasks[1].PaneName = %q, want %q", got, want)
 	}
 
 	worker, err := adapter.WorkerByPane(context.Background(), "/repo", "pane-2")
@@ -265,6 +274,9 @@ func TestSQLiteStateAdapterNonTerminalTasksAndWorkerByPane(t *testing.T) {
 	}
 	if got, want := worker.Health, WorkerHealthEscalated; got != want {
 		t.Fatalf("worker.Health = %q, want %q", got, want)
+	}
+	if got, want := worker.PaneName, "w-LAB-741"; got != want {
+		t.Fatalf("worker.PaneName = %q, want %q", got, want)
 	}
 	if got, want := worker.LastReviewCount, 2; got != want {
 		t.Fatalf("worker.LastReviewCount = %d, want %d", got, want)

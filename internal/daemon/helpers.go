@@ -21,6 +21,8 @@ const (
 	ansiDimOff           = "\x1b[22m"
 	ansiStrikethroughOn  = "\x1b[9m"
 	ansiStrikethroughOff = "\x1b[29m"
+	legacyWorkerPanePrefix = "worker-"
+	workerPanePrefix       = "w-"
 )
 
 type trackedStatus string
@@ -148,6 +150,50 @@ func taskBlocksAssignment(status string) bool {
 	default:
 		return true
 	}
+}
+
+func workerPaneName(issue, stableRef string) string {
+	issue = strings.TrimSpace(issue)
+	if issue != "" {
+		return workerPanePrefix + issue
+	}
+	return strings.TrimSpace(stableRef)
+}
+
+func legacyWorkerPaneName(issue string) string {
+	issue = strings.TrimSpace(issue)
+	if issue == "" {
+		return ""
+	}
+	return legacyWorkerPanePrefix + issue
+}
+
+func stableWorkerRef(task Task, worker Worker) string {
+	for _, candidate := range []string{
+		strings.TrimSpace(task.WorkerID),
+		strings.TrimSpace(worker.WorkerID),
+	} {
+		if candidate == "" || isNumericPaneRef(candidate) {
+			continue
+		}
+		return candidate
+	}
+
+	issue := firstNonEmpty(task.Issue, worker.Issue)
+	for _, candidate := range []string{
+		strings.TrimSpace(task.PaneName),
+		strings.TrimSpace(worker.PaneName),
+	} {
+		if candidate == "" || isNumericPaneRef(candidate) {
+			continue
+		}
+		if candidate == workerPaneName(issue, "") || candidate == legacyWorkerPaneName(issue) {
+			continue
+		}
+		return candidate
+	}
+
+	return ""
 }
 
 func assignmentMetadata(agentProfile, branch, task string) map[string]string {
@@ -539,21 +585,6 @@ func assignmentPaneName(task Task, worker Worker) string {
 	return paneName
 }
 
-func workerPaneRef(task Task, worker Worker) string {
-	for _, candidate := range []string{
-		strings.TrimSpace(task.WorkerID),
-		strings.TrimSpace(worker.WorkerID),
-		strings.TrimSpace(task.PaneName),
-		strings.TrimSpace(worker.PaneName),
-	} {
-		if candidate == "" || isNumericPaneRef(candidate) {
-			continue
-		}
-		return candidate
-	}
-	return ""
-}
-
 func isNumericPaneRef(ref string) bool {
 	if strings.TrimSpace(ref) == "" {
 		return false
@@ -567,15 +598,17 @@ func (d *Daemon) normalizeStoredPaneRef(ctx context.Context, task *Task, worker 
 		return nil
 	}
 
-	stableRef := workerPaneRef(*task, derefWorker(worker))
+	currentWorker := derefWorker(worker)
+	stableRef := stableWorkerRef(*task, currentWorker)
 	if stableRef == "" {
 		return nil
 	}
+	paneName := workerPaneName(firstNonEmpty(task.Issue, currentWorker.Issue), stableRef)
 
 	now := d.now()
-	if task.WorkerID != stableRef || strings.TrimSpace(task.PaneName) != stableRef {
+	if task.WorkerID != stableRef || strings.TrimSpace(task.PaneName) != paneName {
 		task.WorkerID = stableRef
-		task.PaneName = stableRef
+		task.PaneName = paneName
 		task.UpdatedAt = now
 		if err := d.state.PutTask(ctx, *task); err != nil {
 			return fmt.Errorf("normalize task pane ref: %w", err)
@@ -586,12 +619,12 @@ func (d *Daemon) normalizeStoredPaneRef(ctx context.Context, task *Task, worker 
 		return nil
 	}
 
-	if worker.WorkerID == stableRef && strings.TrimSpace(worker.PaneName) == stableRef {
+	if worker.WorkerID == stableRef && strings.TrimSpace(worker.PaneName) == paneName {
 		return nil
 	}
 
 	worker.WorkerID = stableRef
-	worker.PaneName = stableRef
+	worker.PaneName = paneName
 	worker.LastSeenAt = now
 	if err := d.state.PutWorker(ctx, *worker); err != nil {
 		return fmt.Errorf("normalize worker pane ref: %w", err)

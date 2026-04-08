@@ -279,6 +279,41 @@ func TestLocalControllerSpawn(t *testing.T) {
 	}
 }
 
+func TestWorkerPaneSpawnName(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		task      Task
+		stableRef string
+		want      string
+	}{
+		{
+			name:      "uses shortened issue pane prefix",
+			task:      Task{Issue: "LAB-948"},
+			stableRef: "worker-01",
+			want:      "w-LAB-948",
+		},
+		{
+			name:      "falls back to stable ref without issue",
+			task:      Task{},
+			stableRef: "worker-01",
+			want:      "worker-01",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := workerPaneSpawnName(tt.task, tt.stableRef); got != tt.want {
+				t.Fatalf("workerPaneSpawnName() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 type spawnFailingRunner struct {
 	err error
 }

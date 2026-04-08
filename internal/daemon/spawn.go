@@ -162,10 +162,7 @@ func paneMatchesReference(pane Pane, ref string) bool {
 }
 
 func workerPaneSpawnName(task Task, stableRef string) string {
-	if issue := strings.TrimSpace(task.Issue); issue != "" {
-		return "worker-" + issue
-	}
-	return strings.TrimSpace(stableRef)
+	return workerPaneName(task.Issue, stableRef)
 }
 
 func (d *Daemon) spawnWorkerPane(ctx context.Context, task Task, stableRef, clonePath string, profile AgentProfile) (Pane, error) {
