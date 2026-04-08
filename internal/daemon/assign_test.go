@@ -97,7 +97,7 @@ func TestAssignCreatesStableWorkerIdentityAndCloneGitIdentity(t *testing.T) {
 	if got, want := len(deps.amux.spawnRequests), 1; got != want {
 		t.Fatalf("len(spawnRequests) = %d, want %d", got, want)
 	}
-	if got, want := deps.amux.spawnRequests[0].Name, "worker-01"; got != want {
+	if got, want := deps.amux.spawnRequests[0].Name, "worker-LAB-894"; got != want {
 		t.Fatalf("spawn.Name = %q, want %q", got, want)
 	}
 
@@ -156,7 +156,7 @@ func TestAssignReusesIdleWorkerIdentity(t *testing.T) {
 	if got, want := task.WorkerID, "worker-01"; got != want {
 		t.Fatalf("task.WorkerID = %q, want %q", got, want)
 	}
-	if got, want := deps.amux.spawnRequests[0].Name, "worker-01"; got != want {
+	if got, want := deps.amux.spawnRequests[0].Name, "worker-LAB-895"; got != want {
 		t.Fatalf("spawn.Name = %q, want %q", got, want)
 	}
 }
