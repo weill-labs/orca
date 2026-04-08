@@ -181,36 +181,36 @@ func (d *Daemon) assign(ctx context.Context, projectPath, issue, prompt, agentPr
 		UpdatedAt:             now,
 	}
 	if err := d.state.PutTask(ctx, task); err != nil {
-		d.failPendingAssignment(ctx, projectPath, issue, clone, pane, worker, profile, err, restoreReservation)
+		d.failPendingAssignment(ctx, projectPath, issue, clone, pane, worker, profile, prNumber, err, restoreReservation)
 		return fmt.Errorf("store pending task: %w", err)
 	}
 	if err := d.state.PutWorker(ctx, worker); err != nil {
-		d.failPendingAssignment(ctx, projectPath, issue, clone, pane, worker, profile, err, restoreReservation)
+		d.failPendingAssignment(ctx, projectPath, issue, clone, pane, worker, profile, prNumber, err, restoreReservation)
 		return fmt.Errorf("store pending worker: %w", err)
 	}
 
 	if err := d.agentHandshake(ctx, pane.ID, profile); err != nil {
-		d.failPendingAssignment(ctx, projectPath, issue, clone, pane, worker, profile, err, restoreReservation)
+		d.failPendingAssignment(ctx, projectPath, issue, clone, pane, worker, profile, prNumber, err, restoreReservation)
 		return fmt.Errorf("agent handshake: %w", err)
 	}
 
 	if err := d.sendPromptAndEnter(ctx, pane.ID, prompt); err != nil {
-		d.failPendingAssignment(ctx, projectPath, issue, clone, pane, worker, profile, err, restoreReservation)
+		d.failPendingAssignment(ctx, projectPath, issue, clone, pane, worker, profile, prNumber, err, restoreReservation)
 		return fmt.Errorf("send prompt: %w", err)
 	}
 	if err := d.confirmPromptDelivery(ctx, pane.ID, profile); err != nil {
-		d.failPendingAssignment(ctx, projectPath, issue, clone, pane, worker, profile, err, restoreReservation)
+		d.failPendingAssignment(ctx, projectPath, issue, clone, pane, worker, profile, prNumber, err, restoreReservation)
 		return fmt.Errorf("send prompt: %w", err)
 	}
 	if err := d.setIssueStatus(ctx, projectPath, issue, IssueStateInProgress); err != nil {
-		d.failPendingAssignment(ctx, projectPath, issue, clone, pane, worker, profile, err, restoreReservation)
+		d.failPendingAssignment(ctx, projectPath, issue, clone, pane, worker, profile, prNumber, err, restoreReservation)
 		return fmt.Errorf("set issue status: %w", err)
 	}
 
 	task.Status = TaskStatusActive
 	task.UpdatedAt = d.now()
 	if err := d.state.PutTask(ctx, task); err != nil {
-		d.failPendingAssignment(ctx, projectPath, issue, clone, pane, worker, profile, err, restoreReservation)
+		d.failPendingAssignment(ctx, projectPath, issue, clone, pane, worker, profile, prNumber, err, restoreReservation)
 		return fmt.Errorf("store task: %w", err)
 	}
 	d.ensureTaskMonitorForProject(projectPath, issue)
@@ -275,8 +275,8 @@ func validateAssignmentPrompt(prompt string) error {
 	return nil
 }
 
-func (d *Daemon) failPendingAssignment(ctx context.Context, projectPath, issue string, clone Clone, pane Pane, worker Worker, profile AgentProfile, err error, releaseReservation func()) {
-	d.emitAssignFailure(ctx, projectPath, issue, worker.WorkerID, profile.Name, clone, pane, 0, err)
+func (d *Daemon) failPendingAssignment(ctx context.Context, projectPath, issue string, clone Clone, pane Pane, worker Worker, profile AgentProfile, prNumber int, err error, releaseReservation func()) {
+	d.emitAssignFailure(ctx, projectPath, issue, worker.WorkerID, profile.Name, clone, pane, prNumber, err)
 	_ = d.rollbackAssignmentForProject(ctx, projectPath, clone, pane, issue)
 	if releaseErr := d.releaseWorkerClaim(context.WithoutCancel(ctx), worker); releaseErr != nil && !errors.Is(releaseErr, ErrWorkerNotFound) {
 		_ = releaseErr
