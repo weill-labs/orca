@@ -17,33 +17,35 @@ Orca manages the full lifecycle of coding tasks: clone allocation, agent spawnin
 
 ```
 User
-  └─ Claude Code (lead pane)
-       └─ orca CLI ─── orca daemon
+  └─ Claude Code (any pane)
+       └─ orca CLI ─── orca daemon (single global process)
             ├─ amux        (pane/PTY infrastructure)
             ├─ GitHub API  (PR merge detection)
-            └─ clone pool  (auto-created under .orca/pool/)
+            └─ clone pool  (auto-created under .orca/pool/ per project)
 ```
 
-The daemon is stateless in memory — all state lives in SQLite at `~/.config/orca/state.db`. This means `orca stop && orca start` is seamless; the new daemon picks up exactly where the old one left off.
+The daemon is a single global process per machine — not per project. All state lives in SQLite at `~/.config/orca/state.db`. This means `orca stop && orca start` is seamless; the new daemon picks up exactly where the old one left off.
+
+When assigning work, the CLI reads `AMUX_PANE` from the environment and passes it to the daemon as the split target for spawning worker panes. This means workers are always spawned in the same window as the caller.
 
 ## Core Workflow
 
 ### 1. Start the daemon
 
-The daemon must be running before any other command. Start it from the project directory:
+The daemon must be running before any other command:
 
 ```bash
 orca start
 ```
 
-Orca auto-detects the project from the current directory and the amux session from `$AMUX_SESSION`. Clones are created on demand under `.orca/pool/`.
+Orca auto-detects the amux session from `$AMUX_SESSION`. The daemon is global — start it once, use it from any project directory.
 
 Check if it's already running with `orca status` first — `start` errors if a daemon is already active.
 
 ### 2. Assign work
 
 ```bash
-orca assign ISSUE --prompt "DETAILED INSTRUCTIONS" --agent AGENT --title "PANE TITLE"
+orca assign ISSUE --prompt "DETAILED INSTRUCTIONS" --agent AGENT
 ```
 
 **Required flags:**
@@ -52,13 +54,12 @@ orca assign ISSUE --prompt "DETAILED INSTRUCTIONS" --agent AGENT --title "PANE T
 
 **Optional flags:**
 - `--agent` — agent profile to use. Default is `claude`. Use `codex` for Codex workers.
-- `--title` — sets the amux pane title for easy identification in `orca workers` output. Recommended format: `"ISSUE: short description"`.
+- `--project` — target a specific project. Defaults to cwd.
 
 **Example — fresh issue:**
 ```bash
 orca assign LAB-784 \
   --agent codex \
-  --title "LAB-784: adopt existing PRs in orca assign" \
   --prompt "Implement LAB-784: make orca assign adopt existing PRs instead of rejecting. See the Linear issue for details. Write tests."
 ```
 
@@ -66,27 +67,26 @@ orca assign LAB-784 \
 ```bash
 orca assign LAB-761 \
   --agent claude \
-  --title "LAB-761: resume terminal tasks" \
   --prompt "Pick up PR #57 (branch LAB-761). Address review feedback: (1) Add t.Parallel() to test functions missing it. (2) Verify patch coverage meets 80%. Push and iterate until CI is green."
 ```
 
 ### 3. Verify the worker started correctly
 
-After assigning, always verify the worker received the prompt:
+After assigning, verify the worker received the prompt using orca's own commands:
 
 ```bash
-# Check worker health
+# Check worker health and pane assignment
 orca workers
 
-# Capture pane output to verify prompt was received
-amux -s SESSION capture PANE_ID | tail -40
+# Check detailed task status with event log
+orca status ISSUE
 ```
 
-The pane ID appears in `orca workers` output (e.g., `worker-LAB-784`). If the worker didn't receive the prompt (race condition), cancel and reassign:
+If the worker shows as `escalated` shortly after assignment, the agent likely failed to start. Cancel and reassign:
 
 ```bash
 orca cancel ISSUE
-orca assign ISSUE --agent AGENT --title "TITLE" --prompt "PROMPT"
+orca assign ISSUE --agent AGENT --prompt "PROMPT"
 ```
 
 ### 4. Monitor
@@ -110,8 +110,8 @@ For multiple tasks, create a JSON manifest and use `orca batch`:
 
 ```json
 [
-  {"issue": "LAB-123", "agent": "codex", "prompt": "Fix the auth bug. TDD.", "title": "LAB-123: auth fix"},
-  {"issue": "LAB-124", "agent": "claude", "prompt": "Add regression tests.", "title": "LAB-124: tests"}
+  {"issue": "LAB-123", "agent": "codex", "prompt": "Fix the auth bug. TDD."},
+  {"issue": "LAB-124", "agent": "claude", "prompt": "Add regression tests."}
 ]
 ```
 
@@ -169,7 +169,6 @@ When a PR has review comments that need addressing:
 ```bash
 orca assign ISSUE \
   --agent codex \
-  --title "ISSUE: address PR review" \
   --prompt "Pick up PR #NUMBER (branch BRANCH). Address blocking review feedback: (1) specific issue. (2) another issue. Push and iterate until CI is green."
 ```
 
@@ -180,38 +179,38 @@ If `orca assign` fails or the worker didn't get the prompt:
 ```bash
 orca cancel ISSUE
 # Then reassign
-orca assign ISSUE --agent AGENT --title "TITLE" --prompt "PROMPT"
+orca assign ISSUE --agent AGENT --prompt "PROMPT"
 ```
 
 ### Check what a worker is doing
 
 ```bash
-amux -s SESSION capture PANE_ID | tail -40
+orca status ISSUE
 ```
 
-This shows the last 40 lines of the worker's terminal output.
+This shows the task's event log with timestamps — handshake steps, stuck detection, nudges, and escalations.
 
 ## Known Limitations
 
-- `orca assign` rejects issues that already have an open PR (`issue X already has open PR #Y`). This is tracked in LAB-784 — the fix will make assign adopt existing PRs instead of rejecting.
-- `orca resume` requires an existing task in the DB. Tasks created by orca on another machine won't have local DB entries.
+- `orca resume` tries to spawn a new pane rather than reconnecting to an existing one. If the worker is still running, use `orca cancel` then `orca assign` instead.
 - The default agent is `claude`. Always pass `--agent codex` explicitly when you want Codex.
+- Codex workers sometimes exit silently on startup (transient). Orca's prompt delivery verification retries up to 10 times, but if it still fails, cancel and reassign.
 
 ## All Commands Reference
 
 | Command | Usage | Description |
 |---------|-------|-------------|
-| `start` | `orca start [--session S] [--lead-pane P]` | Start the daemon |
+| `start` | `orca start [--session S] [--global] [--json]` | Start the global daemon |
 | `stop` | `orca stop` | Stop the daemon |
-| `status` | `orca status [ISSUE]` | Show status (overall or per-task) |
-| `assign` | `orca assign ISSUE --prompt P [--agent A] [--title T]` | Assign an issue to a worker |
-| `batch` | `orca batch MANIFEST [--delay D]` | Batch assign from JSON manifest |
-| `enqueue` | `orca enqueue PR_NUMBER` | Queue a PR for serialized landing |
-| `cancel` | `orca cancel ISSUE` | Cancel a task |
-| `resume` | `orca resume ISSUE` | Resume a task in its existing pane |
-| `workers` | `orca workers` | List workers and their state |
-| `pool` | `orca pool` | List clone pool status |
-| `events` | `orca events` | Stream orchestration events as NDJSON |
+| `status` | `orca status [ISSUE] [--project P]` | Show status (overall or per-task) |
+| `assign` | `orca assign ISSUE --prompt P [--agent A] [--project P]` | Assign an issue to a worker |
+| `batch` | `orca batch MANIFEST [--delay D] [--project P]` | Batch assign from JSON manifest |
+| `enqueue` | `orca enqueue PR_NUMBER [--project P]` | Queue a PR for serialized landing |
+| `cancel` | `orca cancel ISSUE [--project P]` | Cancel a task |
+| `resume` | `orca resume ISSUE [--project P]` | Resume a task in its existing pane |
+| `workers` | `orca workers [--project P]` | List workers and their state |
+| `pool` | `orca pool [--project P]` | List clone pool status |
+| `events` | `orca events [--project P]` | Stream orchestration events as NDJSON |
 | `version` | `orca version` | Print version |
 
-Most commands accept `--project PATH` to target a specific project and `--json` for machine-readable output. Exceptions: `batch` and `events` do not support `--json`; `version` accepts no flags.
+Most commands accept `--project PATH` to target a specific project and `--json` for machine-readable output.
