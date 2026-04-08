@@ -6,9 +6,11 @@ import (
 )
 
 type Pane struct {
-	ID   string `json:"id,omitempty"`
-	Name string `json:"name,omitempty"`
-	CWD  string `json:"cwd,omitempty"`
+	ID     string `json:"id,omitempty"`
+	Name   string `json:"name,omitempty"`
+	CWD    string `json:"cwd,omitempty"`
+	Window string `json:"window,omitempty"`
+	Lead   bool   `json:"lead,omitempty"`
 }
 
 func (p Pane) Ref() string {

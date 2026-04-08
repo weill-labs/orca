@@ -382,8 +382,8 @@ func TestCLIClientListPanes(t *testing.T) {
 	}
 
 	wantPanes := []Pane{
-		{ID: "1", Name: "worker-LAB-711", CWD: "/tmp/orca01"},
-		{ID: "2", Name: "worker-LAB-712", CWD: "/tmp/orca02"},
+		{ID: "1", Name: "worker-LAB-711", CWD: "/tmp/orca01", Window: "main"},
+		{ID: "2", Name: "worker-LAB-712", CWD: "/tmp/orca02", Window: "main"},
 	}
 	if !reflect.DeepEqual(panes, wantPanes) {
 		t.Fatalf("ListPanes() = %#v, want %#v", panes, wantPanes)
@@ -444,7 +444,7 @@ func TestCLIClientListPanesErrorsAndFallbacks(t *testing.T) {
 				},
 			},
 			wantPanes: []Pane{
-				{ID: "1", Name: "worker-LAB-711"},
+				{ID: "1", Name: "worker-LAB-711", Window: "main"},
 			},
 		},
 		{
@@ -456,7 +456,7 @@ func TestCLIClientListPanesErrorsAndFallbacks(t *testing.T) {
 				},
 			},
 			wantPanes: []Pane{
-				{ID: "1", Name: "worker-LAB-711"},
+				{ID: "1", Name: "worker-LAB-711", Window: "main"},
 			},
 		},
 		{
@@ -468,7 +468,7 @@ func TestCLIClientListPanesErrorsAndFallbacks(t *testing.T) {
 				},
 			},
 			wantPanes: []Pane{
-				{ID: "1", Name: "worker-LAB-711", CWD: "/tmp/orca01"},
+				{ID: "1", Name: "worker-LAB-711", CWD: "/tmp/orca01", Window: "main"},
 			},
 		},
 	}
@@ -630,13 +630,13 @@ func TestParsePaneList(t *testing.T) {
 			name: "parses rows and strips active marker",
 			output: strings.Join([]string{
 				header,
-				fmt.Sprintf("%-6s %-20s %-15s %-30s %-9s %-10s %-12s %s", "*7", "worker-LAB-711", "local", "LAB-711", "--", "main", "LAB-711", "agent=codex"),
+				fmt.Sprintf("%-6s %-20s %-15s %-30s %-9s %-10s %-12s %s", "*7", "pane-7", "local", "main", "--", "orca", "", "lead"),
 				fmt.Sprintf("%-6s %-20s %-15s %-30s %-9s %-10s %-12s %s", "8", "worker-LAB-712", "local", "LAB-712", "--", "main", "LAB-712", "agent=codex"),
 				"",
 			}, "\n"),
 			want: []Pane{
-				{ID: "7", Name: "worker-LAB-711"},
-				{ID: "8", Name: "worker-LAB-712"},
+				{ID: "7", Name: "pane-7", Window: "orca", Lead: true},
+				{ID: "8", Name: "worker-LAB-712", Window: "main"},
 			},
 		},
 		{

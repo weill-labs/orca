@@ -512,7 +512,10 @@ func parsePaneList(output string) ([]Pane, error) {
 	header := lines[0]
 	nameColumn := strings.Index(header, "NAME")
 	hostColumn := strings.Index(header, "HOST")
-	if nameColumn <= 0 || hostColumn <= nameColumn {
+	windowColumn := strings.Index(header, "WINDOW")
+	taskColumn := strings.Index(header, "TASK")
+	metaColumn := strings.Index(header, "META")
+	if nameColumn <= 0 || hostColumn <= nameColumn || windowColumn <= hostColumn || taskColumn <= windowColumn || metaColumn <= taskColumn {
 		return nil, fmt.Errorf("parse pane list header: %q", strings.TrimSpace(header))
 	}
 
@@ -529,13 +532,25 @@ func parsePaneList(output string) ([]Pane, error) {
 			return nil, fmt.Errorf("parse pane id from list row: %q", strings.TrimSpace(line))
 		}
 
+		meta := strings.TrimSpace(columnSlice(line, metaColumn, len(line)))
 		panes = append(panes, Pane{
-			ID:   paneID,
-			Name: strings.TrimSpace(columnSlice(line, nameColumn, hostColumn)),
+			ID:     paneID,
+			Name:   strings.TrimSpace(columnSlice(line, nameColumn, hostColumn)),
+			Window: strings.TrimSpace(columnSlice(line, windowColumn, taskColumn)),
+			Lead:   paneMetaHasFlag(meta, "lead"),
 		})
 	}
 
 	return panes, nil
+}
+
+func paneMetaHasFlag(meta, flag string) bool {
+	for _, field := range strings.Fields(meta) {
+		if field == flag {
+			return true
+		}
+	}
+	return false
 }
 
 func columnSlice(line string, start, end int) string {
