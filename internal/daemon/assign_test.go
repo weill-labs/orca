@@ -710,6 +710,30 @@ func TestValidateAssignmentPrompt(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name:    "allows assigned issue from backlog context",
+			issue:   "LAB-689",
+			prompt:  "Address LAB-689 from the backlog and start working.",
+			wantErr: false,
+		},
+		{
+			name:    "rejects different issue from backlog context",
+			issue:   "LAB-689",
+			prompt:  "Address LAB-690 from the backlog and start working.",
+			wantErr: true,
+		},
+		{
+			name:    "rejects generic next issue even when assigned issue is mentioned",
+			issue:   "LAB-689",
+			prompt:  "Address LAB-689, then pick up the next issue from the backlog.",
+			wantErr: true,
+		},
+		{
+			name:    "matches assigned issue exactly instead of by substring",
+			issue:   "LAB-68",
+			prompt:  "Address LAB-689 from the backlog and start working.",
+			wantErr: true,
+		},
+		{
 			name:    "rejects standalone new work phrasing",
 			prompt:  "After you land the fix, pick up new work from the queue.",
 			wantErr: true,
