@@ -500,6 +500,20 @@ func TestFinishAssignmentPreservesHistoricalTrackedMetadata(t *testing.T) {
 	})
 }
 
+func TestNewPostmortemAssignmentUsesCanonicalPaneNames(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	active := newPostmortemAssignment(deps)
+
+	if got, want := active.Task.PaneName, "w-LAB-689"; got != want {
+		t.Fatalf("task.PaneName = %q, want %q", got, want)
+	}
+	if got, want := active.Worker.PaneName, "w-LAB-689"; got != want {
+		t.Fatalf("worker.PaneName = %q, want %q", got, want)
+	}
+}
+
 func newPostmortemAssignment(deps *testDeps) ActiveAssignment {
 	return ActiveAssignment{
 		Task: Task{
