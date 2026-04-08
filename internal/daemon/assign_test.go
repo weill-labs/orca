@@ -607,6 +607,32 @@ func TestAssignRejectsAutonomousBacklogPickingPromptBeforePRLookupOrCloneAcquire
 	}
 }
 
+func TestAssignAllowsPromptReferencingAssignedIssueFromBacklog(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-689", "Address LAB-689 from the backlog and start working.", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v, want success", err)
+	}
+	if got, want := deps.commands.countCalls("gh", []string{"pr", "list", "--head", "LAB-689", "--state", "open", "--json", "number"}), 1; got != want {
+		t.Fatalf("gh pr list calls = %d, want %d", got, want)
+	}
+	if got, want := deps.pool.acquireCallCount(), 1; got != want {
+		t.Fatalf("pool acquire calls = %d, want %d", got, want)
+	}
+}
+
 func TestAssignLogsFailureWhenCloneAcquireFails(t *testing.T) {
 	t.Parallel()
 
