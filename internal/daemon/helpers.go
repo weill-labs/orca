@@ -584,21 +584,6 @@ func assignmentPaneName(task Task, worker Worker) string {
 	return paneName
 }
 
-func workerPaneRef(task Task, worker Worker) string {
-	for _, candidate := range []string{
-		strings.TrimSpace(task.WorkerID),
-		strings.TrimSpace(worker.WorkerID),
-		strings.TrimSpace(task.PaneName),
-		strings.TrimSpace(worker.PaneName),
-	} {
-		if candidate == "" || isNumericPaneRef(candidate) {
-			continue
-		}
-		return candidate
-	}
-	return ""
-}
-
 func isNumericPaneRef(ref string) bool {
 	if strings.TrimSpace(ref) == "" {
 		return false

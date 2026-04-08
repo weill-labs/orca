@@ -7,62 +7,6 @@ import (
 	"testing"
 )
 
-func TestWorkerPaneRef(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name   string
-		task   Task
-		worker Worker
-		want   string
-	}{
-		{
-			name: "prefers task pane name",
-			task: Task{PaneName: "w-LAB-854", PaneID: "7", Issue: "LAB-854"},
-			want: "w-LAB-854",
-		},
-		{
-			name:   "falls back to worker pane name",
-			task:   Task{PaneID: "7", Issue: "LAB-854"},
-			worker: Worker{PaneName: "w-LAB-854", PaneID: "8"},
-			want:   "w-LAB-854",
-		},
-		{
-			name: "falls back to stable task pane name",
-			task: Task{PaneName: "worker-01", PaneID: "7", Issue: "LAB-854"},
-			want: "worker-01",
-		},
-		{
-			name:   "falls back to stable worker pane name",
-			task:   Task{Issue: "LAB-854"},
-			worker: Worker{PaneName: "worker-01"},
-			want:   "worker-01",
-		},
-		{
-			name:   "returns empty when only numeric pane refs remain",
-			task:   Task{PaneID: "7", Issue: "LAB-854"},
-			worker: Worker{PaneID: "8"},
-			want:   "",
-		},
-		{
-			name:   "returns empty when no stable worker ref exists",
-			task:   Task{PaneID: "7"},
-			worker: Worker{PaneID: "8"},
-			want:   "",
-		},
-	}
-
-	for _, tt := range tests {
-		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			if got := workerPaneRef(tt.task, tt.worker); got != tt.want {
-				t.Fatalf("workerPaneRef() = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestStableWorkerRef(t *testing.T) {
 	t.Parallel()
 
@@ -97,6 +41,24 @@ func TestStableWorkerRef(t *testing.T) {
 			name: "keeps stable pane style fallback when it is not an issue pane name",
 			task: Task{Issue: "LAB-854", PaneName: "worker-01"},
 			want: "worker-01",
+		},
+		{
+			name:   "falls back to stable worker pane name",
+			task:   Task{Issue: "LAB-854"},
+			worker: Worker{PaneName: "worker-01"},
+			want:   "worker-01",
+		},
+		{
+			name:   "returns empty when only numeric pane refs remain",
+			task:   Task{PaneID: "7", Issue: "LAB-854"},
+			worker: Worker{PaneID: "8"},
+			want:   "",
+		},
+		{
+			name:   "returns empty when no stable worker ref exists",
+			task:   Task{PaneID: "7"},
+			worker: Worker{PaneID: "8"},
+			want:   "",
 		},
 	}
 
