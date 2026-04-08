@@ -173,9 +173,10 @@ func stableWorkerRef(task Task, worker Worker) string {
 		strings.TrimSpace(task.WorkerID),
 		strings.TrimSpace(worker.WorkerID),
 	} {
-		if candidate != "" {
-			return candidate
+		if candidate == "" || isNumericPaneRef(candidate) {
+			continue
 		}
+		return candidate
 	}
 
 	issue := firstNonEmpty(task.Issue, worker.Issue)
