@@ -419,6 +419,7 @@ func (a *App) runBatch(ctx context.Context, args []string) error {
 	fs := newFlagSet("batch")
 	var projectPath string
 	var delay time.Duration
+	var callerPane string
 	fs.StringVar(&projectPath, "project", "", "project path")
 	fs.DurationVar(&delay, "delay", 5*time.Second, "delay between assigns")
 
@@ -442,11 +443,13 @@ func (a *App) runBatch(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	callerPane = strings.TrimSpace(os.Getenv(amuxPaneEnvVar))
 
 	result, err := a.daemon.Batch(ctx, daemon.BatchRequest{
-		Project: projectPath,
-		Entries: entries,
-		Delay:   delay,
+		Project:    projectPath,
+		Entries:    entries,
+		Delay:      delay,
+		CallerPane: callerPane,
 	})
 	if err != nil {
 		return err

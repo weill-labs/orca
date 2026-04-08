@@ -231,9 +231,10 @@ func dispatchRPCRequest(ctx context.Context, request rpcRequest, instance *Daemo
 		}
 
 		result, err := instance.Batch(ctx, BatchRequest{
-			Project: projectPath,
-			Entries: params.Entries,
-			Delay:   delay,
+			Project:    projectPath,
+			Entries:    params.Entries,
+			Delay:      delay,
+			CallerPane: params.CallerPane,
 		})
 		if err != nil {
 			return rpcFailure(request.ID, -32000, err)

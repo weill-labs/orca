@@ -51,9 +51,10 @@ type assignRPCParams struct {
 }
 
 type batchRPCParams struct {
-	Project string       `json:"project"`
-	Entries []BatchEntry `json:"entries"`
-	Delay   string       `json:"delay"`
+	Project    string       `json:"project"`
+	Entries    []BatchEntry `json:"entries"`
+	Delay      string       `json:"delay"`
+	CallerPane string       `json:"caller_pane"`
 }
 
 type cancelRPCParams struct {

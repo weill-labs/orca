@@ -62,9 +62,10 @@ func (d *Daemon) Batch(ctx context.Context, req BatchRequest) (BatchResult, erro
 		Project: projectPath,
 		Results: make([]TaskActionResult, 0, len(entries)),
 	}
+	callerPane := strings.TrimSpace(req.CallerPane)
 
 	for i, entry := range entries {
-		if err := d.assign(ctx, projectPath, entry.Issue, entry.Prompt, entry.Agent, "", entry.Title); err != nil {
+		if err := d.assign(ctx, projectPath, entry.Issue, entry.Prompt, entry.Agent, callerPane, entry.Title); err != nil {
 			result.Failures = append(result.Failures, BatchFailure{
 				Issue: entry.Issue,
 				Error: err.Error(),
