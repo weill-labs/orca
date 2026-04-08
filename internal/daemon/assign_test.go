@@ -607,6 +607,32 @@ func TestAssignRejectsAutonomousBacklogPickingPromptBeforePRLookupOrCloneAcquire
 	}
 }
 
+func TestAssignAllowsPromptReferencingAssignedIssueFromBacklog(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-689", "Address LAB-689 from the backlog and start working.", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v, want success", err)
+	}
+	if got, want := deps.commands.countCalls("gh", []string{"pr", "list", "--head", "LAB-689", "--state", "open", "--json", "number"}), 1; got != want {
+		t.Fatalf("gh pr list calls = %d, want %d", got, want)
+	}
+	if got, want := deps.pool.acquireCallCount(), 1; got != want {
+		t.Fatalf("pool acquire calls = %d, want %d", got, want)
+	}
+}
+
 func TestAssignLogsFailureWhenCloneAcquireFails(t *testing.T) {
 	t.Parallel()
 
@@ -674,12 +700,37 @@ func TestValidateAssignmentPrompt(t *testing.T) {
 
 	tests := []struct {
 		name    string
+		issue   string
 		prompt  string
 		wantErr bool
 	}{
 		{
 			name:    "rejects autonomous backlog pickup",
 			prompt:  "Pick up the next issue from the backlog and start working.",
+			wantErr: true,
+		},
+		{
+			name:    "allows assigned issue from backlog context",
+			issue:   "LAB-689",
+			prompt:  "Address LAB-689 from the backlog and start working.",
+			wantErr: false,
+		},
+		{
+			name:    "rejects different issue from backlog context",
+			issue:   "LAB-689",
+			prompt:  "Address LAB-690 from the backlog and start working.",
+			wantErr: true,
+		},
+		{
+			name:    "rejects generic next issue even when assigned issue is mentioned",
+			issue:   "LAB-689",
+			prompt:  "Address LAB-689, then pick up the next issue from the backlog.",
+			wantErr: true,
+		},
+		{
+			name:    "matches assigned issue exactly instead of by substring",
+			issue:   "LAB-68",
+			prompt:  "Address LAB-689 from the backlog and start working.",
 			wantErr: true,
 		},
 		{
@@ -704,12 +755,12 @@ func TestValidateAssignmentPrompt(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			err := validateAssignmentPrompt(tt.prompt)
+			err := validateAssignmentPrompt(tt.issue, tt.prompt)
 			if tt.wantErr && err == nil {
-				t.Fatalf("validateAssignmentPrompt(%q) error = nil, want error", tt.prompt)
+				t.Fatalf("validateAssignmentPrompt(%q, %q) error = nil, want error", tt.issue, tt.prompt)
 			}
 			if !tt.wantErr && err != nil {
-				t.Fatalf("validateAssignmentPrompt(%q) error = %v, want nil", tt.prompt, err)
+				t.Fatalf("validateAssignmentPrompt(%q, %q) error = %v, want nil", tt.issue, tt.prompt, err)
 			}
 		})
 	}
