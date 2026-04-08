@@ -372,6 +372,48 @@ func TestAssignWithCallerPaneUsesCallerPaneForWorkerSpawn(t *testing.T) {
 	}
 }
 
+func TestAssignWithCallerLeadPaneUsesNonLeadPaneInSameWindowForWorkerSpawn(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	deps.amux.listPanes = []Pane{
+		{ID: "2", Name: "pane-2", Window: "orca", Lead: true},
+		{ID: "155", Name: "worker-07", Window: "orca"},
+		{ID: "13", Name: "pane-13", Window: "alphaos", Lead: true},
+	}
+	d := deps.newDaemon(t)
+	d.leadPane = "fallback-lead-pane"
+	ctx := context.Background()
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.AssignWithCallerPane(ctx, "LAB-943", "Use a non-lead pane in the caller window", "codex", "pane-2"); err != nil {
+		t.Fatalf("AssignWithCallerPane() error = %v", err)
+	}
+
+	waitFor(t, "spawn request", func() bool {
+		return len(deps.amux.spawnRequests) == 1
+	})
+
+	if got, want := deps.amux.spawnRequests[0].AtPane, "worker-07"; got != want {
+		t.Fatalf("spawn.AtPane = %q, want %q", got, want)
+	}
+
+	task, ok := deps.state.task("LAB-943")
+	if !ok {
+		t.Fatal("task not stored in state")
+	}
+	if got, want := task.CallerPane, "pane-2"; got != want {
+		t.Fatalf("task.CallerPane = %q, want %q", got, want)
+	}
+}
+
 func TestNormalizeLeadPaneFallbacks(t *testing.T) {
 	t.Parallel()
 
