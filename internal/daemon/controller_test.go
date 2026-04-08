@@ -448,11 +448,14 @@ func TestLocalControllerAssignAndBatchRPC(t *testing.T) {
 		t.Fatalf("assign issue = %q, want %q", got, want)
 	}
 
-	batchResult, err := controller.Batch(context.Background(), BatchRequest{
-		Project: projectPath,
-		Entries: []BatchEntry{{Issue: "  LAB-719  ", Agent: "  codex  ", Prompt: "Implement controller batch.", Title: "  Batch title  "}},
-		Delay:   7 * time.Second,
-	})
+	batchReq := BatchRequest{
+		Project:    projectPath,
+		Entries:    []BatchEntry{{Issue: "  LAB-719  ", Agent: "  codex  ", Prompt: "Implement controller batch.", Title: "  Batch title  "}},
+		Delay:      7 * time.Second,
+		CallerPane: "  pane-13  ",
+	}
+
+	batchResult, err := controller.Batch(context.Background(), batchReq)
 	if err != nil {
 		t.Fatalf("Batch() error = %v", err)
 	}
@@ -479,12 +482,12 @@ func TestLocalControllerAssignAndBatchRPC(t *testing.T) {
 		t.Fatalf("assign params = %#v, want %#v", got, want)
 	}
 
-	batchReq := <-requests
-	if got, want := batchReq.Method, "batch"; got != want {
+	batchRPCRequest := <-requests
+	if got, want := batchRPCRequest.Method, "batch"; got != want {
 		t.Fatalf("batch method = %q, want %q", got, want)
 	}
 	var batchParams batchRPCParams
-	if err := json.Unmarshal(batchReq.Params, &batchParams); err != nil {
+	if err := json.Unmarshal(batchRPCRequest.Params, &batchParams); err != nil {
 		t.Fatalf("json.Unmarshal(batch params) error = %v", err)
 	}
 	if got, want := batchParams.Entries, []BatchEntry{{Issue: "LAB-719", Agent: "codex", Prompt: "Implement controller batch.", Title: "Batch title"}}; !reflect.DeepEqual(got, want) {
@@ -495,6 +498,9 @@ func TestLocalControllerAssignAndBatchRPC(t *testing.T) {
 	}
 	if got, want := batchParams.Delay, "7s"; got != want {
 		t.Fatalf("batch delay = %q, want %q", got, want)
+	}
+	if got, want := batchParams.CallerPane, "pane-13"; got != want {
+		t.Fatalf("batch caller pane = %q, want %q", got, want)
 	}
 }
 

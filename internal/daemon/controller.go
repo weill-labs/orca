@@ -92,9 +92,10 @@ type BatchEntry struct {
 }
 
 type BatchRequest struct {
-	Project string
-	Entries []BatchEntry
-	Delay   time.Duration
+	Project    string
+	Entries    []BatchEntry
+	Delay      time.Duration
+	CallerPane string
 }
 
 type CancelRequest struct {
@@ -405,9 +406,10 @@ func (c *LocalController) Batch(ctx context.Context, req BatchRequest) (BatchRes
 
 	var result BatchResult
 	err = callRPC(callCtx, c.paths.socketFile(), "batch", batchRPCParams{
-		Project: projectPath,
-		Entries: normalizeBatchEntries(req.Entries),
-		Delay:   req.Delay.String(),
+		Project:    projectPath,
+		Entries:    normalizeBatchEntries(req.Entries),
+		Delay:      req.Delay.String(),
+		CallerPane: strings.TrimSpace(req.CallerPane),
 	}, &result)
 	if err != nil {
 		return BatchResult{}, err

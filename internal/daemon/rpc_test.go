@@ -183,8 +183,32 @@ func TestResumeTypesIncludePromptField(t *testing.T) {
 	}
 }
 
-func TestBatchTypesIncludeEntriesAndDelayFields(t *testing.T) {
+func TestBatchTypesIncludeCallerPaneEntriesAndDelayFields(t *testing.T) {
 	t.Parallel()
+
+	batchRequestCallerPaneField, ok := reflect.TypeOf(BatchRequest{}).FieldByName("CallerPane")
+	if !ok {
+		t.Fatal("BatchRequest missing CallerPane field")
+	}
+	if got, want := batchRequestCallerPaneField.Type.Kind(), reflect.String; got != want {
+		t.Fatalf("BatchRequest.CallerPane kind = %v, want %v", got, want)
+	}
+
+	batchRPCCallerPaneField, ok := reflect.TypeOf(batchRPCParams{}).FieldByName("CallerPane")
+	if !ok {
+		t.Fatal("batchRPCParams missing CallerPane field")
+	}
+	if got, want := batchRPCCallerPaneField.Tag.Get("json"), "caller_pane"; got != want {
+		t.Fatalf("batchRPCParams.CallerPane json tag = %q, want %q", got, want)
+	}
+
+	if got, want := (BatchRequest{}).CallerPane, ""; got != want {
+		t.Fatalf("BatchRequest{}.CallerPane = %q, want %q", got, want)
+	}
+
+	if got, want := (batchRPCParams{}).CallerPane, ""; got != want {
+		t.Fatalf("batchRPCParams{}.CallerPane = %q, want %q", got, want)
+	}
 
 	batchRequestField, ok := reflect.TypeOf(BatchRequest{}).FieldByName("Entries")
 	if !ok {

@@ -98,6 +98,72 @@ func TestBatchAssignsEachEntryAndSleepsBetweenAssignments(t *testing.T) {
 	})
 }
 
+func TestBatchUsesCallerPaneForEachAssignment(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+
+	cloneTwoPath := filepath.Join(filepath.Dir(deps.pool.clone.Path), "clone-02")
+	if err := os.MkdirAll(cloneTwoPath, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", cloneTwoPath, err)
+	}
+	deps.pool.clones = []Clone{
+		deps.pool.clone,
+		{Name: "clone-02", Path: cloneTwoPath},
+	}
+	deps.amux.spawnResults = []Pane{
+		{ID: "pane-1", Name: "worker-1"},
+		{ID: "pane-2", Name: "worker-2"},
+	}
+	d := deps.newDaemon(t)
+	d.leadPane = "fallback-lead-pane"
+	ctx := context.Background()
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	req := BatchRequest{
+		Entries: []BatchEntry{
+			{Issue: "LAB-689", Agent: "codex", Prompt: "Implement daemon core"},
+			{Issue: "LAB-690", Agent: "codex", Prompt: "Implement merge queue"},
+		},
+		CallerPane: "pane-13",
+	}
+
+	result, err := d.Batch(ctx, req)
+	if err != nil {
+		t.Fatalf("Batch() error = %v", err)
+	}
+	if got, want := len(result.Results), 2; got != want {
+		t.Fatalf("result count = %d, want %d", got, want)
+	}
+
+	waitFor(t, "spawn requests", func() bool {
+		return len(deps.amux.spawnRequests) == 2
+	})
+
+	for i, spawn := range deps.amux.spawnRequests {
+		if got, want := spawn.AtPane, "pane-13"; got != want {
+			t.Fatalf("spawnRequests[%d].AtPane = %q, want %q", i, got, want)
+		}
+	}
+
+	for _, issue := range []string{"LAB-689", "LAB-690"} {
+		task, ok := deps.state.task(issue)
+		if !ok {
+			t.Fatalf("missing task %s", issue)
+		}
+		if got, want := task.CallerPane, "pane-13"; got != want {
+			t.Fatalf("task %s caller pane = %q, want %q", issue, got, want)
+		}
+	}
+}
+
 func TestBatchValidatesManifestBeforeAssigning(t *testing.T) {
 	t.Parallel()
 

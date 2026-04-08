@@ -122,6 +122,51 @@ func TestAppRunBatchUsesDefaultDelay(t *testing.T) {
 	}
 }
 
+func TestAppRunBatchDefaultsCallerPaneFromAMUXPaneEnv(t *testing.T) {
+	repoRoot := newRepoRoot(t)
+	cwdPath := filepath.Join(repoRoot, "internal", "cli")
+	if err := os.MkdirAll(cwdPath, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", cwdPath, err)
+	}
+
+	manifestPath := filepath.Join(repoRoot, "tasks.json")
+	if err := os.WriteFile(manifestPath, []byte(`[{"issue":"LAB-690","agent":"codex","prompt":"Implement CLI wiring"}]`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", manifestPath, err)
+	}
+
+	t.Setenv("AMUX_PANE", "pane-13")
+
+	d := &fakeDaemon{
+		batchResult: daemon.BatchResult{
+			Project: repoRoot,
+			Results: []daemon.TaskActionResult{{Project: repoRoot, Issue: "LAB-690", Status: "active", Agent: "codex", UpdatedAt: time.Now().UTC()}},
+		},
+	}
+
+	app := New(Options{
+		Daemon:  d,
+		State:   &fakeState{},
+		Stdout:  &bytes.Buffer{},
+		Stderr:  &bytes.Buffer{},
+		Version: "build-123",
+		Cwd: func() (string, error) {
+			return cwdPath, nil
+		},
+	})
+
+	if err := app.Run(context.Background(), []string{"batch", manifestPath}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if d.batchRequest == nil {
+		t.Fatal("expected batch to be called")
+	}
+
+	if got, want := d.batchRequest.CallerPane, "pane-13"; got != want {
+		t.Fatalf("batch caller pane = %q, want %q", got, want)
+	}
+}
+
 func TestAppRunBatchRejectsInvalidManifest(t *testing.T) {
 	t.Parallel()
 
