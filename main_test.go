@@ -166,7 +166,7 @@ func TestRunDaemonProcessValidation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			err := runDaemonProcess(tt.args)
+			err := runDaemonProcess(tt.args, "")
 			if err == nil {
 				t.Fatal("runDaemonProcess() error = nil, want non-nil")
 			}
@@ -214,7 +214,7 @@ func TestRunDaemonProcessPassesBuildCommit(t *testing.T) {
 func TestRunDaemonProcessRejectsLegacyProjectFlag(t *testing.T) {
 	t.Parallel()
 
-	err := runDaemonProcess([]string{"--project", "/tmp/project", "--state-db", "/tmp/orca.db", "--pid-file", "/tmp/orca.pid"})
+	err := runDaemonProcess([]string{"--project", "/tmp/project", "--state-db", "/tmp/orca.db", "--pid-file", "/tmp/orca.pid"}, "")
 	if err == nil {
 		t.Fatal("runDaemonProcess() error = nil, want parse error")
 	}

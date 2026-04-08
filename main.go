@@ -33,7 +33,7 @@ type runDependencies struct {
 	openStateStore   func(string) (stateStore, error)
 	newController    func(daemon.ControllerOptions) (daemon.Controller, error)
 	newApp           func(cli.Options) appRunner
-	runDaemonProcess func([]string) error
+	runDaemonProcess func([]string, string) error
 }
 
 var defaultRunDependencies = runDependencies{
@@ -55,10 +55,12 @@ func main() {
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
-	return runWithDeps(args, stdout, stderr, defaultRunDependencies)
+	return runWithDeps(args, stdout, stderr, defaultRunDependencies, BuildCommit)
 }
 
-func runWithDeps(args []string, stdout, stderr io.Writer, deps runDependencies) int {
+func runWithDeps(args []string, stdout, stderr io.Writer, deps runDependencies, buildCommit string) int {
+	buildCommit = resolvedBuildCommit(buildCommit)
+
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, cli.UsageText())
 		return 1
@@ -72,7 +74,7 @@ func runWithDeps(args []string, stdout, stderr io.Writer, deps runDependencies) 
 	}
 
 	if args[0] == "__daemon-serve" {
-		if err := deps.runDaemonProcess(args[1:]); err != nil {
+		if err := deps.runDaemonProcess(args[1:], buildCommit); err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
@@ -80,7 +82,7 @@ func runWithDeps(args []string, stdout, stderr io.Writer, deps runDependencies) 
 	}
 
 	if args[0] == "version" {
-		fmt.Fprintf(stdout, "orca %s\n", resolvedBuildCommit())
+		fmt.Fprintf(stdout, "orca %s\n", buildCommit)
 		return 0
 	}
 	if args[0] == "help" {
@@ -115,7 +117,7 @@ func runWithDeps(args []string, stdout, stderr io.Writer, deps runDependencies) 
 		State:   store,
 		Stdout:  stdout,
 		Stderr:  stderr,
-		Version: resolvedBuildCommit(),
+		Version: buildCommit,
 		Cwd:     os.Getwd,
 	})
 
@@ -127,7 +129,7 @@ func runWithDeps(args []string, stdout, stderr io.Writer, deps runDependencies) 
 	return 0
 }
 
-func runDaemonProcess(args []string) error {
+func runDaemonProcess(args []string, buildCommit string) error {
 	fs := flag.NewFlagSet("__daemon-serve", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
@@ -160,13 +162,13 @@ func runDaemonProcess(args []string) error {
 		LeadPane:    leadPane,
 		StateDB:     stateDB,
 		PIDFile:     pidFile,
-		BuildCommit: resolvedBuildCommit(),
+		BuildCommit: buildCommit,
 	})
 }
 
-func resolvedBuildCommit() string {
-	if BuildCommit == "" {
+func resolvedBuildCommit(buildCommit string) string {
+	if buildCommit == "" {
 		return "dev"
 	}
-	return BuildCommit
+	return buildCommit
 }
