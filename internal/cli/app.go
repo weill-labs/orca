@@ -103,6 +103,7 @@ type App struct {
 	daemon           daemon.Controller
 	state            state.Reader
 	stdout           io.Writer
+	stderr           io.Writer
 	version          string
 	cwd              func() (string, error)
 	projectStatusRPC func(context.Context, string) (daemon.ProjectStatusRPCResult, error)
@@ -169,6 +170,7 @@ func New(options Options) *App {
 		daemon:           options.Daemon,
 		state:            options.State,
 		stdout:           options.Stdout,
+		stderr:           options.Stderr,
 		version:          version,
 		cwd:              options.Cwd,
 		projectStatusRPC: projectStatusRPC,
@@ -450,12 +452,7 @@ func (a *App) runBatch(ctx context.Context, args []string) error {
 		return err
 	}
 
-	for _, task := range result.Results {
-		if _, err := fmt.Fprintf(a.stdout, "%s assigned to %s\n", task.Issue, task.Agent); err != nil {
-			return err
-		}
-	}
-	return nil
+	return a.writeBatchResult(result)
 }
 
 func (a *App) runSpawn(ctx context.Context, args []string) error {
@@ -554,6 +551,30 @@ func readBatchManifest(path string) ([]daemon.BatchEntry, error) {
 		return nil, fmt.Errorf("decode batch manifest: %w", err)
 	}
 	return entries, nil
+}
+
+func (a *App) writeBatchResult(result daemon.BatchResult) error {
+	for _, task := range result.Results {
+		if _, err := fmt.Fprintf(a.stdout, "%s assigned to %s\n", task.Issue, task.Agent); err != nil {
+			return err
+		}
+	}
+	for _, failure := range result.Failures {
+		if _, err := fmt.Fprintf(a.stderr, "%s failed: %s\n", failure.Issue, failure.Error); err != nil {
+			return err
+		}
+	}
+	if failures := len(result.Failures); failures > 0 {
+		return fmt.Errorf("batch failed for %d %s", failures, pluralize("assignment", failures))
+	}
+	return nil
+}
+
+func pluralize(word string, count int) string {
+	if count == 1 {
+		return word
+	}
+	return word + "s"
 }
 
 func (a *App) runCancel(ctx context.Context, args []string) error {

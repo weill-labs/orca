@@ -121,9 +121,15 @@ type TaskActionResult struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+type BatchFailure struct {
+	Issue string `json:"issue"`
+	Error string `json:"error"`
+}
+
 type BatchResult struct {
-	Project string             `json:"project"`
-	Results []TaskActionResult `json:"results"`
+	Project  string             `json:"project"`
+	Results  []TaskActionResult `json:"results"`
+	Failures []BatchFailure     `json:"failures,omitempty"`
 }
 
 type SpawnPaneRequest struct {
