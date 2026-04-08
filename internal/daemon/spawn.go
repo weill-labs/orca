@@ -106,15 +106,15 @@ func (d *Daemon) taskPaneTarget(task Task) string {
 }
 
 func (d *Daemon) spawnPaneTarget(ctx context.Context, task Task) string {
-	callerPane := strings.TrimSpace(task.CallerPane)
-	if callerPane == "" {
-		return strings.TrimSpace(d.leadPane)
+	target := d.taskPaneTarget(task)
+	if strings.TrimSpace(task.CallerPane) == "" {
+		return target
 	}
 
-	if fallback := d.sameWindowNonLeadPane(ctx, callerPane); fallback != "" {
+	if fallback := d.sameWindowNonLeadPane(ctx, target); fallback != "" {
 		return fallback
 	}
-	return callerPane
+	return target
 }
 
 func (d *Daemon) sameWindowNonLeadPane(ctx context.Context, callerPane string) string {
