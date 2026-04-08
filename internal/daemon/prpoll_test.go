@@ -84,7 +84,7 @@ func TestPRMergePollingSendsWrapUpAndCleansClone(t *testing.T) {
 		"agent_profile":  "codex",
 		"branch":         "LAB-689",
 		"status":         "done",
-		"task":           "\x1b[9m" + paneTitle + "\x1b[29m",
+		"task":           "\x1b[2m\x1b[9m" + paneTitle + "\x1b[29m\x1b[22m",
 		"tracked_issues": `[{"id":"LAB-689","status":"completed"}]`,
 		"tracked_prs":    `[{"number":42,"status":"completed"}]`,
 	})

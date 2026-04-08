@@ -17,6 +17,8 @@ import (
 var linearIssueIdentifierPattern = regexp.MustCompile(`^[A-Z][A-Z0-9]*-\d+$`)
 
 const (
+	ansiDimOn            = "\x1b[2m"
+	ansiDimOff           = "\x1b[22m"
 	ansiStrikethroughOn  = "\x1b[9m"
 	ansiStrikethroughOff = "\x1b[29m"
 )
@@ -165,12 +167,12 @@ func resolveTaskTitle(issue, title string) string {
 	return strings.TrimSpace(issue)
 }
 
-func strikethroughTaskTitle(title string) string {
+func completedTaskTitle(title string) string {
 	title = strings.TrimSpace(title)
 	if title == "" {
 		return ""
 	}
-	return ansiStrikethroughOn + title + ansiStrikethroughOff
+	return ansiDimOn + ansiStrikethroughOn + title + ansiStrikethroughOff + ansiDimOff
 }
 
 func (d *Daemon) paneTaskTitle(ctx context.Context, paneID, issue string) (string, error) {
@@ -423,7 +425,7 @@ func (d *Daemon) completionPaneMetadata(ctx context.Context, active ActiveAssign
 
 	return mergeMetadata(map[string]string{
 		"status": "done",
-		"task":   strikethroughTaskTitle(taskTitle),
+		"task":   completedTaskTitle(taskTitle),
 	}, tracked), nil
 }
 
