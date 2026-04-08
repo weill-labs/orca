@@ -152,15 +152,11 @@ func (d *Daemon) resumeWithFreshPaneForProject(ctx context.Context, projectPath 
 		return fmt.Errorf("task %s has no clone path", task.Issue)
 	}
 
-	paneName := strings.TrimSpace(task.WorkerID)
-	if paneName == "" {
-		paneName = strings.TrimSpace(task.PaneName)
+	stableRef := strings.TrimSpace(task.WorkerID)
+	if stableRef == "" {
+		stableRef = strings.TrimSpace(task.PaneName)
 	}
-	if paneName == "" {
-		paneName = "worker-" + task.Issue
-	}
-
-	pane, err := d.spawnWorkerPane(ctx, task, paneName, clonePath, profile)
+	pane, err := d.spawnWorkerPane(ctx, task, stableRef, clonePath, profile)
 	if err != nil {
 		return fmt.Errorf("spawn pane: %w", err)
 	}
