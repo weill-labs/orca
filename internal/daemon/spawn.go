@@ -105,10 +105,66 @@ func (d *Daemon) taskPaneTarget(task Task) string {
 	return strings.TrimSpace(d.leadPane)
 }
 
+func (d *Daemon) spawnPaneTarget(ctx context.Context, task Task) string {
+	callerPane := strings.TrimSpace(task.CallerPane)
+	if callerPane == "" {
+		return strings.TrimSpace(d.leadPane)
+	}
+
+	if fallback := d.sameWindowNonLeadPane(ctx, callerPane); fallback != "" {
+		return fallback
+	}
+	return callerPane
+}
+
+func (d *Daemon) sameWindowNonLeadPane(ctx context.Context, callerPane string) string {
+	panes, err := d.amux.ListPanes(ctx)
+	if err != nil {
+		return ""
+	}
+
+	caller, ok := paneByReference(panes, callerPane)
+	if !ok || !caller.Lead {
+		return ""
+	}
+
+	window := strings.TrimSpace(caller.Window)
+	if window == "" {
+		return ""
+	}
+
+	for _, pane := range panes {
+		if strings.TrimSpace(pane.Window) != window || pane.Lead || paneMatchesReference(pane, callerPane) {
+			continue
+		}
+		return pane.Ref()
+	}
+
+	return ""
+}
+
+func paneByReference(panes []Pane, ref string) (Pane, bool) {
+	for _, pane := range panes {
+		if paneMatchesReference(pane, ref) {
+			return pane, true
+		}
+	}
+	return Pane{}, false
+}
+
+func paneMatchesReference(pane Pane, ref string) bool {
+	target := strings.TrimSpace(ref)
+	if target == "" {
+		return false
+	}
+
+	return target == strings.TrimSpace(pane.ID) || target == strings.TrimSpace(pane.Name)
+}
+
 func (d *Daemon) spawnWorkerPane(ctx context.Context, task Task, paneName, clonePath string, profile AgentProfile) (Pane, error) {
 	return d.amux.Spawn(ctx, SpawnRequest{
 		Session: d.session,
-		AtPane:  d.taskPaneTarget(task),
+		AtPane:  d.spawnPaneTarget(ctx, task),
 		Name:    paneName,
 		CWD:     clonePath,
 		Command: profile.StartCommand,

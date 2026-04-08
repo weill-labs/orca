@@ -444,7 +444,7 @@ func TestCLIClientListPanesErrorsAndFallbacks(t *testing.T) {
 				},
 			},
 			wantPanes: []Pane{
-				{ID: "1", Name: "worker-LAB-711"},
+				{ID: "1", Name: "worker-LAB-711", Window: "main"},
 			},
 		},
 		{
@@ -456,7 +456,7 @@ func TestCLIClientListPanesErrorsAndFallbacks(t *testing.T) {
 				},
 			},
 			wantPanes: []Pane{
-				{ID: "1", Name: "worker-LAB-711"},
+				{ID: "1", Name: "worker-LAB-711", Window: "main"},
 			},
 		},
 		{
@@ -468,7 +468,7 @@ func TestCLIClientListPanesErrorsAndFallbacks(t *testing.T) {
 				},
 			},
 			wantPanes: []Pane{
-				{ID: "1", Name: "worker-LAB-711", CWD: "/tmp/orca01"},
+				{ID: "1", Name: "worker-LAB-711", CWD: "/tmp/orca01", Window: "main"},
 			},
 		},
 	}
