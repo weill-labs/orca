@@ -401,6 +401,51 @@ func TestAppRunBatchPropagatesStdoutWriteError(t *testing.T) {
 	}
 }
 
+func TestAppRunBatchPropagatesStderrWriteError(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := newRepoRoot(t)
+	cwdPath := filepath.Join(repoRoot, "internal", "cli")
+	if err := os.MkdirAll(cwdPath, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", cwdPath, err)
+	}
+
+	manifestPath := filepath.Join(repoRoot, "tasks.json")
+	if err := os.WriteFile(manifestPath, []byte(`[{"issue":"LAB-690","agent":"codex","prompt":"Implement CLI wiring"}]`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", manifestPath, err)
+	}
+
+	d := &fakeDaemon{
+		batchResult: daemon.BatchResult{
+			Project: repoRoot,
+			Results: []daemon.TaskActionResult{{Project: repoRoot, Issue: "LAB-690", Status: "active", Agent: "codex", UpdatedAt: time.Now().UTC()}},
+			Failures: []daemon.BatchFailure{
+				{Issue: "LAB-691", Error: `load agent profile "missing": unknown agent profile "missing" (available: claude, codex)`},
+			},
+		},
+	}
+
+	var stdout bytes.Buffer
+	app := New(Options{
+		Daemon:  d,
+		State:   &fakeState{},
+		Stdout:  &stdout,
+		Stderr:  errWriter{},
+		Version: "build-123",
+		Cwd: func() (string, error) {
+			return cwdPath, nil
+		},
+	})
+
+	err := app.Run(context.Background(), []string{"batch", manifestPath})
+	if err == nil || !strings.Contains(err.Error(), "write failed") {
+		t.Fatalf("Run() error = %v, want stderr write error", err)
+	}
+	if output := stdout.String(); !strings.Contains(output, "LAB-690 assigned to codex") {
+		t.Fatalf("stdout = %q, want successful assignment output before stderr failure", output)
+	}
+}
+
 type errWriter struct{}
 
 func (errWriter) Write([]byte) (int, error) {

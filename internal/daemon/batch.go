@@ -59,9 +59,8 @@ func (d *Daemon) Batch(ctx context.Context, req BatchRequest) (BatchResult, erro
 
 	entries := normalizeBatchEntries(req.Entries)
 	result := BatchResult{
-		Project:  projectPath,
-		Results:  make([]TaskActionResult, 0, len(entries)),
-		Failures: make([]BatchFailure, 0),
+		Project: projectPath,
+		Results: make([]TaskActionResult, 0, len(entries)),
 	}
 
 	for i, entry := range entries {
