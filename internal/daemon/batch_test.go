@@ -242,6 +242,72 @@ func TestBatchContinuesAfterAssignErrorAndLogsFailure(t *testing.T) {
 	}
 }
 
+func TestBatchSleepsBetweenEntriesEvenWhenPreviousEntryFails(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+
+	cloneTwoPath := filepath.Join(filepath.Dir(deps.pool.clone.Path), "clone-02")
+	cloneThreePath := filepath.Join(filepath.Dir(deps.pool.clone.Path), "clone-03")
+	for _, path := range []string{cloneTwoPath, cloneThreePath} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q) error = %v", path, err)
+		}
+	}
+	deps.pool.clones = []Clone{
+		deps.pool.clone,
+		{Name: "clone-02", Path: cloneTwoPath},
+		{Name: "clone-03", Path: cloneThreePath},
+	}
+	deps.amux.spawnResults = []Pane{
+		{ID: "pane-1", Name: "worker-1"},
+		{ID: "pane-2", Name: "worker-2"},
+	}
+
+	var sleeps []time.Duration
+	deps.sleep = func(_ context.Context, delay time.Duration) error {
+		sleeps = append(sleeps, delay)
+		deps.clock.Advance(delay)
+		return nil
+	}
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	result, err := d.Batch(ctx, BatchRequest{
+		Entries: []BatchEntry{
+			{Issue: "LAB-689", Agent: "codex", Prompt: "Implement daemon core"},
+			{Issue: "LAB-690", Agent: "missing", Prompt: "Implement missing profile handling"},
+			{Issue: "LAB-691", Agent: "codex", Prompt: "Implement merge queue"},
+		},
+		Delay: 5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("Batch() error = %v", err)
+	}
+
+	if got, want := sleeps, []time.Duration{5 * time.Second, 5 * time.Second}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("sleep durations = %#v, want %#v", got, want)
+	}
+	if got, want := len(result.Results), 2; got != want {
+		t.Fatalf("result count = %d, want %d", got, want)
+	}
+	if got, want := []string{result.Results[0].Issue, result.Results[1].Issue}, []string{"LAB-689", "LAB-691"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("result issues = %#v, want %#v", got, want)
+	}
+	if got, want := deps.events.countType(EventTaskAssignFailed), 1; got != want {
+		t.Fatalf("assign failure events = %d, want %d", got, want)
+	}
+}
+
 func TestBatchPropagatesTaskLookupError(t *testing.T) {
 	t.Parallel()
 
