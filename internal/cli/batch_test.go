@@ -162,11 +162,7 @@ func TestAppRunBatchDefaultsCallerPaneFromAMUXPaneEnv(t *testing.T) {
 		t.Fatal("expected batch to be called")
 	}
 
-	callerPaneField := reflect.ValueOf(*d.batchRequest).FieldByName("CallerPane")
-	if !callerPaneField.IsValid() {
-		t.Fatal("BatchRequest missing CallerPane field")
-	}
-	if got, want := callerPaneField.String(), "pane-13"; got != want {
+	if got, want := d.batchRequest.CallerPane, "pane-13"; got != want {
 		t.Fatalf("batch caller pane = %q, want %q", got, want)
 	}
 }

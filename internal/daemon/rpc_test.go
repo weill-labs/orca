@@ -202,6 +202,14 @@ func TestBatchTypesIncludeCallerPaneEntriesAndDelayFields(t *testing.T) {
 		t.Fatalf("batchRPCParams.CallerPane json tag = %q, want %q", got, want)
 	}
 
+	if got, want := (BatchRequest{}).CallerPane, ""; got != want {
+		t.Fatalf("BatchRequest{}.CallerPane = %q, want %q", got, want)
+	}
+
+	if got, want := (batchRPCParams{}).CallerPane, ""; got != want {
+		t.Fatalf("batchRPCParams{}.CallerPane = %q, want %q", got, want)
+	}
+
 	batchRequestField, ok := reflect.TypeOf(BatchRequest{}).FieldByName("Entries")
 	if !ok {
 		t.Fatal("BatchRequest missing Entries field")

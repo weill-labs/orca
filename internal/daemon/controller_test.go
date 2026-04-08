@@ -449,15 +449,11 @@ func TestLocalControllerAssignAndBatchRPC(t *testing.T) {
 	}
 
 	batchReq := BatchRequest{
-		Project: projectPath,
-		Entries: []BatchEntry{{Issue: "  LAB-719  ", Agent: "  codex  ", Prompt: "Implement controller batch.", Title: "  Batch title  "}},
-		Delay:   7 * time.Second,
+		Project:    projectPath,
+		Entries:    []BatchEntry{{Issue: "  LAB-719  ", Agent: "  codex  ", Prompt: "Implement controller batch.", Title: "  Batch title  "}},
+		Delay:      7 * time.Second,
+		CallerPane: "  pane-13  ",
 	}
-	batchCallerPaneField := reflect.ValueOf(&batchReq).Elem().FieldByName("CallerPane")
-	if !batchCallerPaneField.IsValid() {
-		t.Fatal("BatchRequest missing CallerPane field")
-	}
-	batchCallerPaneField.SetString("  pane-13  ")
 
 	batchResult, err := controller.Batch(context.Background(), batchReq)
 	if err != nil {
@@ -503,11 +499,7 @@ func TestLocalControllerAssignAndBatchRPC(t *testing.T) {
 	if got, want := batchParams.Delay, "7s"; got != want {
 		t.Fatalf("batch delay = %q, want %q", got, want)
 	}
-	batchCallerPane := reflect.ValueOf(batchParams).FieldByName("CallerPane")
-	if !batchCallerPane.IsValid() {
-		t.Fatal("batchRPCParams missing CallerPane field")
-	}
-	if got, want := batchCallerPane.String(), "pane-13"; got != want {
+	if got, want := batchParams.CallerPane, "pane-13"; got != want {
 		t.Fatalf("batch caller pane = %q, want %q", got, want)
 	}
 }

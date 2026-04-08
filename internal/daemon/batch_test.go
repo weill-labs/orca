@@ -132,12 +132,8 @@ func TestBatchUsesCallerPaneForEachAssignment(t *testing.T) {
 			{Issue: "LAB-689", Agent: "codex", Prompt: "Implement daemon core"},
 			{Issue: "LAB-690", Agent: "codex", Prompt: "Implement merge queue"},
 		},
+		CallerPane: "pane-13",
 	}
-	callerPaneField := reflect.ValueOf(&req).Elem().FieldByName("CallerPane")
-	if !callerPaneField.IsValid() {
-		t.Fatal("BatchRequest missing CallerPane field")
-	}
-	callerPaneField.SetString("pane-13")
 
 	result, err := d.Batch(ctx, req)
 	if err != nil {
