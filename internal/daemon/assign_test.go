@@ -82,6 +82,9 @@ func TestAssignCreatesStableWorkerIdentityAndCloneGitIdentity(t *testing.T) {
 	if got, want := task.PaneID, "pane-1"; got != want {
 		t.Fatalf("task.PaneID = %q, want %q", got, want)
 	}
+	if got, want := task.PaneName, "w-LAB-894"; got != want {
+		t.Fatalf("task.PaneName = %q, want %q", got, want)
+	}
 
 	worker, ok := deps.state.worker("worker-01")
 	if !ok {
@@ -93,11 +96,14 @@ func TestAssignCreatesStableWorkerIdentityAndCloneGitIdentity(t *testing.T) {
 	if got, want := worker.PaneID, "pane-1"; got != want {
 		t.Fatalf("worker.PaneID = %q, want %q", got, want)
 	}
+	if got, want := worker.PaneName, "w-LAB-894"; got != want {
+		t.Fatalf("worker.PaneName = %q, want %q", got, want)
+	}
 
 	if got, want := len(deps.amux.spawnRequests), 1; got != want {
 		t.Fatalf("len(spawnRequests) = %d, want %d", got, want)
 	}
-	if got, want := deps.amux.spawnRequests[0].Name, "worker-LAB-894"; got != want {
+	if got, want := deps.amux.spawnRequests[0].Name, "w-LAB-894"; got != want {
 		t.Fatalf("spawn.Name = %q, want %q", got, want)
 	}
 
@@ -156,8 +162,19 @@ func TestAssignReusesIdleWorkerIdentity(t *testing.T) {
 	if got, want := task.WorkerID, "worker-01"; got != want {
 		t.Fatalf("task.WorkerID = %q, want %q", got, want)
 	}
-	if got, want := deps.amux.spawnRequests[0].Name, "worker-LAB-895"; got != want {
+	if got, want := task.PaneName, "w-LAB-895"; got != want {
+		t.Fatalf("task.PaneName = %q, want %q", got, want)
+	}
+	if got, want := deps.amux.spawnRequests[0].Name, "w-LAB-895"; got != want {
 		t.Fatalf("spawn.Name = %q, want %q", got, want)
+	}
+
+	worker, ok := deps.state.worker("worker-01")
+	if !ok {
+		t.Fatal("worker not stored in state")
+	}
+	if got, want := worker.PaneName, "w-LAB-895"; got != want {
+		t.Fatalf("worker.PaneName = %q, want %q", got, want)
 	}
 }
 

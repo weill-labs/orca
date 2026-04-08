@@ -18,14 +18,14 @@ func TestWorkerPaneRef(t *testing.T) {
 	}{
 		{
 			name: "prefers task pane name",
-			task: Task{PaneName: "worker-LAB-854", PaneID: "7", Issue: "LAB-854"},
-			want: "worker-LAB-854",
+			task: Task{PaneName: "w-LAB-854", PaneID: "7", Issue: "LAB-854"},
+			want: "w-LAB-854",
 		},
 		{
 			name:   "falls back to worker pane name",
 			task:   Task{PaneID: "7", Issue: "LAB-854"},
-			worker: Worker{PaneName: "worker-LAB-854", PaneID: "8"},
-			want:   "worker-LAB-854",
+			worker: Worker{PaneName: "w-LAB-854", PaneID: "8"},
+			want:   "w-LAB-854",
 		},
 		{
 			name: "falls back to stable task pane name",
@@ -64,7 +64,7 @@ func TestWorkerPaneRef(t *testing.T) {
 }
 
 func TestNormalizeStoredPaneRef(t *testing.T) {
-	t.Run("copies stable worker id onto task and worker refs", func(t *testing.T) {
+	t.Run("copies stable worker id and canonical pane name onto task and worker refs", func(t *testing.T) {
 		t.Parallel()
 
 		deps := newTestDeps(t)
@@ -100,13 +100,13 @@ func TestNormalizeStoredPaneRef(t *testing.T) {
 		if got, want := task.WorkerID, "worker-01"; got != want {
 			t.Fatalf("task.WorkerID = %q, want %q", got, want)
 		}
-		if got, want := task.PaneName, "worker-01"; got != want {
+		if got, want := task.PaneName, "w-LAB-854"; got != want {
 			t.Fatalf("task.PaneName = %q, want %q", got, want)
 		}
 		if got, want := worker.WorkerID, "worker-01"; got != want {
 			t.Fatalf("worker.WorkerID = %q, want %q", got, want)
 		}
-		if got, want := worker.PaneName, "worker-01"; got != want {
+		if got, want := worker.PaneName, "w-LAB-854"; got != want {
 			t.Fatalf("worker.PaneName = %q, want %q", got, want)
 		}
 
@@ -117,7 +117,7 @@ func TestNormalizeStoredPaneRef(t *testing.T) {
 		if got, want := storedTask.WorkerID, "worker-01"; got != want {
 			t.Fatalf("storedTask.WorkerID = %q, want %q", got, want)
 		}
-		if got, want := storedTask.PaneName, "worker-01"; got != want {
+		if got, want := storedTask.PaneName, "w-LAB-854"; got != want {
 			t.Fatalf("storedTask.PaneName = %q, want %q", got, want)
 		}
 		if _, ok := deps.state.worker("worker-01"); !ok {
@@ -125,7 +125,7 @@ func TestNormalizeStoredPaneRef(t *testing.T) {
 		}
 	})
 
-	t.Run("fills missing pane names from stable worker id", func(t *testing.T) {
+	t.Run("fills missing pane names from issue and stable worker id", func(t *testing.T) {
 		t.Parallel()
 
 		deps := newTestDeps(t)
@@ -154,10 +154,10 @@ func TestNormalizeStoredPaneRef(t *testing.T) {
 		if got, want := task.PaneID, "pane-1"; got != want {
 			t.Fatalf("task.PaneID = %q, want %q", got, want)
 		}
-		if got, want := task.PaneName, "worker-01"; got != want {
+		if got, want := task.PaneName, "w-LAB-854"; got != want {
 			t.Fatalf("task.PaneName = %q, want %q", got, want)
 		}
-		if got, want := worker.PaneName, "worker-01"; got != want {
+		if got, want := worker.PaneName, "w-LAB-854"; got != want {
 			t.Fatalf("worker.PaneName = %q, want %q", got, want)
 		}
 	})
