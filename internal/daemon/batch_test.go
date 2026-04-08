@@ -225,6 +225,15 @@ func TestBatchContinuesAfterAssignErrorAndLogsFailure(t *testing.T) {
 	if got, want := []string{result.Results[0].Issue, result.Results[1].Issue}, []string{"LAB-689", "LAB-691"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("result issues = %#v, want %#v", got, want)
 	}
+	if got, want := len(result.Failures), 1; got != want {
+		t.Fatalf("failure count = %d, want %d", got, want)
+	}
+	if got, want := result.Failures[0].Issue, "LAB-690"; got != want {
+		t.Fatalf("failure issue = %q, want %q", got, want)
+	}
+	if got := result.Failures[0].Error; !strings.Contains(got, `load agent profile "missing"`) {
+		t.Fatalf("failure error = %q, want missing profile context", got)
+	}
 	if got, want := deps.pool.acquireCallCount(), 2; got != want {
 		t.Fatalf("pool acquire calls = %d, want %d", got, want)
 	}
