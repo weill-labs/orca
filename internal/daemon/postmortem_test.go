@@ -515,6 +515,8 @@ func TestNewPostmortemAssignmentUsesCanonicalPaneNames(t *testing.T) {
 }
 
 func newPostmortemAssignment(deps *testDeps) ActiveAssignment {
+	paneName := workerPaneName("LAB-689", "worker-01")
+
 	return ActiveAssignment{
 		Task: Task{
 			Project:      "/tmp/project",
@@ -522,7 +524,7 @@ func newPostmortemAssignment(deps *testDeps) ActiveAssignment {
 			Branch:       "LAB-689",
 			WorkerID:     "worker-01",
 			PaneID:       deps.amux.spawnPane.ID,
-			PaneName:     "worker-01",
+			PaneName:     paneName,
 			CloneName:    deps.pool.clone.Name,
 			ClonePath:    deps.pool.clone.Path,
 			AgentProfile: deps.config.profiles["codex"].Name,
@@ -533,7 +535,7 @@ func newPostmortemAssignment(deps *testDeps) ActiveAssignment {
 			Project:      "/tmp/project",
 			WorkerID:     "worker-01",
 			PaneID:       deps.amux.spawnPane.ID,
-			PaneName:     "worker-01",
+			PaneName:     paneName,
 			Issue:        "LAB-689",
 			ClonePath:    deps.pool.clone.Path,
 			AgentProfile: deps.config.profiles["codex"].Name,
