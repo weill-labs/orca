@@ -238,7 +238,7 @@ func TestFinishAssignmentMergedCleanupSetsDoneMetadataAfterPostmortem(t *testing
 		"agent_profile":  "codex",
 		"branch":         "LAB-689",
 		"status":         "done",
-		"task":           "\x1b[9mLAB-689\x1b[29m",
+		"task":           "\x1b[2m\x1b[9mLAB-689\x1b[29m\x1b[22m",
 		"tracked_issues": `[{"id":"LAB-689","status":"completed"}]`,
 	})
 }
@@ -286,7 +286,7 @@ func TestFinishAssignmentCancelledStrikesTaskTitleBeforeKill(t *testing.T) {
 		"agent_profile":  "codex",
 		"branch":         "LAB-689",
 		"status":         "done",
-		"task":           "\x1b[9mQueue merge queue\x1b[29m",
+		"task":           "\x1b[2m\x1b[9mQueue merge queue\x1b[29m\x1b[22m",
 		"tracked_issues": `[{"id":"LAB-689","status":"completed"}]`,
 	})
 }
@@ -494,7 +494,7 @@ func TestFinishAssignmentPreservesHistoricalTrackedMetadata(t *testing.T) {
 		"agent_profile":  "codex",
 		"branch":         "LAB-689",
 		"status":         "done",
-		"task":           "\x1b[9mLAB-689\x1b[29m",
+		"task":           "\x1b[2m\x1b[9mLAB-689\x1b[29m\x1b[22m",
 		"tracked_issues": `[{"id":"LAB-688","status":"completed"},{"id":"LAB-689","status":"completed"}]`,
 		"tracked_prs":    `[{"number":41,"status":"completed"},{"number":42,"status":"completed"}]`,
 	})
