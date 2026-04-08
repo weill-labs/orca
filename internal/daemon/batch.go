@@ -64,16 +64,13 @@ func (d *Daemon) Batch(ctx context.Context, req BatchRequest) (BatchResult, erro
 	}
 
 	for i, entry := range entries {
-		if err := d.assign(ctx, projectPath, entry.Issue, entry.Prompt, entry.Agent, "", entry.Title); err != nil {
-			return BatchResult{}, fmt.Errorf("assign %s: %w", entry.Issue, err)
+		if err := d.assign(ctx, projectPath, entry.Issue, entry.Prompt, entry.Agent, "", entry.Title); err == nil {
+			taskResult, err := d.taskActionResult(ctx, projectPath, entry.Issue)
+			if err != nil {
+				return BatchResult{}, fmt.Errorf("load task %s: %w", entry.Issue, err)
+			}
+			result.Results = append(result.Results, taskResult)
 		}
-
-		taskResult, err := d.taskActionResult(ctx, projectPath, entry.Issue)
-		if err != nil {
-			return BatchResult{}, fmt.Errorf("load task %s: %w", entry.Issue, err)
-		}
-		result.Results = append(result.Results, taskResult)
-
 		if i == len(entries)-1 || req.Delay == 0 {
 			continue
 		}

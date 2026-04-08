@@ -12,6 +12,7 @@ type assignStateStub struct {
 
 	taskByIssueErr  error
 	claimTaskErr    error
+	claimWorkerErr  error
 	tasksByPaneErr  error
 	putTaskErrs     []error
 	putWorkerErr    error
@@ -30,6 +31,13 @@ func (s *assignStateStub) ClaimTask(ctx context.Context, task Task) (*Task, erro
 		return nil, s.claimTaskErr
 	}
 	return s.fakeState.ClaimTask(ctx, task)
+}
+
+func (s *assignStateStub) ClaimWorker(ctx context.Context, worker Worker) (Worker, error) {
+	if s.claimWorkerErr != nil {
+		return Worker{}, s.claimWorkerErr
+	}
+	return s.fakeState.ClaimWorker(ctx, worker)
 }
 
 func (s *assignStateStub) TasksByPane(ctx context.Context, project, paneID string) ([]Task, error) {
@@ -83,6 +91,23 @@ func (a *assignAmuxStub) SetMetadata(ctx context.Context, paneID string, metadat
 		return a.setMetadataErr
 	}
 	return a.fakeAmux.SetMetadata(ctx, paneID, metadata)
+}
+
+func requireAssignFailureEvent(t *testing.T, deps *testDeps, wantMessage string) Event {
+	t.Helper()
+
+	if got, want := deps.events.countType(EventTaskAssignFailed), 1; got != want {
+		t.Fatalf("assign failure events = %d, want %d", got, want)
+	}
+
+	event, ok := deps.events.lastEventOfType(EventTaskAssignFailed)
+	if !ok {
+		t.Fatal("missing task.assign_failed event")
+	}
+	if !strings.Contains(event.Message, wantMessage) {
+		t.Fatalf("assign failure message = %q, want substring %q", event.Message, wantMessage)
+	}
+	return event
 }
 
 func TestAssignUsesAgentProfileArgumentWhenConfigNameIsBlank(t *testing.T) {
@@ -145,6 +170,7 @@ func TestAssignAdditionalErrorPaths(t *testing.T) {
 				if got := deps.pool.acquireCallCount(); got != 0 {
 					t.Fatalf("pool acquire calls = %d, want 0", got)
 				}
+				requireAssignFailureEvent(t, deps, "load task LAB-892: db unavailable")
 			},
 		},
 		{
@@ -158,6 +184,7 @@ func TestAssignAdditionalErrorPaths(t *testing.T) {
 				if got := deps.pool.acquireCallCount(); got != 0 {
 					t.Fatalf("pool acquire calls = %d, want 0", got)
 				}
+				requireAssignFailureEvent(t, deps, "check open PRs for LAB-892: gh failed")
 			},
 		},
 		{
@@ -171,6 +198,21 @@ func TestAssignAdditionalErrorPaths(t *testing.T) {
 				if got := deps.pool.acquireCallCount(); got != 0 {
 					t.Fatalf("pool acquire calls = %d, want 0", got)
 				}
+				requireAssignFailureEvent(t, deps, "claim failed")
+			},
+		},
+		{
+			name: "claim worker error",
+			setup: func(_ *testDeps, state *assignStateStub, _ *assignAmuxStub) {
+				state.claimWorkerErr = errors.New("worker claim failed")
+			},
+			wantErr: "claim worker",
+			assert: func(t *testing.T, deps *testDeps) {
+				t.Helper()
+				if got := deps.pool.acquireCallCount(); got != 0 {
+					t.Fatalf("pool acquire calls = %d, want 0", got)
+				}
+				requireAssignFailureEvent(t, deps, "claim worker: worker claim failed")
 			},
 		},
 		{
@@ -197,6 +239,13 @@ func TestAssignAdditionalErrorPaths(t *testing.T) {
 				if got := deps.pool.releasedClones(); len(got) != 1 {
 					t.Fatalf("released clones = %#v, want 1 released clone", got)
 				}
+				event := requireAssignFailureEvent(t, deps, "prepare clone: checkout failed")
+				if got, want := event.WorkerID, "worker-01"; got != want {
+					t.Fatalf("assign failure worker = %q, want %q", got, want)
+				}
+				if got, want := event.ClonePath, deps.pool.clone.Path; got != want {
+					t.Fatalf("assign failure clone path = %q, want %q", got, want)
+				}
 			},
 		},
 		{
@@ -212,6 +261,13 @@ func TestAssignAdditionalErrorPaths(t *testing.T) {
 				state.tasksByPaneErr = errors.New("history failed")
 			},
 			wantErr: "build pane metadata",
+			assert: func(t *testing.T, deps *testDeps) {
+				t.Helper()
+				event := requireAssignFailureEvent(t, deps, "build pane metadata: load pane task history: history failed")
+				if got, want := event.PaneID, "pane-1"; got != want {
+					t.Fatalf("assign failure pane id = %q, want %q", got, want)
+				}
+			},
 		},
 		{
 			name: "set metadata error",
@@ -219,6 +275,13 @@ func TestAssignAdditionalErrorPaths(t *testing.T) {
 				amux.setMetadataErr = errors.New("metadata failed")
 			},
 			wantErr: "set pane metadata",
+			assert: func(t *testing.T, deps *testDeps) {
+				t.Helper()
+				event := requireAssignFailureEvent(t, deps, "set pane metadata: metadata failed")
+				if got, want := event.PaneID, "pane-1"; got != want {
+					t.Fatalf("assign failure pane id = %q, want %q", got, want)
+				}
+			},
 		},
 		{
 			name: "store pending task error",
@@ -253,11 +316,19 @@ func TestAssignAdditionalErrorPaths(t *testing.T) {
 			wantErr: "send prompt: enter failed",
 		},
 		{
-			name: "final store task error",
-			setup: func(_ *testDeps, state *assignStateStub, _ *assignAmuxStub) {
+			name: "final store task error preserves adopted pr number",
+			setup: func(deps *testDeps, state *assignStateStub, _ *assignAmuxStub) {
+				deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-892", "--state", "open", "--json", "number"}, `[{"number":42}]`, nil)
 				state.putTaskErrs = []error{nil, errors.New("store task failed")}
 			},
 			wantErr: "store task",
+			assert: func(t *testing.T, deps *testDeps) {
+				t.Helper()
+				event := requireAssignFailureEvent(t, deps, "store task failed")
+				if got, want := event.PRNumber, 42; got != want {
+					t.Fatalf("assign failure PRNumber = %d, want %d", got, want)
+				}
+			},
 		},
 		{
 			name: "ignore delete worker rollback error",

@@ -260,7 +260,6 @@ func (d *Daemon) Stop(ctx context.Context) error {
 	})
 	return nil
 }
-
 func (d *Daemon) Cancel(ctx context.Context, issue string) error {
 	return d.cancel(ctx, d.project, issue)
 }
