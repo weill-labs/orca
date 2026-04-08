@@ -2,7 +2,7 @@ package daemon
 
 import "testing"
 
-func TestStrikethroughTaskTitle(t *testing.T) {
+func TestCompletedTaskTitle(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -27,8 +27,8 @@ func TestStrikethroughTaskTitle(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			if got := strikethroughTaskTitle(tt.title); got != tt.want {
-				t.Fatalf("strikethroughTaskTitle() = %q, want %q", got, tt.want)
+			if got := completedTaskTitle(tt.title); got != tt.want {
+				t.Fatalf("completedTaskTitle() = %q, want %q", got, tt.want)
 			}
 		})
 	}

@@ -167,7 +167,7 @@ func resolveTaskTitle(issue, title string) string {
 	return strings.TrimSpace(issue)
 }
 
-func strikethroughTaskTitle(title string) string {
+func completedTaskTitle(title string) string {
 	title = strings.TrimSpace(title)
 	if title == "" {
 		return ""
@@ -425,7 +425,7 @@ func (d *Daemon) completionPaneMetadata(ctx context.Context, active ActiveAssign
 
 	return mergeMetadata(map[string]string{
 		"status": "done",
-		"task":   strikethroughTaskTitle(taskTitle),
+		"task":   completedTaskTitle(taskTitle),
 	}, tracked), nil
 }
 
