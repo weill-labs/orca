@@ -84,11 +84,6 @@ func runWithDeps(args []string, stdout, stderr io.Writer, deps runDependencies) 
 		return 0
 	}
 	if args[0] == "help" {
-		fmt.Fprintln(stderr, fmt.Errorf("unknown help topic %q", args[1]))
-		return 1
-	}
-
-	if args[0] == "help" {
 		fmt.Fprintf(stderr, "unknown help topic %q\n", args[1])
 		return 1
 	}

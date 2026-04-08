@@ -94,7 +94,7 @@ func TestPRReviewPollingSkipsNudgesForApprovalOrLGTM(t *testing.T) {
 			if got := deps.events.countType(EventWorkerNudgedReview); got != 0 {
 				t.Fatalf("review nudge event count = %d, want 0", got)
 			}
-			deps.amux.requireSentKeys(t, "pane-1", []string{"Implement daemon core\n"})
+			deps.amux.requireSentKeys(t, "pane-1", []string{wrappedCodexPrompt("Implement daemon core") + "\n"})
 		})
 	}
 }
@@ -206,7 +206,7 @@ func TestPRReviewPollingEscalatesAfterThreeNudgesAndResetsAfterApprovalCycle(t *
 		t.Fatalf("review escalation event count = %d, want %d", got, want)
 	}
 	deps.amux.requireSentKeys(t, "pane-1", []string{
-		"Implement daemon core\n",
+		wrappedCodexPrompt("Implement daemon core") + "\n",
 		aliceNudge,
 		bobNudge,
 		carolNudge,

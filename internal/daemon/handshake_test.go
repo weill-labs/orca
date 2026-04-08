@@ -43,7 +43,7 @@ func TestAssignConfirmsCodexTrustPromptBeforeSendingPrompt(t *testing.T) {
 		return ok && task.Status == TaskStatusActive
 	})
 
-	deps.amux.requireSentKeys(t, "pane-1", []string{"Enter", "Implement handshake", "Enter"})
+	deps.amux.requireSentKeys(t, "pane-1", []string{"Enter", wrappedCodexPrompt("Implement handshake"), "Enter"})
 	if got, want := deps.amux.captureCount("pane-1"), 1; got != want {
 		t.Fatalf("capture count = %d, want %d", got, want)
 	}
@@ -89,7 +89,7 @@ func TestAssignDoesNotBlindlyConfirmWhenTrustPromptNotPresent(t *testing.T) {
 		return ok && task.Status == TaskStatusActive
 	})
 
-	deps.amux.requireSentKeys(t, "pane-1", []string{"Implement handshake\n"})
+	deps.amux.requireSentKeys(t, "pane-1", []string{wrappedCodexPrompt("Implement handshake") + "\n"})
 	if got, want := deps.amux.waitContentCalls, []waitContentCall{
 		{PaneID: "pane-1", Substring: "do you trust", Timeout: defaultTrustPromptTimeout},
 		{PaneID: "pane-1", Substring: codexWorkingText, Timeout: defaultAgentHandshakeTimeout},
@@ -137,7 +137,7 @@ func TestAssignResumesCodexBeforeSendingPrompt(t *testing.T) {
 	deps.amux.requireSentKeys(t, "pane-1", []string{
 		"codex --yolo resume\n",
 		".",
-		"Implement resume flow\n",
+		wrappedCodexPrompt("Implement resume flow") + "\n",
 	})
 	if got, want := deps.amux.waitContentCalls, []waitContentCall{
 		{PaneID: "pane-1", Substring: "do you trust", Timeout: defaultTrustPromptTimeout},

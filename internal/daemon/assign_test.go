@@ -332,7 +332,7 @@ func TestAssignRetriesCodexPromptUntilWorkingAppears(t *testing.T) {
 	})
 
 	deps.amux.requireSentKeys(t, "pane-1", []string{
-		"Verify prompt delivery\n",
+		wrappedCodexPrompt("Verify prompt delivery") + "\n",
 		"\n",
 		"\n",
 	})

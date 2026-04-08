@@ -68,7 +68,7 @@ func TestPRReviewPollingNudgesWorkerOncePerNewBlockingReviewBatch(t *testing.T) 
 	}
 
 	deps.amux.requireSentKeys(t, "pane-1", []string{
-		"Implement daemon core\n",
+		wrappedCodexPrompt("Implement daemon core") + "\n",
 		firstNudgeSent,
 		secondNudgeSent,
 	})
@@ -136,7 +136,7 @@ func TestPRReviewPollingAdvancesCountWithoutNudgingForNonBlockingReviews(t *test
 	}
 
 	deps.amux.requireSentKeys(t, "pane-1", []string{
-		"Implement daemon core\n",
+		wrappedCodexPrompt("Implement daemon core") + "\n",
 		firstNudgeSent,
 	})
 	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
@@ -258,7 +258,7 @@ func TestPRReviewPollingNudgesWorkerForGitHubActionsIssueCommentsWithoutLGTM(t *
 	}
 
 	deps.amux.requireSentKeys(t, "pane-1", []string{
-		"Implement daemon core\n",
+		wrappedCodexPrompt("Implement daemon core") + "\n",
 		firstNudgeSent,
 	})
 	if got, want := deps.events.countType(EventWorkerNudgedReview), 1; got != want {
