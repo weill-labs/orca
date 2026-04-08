@@ -87,6 +87,8 @@ func TestRunHelpFlags(t *testing.T) {
 }
 
 func TestRunVersionAndUnknownHelpTopic(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name            string
 		args            []string
@@ -115,16 +117,12 @@ func TestRunVersionAndUnknownHelpTopic(t *testing.T) {
 	for _, tt := range tests {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
-			previous := BuildCommit
-			BuildCommit = tt.wantBuildCommit
-			t.Cleanup(func() {
-				BuildCommit = previous
-			})
+			t.Parallel()
 
 			var stdout bytes.Buffer
 			var stderr bytes.Buffer
 
-			exitCode := run(tt.args, &stdout, &stderr)
+			exitCode := runWithDeps(tt.args, &stdout, &stderr, defaultRunDependencies, tt.wantBuildCommit)
 			if got, want := exitCode, tt.wantExitCode; got != want {
 				t.Fatalf("run(%q) exit code = %d, want %d", tt.args, got, want)
 			}
@@ -168,7 +166,7 @@ func TestRunDaemonProcessValidation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			err := runDaemonProcess(tt.args)
+			err := runDaemonProcess(tt.args, "")
 			if err == nil {
 				t.Fatal("runDaemonProcess() error = nil, want non-nil")
 			}
@@ -182,26 +180,18 @@ func TestRunDaemonProcessValidation(t *testing.T) {
 func TestRunDaemonProcessPassesBuildCommit(t *testing.T) {
 	t.Parallel()
 
-	previousBuildCommit := BuildCommit
-	previousRunDaemonServe := runDaemonServe
-	BuildCommit = "build-851"
-	t.Cleanup(func() {
-		BuildCommit = previousBuildCommit
-		runDaemonServe = previousRunDaemonServe
-	})
-
 	var gotRequest daemon.ServeRequest
-	runDaemonServe = func(_ context.Context, req daemon.ServeRequest) error {
+	runDaemonServe := func(_ context.Context, req daemon.ServeRequest) error {
 		gotRequest = req
 		return nil
 	}
 
-	err := runDaemonProcess([]string{
+	err := runDaemonProcessWithServe([]string{
 		"--session", "alpha",
 		"--lead-pane", "pane-1",
 		"--state-db", "/tmp/orca.db",
 		"--pid-file", "/tmp/orca.pid",
-	})
+	}, "build-851", runDaemonServe)
 	if err != nil {
 		t.Fatalf("runDaemonProcess() error = %v", err)
 	}
@@ -216,10 +206,31 @@ func TestRunDaemonProcessPassesBuildCommit(t *testing.T) {
 	}
 }
 
+func TestRunDaemonProcessDefaultsBuildCommitToDev(t *testing.T) {
+	t.Parallel()
+
+	var gotRequest daemon.ServeRequest
+	runDaemonServe := func(_ context.Context, req daemon.ServeRequest) error {
+		gotRequest = req
+		return nil
+	}
+
+	err := runDaemonProcessWithServe([]string{
+		"--state-db", "/tmp/orca.db",
+		"--pid-file", "/tmp/orca.pid",
+	}, "", runDaemonServe)
+	if err != nil {
+		t.Fatalf("runDaemonProcess() error = %v", err)
+	}
+	if got, want := gotRequest.BuildCommit, "dev"; got != want {
+		t.Fatalf("ServeRequest.BuildCommit = %q, want %q", got, want)
+	}
+}
+
 func TestRunDaemonProcessRejectsLegacyProjectFlag(t *testing.T) {
 	t.Parallel()
 
-	err := runDaemonProcess([]string{"--project", "/tmp/project", "--state-db", "/tmp/orca.db", "--pid-file", "/tmp/orca.pid"})
+	err := runDaemonProcess([]string{"--project", "/tmp/project", "--state-db", "/tmp/orca.db", "--pid-file", "/tmp/orca.pid"}, "")
 	if err == nil {
 		t.Fatal("runDaemonProcess() error = nil, want parse error")
 	}
@@ -244,9 +255,12 @@ func TestRunWithDepsCoversProcessSetupBranches(t *testing.T) {
 			name: "daemon serve dispatches without requiring project flag",
 			args: []string{"__daemon-serve", "--state-db", "/tmp/orca.db", "--pid-file", "/tmp/orca.pid"},
 			deps: runDependencies{
-				runDaemonProcess: func(args []string) error {
+				runDaemonProcess: func(args []string, buildCommit string) error {
 					if got, want := strings.Join(args, " "), "--state-db /tmp/orca.db --pid-file /tmp/orca.pid"; got != want {
 						t.Fatalf("daemon args = %q, want %q", got, want)
+					}
+					if got, want := buildCommit, "dev"; got != want {
+						t.Fatalf("build commit = %q, want %q", got, want)
 					}
 					return nil
 				},
@@ -350,7 +364,7 @@ func TestRunWithDepsCoversProcessSetupBranches(t *testing.T) {
 
 			var stdout bytes.Buffer
 			var stderr bytes.Buffer
-			exitCode := runWithDeps(tt.args, &stdout, &stderr, deps)
+			exitCode := runWithDeps(tt.args, &stdout, &stderr, deps, "")
 			if got, want := exitCode, tt.wantExitCode; got != want {
 				t.Fatalf("runWithDeps(%q) exit code = %d, want %d", tt.args, got, want)
 			}
@@ -482,7 +496,7 @@ func fillRunDependencies(overrides runDependencies, store *stubStateStore, app *
 		newApp: func(cli.Options) appRunner {
 			return app
 		},
-		runDaemonProcess: func([]string) error {
+		runDaemonProcess: func([]string, string) error {
 			return nil
 		},
 	}
