@@ -236,9 +236,16 @@ func (d *Daemon) assign(ctx context.Context, projectPath, issue, prompt, agentPr
 		Branch:       assignmentBranch,
 		AgentProfile: profile.Name,
 		PRNumber:     prNumber,
-		Message:      "task assigned",
+		Message:      taskAssignedMessage(pane),
 	})
 	return nil
+}
+
+func taskAssignedMessage(pane Pane) string {
+	if window := strings.TrimSpace(pane.Window); window != "" {
+		return fmt.Sprintf("task assigned in fallback amux window %s after target window ran out of split space", window)
+	}
+	return "task assigned"
 }
 
 func (d *Daemon) validateAssignment(ctx context.Context, projectPath, issue, prompt string) error {

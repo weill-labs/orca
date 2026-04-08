@@ -96,20 +96,9 @@ func (c *CLIClient) Spawn(ctx context.Context, req SpawnRequest) (Pane, error) {
 	}
 
 	session := c.resolveSession(req.Session)
-	args := spawnPlacementArgs(req.AtPane)
-	args = append(args, "--name", name)
-
-	output, err := c.run(ctx, session, "spawn", args...)
+	pane, err := c.spawnPaneWithNewWindowFallback(ctx, session, req.AtPane, name)
 	if err != nil {
 		return Pane{}, err
-	}
-	paneID, err := parseSpawnOutput(string(output))
-	if err != nil {
-		return Pane{}, err
-	}
-	pane := Pane{
-		ID:   paneID,
-		Name: name,
 	}
 	paneRef := pane.Ref()
 
