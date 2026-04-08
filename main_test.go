@@ -206,6 +206,27 @@ func TestRunDaemonProcessPassesBuildCommit(t *testing.T) {
 	}
 }
 
+func TestRunDaemonProcessDefaultsBuildCommitToDev(t *testing.T) {
+	t.Parallel()
+
+	var gotRequest daemon.ServeRequest
+	runDaemonServe := func(_ context.Context, req daemon.ServeRequest) error {
+		gotRequest = req
+		return nil
+	}
+
+	err := runDaemonProcessWithServe([]string{
+		"--state-db", "/tmp/orca.db",
+		"--pid-file", "/tmp/orca.pid",
+	}, "", runDaemonServe)
+	if err != nil {
+		t.Fatalf("runDaemonProcess() error = %v", err)
+	}
+	if got, want := gotRequest.BuildCommit, "dev"; got != want {
+		t.Fatalf("ServeRequest.BuildCommit = %q, want %q", got, want)
+	}
+}
+
 func TestRunDaemonProcessRejectsLegacyProjectFlag(t *testing.T) {
 	t.Parallel()
 
