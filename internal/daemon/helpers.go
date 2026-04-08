@@ -17,6 +17,8 @@ import (
 var linearIssueIdentifierPattern = regexp.MustCompile(`^[A-Z][A-Z0-9]*-\d+$`)
 
 const (
+	ansiDimOn            = "\x1b[2m"
+	ansiDimOff           = "\x1b[22m"
 	ansiStrikethroughOn  = "\x1b[9m"
 	ansiStrikethroughOff = "\x1b[29m"
 )
@@ -170,7 +172,7 @@ func strikethroughTaskTitle(title string) string {
 	if title == "" {
 		return ""
 	}
-	return ansiStrikethroughOn + title + ansiStrikethroughOff
+	return ansiDimOn + ansiStrikethroughOn + title + ansiStrikethroughOff + ansiDimOff
 }
 
 func (d *Daemon) paneTaskTitle(ctx context.Context, paneID, issue string) (string, error) {
