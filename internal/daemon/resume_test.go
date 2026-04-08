@@ -553,6 +553,42 @@ func TestResumeWorkerHandlesNoPaneAndLookupErrors(t *testing.T) {
 	}
 }
 
+func TestResumeWorkerFallsBackToPaneLookupForCanonicalPaneNames(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	now := deps.clock.Now()
+	if err := deps.state.PutWorker(context.Background(), Worker{
+		Project:      "/tmp/project",
+		WorkerID:     "worker-01",
+		PaneID:       "pane-1",
+		PaneName:     "w-LAB-757",
+		Issue:        "LAB-757",
+		AgentProfile: "codex",
+		UpdatedAt:    now,
+		LastSeenAt:   now,
+	}); err != nil {
+		t.Fatalf("PutWorker() error = %v", err)
+	}
+
+	d := deps.newDaemon(t)
+	worker, ok, err := d.resumeWorker(context.Background(), Task{
+		Project:  "/tmp/project",
+		Issue:    "LAB-757",
+		PaneID:   "pane-1",
+		PaneName: "w-LAB-757",
+	})
+	if err != nil {
+		t.Fatalf("resumeWorker() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("resumeWorker() = ok false, want true")
+	}
+	if got, want := worker.WorkerID, "worker-01"; got != want {
+		t.Fatalf("worker.WorkerID = %q, want %q", got, want)
+	}
+}
+
 func TestResumeExistingPaneErrorPaths(t *testing.T) {
 	t.Parallel()
 

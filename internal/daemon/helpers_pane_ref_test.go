@@ -63,6 +63,54 @@ func TestWorkerPaneRef(t *testing.T) {
 	}
 }
 
+func TestStableWorkerRef(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		task   Task
+		worker Worker
+		want   string
+	}{
+		{
+			name: "prefers task worker id",
+			task: Task{Issue: "LAB-854", WorkerID: "worker-01", PaneName: "w-LAB-854"},
+			want: "worker-01",
+		},
+		{
+			name:   "falls back to worker worker id",
+			task:   Task{Issue: "LAB-854", PaneName: "w-LAB-854"},
+			worker: Worker{Issue: "LAB-854", WorkerID: "worker-01", PaneName: "w-LAB-854"},
+			want:   "worker-01",
+		},
+		{
+			name: "ignores canonical issue pane name without stable id",
+			task: Task{Issue: "LAB-854", PaneName: "w-LAB-854"},
+			want: "",
+		},
+		{
+			name: "ignores legacy issue pane name without stable id",
+			task: Task{Issue: "LAB-854", PaneName: "worker-LAB-854"},
+			want: "",
+		},
+		{
+			name: "keeps stable pane style fallback when it is not an issue pane name",
+			task: Task{Issue: "LAB-854", PaneName: "worker-01"},
+			want: "worker-01",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := stableWorkerRef(tt.task, tt.worker); got != tt.want {
+				t.Fatalf("stableWorkerRef() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestNormalizeStoredPaneRef(t *testing.T) {
 	t.Run("copies stable worker id and canonical pane name onto task and worker refs", func(t *testing.T) {
 		t.Parallel()
