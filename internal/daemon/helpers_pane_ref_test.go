@@ -55,6 +55,12 @@ func TestStableWorkerRef(t *testing.T) {
 			want:   "",
 		},
 		{
+			name:   "ignores numeric worker ids and falls back to stable pane refs",
+			task:   Task{Issue: "LAB-854", WorkerID: "7", PaneName: "7"},
+			worker: Worker{WorkerID: "8", PaneName: "worker-01"},
+			want:   "worker-01",
+		},
+		{
 			name:   "returns empty when no stable worker ref exists",
 			task:   Task{PaneID: "7"},
 			worker: Worker{PaneID: "8"},
@@ -163,6 +169,53 @@ func TestNormalizeStoredPaneRef(t *testing.T) {
 		}
 		if got, want := task.PaneID, "pane-1"; got != want {
 			t.Fatalf("task.PaneID = %q, want %q", got, want)
+		}
+		if got, want := task.PaneName, "w-LAB-854"; got != want {
+			t.Fatalf("task.PaneName = %q, want %q", got, want)
+		}
+		if got, want := worker.PaneName, "w-LAB-854"; got != want {
+			t.Fatalf("worker.PaneName = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("ignores numeric worker ids during legacy normalization", func(t *testing.T) {
+		t.Parallel()
+
+		deps := newTestDeps(t)
+		d := deps.newDaemon(t)
+		ctx := context.Background()
+		now := deps.clock.Now()
+
+		task := Task{
+			Project:   "/tmp/project",
+			Issue:     "LAB-854",
+			WorkerID:  "7",
+			PaneID:    "7",
+			PaneName:  "7",
+			UpdatedAt: now,
+		}
+		worker := Worker{
+			Project:   "/tmp/project",
+			WorkerID:  "worker-01",
+			Issue:     "LAB-854",
+			PaneID:    "pane-1",
+			PaneName:  "worker-01",
+			UpdatedAt: now,
+		}
+		deps.state.putTaskForTest(task)
+		if err := deps.state.PutWorker(ctx, worker); err != nil {
+			t.Fatalf("PutWorker() error = %v", err)
+		}
+
+		if err := d.normalizeStoredPaneRef(ctx, &task, &worker); err != nil {
+			t.Fatalf("normalizeStoredPaneRef() error = %v", err)
+		}
+
+		if got, want := task.WorkerID, "worker-01"; got != want {
+			t.Fatalf("task.WorkerID = %q, want %q", got, want)
+		}
+		if got, want := worker.WorkerID, "worker-01"; got != want {
+			t.Fatalf("worker.WorkerID = %q, want %q", got, want)
 		}
 		if got, want := task.PaneName, "w-LAB-854"; got != want {
 			t.Fatalf("task.PaneName = %q, want %q", got, want)
