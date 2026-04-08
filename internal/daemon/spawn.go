@@ -161,11 +161,18 @@ func paneMatchesReference(pane Pane, ref string) bool {
 	return target == strings.TrimSpace(pane.ID) || target == strings.TrimSpace(pane.Name)
 }
 
-func (d *Daemon) spawnWorkerPane(ctx context.Context, task Task, paneName, clonePath string, profile AgentProfile) (Pane, error) {
+func workerPaneSpawnName(task Task, stableRef string) string {
+	if issue := strings.TrimSpace(task.Issue); issue != "" {
+		return "worker-" + issue
+	}
+	return strings.TrimSpace(stableRef)
+}
+
+func (d *Daemon) spawnWorkerPane(ctx context.Context, task Task, stableRef, clonePath string, profile AgentProfile) (Pane, error) {
 	return d.amux.Spawn(ctx, SpawnRequest{
 		Session: d.session,
 		AtPane:  d.spawnPaneTarget(ctx, task),
-		Name:    paneName,
+		Name:    workerPaneSpawnName(task, stableRef),
 		CWD:     clonePath,
 		Command: profile.StartCommand,
 	})
