@@ -180,23 +180,18 @@ func TestRunDaemonProcessValidation(t *testing.T) {
 func TestRunDaemonProcessPassesBuildCommit(t *testing.T) {
 	t.Parallel()
 
-	previousRunDaemonServe := runDaemonServe
-	t.Cleanup(func() {
-		runDaemonServe = previousRunDaemonServe
-	})
-
 	var gotRequest daemon.ServeRequest
-	runDaemonServe = func(_ context.Context, req daemon.ServeRequest) error {
+	runDaemonServe := func(_ context.Context, req daemon.ServeRequest) error {
 		gotRequest = req
 		return nil
 	}
 
-	err := runDaemonProcess([]string{
+	err := runDaemonProcessWithServe([]string{
 		"--session", "alpha",
 		"--lead-pane", "pane-1",
 		"--state-db", "/tmp/orca.db",
 		"--pid-file", "/tmp/orca.pid",
-	}, "build-851")
+	}, "build-851", runDaemonServe)
 	if err != nil {
 		t.Fatalf("runDaemonProcess() error = %v", err)
 	}

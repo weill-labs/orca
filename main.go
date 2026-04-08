@@ -130,6 +130,12 @@ func runWithDeps(args []string, stdout, stderr io.Writer, deps runDependencies, 
 }
 
 func runDaemonProcess(args []string, buildCommit string) error {
+	return runDaemonProcessWithServe(args, buildCommit, runDaemonServe)
+}
+
+func runDaemonProcessWithServe(args []string, buildCommit string, serve func(context.Context, daemon.ServeRequest) error) error {
+	buildCommit = resolvedBuildCommit(buildCommit)
+
 	fs := flag.NewFlagSet("__daemon-serve", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
@@ -157,7 +163,7 @@ func runDaemonProcess(args []string, buildCommit string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	return runDaemonServe(ctx, daemon.ServeRequest{
+	return serve(ctx, daemon.ServeRequest{
 		Session:     session,
 		LeadPane:    leadPane,
 		StateDB:     stateDB,
