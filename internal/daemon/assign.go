@@ -160,7 +160,7 @@ func (d *Daemon) assign(ctx context.Context, projectPath, issue, prompt, agentPr
 	task := claimedTask
 	task.WorkerID = claimedWorker.WorkerID
 	task.PaneID = pane.ID
-	task.PaneName = claimedWorker.WorkerID
+	task.PaneName = workerPaneName(issue, claimedWorker.WorkerID)
 	task.CloneName = clone.Name
 	task.ClonePath = clone.Path
 	task.UpdatedAt = d.now()
@@ -168,7 +168,7 @@ func (d *Daemon) assign(ctx context.Context, projectPath, issue, prompt, agentPr
 		Project:               projectPath,
 		WorkerID:              claimedWorker.WorkerID,
 		PaneID:                pane.ID,
-		PaneName:              claimedWorker.WorkerID,
+		PaneName:              workerPaneName(issue, claimedWorker.WorkerID),
 		Issue:                 issue,
 		ClonePath:             clone.Path,
 		AgentProfile:          profile.Name,
@@ -230,7 +230,7 @@ func (d *Daemon) assign(ctx context.Context, projectPath, issue, prompt, agentPr
 		Issue:        issue,
 		WorkerID:     claimedWorker.WorkerID,
 		PaneID:       pane.ID,
-		PaneName:     claimedWorker.WorkerID,
+		PaneName:     workerPaneName(issue, claimedWorker.WorkerID),
 		CloneName:    clone.Name,
 		ClonePath:    clone.Path,
 		Branch:       assignmentBranch,

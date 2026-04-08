@@ -543,8 +543,8 @@ func TestResumeWorkerHandlesNoPaneAndLookupErrors(t *testing.T) {
 	}
 
 	state := &resumeStateStub{
-		fakeState:     deps.state,
-		workerByIDErr: errors.New("lookup failed"),
+		fakeState:       deps.state,
+		workerByPaneErr: errors.New("lookup failed"),
 	}
 	d = newResumeCoverageDaemon(t, deps, state, deps.amux)
 	_, _, err = d.resumeWorker(context.Background(), Task{PaneID: "pane-1"})

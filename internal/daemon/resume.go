@@ -77,23 +77,28 @@ func (d *Daemon) resumeWorker(ctx context.Context, task Task) (Worker, bool, err
 }
 
 func (d *Daemon) resumeWorkerForProject(ctx context.Context, projectPath string, task Task) (Worker, bool, error) {
-	workerID := strings.TrimSpace(task.WorkerID)
-	if workerID == "" {
-		workerID = strings.TrimSpace(task.PaneName)
+	workerID := stableWorkerRef(task, Worker{})
+	if workerID != "" {
+		worker, err := d.state.WorkerByID(ctx, projectPath, workerID)
+		if err == nil {
+			return worker, true, nil
+		}
+		if !errors.Is(err, ErrWorkerNotFound) {
+			return Worker{}, false, fmt.Errorf("load worker %s: %w", workerID, err)
+		}
 	}
-	if workerID == "" {
-		workerID = strings.TrimSpace(task.PaneID)
-	}
-	if workerID == "" {
+
+	paneID := strings.TrimSpace(task.PaneID)
+	if paneID == "" {
 		return Worker{}, false, nil
 	}
 
-	worker, err := d.state.WorkerByID(ctx, projectPath, workerID)
+	worker, err := d.state.WorkerByPane(ctx, projectPath, paneID)
 	if errors.Is(err, ErrWorkerNotFound) {
 		return Worker{}, false, nil
 	}
 	if err != nil {
-		return Worker{}, false, fmt.Errorf("load worker %s: %w", workerID, err)
+		return Worker{}, false, fmt.Errorf("load worker %s: %w", paneID, err)
 	}
 	return worker, true, nil
 }
@@ -154,7 +159,7 @@ func (d *Daemon) resumeWithFreshPaneForProject(ctx context.Context, projectPath 
 
 	stableRef := strings.TrimSpace(task.WorkerID)
 	if stableRef == "" {
-		stableRef = strings.TrimSpace(task.PaneName)
+		stableRef = stableWorkerRef(task, worker)
 	}
 	pane, err := d.spawnWorkerPane(ctx, task, stableRef, clonePath, profile)
 	if err != nil {
@@ -219,16 +224,13 @@ func (d *Daemon) storeResumedTaskForProject(ctx context.Context, projectPath str
 		task.WorkerID = worker.WorkerID
 	}
 	if task.WorkerID == "" {
-		task.WorkerID = strings.TrimSpace(task.PaneName)
-	}
-	if task.WorkerID == "" {
-		task.WorkerID = strings.TrimSpace(pane.Name)
+		task.WorkerID = stableWorkerRef(task, worker)
 	}
 	if task.WorkerID == "" {
 		task.WorkerID = strings.TrimSpace(pane.ID)
 	}
 	task.PaneID = pane.ID
-	task.PaneName = task.WorkerID
+	task.PaneName = workerPaneName(task.Issue, task.WorkerID)
 	if task.PaneName == "" {
 		task.PaneName = pane.Name
 	}
@@ -245,7 +247,7 @@ func (d *Daemon) storeResumedTaskForProject(ctx context.Context, projectPath str
 		resumedWorker = Worker{
 			Project:      projectPath,
 			WorkerID:     task.WorkerID,
-			PaneName:     task.WorkerID,
+			PaneName:     workerPaneName(task.Issue, task.WorkerID),
 			Health:       WorkerHealthHealthy,
 			AgentProfile: task.AgentProfile,
 			ClonePath:    task.ClonePath,
@@ -257,7 +259,7 @@ func (d *Daemon) storeResumedTaskForProject(ctx context.Context, projectPath str
 	resumedWorker.Project = projectPath
 	resumedWorker.WorkerID = task.WorkerID
 	resumedWorker.PaneID = pane.ID
-	resumedWorker.PaneName = task.WorkerID
+	resumedWorker.PaneName = workerPaneName(task.Issue, task.WorkerID)
 	resumedWorker.Issue = task.Issue
 	resumedWorker.ClonePath = task.ClonePath
 	resumedWorker.AgentProfile = task.AgentProfile

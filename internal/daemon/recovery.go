@@ -30,10 +30,7 @@ func (d *Daemon) reconcileTaskOnStartup(ctx context.Context, task Task) {
 	}
 
 	projectPath := d.projectPathForTask(task)
-	workerID := strings.TrimSpace(task.WorkerID)
-	if workerID == "" {
-		workerID = strings.TrimSpace(task.PaneName)
-	}
+	workerID := stableWorkerRef(task, Worker{})
 
 	var worker Worker
 	var err error
