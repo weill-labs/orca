@@ -700,6 +700,7 @@ func TestValidateAssignmentPrompt(t *testing.T) {
 
 	tests := []struct {
 		name    string
+		issue   string
 		prompt  string
 		wantErr bool
 	}{
@@ -730,12 +731,12 @@ func TestValidateAssignmentPrompt(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			err := validateAssignmentPrompt(tt.prompt)
+			err := validateAssignmentPrompt(tt.issue, tt.prompt)
 			if tt.wantErr && err == nil {
-				t.Fatalf("validateAssignmentPrompt(%q) error = nil, want error", tt.prompt)
+				t.Fatalf("validateAssignmentPrompt(%q, %q) error = nil, want error", tt.issue, tt.prompt)
 			}
 			if !tt.wantErr && err != nil {
-				t.Fatalf("validateAssignmentPrompt(%q) error = %v, want nil", tt.prompt, err)
+				t.Fatalf("validateAssignmentPrompt(%q, %q) error = %v, want nil", tt.issue, tt.prompt, err)
 			}
 		})
 	}

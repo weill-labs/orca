@@ -234,7 +234,7 @@ func (d *Daemon) assign(ctx context.Context, projectPath, issue, prompt, agentPr
 }
 
 func (d *Daemon) validateAssignment(ctx context.Context, projectPath, issue, prompt string) error {
-	if err := validateAssignmentPrompt(prompt); err != nil {
+	if err := validateAssignmentPrompt(issue, prompt); err != nil {
 		return err
 	}
 
@@ -268,11 +268,19 @@ func (d *Daemon) emitAssignFailure(ctx context.Context, projectPath, issue, work
 	})
 }
 
-func validateAssignmentPrompt(prompt string) error {
-	if autonomousBacklogPromptPattern.MatchString(prompt) {
+func validateAssignmentPrompt(issue, prompt string) error {
+	if autonomousBacklogPromptPattern.MatchString(prompt) && !promptMentionsAssignedIssue(prompt, issue) {
 		return errors.New("assignment prompt cannot ask the worker to pick backlog work autonomously; assign a specific issue instead")
 	}
 	return nil
+}
+
+func promptMentionsAssignedIssue(prompt, issue string) bool {
+	issue = strings.TrimSpace(issue)
+	if issue == "" {
+		return false
+	}
+	return strings.Contains(strings.ToLower(prompt), strings.ToLower(issue))
 }
 
 func (d *Daemon) failPendingAssignment(ctx context.Context, projectPath, issue string, clone Clone, pane Pane, worker Worker, profile AgentProfile, prNumber int, err error, releaseReservation func()) {
