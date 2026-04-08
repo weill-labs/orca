@@ -104,10 +104,6 @@ func runProcess(ctx context.Context, req ServeRequest, deps serveDeps) error {
 		return fmt.Errorf("create daemon: %w", err)
 	}
 
-	if err := instance.Start(ctx); err != nil {
-		return err
-	}
-
 	startedAt := time.Now().UTC()
 	if err := store.UpsertDaemon(ctx, "", state.DaemonStatus{
 		Session:   req.Session,
@@ -116,7 +112,11 @@ func runProcess(ctx context.Context, req ServeRequest, deps serveDeps) error {
 		StartedAt: startedAt,
 		UpdatedAt: startedAt,
 	}); err != nil {
-		_ = instance.Stop(context.Background())
+		return err
+	}
+
+	if err := instance.Start(ctx); err != nil {
+		_ = store.MarkDaemonStopped(context.Background(), "", time.Now().UTC())
 		return err
 	}
 
