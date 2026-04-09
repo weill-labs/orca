@@ -311,7 +311,7 @@ func TestSendPromptAndCommandReturnsErrPaneGone(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "pane gone") {
 			t.Fatalf("sendPromptAndCommand() error = %v, want pane-gone error", err)
 		}
-		deps.amux.requireSentKeys(t, "pane-1", []string{"Continue work\n"})
+		deps.amux.requireSentKeys(t, "pane-1", []string{"Continue work"})
 		if got := len(deps.amux.waitIdleCalls); got != 0 {
 			t.Fatalf("waitIdle calls = %d, want 0", got)
 		}

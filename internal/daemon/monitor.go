@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"strings"
 	"time"
 )
 
@@ -83,6 +84,7 @@ func (d *Daemon) runCaptureTick(ctx context.Context) {
 	if err != nil {
 		return
 	}
+	assignments = d.reconcileTrackedPanes(ctx, assignments)
 	results := d.dispatchTaskMonitorChecks(ctx, assignments, taskMonitorCheckCapture)
 	d.applyTaskMonitorResults(ctx, results)
 }
@@ -93,6 +95,7 @@ func (d *Daemon) runPollTick(ctx context.Context) {
 
 	assignments, err := d.prPollAssignments(ctx)
 	if err == nil {
+		assignments = d.reconcileTrackedPanes(ctx, assignments)
 		results := d.dispatchTaskMonitorChecks(ctx, assignments, taskMonitorCheckPRPoll)
 		d.applyTaskMonitorResults(ctx, results)
 	}
@@ -119,4 +122,24 @@ func (d *Daemon) prPollAssignments(ctx context.Context) ([]ActiveAssignment, err
 		})
 	}
 	return assignments, nil
+}
+
+func (d *Daemon) reconcileTrackedPanes(ctx context.Context, assignments []ActiveAssignment) []ActiveAssignment {
+	reconciled := make([]ActiveAssignment, 0, len(assignments))
+	for _, active := range assignments {
+		paneID := strings.TrimSpace(active.Task.PaneID)
+		if paneID == "" {
+			reconciled = append(reconciled, active)
+			continue
+		}
+
+		exists, err := d.amux.PaneExists(ctx, paneID)
+		if err != nil || exists {
+			reconciled = append(reconciled, active)
+			continue
+		}
+
+		d.escalateAssignmentOnStartupError(ctx, active, "worker pane missing during monitor reconciliation")
+	}
+	return reconciled
 }
