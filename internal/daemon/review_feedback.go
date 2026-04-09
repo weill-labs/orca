@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -109,4 +110,16 @@ func formatFeedbackLocation(feedback prFeedback) string {
 	default:
 		return path + ":" + strconv.Itoa(feedback.Line)
 	}
+}
+
+func formatFeedbackLine(feedback prFeedback) string {
+	author := strings.TrimSpace(feedback.Author)
+	if author == "" {
+		author = "reviewer"
+	}
+	body := normalizeReviewBody(feedback.Body)
+	if location := formatFeedbackLocation(feedback); location != "" {
+		return fmt.Sprintf("- %s on %s: %s", author, location, body)
+	}
+	return fmt.Sprintf("- %s: %s", author, body)
 }

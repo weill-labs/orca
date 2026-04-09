@@ -93,9 +93,9 @@ func (d *Daemon) checkTaskReviewPoll(ctx context.Context, active ActiveAssignmen
 		return update
 	}
 	now := d.now()
-	reviewItems := reviewItems(payload.Reviews, payload.ReviewComments)
+	items := reviewItems(payload.Reviews, payload.ReviewComments)
 
-	reviewCount := len(reviewItems)
+	reviewCount := len(items)
 	commentCount := len(payload.Comments)
 	previousReviewCount := update.Active.Worker.LastReviewCount
 	previousCommentCount := update.Active.Worker.LastIssueCommentCount
@@ -119,7 +119,7 @@ func (d *Daemon) checkTaskReviewPoll(ctx context.Context, active ActiveAssignmen
 		return update
 	}
 
-	newReviews := reviewItems[previousReviewCount:]
+	newReviews := items[previousReviewCount:]
 	newComments := payload.Comments[previousCommentCount:]
 	blocking := blockingReviewFeedback(payload.ReviewDecision, newReviews, newComments)
 	if len(blocking) == 0 {
@@ -130,7 +130,7 @@ func (d *Daemon) checkTaskReviewPoll(ctx context.Context, active ActiveAssignmen
 	if update.Active.Worker.ReviewNudgeCount >= maxReviewNudges {
 		d.persistReviewWorkerState(&update.Active.Worker, reviewCount, commentCount, now)
 		update.WorkerChanged = true
-		d.notifyCallerPaneReviewEscalation(ctx, update.Active, blockingReviewFeedback(payload.ReviewDecision, reviewItems, payload.Comments))
+		d.notifyCallerPaneReviewEscalation(ctx, update.Active, blockingReviewFeedback(payload.ReviewDecision, items, payload.Comments))
 
 		event := d.assignmentEvent(update.Active, profile, EventWorkerReviewEscalated, fmt.Sprintf("review nudges exhausted after %d attempts; lead intervention required", update.Active.Worker.ReviewNudgeCount))
 		event.Retry = update.Active.Worker.ReviewNudgeCount
@@ -247,16 +247,8 @@ func formatBlockingReviewFeedback(prNumber int, feedback []prFeedback) string {
 	var builder strings.Builder
 	fmt.Fprintf(&builder, "New blocking PR review feedback on #%d:\n", prNumber)
 	for _, item := range feedback {
-		author := strings.TrimSpace(item.Author)
-		if author == "" {
-			author = "reviewer"
-		}
-		body := normalizeReviewBody(item.Body)
-		if location := formatFeedbackLocation(item); location != "" {
-			fmt.Fprintf(&builder, "- %s on %s: %s\n", author, location, body)
-			continue
-		}
-		fmt.Fprintf(&builder, "- %s: %s\n", author, body)
+		builder.WriteString(formatFeedbackLine(item))
+		builder.WriteString("\n")
 	}
 	builder.WriteString("\nAddress the feedback in the PR review and push an update.")
 	return builder.String()
@@ -287,16 +279,8 @@ func formatLeadReviewEscalation(active ActiveAssignment, feedback []prFeedback) 
 
 	builder.WriteString("Unresolved review feedback:\n")
 	for _, item := range feedback {
-		author := strings.TrimSpace(item.Author)
-		if author == "" {
-			author = "reviewer"
-		}
-		body := normalizeReviewBody(item.Body)
-		if location := formatFeedbackLocation(item); location != "" {
-			fmt.Fprintf(&builder, "- %s on %s: %s\n", author, location, body)
-			continue
-		}
-		fmt.Fprintf(&builder, "- %s: %s\n", author, body)
+		builder.WriteString(formatFeedbackLine(item))
+		builder.WriteString("\n")
 	}
 
 	if paneName != "" {
