@@ -31,6 +31,8 @@ const (
 
 	EventDaemonStarted         = "daemon.started"
 	EventDaemonStopped         = "daemon.stopped"
+	EventDaemonCircuitOpened   = "daemon.circuit_opened"
+	EventDaemonCircuitClosed   = "daemon.circuit_closed"
 	EventIssueStatusSkipped    = "issue.status_skipped"
 	EventTaskAssigned          = "task.assigned"
 	EventTaskAssignFailed      = "task.assign_failed"

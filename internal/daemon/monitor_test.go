@@ -93,6 +93,12 @@ func TestDaemonCaptureMonitorOpensAmuxCircuitAfterThreeFailures(t *testing.T) {
 	if err := d.monitorAmuxCircuit.Allow(); !errors.Is(err, ErrCircuitBreakerOpen) {
 		t.Fatalf("amux circuit Allow() error = %v, want %v", err, ErrCircuitBreakerOpen)
 	}
+	if got, want := deps.events.countType(EventDaemonCircuitOpened), 1; got != want {
+		t.Fatalf("circuit opened event count = %d, want %d", got, want)
+	}
+	if got, want := deps.events.lastMessage(EventDaemonCircuitOpened), "monitor amux circuit opened after 3 consecutive failures"; got != want {
+		t.Fatalf("opened event message = %q, want %q", got, want)
+	}
 
 	d.runCaptureTick(ctx)
 	if got, want := deps.amux.captureCount("pane-1"), 3; got != want {
@@ -106,6 +112,12 @@ func TestDaemonCaptureMonitorOpensAmuxCircuitAfterThreeFailures(t *testing.T) {
 	d.runCaptureTick(ctx)
 	if got, want := deps.amux.captureCount("pane-1"), 4; got != want {
 		t.Fatalf("capture count after cooldown = %d, want %d", got, want)
+	}
+	if got, want := deps.events.countType(EventDaemonCircuitClosed), 1; got != want {
+		t.Fatalf("circuit closed event count = %d, want %d", got, want)
+	}
+	if got, want := deps.events.lastMessage(EventDaemonCircuitClosed), "monitor amux circuit closed after cooldown"; got != want {
+		t.Fatalf("closed event message = %q, want %q", got, want)
 	}
 }
 
@@ -136,6 +148,12 @@ func TestDaemonPollMonitorOpensGitHubCircuitAfterThreeFailures(t *testing.T) {
 	if err := d.monitorGitHubCircuit.Allow(); !errors.Is(err, ErrCircuitBreakerOpen) {
 		t.Fatalf("github circuit Allow() error = %v, want %v", err, ErrCircuitBreakerOpen)
 	}
+	if got, want := deps.events.countType(EventDaemonCircuitOpened), 1; got != want {
+		t.Fatalf("circuit opened event count = %d, want %d", got, want)
+	}
+	if got, want := deps.events.lastMessage(EventDaemonCircuitOpened), "monitor github circuit opened after 3 consecutive failures"; got != want {
+		t.Fatalf("opened event message = %q, want %q", got, want)
+	}
 
 	d.runPollTick(ctx)
 	if got, want := deps.commands.countCalls("gh", lookupArgs), 3; got != want {
@@ -146,5 +164,8 @@ func TestDaemonPollMonitorOpensGitHubCircuitAfterThreeFailures(t *testing.T) {
 	d.runPollTick(ctx)
 	if got, want := deps.commands.countCalls("gh", lookupArgs), 4; got != want {
 		t.Fatalf("github call count after cooldown = %d, want %d", got, want)
+	}
+	if got, want := deps.events.countType(EventDaemonCircuitClosed), 1; got != want {
+		t.Fatalf("circuit closed event count = %d, want %d", got, want)
 	}
 }

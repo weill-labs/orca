@@ -14,10 +14,16 @@ const (
 
 var ErrCircuitBreakerOpen = errors.New("circuit breaker open")
 
+type CircuitBreakerHooks struct {
+	OnOpen  func()
+	OnClose func()
+}
+
 type CircuitBreaker struct {
 	now       func() time.Time
 	threshold int
 	cooldown  time.Duration
+	hooks     CircuitBreakerHooks
 
 	mu                  sync.Mutex
 	consecutiveFailures int
@@ -25,6 +31,10 @@ type CircuitBreaker struct {
 }
 
 func NewCircuitBreaker(now func() time.Time, threshold int, cooldown time.Duration) *CircuitBreaker {
+	return NewCircuitBreakerWithHooks(now, threshold, cooldown, CircuitBreakerHooks{})
+}
+
+func NewCircuitBreakerWithHooks(now func() time.Time, threshold int, cooldown time.Duration, hooks CircuitBreakerHooks) *CircuitBreaker {
 	if now == nil {
 		now = time.Now
 	}
@@ -36,6 +46,7 @@ func NewCircuitBreaker(now func() time.Time, threshold int, cooldown time.Durati
 		now:       now,
 		threshold: threshold,
 		cooldown:  cooldown,
+		hooks:     hooks,
 	}
 }
 
@@ -45,12 +56,18 @@ func (c *CircuitBreaker) Allow() error {
 	}
 
 	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if c.shouldCloseLocked() {
+	shouldClose := c.shouldCloseLocked()
+	if shouldClose {
 		c.closeLocked()
 	}
-	if c.isOpenLocked() {
+	isOpen := c.isOpenLocked()
+	onClose := c.hooks.OnClose
+	c.mu.Unlock()
+
+	if shouldClose && onClose != nil {
+		onClose()
+	}
+	if isOpen {
 		return ErrCircuitBreakerOpen
 	}
 	return nil
@@ -62,8 +79,8 @@ func (c *CircuitBreaker) RecordSuccess() {
 	}
 
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.closeLocked()
+	c.mu.Unlock()
 }
 
 func (c *CircuitBreaker) RecordFailure() {
@@ -72,18 +89,33 @@ func (c *CircuitBreaker) RecordFailure() {
 	}
 
 	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if c.shouldCloseLocked() {
+	shouldClose := c.shouldCloseLocked()
+	if shouldClose {
 		c.closeLocked()
 	}
 	if c.isOpenLocked() {
+		onClose := c.hooks.OnClose
+		c.mu.Unlock()
+		if shouldClose && onClose != nil {
+			onClose()
+		}
 		return
 	}
 
 	c.consecutiveFailures++
-	if c.consecutiveFailures >= c.threshold {
+	shouldOpen := c.consecutiveFailures >= c.threshold
+	if shouldOpen {
 		c.openedAt = c.now()
+	}
+	onOpen := c.hooks.OnOpen
+	onClose := c.hooks.OnClose
+	c.mu.Unlock()
+
+	if shouldClose && onClose != nil {
+		onClose()
+	}
+	if shouldOpen && onOpen != nil {
+		onOpen()
 	}
 }
 
@@ -295,7 +327,9 @@ func withCircuit[T any](breaker *CircuitBreaker, call func() (T, error)) (T, err
 
 	value, err := call()
 	if err != nil {
-		breaker.RecordFailure()
+		if shouldRecordCircuitFailure(err) {
+			breaker.RecordFailure()
+		}
 		return zero, err
 	}
 
@@ -312,7 +346,9 @@ func withCircuit3[T1 any, T2 any](breaker *CircuitBreaker, call func() (T1, T2, 
 
 	value1, value2, err := call()
 	if err != nil {
-		breaker.RecordFailure()
+		if shouldRecordCircuitFailure(err) {
+			breaker.RecordFailure()
+		}
 		return zero1, zero2, err
 	}
 
@@ -326,10 +362,16 @@ func withCircuitErr(breaker *CircuitBreaker, call func() error) error {
 	}
 
 	if err := call(); err != nil {
-		breaker.RecordFailure()
+		if shouldRecordCircuitFailure(err) {
+			breaker.RecordFailure()
+		}
 		return err
 	}
 
 	breaker.RecordSuccess()
 	return nil
+}
+
+func shouldRecordCircuitFailure(err error) bool {
+	return !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
 }
