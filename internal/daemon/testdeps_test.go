@@ -122,6 +122,18 @@ func waitFor(t *testing.T, name string, condition func() bool) {
 	t.Fatalf("timed out waiting for %s", name)
 }
 
+func tickAndWaitForHeartbeat(t *testing.T, d *Daemon, deps *testDeps, ticker *fakeTicker, advance time.Duration, name string) time.Time {
+	t.Helper()
+
+	deps.clock.Advance(advance)
+	now := deps.clock.Now()
+	ticker.tick(now)
+	waitFor(t, name, func() bool {
+		return d.lastHeartbeat.Load() == now.UnixMilli()
+	})
+	return now
+}
+
 func nextTestWorkerID(deps *testDeps) string {
 	deps.state.mu.Lock()
 	defer deps.state.mu.Unlock()
