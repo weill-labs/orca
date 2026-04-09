@@ -125,7 +125,10 @@ func TestPRReviewPollingNudgesWorkerWithInlineReviewCommentLocation(t *testing.T
 	prTicker.tick(deps.clock.Now())
 	waitFor(t, "inline review comment nudge", func() bool {
 		worker, ok := deps.state.worker("pane-1")
-		return ok && deps.amux.countKey("pane-1", nudgeSent) == 1 && worker.LastReviewCount == 1
+		return ok &&
+			deps.amux.countKey("pane-1", nudgeSent) == 1 &&
+			worker.LastReviewCount == 0 &&
+			worker.LastInlineReviewCommentCount == 1
 	})
 
 	deps.amux.requireSentKeys(t, "pane-1", []string{

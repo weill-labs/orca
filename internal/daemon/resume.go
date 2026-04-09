@@ -271,6 +271,7 @@ func (d *Daemon) storeResumedTaskForProject(ctx context.Context, projectPath str
 	resumedWorker.AgentProfile = task.AgentProfile
 	resumedWorker.Health = WorkerHealthHealthy
 	resumedWorker.LastReviewCount = 0
+	resumedWorker.LastInlineReviewCommentCount = 0
 	resumedWorker.LastIssueCommentCount = 0
 	resumedWorker.ReviewNudgeCount = 0
 	resumedWorker.LastCIState = ""

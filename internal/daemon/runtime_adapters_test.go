@@ -220,24 +220,25 @@ func TestSQLiteStateAdapterNonTerminalTasksAndWorkerByPane(t *testing.T) {
 	}
 
 	if err := adapter.PutWorker(context.Background(), Worker{
-		Project:               "/repo",
-		PaneID:                "pane-2",
-		Issue:                 "LAB-741",
-		ClonePath:             "/clones/clone-02",
-		AgentProfile:          "codex",
-		Health:                WorkerHealthEscalated,
-		LastReviewCount:       2,
-		LastIssueCommentCount: 4,
-		ReviewNudgeCount:      3,
-		LastCIState:           "fail",
-		CINudgeCount:          2,
-		CIFailurePollCount:    1,
-		CIEscalated:           true,
-		LastMergeableState:    "CONFLICTING",
-		NudgeCount:            3,
-		LastCapture:           "permission prompt",
-		LastActivityAt:        now,
-		UpdatedAt:             now.Add(time.Minute),
+		Project:                      "/repo",
+		PaneID:                       "pane-2",
+		Issue:                        "LAB-741",
+		ClonePath:                    "/clones/clone-02",
+		AgentProfile:                 "codex",
+		Health:                       WorkerHealthEscalated,
+		LastReviewCount:              2,
+		LastInlineReviewCommentCount: 1,
+		LastIssueCommentCount:        4,
+		ReviewNudgeCount:             3,
+		LastCIState:                  "fail",
+		CINudgeCount:                 2,
+		CIFailurePollCount:           1,
+		CIEscalated:                  true,
+		LastMergeableState:           "CONFLICTING",
+		NudgeCount:                   3,
+		LastCapture:                  "permission prompt",
+		LastActivityAt:               now,
+		UpdatedAt:                    now.Add(time.Minute),
 	}); err != nil {
 		t.Fatalf("PutWorker() error = %v", err)
 	}
@@ -280,6 +281,9 @@ func TestSQLiteStateAdapterNonTerminalTasksAndWorkerByPane(t *testing.T) {
 	}
 	if got, want := worker.LastReviewCount, 2; got != want {
 		t.Fatalf("worker.LastReviewCount = %d, want %d", got, want)
+	}
+	if got, want := worker.LastInlineReviewCommentCount, 1; got != want {
+		t.Fatalf("worker.LastInlineReviewCommentCount = %d, want %d", got, want)
 	}
 	if got, want := worker.LastIssueCommentCount, 4; got != want {
 		t.Fatalf("worker.LastIssueCommentCount = %d, want %d", got, want)

@@ -125,6 +125,7 @@ func (d *Daemon) releaseWorkerClaim(ctx context.Context, worker Worker) error {
 	worker.ClonePath = ""
 	worker.Health = WorkerHealthHealthy
 	worker.LastReviewCount = 0
+	worker.LastInlineReviewCommentCount = 0
 	worker.LastIssueCommentCount = 0
 	worker.ReviewNudgeCount = 0
 	worker.LastCIState = ""

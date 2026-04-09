@@ -611,6 +611,15 @@ func TestReviewFormattingHelpers(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("review comment line falls back to original line", func(t *testing.T) {
+		t.Parallel()
+
+		comment := prReviewComment{OriginalLine: 27}
+		if got, want := reviewCommentLine(comment), 27; got != want {
+			t.Fatalf("reviewCommentLine() = %d, want %d", got, want)
+		}
+	})
 }
 
 func marshalReviewPayload(t *testing.T, reviewDecision string, reviews []prReview, comments []prComment) string {
