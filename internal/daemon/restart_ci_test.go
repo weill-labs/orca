@@ -23,6 +23,9 @@ func TestPRPollResumesFromPersistedCIStateAfterRestart(t *testing.T) {
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
 	deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[{"bucket":"fail"}]`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
+	for range 3 {
+		deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket,name,link"}, ciFailedChecksOutput, nil)
+	}
 
 	first := deps.newDaemon(t)
 	ctx := context.Background()
@@ -37,14 +40,16 @@ func TestPRPollResumesFromPersistedCIStateAfterRestart(t *testing.T) {
 	firstPollTicker.tick(deps.clock.Now())
 	waitFor(t, "initial CI nudge", func() bool {
 		worker, ok := deps.state.worker("pane-1")
-		return ok && worker.LastCIState == ciStateFail && deps.amux.countKey("pane-1", "\n") == 1
+		return ok &&
+			worker.LastCIState == ciStateFail &&
+			deps.amux.countKey("pane-1", expectedCINudgePrompt(42)+"\n") == 1
 	})
 
 	firstPollTicker.tick(deps.clock.Now())
 	waitFor(t, "persisted failing CI schedule before restart", func() bool {
 		return deps.commands.countCall("gh", "pr", "checks", "42", "--json", "bucket") == 2
 	})
-	if got, want := deps.amux.countKey("pane-1", "\n"), 1; got != want {
+	if got, want := deps.amux.countKey("pane-1", expectedCINudgePrompt(42)+"\n"), 1; got != want {
 		t.Fatalf("CI nudge count before restart = %d, want %d", got, want)
 	}
 
@@ -62,7 +67,8 @@ func TestPRPollResumesFromPersistedCIStateAfterRestart(t *testing.T) {
 
 	secondPollTicker.tick(deps.clock.Now())
 	waitFor(t, "scheduled CI nudge after restart", func() bool {
-		return deps.amux.countKey("pane-1", "\n") == 2 && deps.events.countType(EventWorkerNudgedCI) == 2
+		return deps.amux.countKey("pane-1", expectedCINudgePrompt(42)+"\n") == 2 &&
+			deps.events.countType(EventWorkerNudgedCI) == 2
 	})
 
 	secondPollTicker.tick(deps.clock.Now())
@@ -73,6 +79,7 @@ func TestPRPollResumesFromPersistedCIStateAfterRestart(t *testing.T) {
 
 	secondPollTicker.tick(deps.clock.Now())
 	waitFor(t, "CI nudge after recovery", func() bool {
-		return deps.amux.countKey("pane-1", "\n") == 3 && deps.events.countType(EventWorkerNudgedCI) == 3
+		return deps.amux.countKey("pane-1", expectedCINudgePrompt(42)+"\n") == 3 &&
+			deps.events.countType(EventWorkerNudgedCI) == 3
 	})
 }

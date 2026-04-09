@@ -642,9 +642,16 @@ func derefWorker(worker *Worker) Worker {
 }
 
 func (d *Daemon) sendPromptAndEnter(ctx context.Context, paneID, prompt string) error {
+	return d.sendPromptAndCommand(ctx, paneID, prompt, "Enter")
+}
+
+func (d *Daemon) sendPromptAndCommand(ctx context.Context, paneID, prompt, command string) error {
 	trimmed := strings.TrimRight(prompt, "\r\n")
 	if trimmed == "" {
 		return errors.New("prompt is empty")
+	}
+	if strings.TrimSpace(command) == "" {
+		return errors.New("command is empty")
 	}
 	client := d.amuxClient(ctx)
 	if err := client.SendKeys(ctx, paneID, trimmed); err != nil {
@@ -653,7 +660,7 @@ func (d *Daemon) sendPromptAndEnter(ctx context.Context, paneID, prompt string) 
 	if err := client.WaitIdleSettle(ctx, paneID, defaultAgentHandshakeTimeout, defaultPromptSettleDuration); err != nil {
 		return err
 	}
-	return client.SendKeys(ctx, paneID, "Enter")
+	return client.SendKeys(ctx, paneID, command)
 }
 
 func (d *Daemon) startAgentInPane(ctx context.Context, paneID string, profile AgentProfile) error {
