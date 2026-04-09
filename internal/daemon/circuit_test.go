@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/weill-labs/orca/internal/amux"
 )
 
 func TestCircuitBreakerOpensAfterThreeFailuresAndClosesAfterCooldown(t *testing.T) {
@@ -189,6 +191,41 @@ func TestCircuitAmuxClientWrapsBaseMethods(t *testing.T) {
 				}
 				if want := map[string]string{"role": "worker", "status": "active"}; !reflect.DeepEqual(got, want) {
 					t.Fatalf("Metadata() = %#v, want %#v", got, want)
+				}
+			},
+		},
+		{
+			name: "events",
+			call: func(t *testing.T, client AmuxClient, base *fakeAmux) {
+				t.Helper()
+
+				event := amux.Event{Type: "exited", PaneName: base.spawnPane.ID}
+				base.eventSequences = []fakeAmuxEventSequence{{events: []amux.Event{event}}}
+
+				eventsCh, errCh := client.Events(context.Background(), amux.EventsRequest{Filter: []string{"exited"}})
+
+				select {
+				case got, ok := <-eventsCh:
+					if !ok {
+						t.Fatal("Events() closed events channel before delivering event")
+					}
+					if got != event {
+						t.Fatalf("Events() event = %#v, want %#v", got, event)
+					}
+				case <-time.After(time.Second):
+					t.Fatal("timed out waiting for event stream value")
+				}
+
+				select {
+				case err, ok := <-errCh:
+					if ok && err != nil {
+						t.Fatalf("Events() error = %v, want nil", err)
+					}
+				case <-time.After(10 * time.Millisecond):
+				}
+
+				if got, want := base.eventsCalls, 1; got != want {
+					t.Fatalf("eventsCalls = %d, want %d", got, want)
 				}
 			},
 		},

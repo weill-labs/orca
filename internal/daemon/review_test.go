@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"testing"
 	"time"
@@ -615,6 +616,47 @@ func TestPRReviewPollingDefersBlockingReviewNudgeWhenFreshCaptureShowsActivity(t
 		worker, ok := deps.state.worker("pane-1")
 		return ok && worker.LastReviewCount == 1 && deps.amux.countKey("pane-1", nudgeSent) == 1
 	})
+}
+
+func TestPRReviewPollingLogsGitHubRateLimitWarnings(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	captureTicker := newFakeTicker()
+	prTicker := newFakeTicker()
+	deps.tickers.enqueue(captureTicker, prTicker)
+	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, "HTTP 429: API rate limit exceeded\nRetry-After: 120\n", errors.New("gh: HTTP 429"))
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-689", "Implement daemon core", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	prTicker.tick(deps.clock.Now())
+	waitFor(t, "review poll rate limit event", func() bool {
+		return deps.events.countType(EventPRRateLimited) == 1
+	})
+
+	event, ok := deps.events.lastEventOfType(EventPRRateLimited)
+	if !ok {
+		t.Fatal("missing GitHub rate limit event")
+	}
+	if got, want := event.Message, "github: rate limited until 09:02"; got != want {
+		t.Fatalf("event.Message = %q, want %q", got, want)
+	}
+	if got, want := deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}), 1; got != want {
+		t.Fatalf("review poll count = %d, want %d", got, want)
+	}
 }
 
 func makeWorkerIdleForReviewNudge(deps *testDeps) {

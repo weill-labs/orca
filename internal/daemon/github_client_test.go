@@ -555,6 +555,45 @@ func TestIsGitHubRateLimitError(t *testing.T) {
 	}
 }
 
+func TestGitHubRateLimitDeadline(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 2, 9, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name     string
+		err      error
+		output   []byte
+		fallback time.Duration
+		want     time.Time
+	}{
+		{
+			name:     "invalid retry-after falls back to explicit backoff",
+			err:      errors.New("gh: HTTP 429"),
+			output:   []byte("Retry-After: 0"),
+			fallback: 8 * time.Second,
+			want:     now.Add(8 * time.Second),
+		},
+		{
+			name:   "invalid reset header falls back to default minute",
+			err:    errors.New("gh: HTTP 403"),
+			output: []byte("X-RateLimit-Reset: 0"),
+			want:   now.Add(time.Minute),
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := gitHubRateLimitDeadline(tt.err, tt.output, now, tt.fallback); !got.Equal(tt.want) {
+				t.Fatalf("gitHubRateLimitDeadline() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestSleepContext(t *testing.T) {
 	t.Parallel()
 
