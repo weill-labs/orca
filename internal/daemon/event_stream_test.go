@@ -97,3 +97,45 @@ func TestExitedEventListenerReconnectsAfterStreamError(t *testing.T) {
 		t.Fatalf("sleep[0] = %s, want positive backoff", sleeps[0])
 	}
 }
+
+func TestExitedEventCaptureErrorPreservesLastCapture(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	seedActiveAssignment(t, deps, "LAB-922", "pane-1")
+	deps.amux.capturePaneErr = errors.New("capture failed")
+	deps.amux.enqueueEventSequence(fakeAmuxEventSequence{
+		events: []amuxapi.Event{{Type: "exited", PaneName: "pane-1"}},
+	})
+
+	worker, ok := deps.state.worker("pane-1")
+	if !ok {
+		t.Fatal("seeded worker missing")
+	}
+	worker.LastCapture = "last useful output"
+	if err := deps.state.PutWorker(context.Background(), worker); err != nil {
+		t.Fatalf("PutWorker() error = %v", err)
+	}
+
+	d := deps.newDaemon(t)
+	if err := d.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	waitFor(t, "worker escalation after capture error", func() bool {
+		worker, ok := deps.state.worker("pane-1")
+		return ok && worker.Health == WorkerHealthEscalated
+	})
+
+	worker, ok = deps.state.worker("pane-1")
+	if !ok {
+		t.Fatal("worker missing after exited event")
+	}
+	if got, want := worker.LastCapture, "last useful output"; got != want {
+		t.Fatalf("worker.LastCapture = %q, want %q", got, want)
+	}
+}

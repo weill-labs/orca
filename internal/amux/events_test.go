@@ -100,6 +100,9 @@ func TestCLIClientEvents(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
+			ctx, cancel := context.WithCancel(context.Background())
+			t.Cleanup(cancel)
+
 			starter := &fakeEventStarter{processes: tt.processes}
 			client := &CLIClient{
 				binary:       "amux",
@@ -107,7 +110,7 @@ func TestCLIClientEvents(t *testing.T) {
 				eventStarter: starter,
 			}
 
-			eventsCh, errCh := client.Events(context.Background(), EventsRequest{
+			eventsCh, errCh := client.Events(ctx, EventsRequest{
 				Filter:      []string{"exited"},
 				NoReconnect: true,
 			})
@@ -120,6 +123,9 @@ func TestCLIClientEvents(t *testing.T) {
 					}
 					if event != tt.wantEvent {
 						t.Fatalf("first event = %#v, want %#v", event, tt.wantEvent)
+					}
+					cancel()
+					for range eventsCh {
 					}
 				case err := <-errCh:
 					t.Fatalf("unexpected err = %v", err)

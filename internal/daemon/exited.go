@@ -56,7 +56,7 @@ func (d *Daemon) exitedPaneStateUpdate(active ActiveAssignment, profile AgentPro
 	update := TaskStateUpdate{Active: active}
 	output := snapshot.Output()
 
-	if output != update.Active.Worker.LastCapture {
+	if shouldUpdateExitedCapture(output, update.Active.Worker.LastCapture) {
 		update.Active.Worker.LastCapture = output
 		update.Active.Worker.LastSeenAt = now
 		update.Active.Task.UpdatedAt = now
@@ -79,6 +79,13 @@ func (d *Daemon) exitedPaneStateUpdate(active ActiveAssignment, profile AgentPro
 	update.Events = append(update.Events, d.assignmentEvent(update.Active, profile, EventWorkerEscalated, exitedPaneMessage(snapshot)))
 
 	return update
+}
+
+func shouldUpdateExitedCapture(next, current string) bool {
+	if next == "" && current != "" {
+		return false
+	}
+	return next != current
 }
 
 func exitedPaneMessage(snapshot PaneCapture) string {
