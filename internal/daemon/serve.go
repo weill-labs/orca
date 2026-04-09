@@ -112,7 +112,7 @@ func runProcess(ctx context.Context, req ServeRequest, deps serveDeps) error {
 		return fmt.Errorf("create daemon: %w", err)
 	}
 
-	if err := statusWriter.Update(ctx, "running", startedAt); err != nil {
+	if err := statusWriter.Update(ctx, daemonStatusRunning, startedAt); err != nil {
 		return err
 	}
 

@@ -8,6 +8,8 @@ import (
 const (
 	watchdogWarningMultiplier   = 2
 	watchdogUnhealthyMultiplier = 5
+	daemonStatusRunning         = "running"
+	daemonStatusUnhealthy       = "unhealthy"
 )
 
 type daemonStatusWriter interface {
@@ -48,7 +50,7 @@ func (d *Daemon) runWatchdog(ctx context.Context, done chan struct{}) {
 				continue
 			}
 
-			d.updateDaemonStatus(ctx, "unhealthy", heartbeatAt)
+			d.updateDaemonStatus(ctx, daemonStatusUnhealthy, heartbeatAt)
 			unhealthy = true
 		}
 	}
@@ -57,7 +59,7 @@ func (d *Daemon) runWatchdog(ctx context.Context, done chan struct{}) {
 func (d *Daemon) recordHeartbeat(ctx context.Context) {
 	heartbeatAt := d.now()
 	d.lastHeartbeat.Store(heartbeatAt.UnixMilli())
-	d.updateDaemonStatus(ctx, "running", heartbeatAt)
+	d.updateDaemonStatus(ctx, daemonStatusRunning, heartbeatAt)
 }
 
 func (d *Daemon) updateDaemonStatus(ctx context.Context, status string, heartbeatAt time.Time) {
