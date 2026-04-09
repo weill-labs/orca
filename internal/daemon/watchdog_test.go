@@ -110,6 +110,64 @@ func TestDaemonWatchdogWarnsAndMarksUnhealthyAfterStaleHeartbeat(t *testing.T) {
 	}
 }
 
+func TestDaemonWatchdogRecoveryWritesRunningHeartbeat(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	captureTicker := newFakeTicker()
+	pollTicker := newFakeTicker()
+	watchdogTicker := newFakeTicker()
+	deps.tickers.enqueue(captureTicker, pollTicker)
+	deps.watchdogTickers.enqueue(watchdogTicker)
+
+	statusWriter := &fakeDaemonStatusWriter{}
+	d := deps.newDaemonWithOptions(t, func(opts *Options) {
+		opts.DaemonStatusWriter = statusWriter
+		opts.NewWatchdogTicker = deps.watchdogTickers.NewTicker
+	})
+
+	if err := d.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	startedAt := deps.clock.Now()
+	deps.clock.Advance(26 * time.Second)
+	watchdogTicker.tick(deps.clock.Now())
+	waitFor(t, "watchdog unhealthy update", func() bool {
+		update, ok := statusWriter.lastUpdate()
+		return ok && update.Status == daemonStatusUnhealthy
+	})
+
+	unhealthyUpdate, ok := statusWriter.lastUpdate()
+	if !ok {
+		t.Fatal("lastUpdate() = ok false, want unhealthy update")
+	}
+	if got, want := unhealthyUpdate.HeartbeatAt, startedAt; !got.Equal(want) {
+		t.Fatalf("heartbeatAt = %v, want %v", got, want)
+	}
+
+	deps.clock.Advance(4 * time.Second)
+	captureTicker.tick(deps.clock.Now())
+	waitFor(t, "running heartbeat update", func() bool {
+		update, ok := statusWriter.lastUpdate()
+		return ok && update.Status == daemonStatusRunning
+	})
+
+	runningUpdate, ok := statusWriter.lastUpdate()
+	if !ok {
+		t.Fatal("lastUpdate() = ok false, want running update")
+	}
+	if got, want := runningUpdate.HeartbeatAt, deps.clock.Now(); !got.Equal(want) {
+		t.Fatalf("heartbeatAt = %v, want %v", got, want)
+	}
+	if got, want := d.lastHeartbeat.Load(), deps.clock.Now().UnixMilli(); got != want {
+		t.Fatalf("lastHeartbeat = %d, want %d", got, want)
+	}
+}
+
 type fakeDaemonStatusWriter struct {
 	mu      sync.Mutex
 	updates []daemonStatusUpdate

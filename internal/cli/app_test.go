@@ -1194,12 +1194,13 @@ func TestWriteProjectStatusAndTaskStatus(t *testing.T) {
 		{
 			name: "project status with daemon and tasks",
 			write: func(buf *bytes.Buffer) error {
-				return writeProjectStatus(buf, state.ProjectStatus{
+				return writeProjectStatusAt(buf, state.ProjectStatus{
 					Project: "repo",
 					Daemon: &state.DaemonStatus{
-						Session: "alpha",
-						PID:     42,
-						Status:  "running",
+						Session:   "alpha",
+						PID:       42,
+						Status:    "running",
+						UpdatedAt: now.Add(-30 * time.Second),
 					},
 					Summary: state.Summary{
 						Tasks:          2,
@@ -1220,13 +1221,14 @@ func TestWriteProjectStatusAndTaskStatus(t *testing.T) {
 							UpdatedAt: now,
 						},
 					},
-				}, "", "")
+				}, "", "", now)
 			},
 			wants: []string{
 				"project: repo",
 				"daemon: running",
 				"session: alpha",
 				"pid: 42",
+				"heartbeat age: 30s",
 				"tasks: 2 total, 1 queued, 1 active, 0 done, 0 cancelled",
 				"ISSUE",
 				"LAB-804",
@@ -1248,20 +1250,20 @@ func TestWriteProjectStatusAndTaskStatus(t *testing.T) {
 		{
 			name: "project status includes heartbeat age",
 			write: func(buf *bytes.Buffer) error {
-				return writeProjectStatus(buf, state.ProjectStatus{
+				return writeProjectStatusAt(buf, state.ProjectStatus{
 					Project: "repo",
 					Daemon: &state.DaemonStatus{
 						Session:   "alpha",
 						PID:       42,
 						Status:    "unhealthy",
-						UpdatedAt: time.Now().UTC().Add(-2 * time.Minute),
+						UpdatedAt: now.Add(-2 * time.Minute),
 					},
-				}, "", "")
+				}, "", "", now)
 			},
 			wants: []string{
 				"project: repo",
 				"daemon: unhealthy",
-				"heartbeat age:",
+				"heartbeat age: 2m0s",
 			},
 		},
 		{
@@ -1344,6 +1346,45 @@ func TestWriteProjectStatusAndTaskStatus(t *testing.T) {
 				if !strings.Contains(buf.String(), want) {
 					t.Fatalf("output = %q, want substring %q", buf.String(), want)
 				}
+			}
+		})
+	}
+}
+
+func TestHeartbeatAge(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 2, 15, 4, 5, 0, time.UTC)
+
+	tests := []struct {
+		name        string
+		heartbeatAt time.Time
+		want        string
+	}{
+		{
+			name:        "returns elapsed duration",
+			heartbeatAt: now.Add(-90 * time.Second),
+			want:        "1m30s",
+		},
+		{
+			name:        "clamps future heartbeats",
+			heartbeatAt: now.Add(5 * time.Second),
+			want:        "0s",
+		},
+		{
+			name:        "clamps sub-second durations",
+			heartbeatAt: now.Add(-500 * time.Millisecond),
+			want:        "0s",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := heartbeatAge(now, tt.heartbeatAt); got != tt.want {
+				t.Fatalf("heartbeatAge() = %q, want %q", got, tt.want)
 			}
 		})
 	}
