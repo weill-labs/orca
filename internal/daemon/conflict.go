@@ -48,7 +48,7 @@ func (d *Daemon) handlePRMergeablePoll(ctx context.Context, update *TaskStateUpd
 }
 
 func (d *Daemon) lookupPRMergeableState(ctx context.Context, projectPath string, prNumber int) (string, bool, error) {
-	output, err := d.commands.Run(ctx, projectPath, "gh", "pr", "view", fmt.Sprintf("%d", prNumber), "--json", "mergeable")
+	output, err := d.commandRunner(ctx).Run(ctx, projectPath, "gh", "pr", "view", fmt.Sprintf("%d", prNumber), "--json", "mergeable")
 	if err != nil {
 		return "", false, err
 	}

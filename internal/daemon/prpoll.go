@@ -107,13 +107,13 @@ func mergeTaskStateUpdates(base, next TaskStateUpdate) TaskStateUpdate {
 }
 
 func (d *Daemon) lookupPRNumber(ctx context.Context, projectPath, branch string) (int, error) {
-	return d.githubForProject(projectPath).lookupPRNumber(ctx, branch)
+	return d.gitHubClientForContext(ctx, projectPath).lookupPRNumber(ctx, branch)
 }
 
 func (d *Daemon) lookupOpenPRNumber(ctx context.Context, projectPath, branch string) (int, error) {
-	return d.githubForProject(projectPath).lookupOpenPRNumber(ctx, branch)
+	return d.gitHubClientForContext(ctx, projectPath).lookupOpenPRNumber(ctx, branch)
 }
 
 func (d *Daemon) isPRMerged(ctx context.Context, projectPath string, prNumber int) (bool, error) {
-	return d.githubForProject(projectPath).isPRMerged(ctx, prNumber)
+	return d.gitHubClientForContext(ctx, projectPath).isPRMerged(ctx, prNumber)
 }

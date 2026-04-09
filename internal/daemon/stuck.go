@@ -11,7 +11,7 @@ func (d *Daemon) nudgeOrEscalate(ctx context.Context, update *TaskStateUpdate, p
 
 	if update.Active.Worker.NudgeCount < profile.MaxNudgeRetries {
 		update.queueNudge(func(ctx context.Context, d *Daemon, update *TaskStateUpdate) {
-			if err := d.amux.SendKeys(ctx, update.Active.Task.PaneID, profile.NudgeCommand); err != nil {
+			if err := d.amuxClient(ctx).SendKeys(ctx, update.Active.Task.PaneID, profile.NudgeCommand); err != nil {
 				return
 			}
 

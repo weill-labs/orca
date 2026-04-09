@@ -22,26 +22,28 @@ const (
 )
 
 type Daemon struct {
-	project          string
-	session          string
-	leadPane         string
-	pidPath          string
-	config           ConfigProvider
-	state            StateStore
-	pool             Pool
-	amux             AmuxClient
-	issueTracker     IssueTracker
-	commands         CommandRunner
-	github           gitHubClient
-	githubMu         sync.Mutex
-	githubClients    map[string]gitHubClient
-	events           EventSink
-	now              func() time.Time
-	newTicker        func(time.Duration) Ticker
-	sleep            func(context.Context, time.Duration) error
-	captureInterval  time.Duration
-	pollInterval     time.Duration
-	mergeGracePeriod time.Duration
+	project              string
+	session              string
+	leadPane             string
+	pidPath              string
+	config               ConfigProvider
+	state                StateStore
+	pool                 Pool
+	amux                 AmuxClient
+	issueTracker         IssueTracker
+	commands             CommandRunner
+	github               gitHubClient
+	githubMu             sync.Mutex
+	githubClients        map[string]gitHubClient
+	events               EventSink
+	now                  func() time.Time
+	newTicker            func(time.Duration) Ticker
+	sleep                func(context.Context, time.Duration) error
+	captureInterval      time.Duration
+	pollInterval         time.Duration
+	mergeGracePeriod     time.Duration
+	monitorAmuxCircuit   *CircuitBreaker
+	monitorGitHubCircuit *CircuitBreaker
 
 	started           atomic.Bool
 	stopContext       context.Context
@@ -131,7 +133,37 @@ func New(opts Options) (*Daemon, error) {
 		captureInterval:  opts.CaptureInterval,
 		pollInterval:     opts.PollInterval,
 		mergeGracePeriod: opts.MergeGracePeriod,
+		// Monitor circuits are daemon-wide by design so broad amux/GitHub
+		// outages pause all monitor traffic instead of retrying per task.
+		monitorAmuxCircuit:   NewCircuitBreakerWithHooks(opts.Now, defaultCircuitBreakerFailureThreshold, defaultCircuitBreakerCooldown, daemonCircuitHooks(opts.Project, opts.Now, opts.State, opts.Events, "monitor amux")),
+		monitorGitHubCircuit: NewCircuitBreakerWithHooks(opts.Now, defaultCircuitBreakerFailureThreshold, defaultCircuitBreakerCooldown, daemonCircuitHooks(opts.Project, opts.Now, opts.State, opts.Events, "monitor github")),
 	}, nil
+}
+
+func daemonCircuitHooks(project string, now func() time.Time, state StateStore, events EventSink, name string) CircuitBreakerHooks {
+	emit := func(eventType, message string) {
+		event := Event{
+			Time:    now(),
+			Type:    eventType,
+			Project: project,
+			Message: message,
+		}
+		if state != nil {
+			_ = state.RecordEvent(context.Background(), event)
+		}
+		if events != nil {
+			_ = events.Emit(context.Background(), event)
+		}
+	}
+
+	return CircuitBreakerHooks{
+		OnOpen: func() {
+			emit(EventDaemonCircuitOpened, name+" circuit opened after 3 consecutive failures")
+		},
+		OnClose: func() {
+			emit(EventDaemonCircuitClosed, name+" circuit closed after cooldown")
+		},
+	}
 }
 
 func (d *Daemon) Start(ctx context.Context) error {

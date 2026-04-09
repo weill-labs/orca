@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -67,5 +68,104 @@ func TestDaemonSkipsBufferedPollTickWhilePollCycleIsRunning(t *testing.T) {
 
 	if got, want := deps.commands.countCalls("gh", checkArgs), 1; got != want {
 		t.Fatalf("gh pr checks call count = %d, want %d", got, want)
+	}
+}
+
+func TestDaemonCaptureMonitorOpensAmuxCircuitAfterThreeFailures(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	seedTaskMonitorAssignment(t, deps, "LAB-924", "pane-1", 0)
+	deps.amux.capturePaneErr = errors.New("amux unavailable")
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+	t.Cleanup(func() {
+		d.stopAllTaskMonitors(true)
+	})
+
+	for i := 0; i < 3; i++ {
+		d.runCaptureTick(ctx)
+		if got, want := deps.amux.captureCount("pane-1"), i+1; got != want {
+			t.Fatalf("capture count after failure %d = %d, want %d", i+1, got, want)
+		}
+	}
+	if err := d.monitorAmuxCircuit.Allow(); !errors.Is(err, ErrCircuitBreakerOpen) {
+		t.Fatalf("amux circuit Allow() error = %v, want %v", err, ErrCircuitBreakerOpen)
+	}
+	if got, want := deps.events.countType(EventDaemonCircuitOpened), 1; got != want {
+		t.Fatalf("circuit opened event count = %d, want %d", got, want)
+	}
+	if got, want := deps.events.lastMessage(EventDaemonCircuitOpened), "monitor amux circuit opened after 3 consecutive failures"; got != want {
+		t.Fatalf("opened event message = %q, want %q", got, want)
+	}
+
+	d.runCaptureTick(ctx)
+	if got, want := deps.amux.captureCount("pane-1"), 3; got != want {
+		t.Fatalf("capture count with open circuit = %d, want %d", got, want)
+	}
+
+	deps.clock.Advance(60 * time.Second)
+	deps.amux.capturePaneErr = nil
+	deps.amux.capturePaneSequence("pane-1", []PaneCapture{paneCaptureFromOutput("worker output")})
+
+	d.runCaptureTick(ctx)
+	if got, want := deps.amux.captureCount("pane-1"), 4; got != want {
+		t.Fatalf("capture count after cooldown = %d, want %d", got, want)
+	}
+	if got, want := deps.events.countType(EventDaemonCircuitClosed), 1; got != want {
+		t.Fatalf("circuit closed event count = %d, want %d", got, want)
+	}
+	if got, want := deps.events.lastMessage(EventDaemonCircuitClosed), "monitor amux circuit closed after cooldown"; got != want {
+		t.Fatalf("closed event message = %q, want %q", got, want)
+	}
+}
+
+func TestDaemonPollMonitorOpensGitHubCircuitAfterThreeFailures(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	seedTaskMonitorAssignment(t, deps, "LAB-924", "pane-1", 0)
+
+	lookupArgs := []string{"pr", "list", "--head", "LAB-924", "--json", "number"}
+	for i := 0; i < 3; i++ {
+		deps.commands.queue("gh", lookupArgs, ``, errors.New("github unavailable"))
+	}
+	deps.commands.queue("gh", lookupArgs, `[]`, nil)
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+	t.Cleanup(func() {
+		d.stopAllTaskMonitors(true)
+	})
+
+	for i := 0; i < 3; i++ {
+		d.runPollTick(ctx)
+		if got, want := deps.commands.countCalls("gh", lookupArgs), i+1; got != want {
+			t.Fatalf("github call count after failure %d = %d, want %d", i+1, got, want)
+		}
+	}
+	if err := d.monitorGitHubCircuit.Allow(); !errors.Is(err, ErrCircuitBreakerOpen) {
+		t.Fatalf("github circuit Allow() error = %v, want %v", err, ErrCircuitBreakerOpen)
+	}
+	if got, want := deps.events.countType(EventDaemonCircuitOpened), 1; got != want {
+		t.Fatalf("circuit opened event count = %d, want %d", got, want)
+	}
+	if got, want := deps.events.lastMessage(EventDaemonCircuitOpened), "monitor github circuit opened after 3 consecutive failures"; got != want {
+		t.Fatalf("opened event message = %q, want %q", got, want)
+	}
+
+	d.runPollTick(ctx)
+	if got, want := deps.commands.countCalls("gh", lookupArgs), 3; got != want {
+		t.Fatalf("github call count with open circuit = %d, want %d", got, want)
+	}
+
+	deps.clock.Advance(60 * time.Second)
+	d.runPollTick(ctx)
+	if got, want := deps.commands.countCalls("gh", lookupArgs), 4; got != want {
+		t.Fatalf("github call count after cooldown = %d, want %d", got, want)
+	}
+	if got, want := deps.events.countType(EventDaemonCircuitClosed), 1; got != want {
+		t.Fatalf("circuit closed event count = %d, want %d", got, want)
 	}
 }
