@@ -211,7 +211,7 @@ func TestPRPollRetriesScheduledCIRenudgeAfterSendKeysFailure(t *testing.T) {
 			deps.commands.countCall("gh", "pr", "checks", "42", "--json", "bucket") == 3 &&
 			worker.CIFailurePollCount == ciFailureRenudgePollWindow
 	})
-	if got, want := deps.amux.countKey("pane-1", "\n"), 1; got != want {
+	if got, want := deps.amux.countKey("pane-1", expectedCINudgePrompt(42)+"\n"), 1; got != want {
 		t.Fatalf("successful nudge count after failed scheduled re-nudge = %d, want %d", got, want)
 	}
 	if got, want := deps.events.countType(EventWorkerNudgedCI), 1; got != want {
