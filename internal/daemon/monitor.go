@@ -139,7 +139,7 @@ func (d *Daemon) reconcileTrackedPanes(ctx context.Context, assignments []Active
 			continue
 		}
 
-		d.escalateAssignmentOnStartupError(ctx, active, "worker pane missing during monitor reconciliation")
+		d.escalateAssignmentError(ctx, active, "worker pane missing during monitor reconciliation")
 	}
 	return reconciled
 }
