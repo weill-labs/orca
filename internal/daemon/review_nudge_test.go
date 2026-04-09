@@ -78,7 +78,7 @@ func TestPRReviewPollingSkipsNudgesForApprovalOrLGTM(t *testing.T) {
 			deps.tickers.enqueue(captureTicker, prTicker)
 			deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--state", "open", "--json", "number"}, `[]`, nil)
 			deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
-			deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, tt.payload, nil)
+			queuePRReviewPayload(deps, 42, tt.payload)
 
 			d := deps.newDaemon(t)
 			ctx := context.Background()
@@ -119,37 +119,37 @@ func TestPRReviewPollingEscalatesAfterThreeNudgesAndResetsAfterApprovalCycle(t *
 	deps.tickers.enqueue(captureTicker, prTicker)
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--state", "open", "--json", "number"}, `[]`, nil)
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, marshalReviewPayload(t, "CHANGES_REQUESTED", []prReview{
+	queuePRReviewPayload(deps, 42, marshalReviewPayload(t, "CHANGES_REQUESTED", []prReview{
 		testReview("alice", "CHANGES_REQUESTED", "Please add tests."),
-	}, nil), nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, marshalReviewPayload(t, "CHANGES_REQUESTED", []prReview{
-		testReview("alice", "CHANGES_REQUESTED", "Please add tests."),
-		testReview("bob", "CHANGES_REQUESTED", "Handle the nil case too."),
-	}, nil), nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, marshalReviewPayload(t, "CHANGES_REQUESTED", []prReview{
+	}, nil))
+	queuePRReviewPayload(deps, 42, marshalReviewPayload(t, "CHANGES_REQUESTED", []prReview{
 		testReview("alice", "CHANGES_REQUESTED", "Please add tests."),
 		testReview("bob", "CHANGES_REQUESTED", "Handle the nil case too."),
-		testReview("carol", "CHANGES_REQUESTED", "Cover the restart flow."),
-	}, nil), nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, marshalReviewPayload(t, "CHANGES_REQUESTED", []prReview{
+	}, nil))
+	queuePRReviewPayload(deps, 42, marshalReviewPayload(t, "CHANGES_REQUESTED", []prReview{
 		testReview("alice", "CHANGES_REQUESTED", "Please add tests."),
 		testReview("bob", "CHANGES_REQUESTED", "Handle the nil case too."),
 		testReview("carol", "CHANGES_REQUESTED", "Cover the restart flow."),
-		testReview("dave", "CHANGES_REQUESTED", "Persist the nudge counter."),
-	}, nil), nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, marshalReviewPayload(t, "APPROVED", []prReview{
+	}, nil))
+	queuePRReviewPayload(deps, 42, marshalReviewPayload(t, "CHANGES_REQUESTED", []prReview{
 		testReview("alice", "CHANGES_REQUESTED", "Please add tests."),
 		testReview("bob", "CHANGES_REQUESTED", "Handle the nil case too."),
 		testReview("carol", "CHANGES_REQUESTED", "Cover the restart flow."),
 		testReview("dave", "CHANGES_REQUESTED", "Persist the nudge counter."),
-	}, nil), nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, marshalReviewPayload(t, "CHANGES_REQUESTED", []prReview{
+	}, nil))
+	queuePRReviewPayload(deps, 42, marshalReviewPayload(t, "APPROVED", []prReview{
+		testReview("alice", "CHANGES_REQUESTED", "Please add tests."),
+		testReview("bob", "CHANGES_REQUESTED", "Handle the nil case too."),
+		testReview("carol", "CHANGES_REQUESTED", "Cover the restart flow."),
+		testReview("dave", "CHANGES_REQUESTED", "Persist the nudge counter."),
+	}, nil))
+	queuePRReviewPayload(deps, 42, marshalReviewPayload(t, "CHANGES_REQUESTED", []prReview{
 		testReview("alice", "CHANGES_REQUESTED", "Please add tests."),
 		testReview("bob", "CHANGES_REQUESTED", "Handle the nil case too."),
 		testReview("carol", "CHANGES_REQUESTED", "Cover the restart flow."),
 		testReview("dave", "CHANGES_REQUESTED", "Persist the nudge counter."),
 		testReview("erin", "CHANGES_REQUESTED", "Add reset coverage."),
-	}, nil), nil)
+	}, nil))
 
 	d := deps.newDaemon(t)
 	ctx := context.Background()
@@ -234,24 +234,24 @@ func TestPRReviewPollingNotifiesCallerPaneWhenReviewNudgesAreExhausted(t *testin
 	deps.tickers.enqueue(captureTicker, prTicker)
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--state", "open", "--json", "number"}, `[]`, nil)
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, marshalReviewPayload(t, "CHANGES_REQUESTED", []prReview{
+	queuePRReviewPayload(deps, 42, marshalReviewPayload(t, "CHANGES_REQUESTED", []prReview{
 		testReview("alice", "CHANGES_REQUESTED", "Please add tests."),
-	}, nil), nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, marshalReviewPayload(t, "CHANGES_REQUESTED", []prReview{
+	}, nil))
+	queuePRReviewPayload(deps, 42, marshalReviewPayload(t, "CHANGES_REQUESTED", []prReview{
 		testReview("alice", "CHANGES_REQUESTED", "Please add tests."),
 		testReview("bob", "CHANGES_REQUESTED", "Handle the nil case too."),
-	}, nil), nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, marshalReviewPayload(t, "CHANGES_REQUESTED", []prReview{
+	}, nil))
+	queuePRReviewPayload(deps, 42, marshalReviewPayload(t, "CHANGES_REQUESTED", []prReview{
 		testReview("alice", "CHANGES_REQUESTED", "Please add tests."),
 		testReview("bob", "CHANGES_REQUESTED", "Handle the nil case too."),
 		testReview("carol", "CHANGES_REQUESTED", "Cover the restart flow."),
-	}, nil), nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, marshalReviewPayload(t, "CHANGES_REQUESTED", []prReview{
+	}, nil))
+	queuePRReviewPayload(deps, 42, marshalReviewPayload(t, "CHANGES_REQUESTED", []prReview{
 		testReview("alice", "CHANGES_REQUESTED", "Please add tests."),
 		testReview("bob", "CHANGES_REQUESTED", "Handle the nil case too."),
 		testReview("carol", "CHANGES_REQUESTED", "Cover the restart flow."),
 		testReview("dave", "CHANGES_REQUESTED", "Persist the nudge counter."),
-	}, nil), nil)
+	}, nil))
 
 	d := deps.newDaemon(t)
 	d.leadPane = "fallback-lead-pane"
@@ -356,9 +356,9 @@ func TestPRReviewPollingDefersReviewNudgeUntilWorkerAppearsIdle(t *testing.T) {
 			deps.tickers.enqueue(captureTicker, prTicker)
 			deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--state", "open", "--json", "number"}, `[]`, nil)
 			deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
-			deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, marshalReviewPayload(t, "CHANGES_REQUESTED", []prReview{
+			queuePRReviewPayload(deps, 42, marshalReviewPayload(t, "CHANGES_REQUESTED", []prReview{
 				testReview("alice", "CHANGES_REQUESTED", "Please add tests."),
-			}, nil), nil)
+			}, nil))
 
 			d := deps.newDaemon(t)
 			ctx := context.Background()
