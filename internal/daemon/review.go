@@ -16,15 +16,17 @@ const (
 )
 
 type prReviewPayload struct {
-	ReviewDecision string      `json:"reviewDecision"`
-	Reviews        []prReview  `json:"reviews"`
+	ReviewDecision string     `json:"reviewDecision"`
+	Reviews        []prReview `json:"reviews"`
+	ReviewComments []prReviewComment
 	Comments       []prComment `json:"comments"`
 }
 
 type prReview struct {
-	State  string `json:"state"`
-	Body   string `json:"body"`
-	Author struct {
+	State       string    `json:"state"`
+	Body        string    `json:"body"`
+	SubmittedAt time.Time `json:"submittedAt"`
+	Author      struct {
 		Login string `json:"login"`
 	} `json:"author"`
 }
@@ -38,6 +40,8 @@ type prComment struct {
 
 type prFeedback struct {
 	Author string
+	Path   string
+	Line   int
 	Body   string
 }
 
@@ -89,8 +93,9 @@ func (d *Daemon) checkTaskReviewPoll(ctx context.Context, active ActiveAssignmen
 		return update
 	}
 	now := d.now()
+	reviewItems := reviewItems(payload.Reviews, payload.ReviewComments)
 
-	reviewCount := len(payload.Reviews)
+	reviewCount := len(reviewItems)
 	commentCount := len(payload.Comments)
 	previousReviewCount := update.Active.Worker.LastReviewCount
 	previousCommentCount := update.Active.Worker.LastIssueCommentCount
@@ -114,7 +119,7 @@ func (d *Daemon) checkTaskReviewPoll(ctx context.Context, active ActiveAssignmen
 		return update
 	}
 
-	newReviews := payload.Reviews[previousReviewCount:]
+	newReviews := reviewItems[previousReviewCount:]
 	newComments := payload.Comments[previousCommentCount:]
 	blocking := blockingReviewFeedback(payload.ReviewDecision, newReviews, newComments)
 	if len(blocking) == 0 {
@@ -125,7 +130,7 @@ func (d *Daemon) checkTaskReviewPoll(ctx context.Context, active ActiveAssignmen
 	if update.Active.Worker.ReviewNudgeCount >= maxReviewNudges {
 		d.persistReviewWorkerState(&update.Active.Worker, reviewCount, commentCount, now)
 		update.WorkerChanged = true
-		d.notifyCallerPaneReviewEscalation(ctx, update.Active, blockingReviewFeedback(payload.ReviewDecision, payload.Reviews, payload.Comments))
+		d.notifyCallerPaneReviewEscalation(ctx, update.Active, blockingReviewFeedback(payload.ReviewDecision, reviewItems, payload.Comments))
 
 		event := d.assignmentEvent(update.Active, profile, EventWorkerReviewEscalated, fmt.Sprintf("review nudges exhausted after %d attempts; lead intervention required", update.Active.Worker.ReviewNudgeCount))
 		event.Retry = update.Active.Worker.ReviewNudgeCount
@@ -221,31 +226,6 @@ func (d *Daemon) lookupPRReviews(ctx context.Context, projectPath string, prNumb
 	return d.gitHubClientForContext(ctx, projectPath).lookupPRReviews(ctx, prNumber)
 }
 
-func blockingReviewFeedback(reviewDecision string, reviews []prReview, comments []prComment) []prFeedback {
-	blocking := make([]prFeedback, 0, len(reviews)+len(comments))
-	if reviewDecision == "CHANGES_REQUESTED" {
-		for _, review := range reviews {
-			if review.State != "CHANGES_REQUESTED" {
-				continue
-			}
-			blocking = append(blocking, prFeedback{
-				Author: review.Author.Login,
-				Body:   normalizeReviewBody(review.Body),
-			})
-		}
-	}
-	for _, comment := range comments {
-		if !isBlockingIssueComment(comment) {
-			continue
-		}
-		blocking = append(blocking, prFeedback{
-			Author: comment.Author.Login,
-			Body:   summarizeBlockingIssueComment(comment.Body),
-		})
-	}
-	return blocking
-}
-
 func latestReviewContainsLGTM(reviews []prReview) bool {
 	if len(reviews) == 0 {
 		return false
@@ -272,6 +252,10 @@ func formatBlockingReviewFeedback(prNumber int, feedback []prFeedback) string {
 			author = "reviewer"
 		}
 		body := normalizeReviewBody(item.Body)
+		if location := formatFeedbackLocation(item); location != "" {
+			fmt.Fprintf(&builder, "- %s on %s: %s\n", author, location, body)
+			continue
+		}
 		fmt.Fprintf(&builder, "- %s: %s\n", author, body)
 	}
 	builder.WriteString("\nAddress the feedback in the PR review and push an update.")
@@ -307,7 +291,12 @@ func formatLeadReviewEscalation(active ActiveAssignment, feedback []prFeedback) 
 		if author == "" {
 			author = "reviewer"
 		}
-		fmt.Fprintf(&builder, "- %s: %s\n", author, normalizeReviewBody(item.Body))
+		body := normalizeReviewBody(item.Body)
+		if location := formatFeedbackLocation(item); location != "" {
+			fmt.Fprintf(&builder, "- %s on %s: %s\n", author, location, body)
+			continue
+		}
+		fmt.Fprintf(&builder, "- %s: %s\n", author, body)
 	}
 
 	if paneName != "" {

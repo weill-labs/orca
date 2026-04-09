@@ -186,7 +186,28 @@ func (c *gitHubCLIClient) lookupPRReviews(ctx context.Context, prNumber int) (pr
 	if err := json.Unmarshal(output, &payload); err != nil {
 		return prReviewPayload{}, false, err
 	}
+	reviewComments, err := c.lookupPRReviewComments(ctx, prNumber)
+	if err != nil {
+		return prReviewPayload{}, false, err
+	}
+	payload.ReviewComments = reviewComments
 	return payload, true, nil
+}
+
+func (c *gitHubCLIClient) lookupPRReviewComments(ctx context.Context, prNumber int) ([]prReviewComment, error) {
+	output, err := c.run(ctx, "api", fmt.Sprintf("repos/{owner}/{repo}/pulls/%d/comments?per_page=100", prNumber))
+	if err != nil {
+		return nil, err
+	}
+	if len(output) == 0 {
+		return nil, nil
+	}
+
+	var comments []prReviewComment
+	if err := json.Unmarshal(output, &comments); err != nil {
+		return nil, err
+	}
+	return comments, nil
 }
 
 func (c *gitHubCLIClient) run(ctx context.Context, args ...string) ([]byte, error) {
