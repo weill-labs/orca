@@ -17,10 +17,10 @@ import (
 var linearIssueIdentifierPattern = regexp.MustCompile(`^[A-Z][A-Z0-9]*-\d+$`)
 
 const (
-	ansiDimOn            = "\x1b[2m"
-	ansiDimOff           = "\x1b[22m"
-	ansiStrikethroughOn  = "\x1b[9m"
-	ansiStrikethroughOff = "\x1b[29m"
+	ansiDimOn              = "\x1b[2m"
+	ansiDimOff             = "\x1b[22m"
+	ansiStrikethroughOn    = "\x1b[9m"
+	ansiStrikethroughOff   = "\x1b[29m"
 	legacyWorkerPanePrefix = "worker-"
 	workerPanePrefix       = "w-"
 )
@@ -133,6 +133,7 @@ func (d *Daemon) releaseWorkerClaim(ctx context.Context, worker Worker) error {
 	worker.CIEscalated = false
 	worker.LastMergeableState = ""
 	worker.NudgeCount = 0
+	worker.RestartCount = 0
 	worker.LastCapture = ""
 	worker.LastActivityAt = time.Time{}
 	if worker.CreatedAt.IsZero() {

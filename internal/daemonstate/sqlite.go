@@ -58,6 +58,7 @@ CREATE TABLE IF NOT EXISTS workers (
 	ci_escalated INTEGER NOT NULL DEFAULT 0,
 	last_mergeable_state TEXT NOT NULL DEFAULT '',
 	nudge_count INTEGER NOT NULL DEFAULT 0,
+	restart_count INTEGER NOT NULL DEFAULT 0,
 	last_capture TEXT NOT NULL DEFAULT '',
 	last_activity_at TEXT NOT NULL DEFAULT '',
 	created_at TEXT NOT NULL,
@@ -147,6 +148,7 @@ CREATE TABLE IF NOT EXISTS workers (
 	ci_escalated INTEGER NOT NULL DEFAULT 0,
 	last_mergeable_state TEXT NOT NULL DEFAULT '',
 	nudge_count INTEGER NOT NULL DEFAULT 0,
+	restart_count INTEGER NOT NULL DEFAULT 0,
 	last_capture TEXT NOT NULL DEFAULT '',
 	last_activity_at TEXT NOT NULL DEFAULT '',
 	created_at TEXT NOT NULL,
@@ -351,7 +353,7 @@ func (s *SQLiteStore) ListWorkers(ctx context.Context, project string) ([]Worker
 	}
 
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT worker_id, current_pane_id, agent_profile, state, issue, clone_path, last_review_count, last_issue_comment_count, review_nudge_count, last_ci_state, ci_nudge_count, ci_failure_poll_count, ci_escalated, last_mergeable_state, nudge_count, last_capture, last_activity_at, created_at, last_seen_at
+		SELECT worker_id, current_pane_id, agent_profile, state, issue, clone_path, last_review_count, last_issue_comment_count, review_nudge_count, last_ci_state, ci_nudge_count, ci_failure_poll_count, ci_escalated, last_mergeable_state, nudge_count, restart_count, last_capture, last_activity_at, created_at, last_seen_at
 		FROM workers
 		WHERE project = ?
 		ORDER BY last_seen_at DESC, worker_id ASC
@@ -380,7 +382,7 @@ func (s *SQLiteStore) ListWorkers(ctx context.Context, project string) ([]Worker
 
 func (s *SQLiteStore) WorkerByID(ctx context.Context, project, workerID string) (Worker, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT worker_id, current_pane_id, agent_profile, state, issue, clone_path, last_review_count, last_issue_comment_count, review_nudge_count, last_ci_state, ci_nudge_count, ci_failure_poll_count, ci_escalated, last_mergeable_state, nudge_count, last_capture, last_activity_at, created_at, last_seen_at
+		SELECT worker_id, current_pane_id, agent_profile, state, issue, clone_path, last_review_count, last_issue_comment_count, review_nudge_count, last_ci_state, ci_nudge_count, ci_failure_poll_count, ci_escalated, last_mergeable_state, nudge_count, restart_count, last_capture, last_activity_at, created_at, last_seen_at
 		FROM workers
 		WHERE project = ? AND worker_id = ?
 	`, project, workerID)
@@ -398,7 +400,7 @@ func (s *SQLiteStore) WorkerByID(ctx context.Context, project, workerID string) 
 
 func (s *SQLiteStore) WorkerByPane(ctx context.Context, project, paneID string) (Worker, error) {
 	query := `
-		SELECT project, worker_id, current_pane_id, agent_profile, state, issue, clone_path, last_review_count, last_issue_comment_count, review_nudge_count, last_ci_state, ci_nudge_count, ci_failure_poll_count, ci_escalated, last_mergeable_state, nudge_count, last_capture, last_activity_at, created_at, last_seen_at
+		SELECT project, worker_id, current_pane_id, agent_profile, state, issue, clone_path, last_review_count, last_issue_comment_count, review_nudge_count, last_ci_state, ci_nudge_count, ci_failure_poll_count, ci_escalated, last_mergeable_state, nudge_count, restart_count, last_capture, last_activity_at, created_at, last_seen_at
 		FROM workers
 		WHERE current_pane_id = ?
 	`
@@ -617,8 +619,8 @@ func (s *SQLiteStore) UpsertWorker(ctx context.Context, project string, worker W
 	}
 
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO workers(project, worker_id, agent_profile, current_pane_id, state, issue, clone_path, last_review_count, last_issue_comment_count, review_nudge_count, last_ci_state, ci_nudge_count, ci_failure_poll_count, ci_escalated, last_mergeable_state, nudge_count, last_capture, last_activity_at, created_at, last_seen_at)
-		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO workers(project, worker_id, agent_profile, current_pane_id, state, issue, clone_path, last_review_count, last_issue_comment_count, review_nudge_count, last_ci_state, ci_nudge_count, ci_failure_poll_count, ci_escalated, last_mergeable_state, nudge_count, restart_count, last_capture, last_activity_at, created_at, last_seen_at)
+		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(project, worker_id) DO UPDATE SET
 			agent_profile = excluded.agent_profile,
 			current_pane_id = excluded.current_pane_id,
@@ -634,10 +636,11 @@ func (s *SQLiteStore) UpsertWorker(ctx context.Context, project string, worker W
 			ci_escalated = excluded.ci_escalated,
 			last_mergeable_state = excluded.last_mergeable_state,
 			nudge_count = excluded.nudge_count,
+			restart_count = excluded.restart_count,
 			last_capture = excluded.last_capture,
 			last_activity_at = excluded.last_activity_at,
 			last_seen_at = excluded.last_seen_at
-	`, project, worker.WorkerID, worker.Agent, worker.CurrentPaneID, worker.State, worker.Issue, worker.ClonePath, worker.LastReviewCount, worker.LastIssueCommentCount, worker.ReviewNudgeCount, worker.LastCIState, worker.CINudgeCount, worker.CIFailurePollCount, boolToInt(worker.CIEscalated), worker.LastMergeableState, worker.NudgeCount, worker.LastCapture, formatTime(worker.LastActivityAt), formatTime(worker.CreatedAt), formatTime(worker.LastSeenAt))
+	`, project, worker.WorkerID, worker.Agent, worker.CurrentPaneID, worker.State, worker.Issue, worker.ClonePath, worker.LastReviewCount, worker.LastIssueCommentCount, worker.ReviewNudgeCount, worker.LastCIState, worker.CINudgeCount, worker.CIFailurePollCount, boolToInt(worker.CIEscalated), worker.LastMergeableState, worker.NudgeCount, worker.RestartCount, worker.LastCapture, formatTime(worker.LastActivityAt), formatTime(worker.CreatedAt), formatTime(worker.LastSeenAt))
 	if err != nil {
 		return fmt.Errorf("upsert worker: %w", err)
 	}
@@ -663,7 +666,7 @@ func (s *SQLiteStore) ClaimWorker(ctx context.Context, project string, worker Wo
 	}()
 
 	row := tx.QueryRowContext(ctx, `
-		SELECT worker_id, current_pane_id, agent_profile, state, issue, clone_path, last_review_count, last_issue_comment_count, review_nudge_count, last_ci_state, ci_nudge_count, ci_failure_poll_count, ci_escalated, last_mergeable_state, nudge_count, last_capture, last_activity_at, created_at, last_seen_at
+		SELECT worker_id, current_pane_id, agent_profile, state, issue, clone_path, last_review_count, last_issue_comment_count, review_nudge_count, last_ci_state, ci_nudge_count, ci_failure_poll_count, ci_escalated, last_mergeable_state, nudge_count, restart_count, last_capture, last_activity_at, created_at, last_seen_at
 		FROM workers
 		WHERE project = ? AND agent_profile = ? AND issue = ''
 		ORDER BY created_at ASC, worker_id ASC
@@ -689,8 +692,8 @@ func (s *SQLiteStore) ClaimWorker(ctx context.Context, project string, worker Wo
 			return Worker{}, err
 		}
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO workers(project, worker_id, agent_profile, current_pane_id, state, issue, clone_path, last_review_count, last_issue_comment_count, review_nudge_count, last_ci_state, ci_nudge_count, ci_failure_poll_count, ci_escalated, last_mergeable_state, nudge_count, last_capture, last_activity_at, created_at, last_seen_at)
-			VALUES(?, ?, ?, '', ?, ?, '', 0, 0, 0, '', 0, 0, 0, '', 0, '', '', ?, ?)
+			INSERT INTO workers(project, worker_id, agent_profile, current_pane_id, state, issue, clone_path, last_review_count, last_issue_comment_count, review_nudge_count, last_ci_state, ci_nudge_count, ci_failure_poll_count, ci_escalated, last_mergeable_state, nudge_count, restart_count, last_capture, last_activity_at, created_at, last_seen_at)
+			VALUES(?, ?, ?, '', ?, ?, '', 0, 0, 0, '', 0, 0, 0, '', 0, 0, '', '', ?, ?)
 		`, project, worker.WorkerID, worker.Agent, worker.State, worker.Issue, formatTime(worker.CreatedAt), formatTime(worker.LastSeenAt)); err != nil {
 			return Worker{}, fmt.Errorf("insert claimed worker: %w", err)
 		}
@@ -815,7 +818,7 @@ func (s *SQLiteStore) ActiveAssignments(ctx context.Context, project string) ([]
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT
 			t.issue, t.status, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.pr_number, t.created_at, t.updated_at,
-			w.worker_id, w.current_pane_id, w.agent_profile, w.state, w.issue, w.clone_path, w.last_review_count, w.last_issue_comment_count, w.review_nudge_count, w.last_ci_state, w.ci_nudge_count, w.ci_failure_poll_count, w.ci_escalated, w.last_mergeable_state, w.nudge_count, w.last_capture, w.last_activity_at, w.created_at, w.last_seen_at
+			w.worker_id, w.current_pane_id, w.agent_profile, w.state, w.issue, w.clone_path, w.last_review_count, w.last_issue_comment_count, w.review_nudge_count, w.last_ci_state, w.ci_nudge_count, w.ci_failure_poll_count, w.ci_escalated, w.last_mergeable_state, w.nudge_count, w.restart_count, w.last_capture, w.last_activity_at, w.created_at, w.last_seen_at
 		FROM tasks t
 		INNER JOIN workers w
 			ON w.project = t.project
@@ -849,7 +852,7 @@ func (s *SQLiteStore) ActiveAssignmentByIssue(ctx context.Context, project, issu
 		SELECT
 			t.project,
 			t.issue, t.status, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.pr_number, t.created_at, t.updated_at,
-			w.worker_id, w.current_pane_id, w.agent_profile, w.state, w.issue, w.clone_path, w.last_review_count, w.last_issue_comment_count, w.review_nudge_count, w.last_ci_state, w.ci_nudge_count, w.ci_failure_poll_count, w.ci_escalated, w.last_mergeable_state, w.nudge_count, w.last_capture, w.last_activity_at, w.created_at, w.last_seen_at
+			w.worker_id, w.current_pane_id, w.agent_profile, w.state, w.issue, w.clone_path, w.last_review_count, w.last_issue_comment_count, w.review_nudge_count, w.last_ci_state, w.ci_nudge_count, w.ci_failure_poll_count, w.ci_escalated, w.last_mergeable_state, w.nudge_count, w.restart_count, w.last_capture, w.last_activity_at, w.created_at, w.last_seen_at
 		FROM tasks t
 		INNER JOIN workers w
 			ON w.project = t.project
@@ -878,7 +881,7 @@ func (s *SQLiteStore) ActiveAssignmentByPRNumber(ctx context.Context, project st
 		SELECT
 			t.project,
 			t.issue, t.status, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.pr_number, t.created_at, t.updated_at,
-			w.worker_id, w.current_pane_id, w.agent_profile, w.state, w.issue, w.clone_path, w.last_review_count, w.last_issue_comment_count, w.review_nudge_count, w.last_ci_state, w.ci_nudge_count, w.ci_failure_poll_count, w.ci_escalated, w.last_mergeable_state, w.nudge_count, w.last_capture, w.last_activity_at, w.created_at, w.last_seen_at
+			w.worker_id, w.current_pane_id, w.agent_profile, w.state, w.issue, w.clone_path, w.last_review_count, w.last_issue_comment_count, w.review_nudge_count, w.last_ci_state, w.ci_nudge_count, w.ci_failure_poll_count, w.ci_escalated, w.last_mergeable_state, w.nudge_count, w.restart_count, w.last_capture, w.last_activity_at, w.created_at, w.last_seen_at
 		FROM tasks t
 		INNER JOIN workers w
 			ON w.project = t.project
@@ -1198,7 +1201,7 @@ func (s *SQLiteStore) AllNonTerminalTasks(ctx context.Context) ([]Task, error) {
 
 func (s *SQLiteStore) allWorkers(ctx context.Context) ([]Worker, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT project, worker_id, current_pane_id, agent_profile, state, issue, clone_path, last_review_count, last_issue_comment_count, review_nudge_count, last_ci_state, ci_nudge_count, ci_failure_poll_count, ci_escalated, last_mergeable_state, nudge_count, last_capture, last_activity_at, created_at, last_seen_at
+		SELECT project, worker_id, current_pane_id, agent_profile, state, issue, clone_path, last_review_count, last_issue_comment_count, review_nudge_count, last_ci_state, ci_nudge_count, ci_failure_poll_count, ci_escalated, last_mergeable_state, nudge_count, restart_count, last_capture, last_activity_at, created_at, last_seen_at
 		FROM workers
 		ORDER BY last_seen_at DESC, project ASC, worker_id ASC
 	`)
@@ -1253,7 +1256,7 @@ func (s *SQLiteStore) AllActiveAssignments(ctx context.Context) ([]Assignment, e
 		SELECT
 			t.project,
 			t.issue, t.status, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.pr_number, t.created_at, t.updated_at,
-			w.worker_id, w.current_pane_id, w.agent_profile, w.state, w.issue, w.clone_path, w.last_review_count, w.last_issue_comment_count, w.review_nudge_count, w.last_ci_state, w.ci_nudge_count, w.ci_failure_poll_count, w.ci_escalated, w.last_mergeable_state, w.nudge_count, w.last_capture, w.last_activity_at, w.created_at, w.last_seen_at
+			w.worker_id, w.current_pane_id, w.agent_profile, w.state, w.issue, w.clone_path, w.last_review_count, w.last_issue_comment_count, w.review_nudge_count, w.last_ci_state, w.ci_nudge_count, w.ci_failure_poll_count, w.ci_escalated, w.last_mergeable_state, w.nudge_count, w.restart_count, w.last_capture, w.last_activity_at, w.created_at, w.last_seen_at
 		FROM tasks t
 		INNER JOIN workers w
 			ON w.project = t.project
@@ -1604,6 +1607,7 @@ func scanAssignment(scanner rowScanner, includeProject bool) (Assignment, error)
 		&ciEscalated,
 		&worker.LastMergeableState,
 		&worker.NudgeCount,
+		&worker.RestartCount,
 		&worker.LastCapture,
 		&lastActivityAt,
 		&workerCreatedAt,
@@ -1658,6 +1662,7 @@ func scanWorker(scanner rowScanner, includeProject bool) (Worker, error) {
 		&ciEscalated,
 		&worker.LastMergeableState,
 		&worker.NudgeCount,
+		&worker.RestartCount,
 		&worker.LastCapture,
 		&lastActivityAt,
 		&createdAt,
@@ -1754,6 +1759,7 @@ func (s *SQLiteStore) ensureWorkerTrackingColumns(ctx context.Context) error {
 		{name: "ci_escalated", definition: "INTEGER NOT NULL DEFAULT 0"},
 		{name: "last_mergeable_state", definition: "TEXT NOT NULL DEFAULT ''"},
 		{name: "nudge_count", definition: "INTEGER NOT NULL DEFAULT 0"},
+		{name: "restart_count", definition: "INTEGER NOT NULL DEFAULT 0"},
 		{name: "last_capture", definition: "TEXT NOT NULL DEFAULT ''"},
 		{name: "last_activity_at", definition: "TEXT NOT NULL DEFAULT ''"},
 	}
@@ -1896,6 +1902,7 @@ func (s *SQLiteStore) migrateLegacyWorkerIdentitySchema(ctx context.Context) err
 			ci_escalated INTEGER NOT NULL DEFAULT 0,
 			last_mergeable_state TEXT NOT NULL DEFAULT '',
 			nudge_count INTEGER NOT NULL DEFAULT 0,
+			restart_count INTEGER NOT NULL DEFAULT 0,
 			last_capture TEXT NOT NULL DEFAULT '',
 			last_activity_at TEXT NOT NULL DEFAULT '',
 			created_at TEXT NOT NULL,
@@ -1909,9 +1916,9 @@ func (s *SQLiteStore) migrateLegacyWorkerIdentitySchema(ctx context.Context) err
 	for _, worker := range legacyWorkers {
 		workerID := workerIDsByPane[worker.project+"\x00"+worker.paneID]
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO workers(project, worker_id, agent_profile, current_pane_id, state, issue, clone_path, last_review_count, last_issue_comment_count, review_nudge_count, last_ci_state, ci_nudge_count, ci_failure_poll_count, ci_escalated, last_mergeable_state, nudge_count, last_capture, last_activity_at, created_at, last_seen_at)
-			VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		`, worker.project, workerID, worker.agent, worker.paneID, worker.state, worker.issue, worker.clonePath, worker.lastReviewCount, worker.lastIssueCommentCount, worker.reviewNudgeCount, worker.lastCIState, worker.ciNudgeCount, worker.ciFailurePollCount, worker.ciEscalated, worker.lastMergeableState, worker.nudgeCount, worker.lastCapture, worker.lastActivityAt, worker.updatedAt, worker.updatedAt); err != nil {
+			INSERT INTO workers(project, worker_id, agent_profile, current_pane_id, state, issue, clone_path, last_review_count, last_issue_comment_count, review_nudge_count, last_ci_state, ci_nudge_count, ci_failure_poll_count, ci_escalated, last_mergeable_state, nudge_count, restart_count, last_capture, last_activity_at, created_at, last_seen_at)
+			VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, worker.project, workerID, worker.agent, worker.paneID, worker.state, worker.issue, worker.clonePath, worker.lastReviewCount, worker.lastIssueCommentCount, worker.reviewNudgeCount, worker.lastCIState, worker.ciNudgeCount, worker.ciFailurePollCount, worker.ciEscalated, worker.lastMergeableState, worker.nudgeCount, 0, worker.lastCapture, worker.lastActivityAt, worker.updatedAt, worker.updatedAt); err != nil {
 			return fmt.Errorf("insert migrated worker %s/%s: %w", worker.project, worker.paneID, err)
 		}
 		if _, err := tx.ExecContext(ctx, `
