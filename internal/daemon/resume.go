@@ -257,6 +257,7 @@ func (d *Daemon) storeResumedTaskForProject(ctx context.Context, projectPath str
 			AgentProfile: task.AgentProfile,
 			ClonePath:    task.ClonePath,
 			Issue:        task.Issue,
+			RestartCount: worker.RestartCount,
 			CreatedAt:    now,
 			LastSeenAt:   now,
 		}

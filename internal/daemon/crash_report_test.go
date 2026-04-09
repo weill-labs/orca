@@ -107,6 +107,77 @@ func TestResumeRecordsCrashReportBeforeRestartingExitedWorker(t *testing.T) {
 	}
 }
 
+func TestResumeRecordsCrashReportBeforeRestartingExitedPaneWithoutStoredWorker(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	seedActiveAssignment(t, deps, "LAB-925", "pane-1")
+
+	task, ok := deps.state.task("LAB-925")
+	if !ok {
+		t.Fatal("seeded task missing")
+	}
+	task.Status = TaskStatusCancelled
+	task.UpdatedAt = deps.clock.Now()
+	if err := deps.state.PutTask(context.Background(), task); err != nil {
+		t.Fatalf("PutTask() error = %v", err)
+	}
+	if err := deps.state.DeleteWorker(context.Background(), task.Project, task.WorkerID); err != nil {
+		t.Fatalf("DeleteWorker() error = %v", err)
+	}
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	deps.amux.capturePaneSequence("pane-1", []PaneCapture{{
+		Exited:  true,
+		Content: []string{"worker crashed"},
+	}})
+	deps.amux.captureHistorySequence("pane-1", []PaneCapture{{
+		Exited:  true,
+		Content: []string{"line 001", "line 002"},
+	}})
+	deps.amux.mu.Lock()
+	deps.amux.paneExistsCalls = nil
+	deps.amux.captureCalls = nil
+	deps.amux.historyCaptureCalls = nil
+	deps.amux.mu.Unlock()
+
+	if err := d.Resume(ctx, "LAB-925", ""); err != nil {
+		t.Fatalf("Resume() error = %v", err)
+	}
+
+	event, ok := deps.events.lastEventOfType(EventWorkerCrashReport)
+	if !ok {
+		t.Fatal("crash report event missing")
+	}
+	if got, want := event.RestartAttempt, 1; got != want {
+		t.Fatalf("event.RestartAttempt = %d, want %d", got, want)
+	}
+	if got, want := event.WorkerID, task.WorkerID; got != want {
+		t.Fatalf("event.WorkerID = %q, want %q", got, want)
+	}
+
+	resumedTask, ok := deps.state.task("LAB-925")
+	if !ok {
+		t.Fatal("task missing after resume")
+	}
+	resumedWorker, ok := deps.state.worker(resumedTask.WorkerID)
+	if !ok {
+		t.Fatal("worker missing after resume")
+	}
+	if got, want := resumedWorker.RestartCount, 1; got != want {
+		t.Fatalf("worker.RestartCount = %d, want %d", got, want)
+	}
+}
+
 func TestResumeSkipsCrashReportForLivePane(t *testing.T) {
 	t.Parallel()
 
