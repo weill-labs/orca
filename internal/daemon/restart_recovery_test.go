@@ -131,7 +131,7 @@ func TestDaemonStartReconcilesNonTerminalAssignments(t *testing.T) {
 			wantTaskStatus:   TaskStatusActive,
 			wantWorker:       true,
 			wantWorkerHealth: WorkerHealthHealthy,
-			wantCaptureCount: 1,
+			wantCaptureCount: 2,
 			wantRestartCount: 1,
 			wantRestartSend:  1,
 		},

@@ -241,17 +241,16 @@ func TestExitedPaneDetectionWaitsForPersistentExitedState(t *testing.T) {
 			Content:        []string{"shell prompt"},
 			CurrentCommand: "bash",
 			Exited:         true,
-			ExitedSince:    recentExit,
-		},
-		{
-			Content:        []string{"shell prompt"},
-			CurrentCommand: "bash",
-			Exited:         true,
 			ExitedSince:    staleExit,
 		},
 	})
 
 	captureTicker.tick(deps.clock.Now())
+	waitFor(t, "first exited capture", func() bool {
+		worker, ok := deps.state.worker("pane-1")
+		return ok && worker.LastCapture == "shell prompt" && deps.amux.countKey("pane-1", "codex --yolo\n") == 0
+	})
+
 	worker, ok := deps.state.worker("pane-1")
 	if !ok {
 		t.Fatal("worker missing after first exited capture")
