@@ -13,6 +13,72 @@ func expectedCINudgePrompt(prNumber int) string {
 	return fmt.Sprintf("CI checks test, lint failed on PR #%d. Logs: test: https://ci.example.com/test; lint: https://ci.example.com/lint. Fix the failures and push.", prNumber)
 }
 
+func expectedGenericCINudgePrompt(prNumber int) string {
+	return fmt.Sprintf("CI checks failed on PR #%d. Fix the failures and push.", prNumber)
+}
+
+func TestCIFailurePrompt(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		prNumber     int
+		failedChecks []prCheck
+		want         string
+	}{
+		{
+			name:     "no checks",
+			prNumber: 42,
+			want:     "CI checks failed on PR #42. Fix the failures and push.",
+		},
+		{
+			name:     "single check with link",
+			prNumber: 42,
+			failedChecks: []prCheck{
+				{Name: "test", Link: "https://ci.example.com/test"},
+			},
+			want: "CI check test failed on PR #42. Logs: https://ci.example.com/test. Fix the failure and push.",
+		},
+		{
+			name:     "single check without link",
+			prNumber: 42,
+			failedChecks: []prCheck{
+				{Name: "test"},
+			},
+			want: "CI check test failed on PR #42. Fix the failure and push.",
+		},
+		{
+			name:     "multiple checks with links",
+			prNumber: 42,
+			failedChecks: []prCheck{
+				{Name: "test", Link: "https://ci.example.com/test"},
+				{Name: "lint", Link: "https://ci.example.com/lint"},
+			},
+			want: "CI checks test, lint failed on PR #42. Logs: test: https://ci.example.com/test; lint: https://ci.example.com/lint. Fix the failures and push.",
+		},
+		{
+			name:     "multiple checks with partial links",
+			prNumber: 42,
+			failedChecks: []prCheck{
+				{Name: "test", Link: "https://ci.example.com/test"},
+				{Name: "lint"},
+			},
+			want: "CI checks test, lint failed on PR #42. Logs: test: https://ci.example.com/test. Fix the failures and push.",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := ciFailurePrompt(tt.prNumber, tt.failedChecks); got != tt.want {
+				t.Fatalf("ciFailurePrompt() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestPRPollRenudgesFailingCIOnScheduleAndEscalatesAfterMax(t *testing.T) {
 	t.Parallel()
 
@@ -159,6 +225,37 @@ func TestPRPollRetriesCINudgeAfterSendKeysFailure(t *testing.T) {
 	waitFor(t, "retried CI nudge", func() bool {
 		return deps.amux.countKey("pane-1", expectedCINudgePrompt(42)+"\n") == 1 &&
 			deps.commands.countCall("gh", "pr", "checks", "42", "--json", "bucket,name,link") == 2 &&
+			deps.events.countType(EventWorkerNudgedCI) == 1
+	})
+}
+
+func TestPRPollFallsBackToGenericCINudgeWhenDetailedCheckLookupFails(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	prTicker := newFakeTicker()
+	deps.tickers.enqueue(newFakeTicker(), prTicker)
+	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
+	deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[{"bucket":"fail"}]`, nil)
+	deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket,name,link"}, ``, errors.New("details lookup failed"))
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-689", "Implement daemon core", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	prTicker.tick(deps.clock.Now())
+	waitFor(t, "generic CI nudge", func() bool {
+		return deps.amux.countKey("pane-1", expectedGenericCINudgePrompt(42)+"\n") == 1 &&
 			deps.events.countType(EventWorkerNudgedCI) == 1
 	})
 }
