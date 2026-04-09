@@ -104,14 +104,7 @@ func (d *Daemon) nudgeForCIFailure(ctx context.Context, update *TaskStateUpdate,
 	}
 	prompt := ciFailurePrompt(update.Active.Task.PRNumber, failedChecks)
 
-	client := d.amuxClient(ctx)
-	if err := client.SendKeys(ctx, update.Active.Task.PaneID, prompt); err != nil {
-		return false
-	}
-	if err := client.WaitIdleSettle(ctx, update.Active.Task.PaneID, defaultAgentHandshakeTimeout, defaultPromptSettleDuration); err != nil {
-		return false
-	}
-	if err := client.SendKeys(ctx, update.Active.Task.PaneID, profile.NudgeCommand); err != nil {
+	if err := d.sendPromptAndCommand(ctx, update.Active.Task.PaneID, prompt, profile.NudgeCommand); err != nil {
 		return false
 	}
 
