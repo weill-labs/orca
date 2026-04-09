@@ -302,7 +302,9 @@ func (d *Daemon) dispatchTaskMonitorCheck(ctx context.Context, active ActiveAssi
 	case <-ctx.Done():
 		return
 	case result := <-response:
-		d.executeTaskMonitorNudges(ctx, []taskMonitorResult{result})
+		results := []taskMonitorResult{result}
+		d.executeTaskMonitorNudges(ctx, results)
+		result = results[0]
 		if !d.isCurrentTaskMonitor(result.key, result.monitor) {
 			return
 		}
