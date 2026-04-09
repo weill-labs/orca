@@ -16,6 +16,7 @@ type fakeAmux struct {
 	spawnPane             Pane
 	spawnResults          []Pane
 	spawnPanes            []Pane
+	spawnHook             func(SpawnRequest)
 	eventSequences        []fakeAmuxEventSequence
 	eventsCalls           int
 	spawnErr              error
@@ -74,6 +75,9 @@ type fakeAmuxEventSequence struct {
 func (a *fakeAmux) Spawn(ctx context.Context, req SpawnRequest) (Pane, error) {
 	if a.rejectCanceledContext && ctx.Err() != nil {
 		return Pane{}, ctx.Err()
+	}
+	if a.spawnHook != nil {
+		a.spawnHook(req)
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
