@@ -300,7 +300,22 @@ func isBlockingIssueComment(comment prComment) bool {
 		return false
 	}
 
-	return !bodyContainsStandaloneLGTM(comment.Body)
+	return !bodyContainsStandaloneLGTM(comment.Body) && !isReviewProgressIssueComment(comment.Body)
+}
+
+func isReviewProgressIssueComment(body string) bool {
+	if blockingIssueSection(body) != "" {
+		return false
+	}
+
+	normalized := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(body, "\r\n", "\n"), "…", "..."))
+	if strings.Contains(normalized, "reviewing...") {
+		return true
+	}
+	if strings.Contains(normalized, "working...") && strings.Contains(normalized, "get back to you") {
+		return true
+	}
+	return strings.Contains(normalized, "view job run") && strings.Contains(normalized, "- [ ]")
 }
 
 func summarizeBlockingIssueComment(body string) string {
