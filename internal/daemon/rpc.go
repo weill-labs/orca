@@ -62,6 +62,10 @@ type cancelRPCParams struct {
 	Issue   string `json:"issue"`
 }
 
+type reloadRPCParams struct {
+	Project string `json:"project"`
+}
+
 type resumeRPCParams struct {
 	Project string `json:"project"`
 	Issue   string `json:"issue"`
@@ -156,6 +160,30 @@ func ProjectStatusRPC(ctx context.Context, paths Paths, projectPath string) (Pro
 		return ProjectStatusRPCResult{}, err
 	}
 	return result, nil
+}
+
+func handleReloadRPCRequest(request rpcRequest, enqueue func(reloadRPCParams, chan struct{}) error) (rpcResponse, chan struct{}, bool) {
+	if request.Method != "reload" {
+		return rpcResponse{}, nil, false
+	}
+
+	var params reloadRPCParams
+	if err := decodeRPCParams(request.Params, &params); err != nil {
+		return rpcFailure(request.ID, -32602, fmt.Errorf("decode reload params: %w", err)), nil, true
+	}
+	if enqueue == nil {
+		return rpcFailure(request.ID, -32000, errors.New("reload unavailable")), nil, true
+	}
+
+	ready := make(chan struct{})
+	if err := enqueue(params, ready); err != nil {
+		return rpcFailure(request.ID, -32000, err), nil, true
+	}
+
+	return rpcSuccess(request.ID, ReloadResult{
+		Project: params.Project,
+		PID:     os.Getpid(),
+	}), ready, true
 }
 
 func rpcSuccess(id json.RawMessage, result any) rpcResponse {

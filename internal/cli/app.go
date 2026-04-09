@@ -28,6 +28,7 @@ usage: orca <command>
 commands:
   start    Start the orca daemon
   stop     Stop the orca daemon
+  reload   Hot-reload the orca daemon
   status   Show daemon and task status
   assign   Assign an issue to a worker
   batch    Assign multiple issues from a manifest
@@ -49,6 +50,9 @@ Start the orca daemon.`,
 	"stop": `usage: orca stop [--project PATH] [--force] [--global] [--json]
 
 Stop the orca daemon.`,
+	"reload": `usage: orca reload [--project PATH] [--global] [--json]
+
+Hot-reload the orca daemon.`,
 	"status": `usage: orca status [ISSUE] [--project PATH] [--global] [--json]
 
 Show daemon and task status.`,
@@ -192,6 +196,8 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.runStart(ctx, args[1:])
 	case "stop":
 		return a.runStop(ctx, args[1:])
+	case "reload":
+		return a.runReload(ctx, args[1:])
 	case "status":
 		return a.runStatus(ctx, args[1:])
 	case "assign":
@@ -317,6 +323,47 @@ func (a *App) runStop(ctx context.Context, args []string) error {
 		return err
 	}
 	_, err = fmt.Fprintf(a.stdout, "stopped daemon for %s (pid %d)\n", result.Project, result.PID)
+	return err
+}
+
+func (a *App) runReload(ctx context.Context, args []string) error {
+	fs := newFlagSet("reload")
+	var projectPath string
+	var global bool
+	var jsonOutput bool
+	var err error
+	fs.StringVar(&projectPath, "project", "", "project path")
+	fs.BoolVar(&global, "global", false, "operate on the machine-wide daemon")
+	fs.BoolVar(&jsonOutput, "json", false, "emit JSON output")
+
+	if err := parseFlags(fs, args); err != nil {
+		return err
+	}
+	if len(fs.Args()) > 0 {
+		return fmt.Errorf("reload does not accept positional arguments")
+	}
+
+	if !global {
+		projectPath, err = a.resolveProject(projectPath)
+		if err != nil {
+			return err
+		}
+	}
+
+	result, err := a.daemon.Reload(ctx, daemon.ReloadRequest{Project: projectPath})
+	if err != nil {
+		return err
+	}
+
+	if jsonOutput {
+		return writeJSON(a.stdout, result)
+	}
+
+	if result.Project == "" {
+		_, err = fmt.Fprintf(a.stdout, "reloaded global daemon (pid %d)\n", result.PID)
+		return err
+	}
+	_, err = fmt.Fprintf(a.stdout, "reloaded daemon for %s (pid %d)\n", result.Project, result.PID)
 	return err
 }
 

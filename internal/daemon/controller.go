@@ -25,6 +25,7 @@ var (
 type Controller interface {
 	Start(ctx context.Context, req StartRequest) (StartResult, error)
 	Stop(ctx context.Context, req StopRequest) (StopResult, error)
+	Reload(ctx context.Context, req ReloadRequest) (ReloadResult, error)
 	Assign(ctx context.Context, req AssignRequest) (TaskActionResult, error)
 	Batch(ctx context.Context, req BatchRequest) (BatchResult, error)
 	Spawn(ctx context.Context, req SpawnPaneRequest) (SpawnPaneResult, error)
@@ -73,6 +74,15 @@ type StopResult struct {
 	Project   string    `json:"project"`
 	PID       int       `json:"pid"`
 	StoppedAt time.Time `json:"stopped_at"`
+}
+
+type ReloadRequest struct {
+	Project string
+}
+
+type ReloadResult struct {
+	Project string `json:"project"`
+	PID     int    `json:"pid"`
 }
 
 type AssignRequest struct {
@@ -357,6 +367,28 @@ func (c *LocalController) Stop(ctx context.Context, req StopRequest) (StopResult
 		return StopResult{}, fmt.Errorf("daemon did not stop after SIGKILL within %s", c.stopTimeout)
 	}
 	return StopResult{}, waitErr
+}
+
+func (c *LocalController) Reload(ctx context.Context, req ReloadRequest) (ReloadResult, error) {
+	projectPath, err := canonicalProject(req.Project)
+	if err != nil {
+		return ReloadResult{}, err
+	}
+	if err := c.requireRunning(ctx); err != nil {
+		return ReloadResult{}, err
+	}
+
+	callCtx, cancel := contextWithOptionalTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	var result ReloadResult
+	err = callRPC(callCtx, c.paths.socketFile(), "reload", reloadRPCParams{
+		Project: projectPath,
+	}, &result)
+	if err != nil {
+		return ReloadResult{}, err
+	}
+	return result, nil
 }
 
 func (c *LocalController) Assign(ctx context.Context, req AssignRequest) (TaskActionResult, error) {

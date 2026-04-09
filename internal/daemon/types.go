@@ -70,26 +70,27 @@ var (
 )
 
 type Options struct {
-	Project            string
-	Session            string
-	LeadPane           string
-	PIDPath            string
-	Config             ConfigProvider
-	State              StateStore
-	Pool               Pool
-	Amux               AmuxClient
-	IssueTracker       IssueTracker
-	Commands           CommandRunner
-	Events             EventSink
-	Now                func() time.Time
-	NewTicker          func(time.Duration) Ticker
-	NewWatchdogTicker  func(time.Duration) Ticker
-	Sleep              func(context.Context, time.Duration) error
-	CaptureInterval    time.Duration
-	PollInterval       time.Duration
-	MergeGracePeriod   time.Duration
-	DaemonStatusWriter daemonStatusWriter
-	Logf               func(string, ...any)
+	Project              string
+	Session              string
+	LeadPane             string
+	PIDPath              string
+	AllowCurrentPIDReuse bool
+	Config               ConfigProvider
+	State                StateStore
+	Pool                 Pool
+	Amux                 AmuxClient
+	IssueTracker         IssueTracker
+	Commands             CommandRunner
+	Events               EventSink
+	Now                  func() time.Time
+	NewTicker            func(time.Duration) Ticker
+	Sleep                func(context.Context, time.Duration) error
+	CaptureInterval      time.Duration
+	PollInterval         time.Duration
+	MergeGracePeriod     time.Duration
+	NewWatchdogTicker    func(time.Duration) Ticker
+	DaemonStatusWriter   daemonStatusWriter
+	Logf                 func(string, ...any)
 }
 
 type ConfigProvider interface {
