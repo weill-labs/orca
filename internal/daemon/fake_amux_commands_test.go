@@ -118,6 +118,44 @@ func (a *fakeAmux) ListPanes(ctx context.Context) ([]Pane, error) {
 	return out, nil
 }
 
+func (a *fakeAmux) Events(ctx context.Context, _ amuxapi.EventsRequest) (<-chan amuxapi.Event, <-chan error) {
+	eventsCh := make(chan amuxapi.Event)
+	errCh := make(chan error, 1)
+
+	a.mu.Lock()
+	a.eventsCalls++
+	var sequence fakeAmuxEventSequence
+	if len(a.eventSequences) > 0 {
+		sequence = a.eventSequences[0]
+		if len(a.eventSequences) == 1 {
+			a.eventSequences = nil
+		} else {
+			a.eventSequences = append([]fakeAmuxEventSequence(nil), a.eventSequences[1:]...)
+		}
+	}
+	a.mu.Unlock()
+
+	go func() {
+		defer close(eventsCh)
+		defer close(errCh)
+
+		for _, event := range sequence.events {
+			select {
+			case <-ctx.Done():
+				return
+			case eventsCh <- event:
+			}
+		}
+		if sequence.err != nil && ctx.Err() == nil {
+			errCh <- sequence.err
+			return
+		}
+		<-ctx.Done()
+	}()
+
+	return eventsCh, errCh
+}
+
 func (a *fakeAmux) PaneExists(ctx context.Context, paneID string) (bool, error) {
 	if a.rejectCanceledContext && ctx.Err() != nil {
 		return false, ctx.Err()

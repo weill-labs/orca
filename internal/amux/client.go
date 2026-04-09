@@ -22,6 +22,7 @@ type Client interface {
 	Spawn(ctx context.Context, req SpawnRequest) (Pane, error)
 	PaneExists(ctx context.Context, paneID string) (bool, error)
 	ListPanes(ctx context.Context) ([]Pane, error)
+	Events(ctx context.Context, req EventsRequest) (<-chan Event, <-chan error)
 	Metadata(ctx context.Context, paneID string) (map[string]string, error)
 	SendKeys(ctx context.Context, paneID string, keys ...string) error
 	Capture(ctx context.Context, paneID string) (string, error)
@@ -43,9 +44,10 @@ type Config struct {
 
 // CLIClient shells out to the amux binary.
 type CLIClient struct {
-	binary  string
-	session string
-	runner  commandRunner
+	binary       string
+	session      string
+	runner       commandRunner
+	eventStarter eventStarter
 }
 
 type commandRunner interface {
@@ -79,9 +81,10 @@ var _ Client = (*CLIClient)(nil)
 // NewClient returns a CLI-backed amux client.
 func NewClient(config Config) *CLIClient {
 	return &CLIClient{
-		binary:  defaultBinary(config.Binary),
-		session: config.Session,
-		runner:  execRunner{},
+		binary:       defaultBinary(config.Binary),
+		session:      config.Session,
+		runner:       execRunner{},
+		eventStarter: execEventStarter{},
 	}
 }
 

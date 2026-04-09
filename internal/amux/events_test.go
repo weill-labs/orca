@@ -16,9 +16,9 @@ type fakeEventStarter struct {
 }
 
 type fakeEventProcess struct {
-	output string
+	output  string
 	waitErr error
-	reader io.ReadCloser
+	reader  io.ReadCloser
 }
 
 func (s *fakeEventStarter) Start(_ context.Context, name string, args []string) (eventProcess, error) {

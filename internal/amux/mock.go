@@ -34,6 +34,7 @@ type MockClient struct {
 	SpawnFunc          func(ctx context.Context, req SpawnRequest) (Pane, error)
 	PaneExistsFunc     func(ctx context.Context, paneID string) (bool, error)
 	ListPanesFunc      func(ctx context.Context) ([]Pane, error)
+	EventsFunc         func(ctx context.Context, req EventsRequest) (<-chan Event, <-chan error)
 	MetadataFunc       func(ctx context.Context, paneID string) (map[string]string, error)
 	SendKeysFunc       func(ctx context.Context, paneID string, keys ...string) error
 	CaptureFunc        func(ctx context.Context, paneID string) (string, error)
@@ -49,6 +50,7 @@ type MockClient struct {
 	SpawnCalls          []SpawnRequest
 	PaneExistsCalls     []string
 	ListPanesCalls      int
+	EventsCalls         []EventsRequest
 	MetadataCalls       []string
 	SendKeysCalls       []SendKeysCall
 	CaptureCalls        []string
@@ -105,6 +107,23 @@ func (m *MockClient) ListPanes(ctx context.Context) ([]Pane, error) {
 		return fn(ctx)
 	}
 	return nil, nil
+}
+
+func (m *MockClient) Events(ctx context.Context, req EventsRequest) (<-chan Event, <-chan error) {
+	m.mu.Lock()
+	m.EventsCalls = append(m.EventsCalls, req)
+	fn := m.EventsFunc
+	m.mu.Unlock()
+
+	if fn != nil {
+		return fn(ctx, req)
+	}
+
+	eventsCh := make(chan Event)
+	errCh := make(chan error)
+	close(eventsCh)
+	close(errCh)
+	return eventsCh, errCh
 }
 
 func (m *MockClient) Metadata(ctx context.Context, paneID string) (map[string]string, error) {

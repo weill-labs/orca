@@ -120,6 +120,7 @@ type AmuxClient interface {
 	Spawn(ctx context.Context, req SpawnRequest) (Pane, error)
 	PaneExists(ctx context.Context, paneID string) (bool, error)
 	ListPanes(ctx context.Context) ([]Pane, error)
+	Events(ctx context.Context, req amux.EventsRequest) (<-chan amux.Event, <-chan error)
 	Metadata(ctx context.Context, paneID string) (map[string]string, error)
 	SetMetadata(ctx context.Context, paneID string, metadata map[string]string) error
 	RemoveMetadata(ctx context.Context, paneID string, keys ...string) error

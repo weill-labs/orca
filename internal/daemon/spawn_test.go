@@ -342,6 +342,13 @@ func (f *fakeSpawnAmux) Spawn(_ context.Context, req amux.SpawnRequest) (amux.Pa
 
 func (f *fakeSpawnAmux) PaneExists(context.Context, string) (bool, error) { return false, nil }
 func (f *fakeSpawnAmux) ListPanes(context.Context) ([]amux.Pane, error)   { return nil, nil }
+func (f *fakeSpawnAmux) Events(context.Context, amux.EventsRequest) (<-chan amux.Event, <-chan error) {
+	eventsCh := make(chan amux.Event)
+	errCh := make(chan error)
+	close(eventsCh)
+	close(errCh)
+	return eventsCh, errCh
+}
 func (f *fakeSpawnAmux) Metadata(context.Context, string) (map[string]string, error) {
 	return nil, nil
 }
