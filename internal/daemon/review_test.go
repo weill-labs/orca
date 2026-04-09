@@ -134,6 +134,62 @@ func TestPRReviewPollingNudgesWorkerWithInlineReviewCommentLocation(t *testing.T
 	})
 }
 
+func TestPRReviewPollingDoesNotDuplicateSeenReviewsWhenOlderInlineCommentArrivesLater(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	captureTicker := newFakeTicker()
+	prTicker := newFakeTicker()
+	deps.tickers.enqueue(captureTicker, prTicker)
+	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--state", "open", "--json", "number"}, `[]`, nil)
+	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, `{"reviewDecision":"CHANGES_REQUESTED","reviews":[{"author":{"login":"bob"},"state":"CHANGES_REQUESTED","body":"Please add tests.","submittedAt":"2026-04-02T09:05:00Z"}],"comments":[]}`, nil)
+	deps.commands.queue("gh", []string{"api", "repos/{owner}/{repo}/pulls/42/comments?per_page=100"}, `[]`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, `{"reviewDecision":"CHANGES_REQUESTED","reviews":[{"author":{"login":"bob"},"state":"CHANGES_REQUESTED","body":"Please add tests.","submittedAt":"2026-04-02T09:05:00Z"}],"comments":[]}`, nil)
+	deps.commands.queue("gh", []string{"api", "repos/{owner}/{repo}/pulls/42/comments?per_page=100"}, `[
+		{
+			"user":{"login":"alice"},
+			"path":"internal/daemon/review.go",
+			"line":174,
+			"body":"Include reviewer details in the worker nudge.",
+			"created_at":"2026-04-02T09:04:00Z"
+		}
+	]`, nil)
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-689", "Implement daemon core", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+	makeWorkerIdleForReviewNudge(deps)
+
+	firstNudge := "New blocking PR review feedback on #42:\n- bob: Please add tests.\n\nAddress the feedback in the PR review and push an update."
+	secondNudge := "New blocking PR review feedback on #42:\n- alice on internal/daemon/review.go:174: Include reviewer details in the worker nudge.\n\nAddress the feedback in the PR review and push an update."
+	firstNudgeSent := firstNudge + "\n"
+	secondNudgeSent := secondNudge + "\n"
+
+	prTicker.tick(deps.clock.Now())
+	waitFor(t, "initial review nudge", func() bool {
+		return deps.amux.countKey("pane-1", firstNudgeSent) == 1
+	})
+
+	prTicker.tick(deps.clock.Now())
+	waitFor(t, "late inline comment nudge", func() bool {
+		return deps.amux.countKey("pane-1", secondNudgeSent) == 1
+	})
+
+	if got, want := deps.amux.countKey("pane-1", firstNudgeSent), 1; got != want {
+		t.Fatalf("first review nudge count = %d, want %d", got, want)
+	}
+}
+
 func TestPRReviewPollingAdvancesCountWithoutNudgingForNonBlockingReviews(t *testing.T) {
 	t.Parallel()
 
