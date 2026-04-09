@@ -21,6 +21,7 @@ type testDeps struct {
 	commands     *fakeCommands
 	events       *fakeEvents
 	tickers      *fakeTickerFactory
+	watchdogTickers *fakeTickerFactory
 	pidPath      string
 	sleep        func(context.Context, time.Duration) error
 }
@@ -58,6 +59,7 @@ func newTestDeps(t *testing.T) *testDeps {
 		commands:     newFakeCommands(),
 		events:       newFakeEvents(),
 		tickers:      &fakeTickerFactory{},
+		watchdogTickers: &fakeTickerFactory{},
 		pidPath:      filepath.Join(tmp, "orca.pid"),
 		sleep:        noSleep,
 	}
@@ -65,8 +67,13 @@ func newTestDeps(t *testing.T) *testDeps {
 
 func (d *testDeps) newDaemon(t *testing.T) *Daemon {
 	t.Helper()
+	return d.newDaemonWithOptions(t, nil)
+}
 
-	daemon, err := New(Options{
+func (d *testDeps) newDaemonWithOptions(t *testing.T, mutate func(*Options)) *Daemon {
+	t.Helper()
+
+	opts := Options{
 		Project:          "/tmp/project",
 		Session:          "test-session",
 		PIDPath:          d.pidPath,
@@ -79,11 +86,17 @@ func (d *testDeps) newDaemon(t *testing.T) *Daemon {
 		Events:           d.events,
 		Now:              d.clock.Now,
 		NewTicker:        d.tickers.NewTicker,
+		NewWatchdogTicker: d.watchdogTickers.NewTicker,
 		Sleep:            d.sleep,
 		CaptureInterval:  5 * time.Second,
 		PollInterval:     30 * time.Second,
 		MergeGracePeriod: 2 * time.Minute,
-	})
+	}
+	if mutate != nil {
+		mutate(&opts)
+	}
+
+	daemon, err := New(opts)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}

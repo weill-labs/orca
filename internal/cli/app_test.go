@@ -1246,6 +1246,25 @@ func TestWriteProjectStatusAndTaskStatus(t *testing.T) {
 			},
 		},
 		{
+			name: "project status includes heartbeat age",
+			write: func(buf *bytes.Buffer) error {
+				return writeProjectStatus(buf, state.ProjectStatus{
+					Project: "repo",
+					Daemon: &state.DaemonStatus{
+						Session:   "alpha",
+						PID:       42,
+						Status:    "unhealthy",
+						UpdatedAt: time.Now().UTC().Add(-2 * time.Minute),
+					},
+				}, "", "")
+			},
+			wants: []string{
+				"project: repo",
+				"daemon: unhealthy",
+				"heartbeat age:",
+			},
+		},
+		{
 			name: "project status with daemon but no explicit status",
 			write: func(buf *bytes.Buffer) error {
 				return writeProjectStatus(buf, state.ProjectStatus{
