@@ -87,7 +87,7 @@ func (d *Daemon) runCaptureTick(ctx context.Context) {
 func (d *Daemon) runPollTick(ctx context.Context) {
 	d.applyMergeQueueUpdates(ctx)
 
-	assignments, err := d.pollAssignments(ctx)
+	assignments, err := d.prPollAssignments(ctx)
 	if err == nil {
 		results := d.dispatchTaskMonitorChecks(ctx, assignments, taskMonitorCheckPRPoll)
 		d.applyTaskMonitorResults(ctx, results)
@@ -97,7 +97,7 @@ func (d *Daemon) runPollTick(ctx context.Context) {
 	d.applyMergeQueueUpdates(ctx)
 }
 
-func (d *Daemon) pollAssignments(ctx context.Context) ([]ActiveAssignment, error) {
+func (d *Daemon) prPollAssignments(ctx context.Context) ([]ActiveAssignment, error) {
 	tasks, err := d.state.NonTerminalTasks(ctx, d.project)
 	if err != nil {
 		return nil, err
@@ -105,7 +105,7 @@ func (d *Daemon) pollAssignments(ctx context.Context) ([]ActiveAssignment, error
 
 	assignments := make([]ActiveAssignment, 0, len(tasks))
 	for _, task := range tasks {
-		worker, hasWorker, err := d.resumeWorkerForProject(ctx, d.projectPathForTask(task), task)
+		worker, hasWorker, err := d.resumeWorker(ctx, task)
 		if err != nil || !hasWorker {
 			continue
 		}
