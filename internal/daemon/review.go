@@ -16,15 +16,17 @@ const (
 )
 
 type prReviewPayload struct {
-	ReviewDecision string      `json:"reviewDecision"`
-	Reviews        []prReview  `json:"reviews"`
+	ReviewDecision string     `json:"reviewDecision"`
+	Reviews        []prReview `json:"reviews"`
+	ReviewComments []prReviewComment
 	Comments       []prComment `json:"comments"`
 }
 
 type prReview struct {
-	State  string `json:"state"`
-	Body   string `json:"body"`
-	Author struct {
+	State       string    `json:"state"`
+	Body        string    `json:"body"`
+	SubmittedAt time.Time `json:"submittedAt"`
+	Author      struct {
 		Login string `json:"login"`
 	} `json:"author"`
 }
@@ -38,6 +40,8 @@ type prComment struct {
 
 type prFeedback struct {
 	Author string
+	Path   string
+	Line   int
 	Body   string
 }
 
@@ -89,10 +93,13 @@ func (d *Daemon) checkTaskReviewPoll(ctx context.Context, active ActiveAssignmen
 		return update
 	}
 	now := d.now()
+	items := reviewItems(payload.Reviews, payload.ReviewComments)
 
 	reviewCount := len(payload.Reviews)
+	inlineCommentCount := len(payload.ReviewComments)
 	commentCount := len(payload.Comments)
 	previousReviewCount := update.Active.Worker.LastReviewCount
+	previousInlineCommentCount := update.Active.Worker.LastInlineReviewCommentCount
 	previousCommentCount := update.Active.Worker.LastIssueCommentCount
 	resetReviewNudgeCount := payload.ReviewDecision != "CHANGES_REQUESTED" && update.Active.Worker.ReviewNudgeCount != 0
 	if resetReviewNudgeCount {
@@ -100,32 +107,32 @@ func (d *Daemon) checkTaskReviewPoll(ctx context.Context, active ActiveAssignmen
 		update.Active.Worker.LastSeenAt = now
 		update.WorkerChanged = true
 	}
-	if previousReviewCount > reviewCount || previousCommentCount > commentCount {
-		d.persistReviewWorkerState(&update.Active.Worker, reviewCount, commentCount, now)
+	if previousReviewCount > reviewCount || previousInlineCommentCount > inlineCommentCount || previousCommentCount > commentCount {
+		d.persistReviewWorkerState(&update.Active.Worker, reviewCount, inlineCommentCount, commentCount, now)
 		update.WorkerChanged = true
 		return update
 	}
-	if previousReviewCount == reviewCount && previousCommentCount == commentCount {
+	if previousReviewCount == reviewCount && previousInlineCommentCount == inlineCommentCount && previousCommentCount == commentCount {
 		return update
 	}
 	if payload.ReviewDecision == "APPROVED" || latestReviewContainsLGTM(payload.Reviews) {
-		d.persistReviewWorkerState(&update.Active.Worker, reviewCount, commentCount, now)
+		d.persistReviewWorkerState(&update.Active.Worker, reviewCount, inlineCommentCount, commentCount, now)
 		update.WorkerChanged = true
 		return update
 	}
 
-	newReviews := payload.Reviews[previousReviewCount:]
+	newReviews := reviewItems(payload.Reviews[previousReviewCount:], payload.ReviewComments[previousInlineCommentCount:])
 	newComments := payload.Comments[previousCommentCount:]
 	blocking := blockingReviewFeedback(payload.ReviewDecision, newReviews, newComments)
 	if len(blocking) == 0 {
-		d.persistReviewWorkerState(&update.Active.Worker, reviewCount, commentCount, now)
+		d.persistReviewWorkerState(&update.Active.Worker, reviewCount, inlineCommentCount, commentCount, now)
 		update.WorkerChanged = true
 		return update
 	}
 	if update.Active.Worker.ReviewNudgeCount >= maxReviewNudges {
-		d.persistReviewWorkerState(&update.Active.Worker, reviewCount, commentCount, now)
+		d.persistReviewWorkerState(&update.Active.Worker, reviewCount, inlineCommentCount, commentCount, now)
 		update.WorkerChanged = true
-		d.notifyCallerPaneReviewEscalation(ctx, update.Active, blockingReviewFeedback(payload.ReviewDecision, payload.Reviews, payload.Comments))
+		d.notifyCallerPaneReviewEscalation(ctx, update.Active, blockingReviewFeedback(payload.ReviewDecision, items, payload.Comments))
 
 		event := d.assignmentEvent(update.Active, profile, EventWorkerReviewEscalated, fmt.Sprintf("review nudges exhausted after %d attempts; lead intervention required", update.Active.Worker.ReviewNudgeCount))
 		event.Retry = update.Active.Worker.ReviewNudgeCount
@@ -144,15 +151,16 @@ func (d *Daemon) checkTaskReviewPoll(ctx context.Context, active ActiveAssignmen
 		}
 
 		update.Active.Worker.ReviewNudgeCount++
-		d.persistReviewWorkerState(&update.Active.Worker, reviewCount, commentCount, now)
+		d.persistReviewWorkerState(&update.Active.Worker, reviewCount, inlineCommentCount, commentCount, now)
 		update.WorkerChanged = true
 		update.Events = append(update.Events, d.assignmentEvent(update.Active, profile, EventWorkerNudgedReview, fmt.Sprintf("sent %d new blocking review(s) to worker", len(blocking))))
 	})
 	return update
 }
 
-func (d *Daemon) persistReviewWorkerState(worker *Worker, reviewCount, commentCount int, now time.Time) {
+func (d *Daemon) persistReviewWorkerState(worker *Worker, reviewCount, inlineCommentCount, commentCount int, now time.Time) {
 	worker.LastReviewCount = reviewCount
+	worker.LastInlineReviewCommentCount = inlineCommentCount
 	worker.LastIssueCommentCount = commentCount
 	worker.LastSeenAt = now
 }
@@ -221,31 +229,6 @@ func (d *Daemon) lookupPRReviews(ctx context.Context, projectPath string, prNumb
 	return d.gitHubClientForContext(ctx, projectPath).lookupPRReviews(ctx, prNumber)
 }
 
-func blockingReviewFeedback(reviewDecision string, reviews []prReview, comments []prComment) []prFeedback {
-	blocking := make([]prFeedback, 0, len(reviews)+len(comments))
-	if reviewDecision == "CHANGES_REQUESTED" {
-		for _, review := range reviews {
-			if review.State != "CHANGES_REQUESTED" {
-				continue
-			}
-			blocking = append(blocking, prFeedback{
-				Author: review.Author.Login,
-				Body:   normalizeReviewBody(review.Body),
-			})
-		}
-	}
-	for _, comment := range comments {
-		if !isBlockingIssueComment(comment) {
-			continue
-		}
-		blocking = append(blocking, prFeedback{
-			Author: comment.Author.Login,
-			Body:   summarizeBlockingIssueComment(comment.Body),
-		})
-	}
-	return blocking
-}
-
 func latestReviewContainsLGTM(reviews []prReview) bool {
 	if len(reviews) == 0 {
 		return false
@@ -267,12 +250,8 @@ func formatBlockingReviewFeedback(prNumber int, feedback []prFeedback) string {
 	var builder strings.Builder
 	fmt.Fprintf(&builder, "New blocking PR review feedback on #%d:\n", prNumber)
 	for _, item := range feedback {
-		author := strings.TrimSpace(item.Author)
-		if author == "" {
-			author = "reviewer"
-		}
-		body := normalizeReviewBody(item.Body)
-		fmt.Fprintf(&builder, "- %s: %s\n", author, body)
+		builder.WriteString(formatFeedbackLine(item))
+		builder.WriteString("\n")
 	}
 	builder.WriteString("\nAddress the feedback in the PR review and push an update.")
 	return builder.String()
@@ -303,11 +282,8 @@ func formatLeadReviewEscalation(active ActiveAssignment, feedback []prFeedback) 
 
 	builder.WriteString("Unresolved review feedback:\n")
 	for _, item := range feedback {
-		author := strings.TrimSpace(item.Author)
-		if author == "" {
-			author = "reviewer"
-		}
-		fmt.Fprintf(&builder, "- %s: %s\n", author, normalizeReviewBody(item.Body))
+		builder.WriteString(formatFeedbackLine(item))
+		builder.WriteString("\n")
 	}
 
 	if paneName != "" {
@@ -327,7 +303,22 @@ func isBlockingIssueComment(comment prComment) bool {
 		return false
 	}
 
-	return !bodyContainsStandaloneLGTM(comment.Body)
+	return !bodyContainsStandaloneLGTM(comment.Body) && !isReviewProgressIssueComment(comment.Body)
+}
+
+func isReviewProgressIssueComment(body string) bool {
+	if blockingIssueSection(body) != "" {
+		return false
+	}
+
+	normalized := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(body, "\r\n", "\n"), "…", "..."))
+	if strings.Contains(normalized, "reviewing...") {
+		return true
+	}
+	if strings.Contains(normalized, "working...") && strings.Contains(normalized, "get back to you") {
+		return true
+	}
+	return strings.Contains(normalized, "view job run") && strings.Contains(normalized, "- [ ]")
 }
 
 func summarizeBlockingIssueComment(body string) string {

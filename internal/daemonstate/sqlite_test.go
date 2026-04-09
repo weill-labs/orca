@@ -731,25 +731,26 @@ func TestSQLiteStorePersistsWorkerMonitorStateAndMergeQueue(t *testing.T) {
 	now := time.Date(2026, 4, 3, 9, 30, 0, 0, time.UTC)
 
 	if err := store.UpsertWorker(context.Background(), project, Worker{
-		WorkerID:              "worker-01",
-		CurrentPaneID:         "pane-1",
-		Agent:                 "codex",
-		State:                 "escalated",
-		Issue:                 "LAB-735",
-		ClonePath:             "/clones/orca01",
-		LastReviewCount:       2,
-		LastIssueCommentCount: 4,
-		ReviewNudgeCount:      3,
-		LastCIState:           "fail",
-		CINudgeCount:          2,
-		CIFailurePollCount:    1,
-		CIEscalated:           true,
-		LastMergeableState:    "blocked",
-		NudgeCount:            3,
-		LastCapture:           "permission prompt",
-		LastActivityAt:        now,
-		CreatedAt:             now,
-		LastSeenAt:            now,
+		WorkerID:                     "worker-01",
+		CurrentPaneID:                "pane-1",
+		Agent:                        "codex",
+		State:                        "escalated",
+		Issue:                        "LAB-735",
+		ClonePath:                    "/clones/orca01",
+		LastReviewCount:              2,
+		LastInlineReviewCommentCount: 1,
+		LastIssueCommentCount:        4,
+		ReviewNudgeCount:             3,
+		LastCIState:                  "fail",
+		CINudgeCount:                 2,
+		CIFailurePollCount:           1,
+		CIEscalated:                  true,
+		LastMergeableState:           "blocked",
+		NudgeCount:                   3,
+		LastCapture:                  "permission prompt",
+		LastActivityAt:               now,
+		CreatedAt:                    now,
+		LastSeenAt:                   now,
 	}); err != nil {
 		t.Fatalf("UpsertWorker() error = %v", err)
 	}
@@ -764,6 +765,9 @@ func TestSQLiteStorePersistsWorkerMonitorStateAndMergeQueue(t *testing.T) {
 	worker := workers[0]
 	if got, want := worker.LastReviewCount, 2; got != want {
 		t.Fatalf("worker.LastReviewCount = %d, want %d", got, want)
+	}
+	if got, want := worker.LastInlineReviewCommentCount, 1; got != want {
+		t.Fatalf("worker.LastInlineReviewCommentCount = %d, want %d", got, want)
 	}
 	if got, want := worker.LastIssueCommentCount, 4; got != want {
 		t.Fatalf("worker.LastIssueCommentCount = %d, want %d", got, want)
@@ -912,25 +916,26 @@ func TestSQLiteStoreWorkerByPaneAndNonTerminalTasks(t *testing.T) {
 	}
 
 	if err := store.UpsertWorker(context.Background(), project, Worker{
-		WorkerID:              "worker-02",
-		CurrentPaneID:         "pane-2",
-		Agent:                 "codex",
-		State:                 "escalated",
-		Issue:                 "LAB-741",
-		ClonePath:             "/clones/clone-02",
-		LastReviewCount:       2,
-		LastIssueCommentCount: 4,
-		ReviewNudgeCount:      3,
-		LastCIState:           "fail",
-		CINudgeCount:          2,
-		CIFailurePollCount:    1,
-		CIEscalated:           true,
-		LastMergeableState:    "CONFLICTING",
-		NudgeCount:            3,
-		LastCapture:           "permission prompt",
-		LastActivityAt:        now,
-		CreatedAt:             now,
-		LastSeenAt:            now.Add(time.Minute),
+		WorkerID:                     "worker-02",
+		CurrentPaneID:                "pane-2",
+		Agent:                        "codex",
+		State:                        "escalated",
+		Issue:                        "LAB-741",
+		ClonePath:                    "/clones/clone-02",
+		LastReviewCount:              2,
+		LastInlineReviewCommentCount: 1,
+		LastIssueCommentCount:        4,
+		ReviewNudgeCount:             3,
+		LastCIState:                  "fail",
+		CINudgeCount:                 2,
+		CIFailurePollCount:           1,
+		CIEscalated:                  true,
+		LastMergeableState:           "CONFLICTING",
+		NudgeCount:                   3,
+		LastCapture:                  "permission prompt",
+		LastActivityAt:               now,
+		CreatedAt:                    now,
+		LastSeenAt:                   now.Add(time.Minute),
 	}); err != nil {
 		t.Fatalf("UpsertWorker() error = %v", err)
 	}
@@ -972,6 +977,9 @@ func TestSQLiteStoreWorkerByPaneAndNonTerminalTasks(t *testing.T) {
 	}
 	if got, want := worker.LastReviewCount, 2; got != want {
 		t.Fatalf("worker.LastReviewCount = %d, want %d", got, want)
+	}
+	if got, want := worker.LastInlineReviewCommentCount, 1; got != want {
+		t.Fatalf("worker.LastInlineReviewCommentCount = %d, want %d", got, want)
 	}
 	if got, want := worker.LastIssueCommentCount, 4; got != want {
 		t.Fatalf("worker.LastIssueCommentCount = %d, want %d", got, want)

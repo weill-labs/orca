@@ -86,27 +86,28 @@ type Assignment struct {
 }
 
 type Worker struct {
-	Project               string    `json:"project,omitempty"`
-	WorkerID              string    `json:"worker_id"`
-	CurrentPaneID         string    `json:"current_pane_id,omitempty"`
-	Agent                 string    `json:"agent"`
-	State                 string    `json:"state"`
-	Issue                 string    `json:"issue,omitempty"`
-	ClonePath             string    `json:"clone_path,omitempty"`
-	LastReviewCount       int       `json:"last_review_count,omitempty"`
-	LastIssueCommentCount int       `json:"last_issue_comment_count,omitempty"`
-	ReviewNudgeCount      int       `json:"review_nudge_count,omitempty"`
-	LastCIState           string    `json:"last_ci_state,omitempty"`
-	CINudgeCount          int       `json:"ci_nudge_count,omitempty"`
-	CIFailurePollCount    int       `json:"ci_failure_poll_count,omitempty"`
-	CIEscalated           bool      `json:"ci_escalated,omitempty"`
-	LastMergeableState    string    `json:"last_mergeable_state,omitempty"`
-	NudgeCount            int       `json:"nudge_count,omitempty"`
-	RestartCount          int       `json:"restart_count,omitempty"`
-	LastCapture           string    `json:"last_capture,omitempty"`
-	LastActivityAt        time.Time `json:"last_activity_at,omitempty"`
-	CreatedAt             time.Time `json:"created_at"`
-	LastSeenAt            time.Time `json:"last_seen_at"`
+	Project                      string    `json:"project,omitempty"`
+	WorkerID                     string    `json:"worker_id"`
+	CurrentPaneID                string    `json:"current_pane_id,omitempty"`
+	Agent                        string    `json:"agent"`
+	State                        string    `json:"state"`
+	Issue                        string    `json:"issue,omitempty"`
+	ClonePath                    string    `json:"clone_path,omitempty"`
+	LastReviewCount              int       `json:"last_review_count,omitempty"`
+	LastInlineReviewCommentCount int       `json:"last_inline_review_comment_count,omitempty"`
+	LastIssueCommentCount        int       `json:"last_issue_comment_count,omitempty"`
+	ReviewNudgeCount             int       `json:"review_nudge_count,omitempty"`
+	LastCIState                  string    `json:"last_ci_state,omitempty"`
+	CINudgeCount                 int       `json:"ci_nudge_count,omitempty"`
+	CIFailurePollCount           int       `json:"ci_failure_poll_count,omitempty"`
+	CIEscalated                  bool      `json:"ci_escalated,omitempty"`
+	LastMergeableState           string    `json:"last_mergeable_state,omitempty"`
+	NudgeCount                   int       `json:"nudge_count,omitempty"`
+	RestartCount                 int       `json:"restart_count,omitempty"`
+	LastCapture                  string    `json:"last_capture,omitempty"`
+	LastActivityAt               time.Time `json:"last_activity_at,omitempty"`
+	CreatedAt                    time.Time `json:"created_at"`
+	LastSeenAt                   time.Time `json:"last_seen_at"`
 }
 
 type MergeQueueEntry struct {

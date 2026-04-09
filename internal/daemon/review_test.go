@@ -16,9 +16,9 @@ func TestPRReviewPollingNudgesWorkerOncePerNewBlockingReviewBatch(t *testing.T) 
 	deps.tickers.enqueue(captureTicker, prTicker)
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--state", "open", "--json", "number"}, `[]`, nil)
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, `{"reviewDecision":"CHANGES_REQUESTED","reviews":[{"author":{"login":"alice"},"state":"CHANGES_REQUESTED","body":"Please add tests."}]}`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, `{"reviewDecision":"CHANGES_REQUESTED","reviews":[{"author":{"login":"alice"},"state":"CHANGES_REQUESTED","body":"Please add tests."}]}`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, `{"reviewDecision":"CHANGES_REQUESTED","reviews":[{"author":{"login":"alice"},"state":"CHANGES_REQUESTED","body":"Please add tests."},{"author":{"login":"bob"},"state":"CHANGES_REQUESTED","body":"Handle the nil case too."}]}`, nil)
+	queuePRReviewPayload(deps, 42, `{"reviewDecision":"CHANGES_REQUESTED","reviews":[{"author":{"login":"alice"},"state":"CHANGES_REQUESTED","body":"Please add tests."}]}`)
+	queuePRReviewPayload(deps, 42, `{"reviewDecision":"CHANGES_REQUESTED","reviews":[{"author":{"login":"alice"},"state":"CHANGES_REQUESTED","body":"Please add tests."}]}`)
+	queuePRReviewPayload(deps, 42, `{"reviewDecision":"CHANGES_REQUESTED","reviews":[{"author":{"login":"alice"},"state":"CHANGES_REQUESTED","body":"Please add tests."},{"author":{"login":"bob"},"state":"CHANGES_REQUESTED","body":"Handle the nil case too."}]}`)
 
 	d := deps.newDaemon(t)
 	ctx := context.Background()
@@ -85,6 +85,114 @@ func TestPRReviewPollingNudgesWorkerOncePerNewBlockingReviewBatch(t *testing.T) 
 	}
 }
 
+func TestPRReviewPollingNudgesWorkerWithInlineReviewCommentLocation(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	captureTicker := newFakeTicker()
+	prTicker := newFakeTicker()
+	deps.tickers.enqueue(captureTicker, prTicker)
+	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--state", "open", "--json", "number"}, `[]`, nil)
+	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, `{"reviewDecision":"CHANGES_REQUESTED","reviews":[],"comments":[]}`, nil)
+	deps.commands.queue("gh", []string{"api", "repos/{owner}/{repo}/pulls/42/comments?per_page=100"}, `[
+		{
+			"user":{"login":"alice"},
+			"path":"internal/daemon/review.go",
+			"line":174,
+			"body":"Include reviewer details in the worker nudge.",
+			"created_at":"2026-04-02T09:05:00Z"
+		}
+	]`, nil)
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-689", "Implement daemon core", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+	makeWorkerIdleForReviewNudge(deps)
+
+	nudge := "New blocking PR review feedback on #42:\n- alice on internal/daemon/review.go:174: Include reviewer details in the worker nudge.\n\nAddress the feedback in the PR review and push an update."
+	nudgeSent := nudge + "\n"
+
+	prTicker.tick(deps.clock.Now())
+	waitFor(t, "inline review comment nudge", func() bool {
+		worker, ok := deps.state.worker("pane-1")
+		return ok &&
+			deps.amux.countKey("pane-1", nudgeSent) == 1 &&
+			worker.LastReviewCount == 0 &&
+			worker.LastInlineReviewCommentCount == 1
+	})
+
+	deps.amux.requireSentKeys(t, "pane-1", []string{
+		wrappedCodexPrompt("Implement daemon core") + "\n",
+		nudgeSent,
+	})
+}
+
+func TestPRReviewPollingDoesNotDuplicateSeenReviewsWhenOlderInlineCommentArrivesLater(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	captureTicker := newFakeTicker()
+	prTicker := newFakeTicker()
+	deps.tickers.enqueue(captureTicker, prTicker)
+	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--state", "open", "--json", "number"}, `[]`, nil)
+	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, `{"reviewDecision":"CHANGES_REQUESTED","reviews":[{"author":{"login":"bob"},"state":"CHANGES_REQUESTED","body":"Please add tests.","submittedAt":"2026-04-02T09:05:00Z"}],"comments":[]}`, nil)
+	deps.commands.queue("gh", []string{"api", "repos/{owner}/{repo}/pulls/42/comments?per_page=100"}, `[]`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, `{"reviewDecision":"CHANGES_REQUESTED","reviews":[{"author":{"login":"bob"},"state":"CHANGES_REQUESTED","body":"Please add tests.","submittedAt":"2026-04-02T09:05:00Z"}],"comments":[]}`, nil)
+	deps.commands.queue("gh", []string{"api", "repos/{owner}/{repo}/pulls/42/comments?per_page=100"}, `[
+		{
+			"user":{"login":"alice"},
+			"path":"internal/daemon/review.go",
+			"line":174,
+			"body":"Include reviewer details in the worker nudge.",
+			"created_at":"2026-04-02T09:04:00Z"
+		}
+	]`, nil)
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-689", "Implement daemon core", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+	makeWorkerIdleForReviewNudge(deps)
+
+	firstNudge := "New blocking PR review feedback on #42:\n- bob: Please add tests.\n\nAddress the feedback in the PR review and push an update."
+	secondNudge := "New blocking PR review feedback on #42:\n- alice on internal/daemon/review.go:174: Include reviewer details in the worker nudge.\n\nAddress the feedback in the PR review and push an update."
+	firstNudgeSent := firstNudge + "\n"
+	secondNudgeSent := secondNudge + "\n"
+
+	prTicker.tick(deps.clock.Now())
+	waitFor(t, "initial review nudge", func() bool {
+		return deps.amux.countKey("pane-1", firstNudgeSent) == 1
+	})
+
+	prTicker.tick(deps.clock.Now())
+	waitFor(t, "late inline comment nudge", func() bool {
+		return deps.amux.countKey("pane-1", secondNudgeSent) == 1
+	})
+
+	if got, want := deps.amux.countKey("pane-1", firstNudgeSent), 1; got != want {
+		t.Fatalf("first review nudge count = %d, want %d", got, want)
+	}
+}
+
 func TestPRReviewPollingAdvancesCountWithoutNudgingForNonBlockingReviews(t *testing.T) {
 	t.Parallel()
 
@@ -94,8 +202,8 @@ func TestPRReviewPollingAdvancesCountWithoutNudgingForNonBlockingReviews(t *test
 	deps.tickers.enqueue(captureTicker, prTicker)
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--state", "open", "--json", "number"}, `[]`, nil)
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, `{"reviewDecision":"CHANGES_REQUESTED","reviews":[{"author":{"login":"alice"},"state":"CHANGES_REQUESTED","body":"Please add tests."}]}`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, `{"reviewDecision":"CHANGES_REQUESTED","reviews":[{"author":{"login":"alice"},"state":"CHANGES_REQUESTED","body":"Please add tests."},{"author":{"login":"bob"},"state":"APPROVED","body":"Looks good after that."}]}`, nil)
+	queuePRReviewPayload(deps, 42, `{"reviewDecision":"CHANGES_REQUESTED","reviews":[{"author":{"login":"alice"},"state":"CHANGES_REQUESTED","body":"Please add tests."}]}`)
+	queuePRReviewPayload(deps, 42, `{"reviewDecision":"CHANGES_REQUESTED","reviews":[{"author":{"login":"alice"},"state":"CHANGES_REQUESTED","body":"Please add tests."},{"author":{"login":"bob"},"state":"APPROVED","body":"Looks good after that."}]}`)
 
 	d := deps.newDaemon(t)
 	ctx := context.Background()
@@ -160,8 +268,8 @@ func TestPRReviewPollingIgnoresEmptyReviewPayload(t *testing.T) {
 	deps.tickers.enqueue(captureTicker, prTicker)
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--state", "open", "--json", "number"}, `[]`, nil)
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, `{"reviewDecision":"CHANGES_REQUESTED","reviews":[{"author":{"login":"alice"},"state":"CHANGES_REQUESTED","body":"Please add tests."}]}`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, ``, nil)
+	queuePRReviewPayload(deps, 42, `{"reviewDecision":"CHANGES_REQUESTED","reviews":[{"author":{"login":"alice"},"state":"CHANGES_REQUESTED","body":"Please add tests."}]}`)
+	queuePRReviewPayload(deps, 42, ``)
 
 	d := deps.newDaemon(t)
 	ctx := context.Background()
@@ -212,8 +320,8 @@ func TestPRReviewPollingNudgesWorkerForGitHubActionsIssueCommentsWithoutLGTM(t *
 	deps.tickers.enqueue(captureTicker, prTicker)
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--state", "open", "--json", "number"}, `[]`, nil)
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, `{"reviewDecision":"CHANGES_REQUESTED","reviews":[],"comments":[{"author":{"login":"github-actions"},"body":"Potential bug: stale local branch in prepareAdoptedClone."}]}`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, `{"reviewDecision":"CHANGES_REQUESTED","reviews":[],"comments":[{"author":{"login":"github-actions"},"body":"Potential bug: stale local branch in prepareAdoptedClone."},{"author":{"login":"cweill"},"body":"Thanks, taking a look."}]}`, nil)
+	queuePRReviewPayload(deps, 42, `{"reviewDecision":"CHANGES_REQUESTED","reviews":[],"comments":[{"author":{"login":"github-actions"},"body":"Potential bug: stale local branch in prepareAdoptedClone."}]}`)
+	queuePRReviewPayload(deps, 42, `{"reviewDecision":"CHANGES_REQUESTED","reviews":[],"comments":[{"author":{"login":"github-actions"},"body":"Potential bug: stale local branch in prepareAdoptedClone."},{"author":{"login":"cweill"},"body":"Thanks, taking a look."}]}`)
 
 	d := deps.newDaemon(t)
 	ctx := context.Background()
@@ -278,11 +386,11 @@ func TestPRReviewPollingResumesFromPersistedWorkerStateAfterRestart(t *testing.T
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--state", "open", "--json", "number"}, `[]`, nil)
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, `{"reviewDecision":"CHANGES_REQUESTED","reviews":[{"author":{"login":"alice"},"state":"CHANGES_REQUESTED","body":"Please add tests."}]}`, nil)
+	queuePRReviewPayload(deps, 42, `{"reviewDecision":"CHANGES_REQUESTED","reviews":[{"author":{"login":"alice"},"state":"CHANGES_REQUESTED","body":"Please add tests."}]}`)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, `{"reviewDecision":"CHANGES_REQUESTED","reviews":[{"author":{"login":"alice"},"state":"CHANGES_REQUESTED","body":"Please add tests."}]}`, nil)
+	queuePRReviewPayload(deps, 42, `{"reviewDecision":"CHANGES_REQUESTED","reviews":[{"author":{"login":"alice"},"state":"CHANGES_REQUESTED","body":"Please add tests."}]}`)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, `{"reviewDecision":"CHANGES_REQUESTED","reviews":[{"author":{"login":"alice"},"state":"CHANGES_REQUESTED","body":"Please add tests."},{"author":{"login":"bob"},"state":"CHANGES_REQUESTED","body":"Handle the nil case too."}]}`, nil)
+	queuePRReviewPayload(deps, 42, `{"reviewDecision":"CHANGES_REQUESTED","reviews":[{"author":{"login":"alice"},"state":"CHANGES_REQUESTED","body":"Please add tests."},{"author":{"login":"bob"},"state":"CHANGES_REQUESTED","body":"Handle the nil case too."}]}`)
 
 	first := deps.newDaemon(t)
 	ctx := context.Background()
@@ -345,11 +453,11 @@ func TestPRReviewPollingResumesIssueCommentCursorAfterRestart(t *testing.T) {
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--state", "open", "--json", "number"}, `[]`, nil)
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, `{"reviewDecision":"CHANGES_REQUESTED","reviews":[],"comments":[{"author":{"login":"github-actions"},"body":"### PR Review\n\n### Blocking Issues\n\n**1. Add regression coverage for issue comments**"}]}`, nil)
+	queuePRReviewPayload(deps, 42, `{"reviewDecision":"CHANGES_REQUESTED","reviews":[],"comments":[{"author":{"login":"github-actions"},"body":"### PR Review\n\n### Blocking Issues\n\n**1. Add regression coverage for issue comments**"}]}`)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, `{"reviewDecision":"CHANGES_REQUESTED","reviews":[],"comments":[{"author":{"login":"github-actions"},"body":"### PR Review\n\n### Blocking Issues\n\n**1. Add regression coverage for issue comments**"}]}`, nil)
+	queuePRReviewPayload(deps, 42, `{"reviewDecision":"CHANGES_REQUESTED","reviews":[],"comments":[{"author":{"login":"github-actions"},"body":"### PR Review\n\n### Blocking Issues\n\n**1. Add regression coverage for issue comments**"}]}`)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, `{"reviewDecision":"CHANGES_REQUESTED","reviews":[],"comments":[{"author":{"login":"github-actions"},"body":"### PR Review\n\n### Blocking Issues\n\n**1. Add regression coverage for issue comments**"},{"author":{"login":"github-actions"},"body":"### PR Review\n\n### Blocking Issue\n\n**1. Persist the issue comment cursor across restarts**"}]}`, nil)
+	queuePRReviewPayload(deps, 42, `{"reviewDecision":"CHANGES_REQUESTED","reviews":[],"comments":[{"author":{"login":"github-actions"},"body":"### PR Review\n\n### Blocking Issues\n\n**1. Add regression coverage for issue comments**"},{"author":{"login":"github-actions"},"body":"### PR Review\n\n### Blocking Issue\n\n**1. Persist the issue comment cursor across restarts**"}]}`)
 
 	first := deps.newDaemon(t)
 	ctx := context.Background()
@@ -410,8 +518,8 @@ func TestPRReviewPollingDefersBlockingReviewNudgeUntilWorkerIsIdle(t *testing.T)
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--state", "open", "--json", "number"}, `[]`, nil)
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
 	payload := `{"reviewDecision":"CHANGES_REQUESTED","reviews":[{"author":{"login":"alice"},"state":"CHANGES_REQUESTED","body":"Please add tests."}]}`
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, payload, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, payload, nil)
+	queuePRReviewPayload(deps, 42, payload)
+	queuePRReviewPayload(deps, 42, payload)
 
 	d := deps.newDaemon(t)
 	ctx := context.Background()
@@ -463,8 +571,8 @@ func TestPRReviewPollingDefersBlockingReviewNudgeWhenFreshCaptureShowsActivity(t
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--state", "open", "--json", "number"}, `[]`, nil)
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
 	payload := `{"reviewDecision":"CHANGES_REQUESTED","reviews":[{"author":{"login":"alice"},"state":"CHANGES_REQUESTED","body":"Please add tests."}]}`
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, payload, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, payload, nil)
+	queuePRReviewPayload(deps, 42, payload)
+	queuePRReviewPayload(deps, 42, payload)
 	deps.amux.captureSequence("pane-1", []string{"still coding"})
 
 	d := deps.newDaemon(t)
