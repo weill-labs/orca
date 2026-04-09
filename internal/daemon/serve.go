@@ -253,15 +253,7 @@ func reloadProcess(req ServeRequest, listener net.Listener, instance *Daemon, ex
 	}
 
 	env := append(os.Environ(), fmt.Sprintf("%s=%d", daemonListenerFDEnvVar, reloadListenerFile.Fd()))
-	args := []string{
-		executable,
-		"__daemon-serve",
-		"--session", req.Session,
-		"--lead-pane", req.LeadPane,
-		"--state-db", req.StateDB,
-		"--pid-file", req.PIDFile,
-	}
-	return execProcess(executable, args, env)
+	return execProcess(executable, daemonServeArgs(executable, req), env)
 }
 
 func closeListenerForReload(listener net.Listener) error {
@@ -292,6 +284,17 @@ func stopDaemonForReload(instance *Daemon) {
 	}
 	if instance.mergeQueueDone != nil {
 		<-instance.mergeQueueDone
+	}
+}
+
+func daemonServeArgs(executable string, req ServeRequest) []string {
+	return []string{
+		executable,
+		"__daemon-serve",
+		"--session", req.Session,
+		"--lead-pane", req.LeadPane,
+		"--state-db", req.StateDB,
+		"--pid-file", req.PIDFile,
 	}
 }
 
