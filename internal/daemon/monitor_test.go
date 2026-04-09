@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -68,4 +69,90 @@ func TestDaemonSkipsBufferedPollTickWhilePollCycleIsRunning(t *testing.T) {
 	if got, want := deps.commands.countCalls("gh", checkArgs), 1; got != want {
 		t.Fatalf("gh pr checks call count = %d, want %d", got, want)
 	}
+}
+
+func TestDaemonCaptureMonitorOpensAmuxCircuitAfterThreeFailures(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	captureTicker := newFakeTicker()
+	pollTicker := newFakeTicker()
+	deps.tickers.enqueue(captureTicker, pollTicker)
+	seedTaskMonitorAssignment(t, deps, "LAB-924", "pane-1", 0)
+	deps.amux.capturePaneErr = errors.New("amux unavailable")
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	for i := 0; i < 3; i++ {
+		captureTicker.tick(deps.clock.Now())
+		waitFor(t, "capture attempt", func() bool {
+			return deps.amux.captureCount("pane-1") == i+1
+		})
+	}
+
+	captureTicker.tick(deps.clock.Now())
+	<-time.After(50 * time.Millisecond)
+	if got, want := deps.amux.captureCount("pane-1"), 3; got != want {
+		t.Fatalf("capture count with open circuit = %d, want %d", got, want)
+	}
+
+	deps.clock.Advance(60 * time.Second)
+	deps.amux.capturePaneErr = nil
+	deps.amux.capturePaneSequence("pane-1", []PaneCapture{paneCaptureFromOutput("worker output")})
+
+	captureTicker.tick(deps.clock.Now())
+	waitFor(t, "capture after cooldown", func() bool {
+		return deps.amux.captureCount("pane-1") == 4
+	})
+}
+
+func TestDaemonPollMonitorOpensGitHubCircuitAfterThreeFailures(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	captureTicker := newFakeTicker()
+	pollTicker := newFakeTicker()
+	deps.tickers.enqueue(captureTicker, pollTicker)
+	seedTaskMonitorAssignment(t, deps, "LAB-924", "pane-1", 0)
+
+	lookupArgs := []string{"pr", "list", "--head", "LAB-924", "--json", "number"}
+	for i := 0; i < 3; i++ {
+		deps.commands.queue("gh", lookupArgs, ``, errors.New("github unavailable"))
+	}
+	deps.commands.queue("gh", lookupArgs, `[]`, nil)
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	for i := 0; i < 3; i++ {
+		pollTicker.tick(deps.clock.Now())
+		waitFor(t, "poll attempt", func() bool {
+			return deps.commands.countCalls("gh", lookupArgs) == i+1
+		})
+	}
+
+	pollTicker.tick(deps.clock.Now())
+	<-time.After(50 * time.Millisecond)
+	if got, want := deps.commands.countCalls("gh", lookupArgs), 3; got != want {
+		t.Fatalf("github call count with open circuit = %d, want %d", got, want)
+	}
+
+	deps.clock.Advance(60 * time.Second)
+	pollTicker.tick(deps.clock.Now())
+	waitFor(t, "poll after cooldown", func() bool {
+		return deps.commands.countCalls("gh", lookupArgs) == 4
+	})
 }
