@@ -103,6 +103,13 @@ func (d *Daemon) assign(ctx context.Context, projectPath, issue, prompt, agentPr
 	restoreWorkerClaim := func() {
 		_ = d.releaseWorkerClaim(context.WithoutCancel(ctx), claimedWorker)
 	}
+	if err := d.clearStaleWorkerPaneRef(ctx, &claimedWorker); err != nil {
+		restoreWorkerClaim()
+		restoreReservation()
+		err = fmt.Errorf("clear stale worker pane ref: %w", err)
+		d.emitAssignFailure(ctx, projectPath, issue, claimedWorker.WorkerID, profile.Name, Clone{}, Pane{}, prNumber, err)
+		return err
+	}
 
 	clone, err := d.pool.Acquire(ctx, projectPath, issue)
 	if err != nil {

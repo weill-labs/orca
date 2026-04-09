@@ -166,8 +166,8 @@ daemonReady:
 		t.Fatalf("resumeResult.Status = %q, want %q", got, want)
 	}
 
-	if got, want := amuxClient.paneExistsCalls, []string{"pane-1"}; len(got) != len(want) || got[0] != want[0] {
-		t.Fatalf("paneExistsCalls = %#v, want %#v", got, want)
+	if got := amuxClient.paneExistsCalls; len(got) == 0 || got[0] != "pane-1" {
+		t.Fatalf("paneExistsCalls = %#v, want first call for %q", got, "pane-1")
 	}
 	amuxClient.requireSentKeys(t, "pane-1", []string{
 		"Implement Unix socket IPC.\n",

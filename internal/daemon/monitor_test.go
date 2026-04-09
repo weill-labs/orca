@@ -169,3 +169,61 @@ func TestDaemonPollMonitorOpensGitHubCircuitAfterThreeFailures(t *testing.T) {
 		t.Fatalf("circuit closed event count = %d, want %d", got, want)
 	}
 }
+
+func TestDaemonCaptureTickEscalatesMissingTrackedPaneBeforeCapture(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	seedTaskMonitorAssignment(t, deps, "LAB-988", "pane-1", 0)
+	deps.amux.paneExists = map[string]bool{"pane-1": false}
+
+	d := deps.newDaemon(t)
+	d.runCaptureTick(context.Background())
+
+	worker, ok := deps.state.worker("pane-1")
+	if !ok {
+		t.Fatal("worker missing after capture reconciliation")
+	}
+	if got, want := worker.Health, WorkerHealthEscalated; got != want {
+		t.Fatalf("worker.Health = %q, want %q", got, want)
+	}
+	if got := deps.amux.captureCount("pane-1"); got != 0 {
+		t.Fatalf("capture count = %d, want 0", got)
+	}
+	event, ok := deps.events.lastEventOfType(EventWorkerEscalated)
+	if !ok {
+		t.Fatal("worker escalation event missing")
+	}
+	if got, want := event.Message, "worker pane missing during monitor reconciliation"; got != want {
+		t.Fatalf("event.Message = %q, want %q", got, want)
+	}
+}
+
+func TestDaemonPollTickSkipsMissingTrackedPaneBeforePRPoll(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	seedTaskMonitorAssignment(t, deps, "LAB-988", "pane-1", 42)
+	deps.amux.paneExists = map[string]bool{"pane-1": false}
+
+	d := deps.newDaemon(t)
+	d.runPollTick(context.Background())
+
+	worker, ok := deps.state.worker("pane-1")
+	if !ok {
+		t.Fatal("worker missing after poll reconciliation")
+	}
+	if got, want := worker.Health, WorkerHealthEscalated; got != want {
+		t.Fatalf("worker.Health = %q, want %q", got, want)
+	}
+	if got := deps.commands.countCalls("gh", []string{"pr", "checks", "42", "--json", "bucket"}); got != 0 {
+		t.Fatalf("gh pr checks calls = %d, want 0", got)
+	}
+	event, ok := deps.events.lastEventOfType(EventWorkerEscalated)
+	if !ok {
+		t.Fatal("worker escalation event missing")
+	}
+	if got, want := event.Message, "worker pane missing during monitor reconciliation"; got != want {
+		t.Fatalf("event.Message = %q, want %q", got, want)
+	}
+}

@@ -274,3 +274,60 @@ func TestNormalizeStoredPaneRef(t *testing.T) {
 		}
 	})
 }
+
+func TestSendPromptAndCommandReturnsErrPaneGone(t *testing.T) {
+	t.Parallel()
+
+	t.Run("before send keys", func(t *testing.T) {
+		t.Parallel()
+
+		deps := newTestDeps(t)
+		d := deps.newDaemon(t)
+		deps.amux.paneExists = map[string]bool{"pane-1": false}
+
+		err := d.sendPromptAndCommand(context.Background(), "pane-1", "Continue work", "Enter")
+		if err == nil || !strings.Contains(err.Error(), "pane gone") {
+			t.Fatalf("sendPromptAndCommand() error = %v, want pane-gone error", err)
+		}
+		deps.amux.requireSentKeys(t, "pane-1", nil)
+		if got := len(deps.amux.waitIdleCalls); got != 0 {
+			t.Fatalf("waitIdle calls = %d, want 0", got)
+		}
+	})
+
+	t.Run("before wait idle settle", func(t *testing.T) {
+		t.Parallel()
+
+		deps := newTestDeps(t)
+		d := deps.newDaemon(t)
+		deps.amux.paneExists = map[string]bool{"pane-1": true}
+		deps.amux.sendKeysHook = func(paneID string, _ []string) {
+			deps.amux.mu.Lock()
+			defer deps.amux.mu.Unlock()
+			deps.amux.paneExists[paneID] = false
+		}
+
+		err := d.sendPromptAndCommand(context.Background(), "pane-1", "Continue work", "Enter")
+		if err == nil || !strings.Contains(err.Error(), "pane gone") {
+			t.Fatalf("sendPromptAndCommand() error = %v, want pane-gone error", err)
+		}
+		deps.amux.requireSentKeys(t, "pane-1", []string{"Continue work"})
+		if got := len(deps.amux.waitIdleCalls); got != 0 {
+			t.Fatalf("waitIdle calls = %d, want 0", got)
+		}
+	})
+}
+
+func TestStartAgentInPaneReturnsErrPaneGone(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	d := deps.newDaemon(t)
+	deps.amux.paneExists = map[string]bool{"pane-1": false}
+
+	err := d.startAgentInPane(context.Background(), "pane-1", deps.config.profiles["codex"])
+	if err == nil || !strings.Contains(err.Error(), "pane gone") {
+		t.Fatalf("startAgentInPane() error = %v, want pane-gone error", err)
+	}
+	deps.amux.requireSentKeys(t, "pane-1", nil)
+}

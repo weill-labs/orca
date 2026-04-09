@@ -937,3 +937,57 @@ func TestAssignPreservesTrackedHistoryForReusedPane(t *testing.T) {
 		"tracked_prs":    `[{"number":41,"status":"completed"}]`,
 	})
 }
+
+func TestAssignClearsClaimedWorkerStalePaneRefBeforeSpawn(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	now := deps.clock.Now()
+	if err := deps.state.PutWorker(context.Background(), Worker{
+		Project:      "/tmp/project",
+		WorkerID:     "worker-01",
+		PaneID:       "pane-stale",
+		PaneName:     "w-LAB-old",
+		AgentProfile: "codex",
+		Health:       WorkerHealthHealthy,
+		CreatedAt:    now.Add(-time.Hour),
+		LastSeenAt:   now.Add(-time.Minute),
+		UpdatedAt:    now.Add(-time.Minute),
+	}); err != nil {
+		t.Fatalf("PutWorker() error = %v", err)
+	}
+	deps.amux.paneExists = map[string]bool{"pane-stale": false}
+
+	var spawnWorker Worker
+	deps.amux.spawnHook = func(SpawnRequest) {
+		worker, ok := deps.state.worker("worker-01")
+		if !ok {
+			t.Fatal("claimed worker missing during spawn")
+		}
+		spawnWorker = worker
+	}
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-988", "Fix pane reconciliation", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	if got := spawnWorker.PaneID; got != "" {
+		t.Fatalf("worker.PaneID during spawn = %q, want empty", got)
+	}
+	if got, want := spawnWorker.PaneName, "worker-01"; got != want {
+		t.Fatalf("worker.PaneName during spawn = %q, want %q", got, want)
+	}
+	if got, want := deps.amux.paneExistsCalls[0], "pane-stale"; got != want {
+		t.Fatalf("first pane exists call = %q, want %q", got, want)
+	}
+}

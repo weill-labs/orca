@@ -16,6 +16,8 @@ import (
 
 var linearIssueIdentifierPattern = regexp.MustCompile(`^[A-Z][A-Z0-9]*-\d+$`)
 
+var ErrPaneGone = errors.New("pane gone")
+
 const (
 	ansiDimOn              = "\x1b[2m"
 	ansiDimOff             = "\x1b[22m"
@@ -642,6 +644,74 @@ func derefWorker(worker *Worker) Worker {
 	return *worker
 }
 
+func (d *Daemon) clearStaleWorkerPaneRef(ctx context.Context, worker *Worker) error {
+	if worker == nil {
+		return nil
+	}
+
+	paneID := strings.TrimSpace(worker.PaneID)
+	if paneID == "" {
+		return nil
+	}
+
+	exists, err := d.amux.PaneExists(ctx, paneID)
+	if err != nil {
+		return fmt.Errorf("check pane %s: %w", paneID, err)
+	}
+	if exists {
+		return nil
+	}
+
+	now := d.now()
+	worker.PaneID = ""
+	worker.PaneName = strings.TrimSpace(worker.WorkerID)
+	worker.LastCapture = ""
+	worker.LastActivityAt = time.Time{}
+	worker.LastSeenAt = now
+	worker.UpdatedAt = now
+	if err := d.state.PutWorker(ctx, *worker); err != nil {
+		return fmt.Errorf("clear stale worker pane ref: %w", err)
+	}
+	return nil
+}
+
+func (d *Daemon) ensureLivePane(ctx context.Context, paneID string) error {
+	trimmed := strings.TrimSpace(paneID)
+	if trimmed == "" {
+		return ErrPaneGone
+	}
+
+	exists, err := d.amuxClient(ctx).PaneExists(ctx, trimmed)
+	if err != nil {
+		return fmt.Errorf("check pane %s: %w", trimmed, err)
+	}
+	if !exists {
+		return fmt.Errorf("pane %s: %w", trimmed, ErrPaneGone)
+	}
+	return nil
+}
+
+func (d *Daemon) sendKeysToLivePane(ctx context.Context, paneID string, keys ...string) error {
+	if err := d.ensureLivePane(ctx, paneID); err != nil {
+		return err
+	}
+	return d.amuxClient(ctx).SendKeys(ctx, paneID, keys...)
+}
+
+func (d *Daemon) waitIdleForLivePane(ctx context.Context, paneID string, timeout time.Duration) error {
+	if err := d.ensureLivePane(ctx, paneID); err != nil {
+		return err
+	}
+	return d.amuxClient(ctx).WaitIdle(ctx, paneID, timeout)
+}
+
+func (d *Daemon) waitIdleSettleForLivePane(ctx context.Context, paneID string, timeout, settle time.Duration) error {
+	if err := d.ensureLivePane(ctx, paneID); err != nil {
+		return err
+	}
+	return d.amuxClient(ctx).WaitIdleSettle(ctx, paneID, timeout, settle)
+}
+
 func (d *Daemon) sendPromptAndEnter(ctx context.Context, paneID, prompt string) error {
 	return d.sendPromptAndCommand(ctx, paneID, prompt, "Enter")
 }
@@ -654,18 +724,17 @@ func (d *Daemon) sendPromptAndCommand(ctx context.Context, paneID, prompt, comma
 	if strings.TrimSpace(command) == "" {
 		return errors.New("command is empty")
 	}
-	client := d.amuxClient(ctx)
-	if err := client.SendKeys(ctx, paneID, trimmed); err != nil {
+	if err := d.sendKeysToLivePane(ctx, paneID, trimmed); err != nil {
 		return err
 	}
-	if err := client.WaitIdleSettle(ctx, paneID, defaultAgentHandshakeTimeout, defaultPromptSettleDuration); err != nil {
+	if err := d.waitIdleSettleForLivePane(ctx, paneID, defaultAgentHandshakeTimeout, defaultPromptSettleDuration); err != nil {
 		return err
 	}
-	return client.SendKeys(ctx, paneID, command)
+	return d.sendKeysToLivePane(ctx, paneID, command)
 }
 
 func (d *Daemon) startAgentInPane(ctx context.Context, paneID string, profile AgentProfile) error {
-	if err := d.amux.SendKeys(ctx, paneID, profile.StartCommand, "Enter"); err != nil {
+	if err := d.sendKeysToLivePane(ctx, paneID, profile.StartCommand, "Enter"); err != nil {
 		return fmt.Errorf("restart agent in pane %s: %w", paneID, err)
 	}
 	if err := d.agentHandshake(ctx, paneID, profile); err != nil {
@@ -680,16 +749,16 @@ func (d *Daemon) resumeAgentInPane(ctx context.Context, paneID string, profile A
 	}
 
 	if !strings.EqualFold(profile.Name, "codex") || len(profile.ResumeSequence) < 3 {
-		return d.amux.SendKeys(ctx, paneID, profile.ResumeSequence...)
+		return d.sendKeysToLivePane(ctx, paneID, profile.ResumeSequence...)
 	}
 
-	if err := d.amux.SendKeys(ctx, paneID, profile.ResumeSequence[:2]...); err != nil {
+	if err := d.sendKeysToLivePane(ctx, paneID, profile.ResumeSequence[:2]...); err != nil {
 		return err
 	}
 	if err := d.amux.WaitContent(ctx, paneID, "›", defaultAgentHandshakeTimeout); err != nil {
 		return err
 	}
-	return d.amux.SendKeys(ctx, paneID, profile.ResumeSequence[2:]...)
+	return d.sendKeysToLivePane(ctx, paneID, profile.ResumeSequence[2:]...)
 }
 
 func ensureTrailingNewline(input string) string {

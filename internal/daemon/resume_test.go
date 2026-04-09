@@ -53,8 +53,8 @@ func TestResumeRestartsExistingWorkerInPlace(t *testing.T) {
 		t.Fatalf("Resume() error = %v", err)
 	}
 
-	if got, want := deps.amux.paneExistsCalls, []string{"pane-1"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("pane exists calls = %#v, want %#v", got, want)
+	if got := deps.amux.paneExistsCalls; len(got) == 0 || got[0] != "pane-1" {
+		t.Fatalf("pane exists calls = %#v, want first call for %q", got, "pane-1")
 	}
 	deps.amux.requireSentKeys(t, "pane-1", []string{"codex --yolo\n"})
 	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
@@ -122,8 +122,8 @@ func TestResumeRestartsExistingWorkerInPlaceAndSendsPrompt(t *testing.T) {
 		t.Fatalf("Resume() error = %v", err)
 	}
 
-	if got, want := deps.amux.paneExistsCalls, []string{"pane-1"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("pane exists calls = %#v, want %#v", got, want)
+	if got := deps.amux.paneExistsCalls; len(got) == 0 || got[0] != "pane-1" {
+		t.Fatalf("pane exists calls = %#v, want first call for %q", got, "pane-1")
 	}
 	deps.amux.requireSentKeys(t, "pane-1", []string{"codex --yolo\n", "Continue from the latest review comments\n"})
 	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
@@ -176,8 +176,8 @@ func TestResumeRespawnsCancelledTaskInExistingClone(t *testing.T) {
 		t.Fatalf("Resume() error = %v", err)
 	}
 
-	if got, want := deps.amux.paneExistsCalls, []string{"pane-9"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("pane exists calls = %#v, want %#v", got, want)
+	if got := deps.amux.paneExistsCalls; len(got) == 0 || got[0] != "pane-9" {
+		t.Fatalf("pane exists calls = %#v, want first call for %q", got, "pane-9")
 	}
 	if got, want := len(deps.amux.spawnRequests), 1; got != want {
 		t.Fatalf("spawn requests = %d, want %d", got, want)
@@ -284,8 +284,8 @@ func TestResumeNormalizesLegacyNumericPaneRefBeforePaneChecks(t *testing.T) {
 		t.Fatalf("Resume() error = %v", err)
 	}
 
-	if got, want := deps.amux.paneExistsCalls, []string{"7"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("pane exists calls = %#v, want %#v", got, want)
+	if got := deps.amux.paneExistsCalls; len(got) == 0 || got[0] != "7" {
+		t.Fatalf("pane exists calls = %#v, want first call for %q", got, "7")
 	}
 	deps.amux.requireSentKeys(t, "7", []string{"codex --yolo\n", "Implement startup recovery\n"})
 	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
