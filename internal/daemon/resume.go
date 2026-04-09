@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
-	"time"
 )
 
 func (d *Daemon) Resume(ctx context.Context, issue, prompt string) error {
@@ -283,8 +282,7 @@ func (d *Daemon) storeResumedTaskForProject(ctx context.Context, projectPath str
 	resumedWorker.NudgeCount = 0
 	resumedWorker.LastCapture = ""
 	resumedWorker.LastActivityAt = now
-	resumedWorker.RestartCount = 0
-	resumedWorker.FirstCrashAt = time.Time{}
+	resetExitedPaneRestartWindow(&resumedWorker)
 	resumedWorker.LastSeenAt = now
 	resumedWorker.UpdatedAt = now
 	if oldPaneID != "" && oldPaneID != pane.ID {

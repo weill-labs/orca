@@ -137,8 +137,7 @@ func (d *Daemon) releaseWorkerClaim(ctx context.Context, worker Worker) error {
 	worker.RestartCount = 0
 	worker.LastCapture = ""
 	worker.LastActivityAt = time.Time{}
-	worker.RestartCount = 0
-	worker.FirstCrashAt = time.Time{}
+	resetExitedPaneRestartWindow(&worker)
 	if worker.CreatedAt.IsZero() {
 		worker.CreatedAt = now
 	}

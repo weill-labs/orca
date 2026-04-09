@@ -46,10 +46,17 @@ func (d *Daemon) maybeResetExitedPaneRestartWindow(update *TaskStateUpdate, now 
 		return
 	}
 
-	update.Active.Worker.RestartCount = 0
-	update.Active.Worker.FirstCrashAt = time.Time{}
+	resetExitedPaneRestartWindow(&update.Active.Worker)
 	update.Active.Worker.LastSeenAt = now
 	update.WorkerChanged = true
+}
+
+func resetExitedPaneRestartWindow(worker *Worker) {
+	if worker == nil {
+		return
+	}
+	worker.RestartCount = 0
+	worker.FirstCrashAt = time.Time{}
 }
 
 func exitedPaneRestartPlan(worker Worker, now time.Time) (delay time.Duration, restartCount int, firstCrashAt time.Time, escalate bool) {
