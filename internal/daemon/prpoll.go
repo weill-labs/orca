@@ -88,20 +88,20 @@ func (d *Daemon) checkTaskPRPoll(ctx context.Context, active ActiveAssignment) T
 		if d.appendGitHubRateLimitEvent(&update, profile, err) {
 			return update
 		}
-		d.handlePRMergeablePoll(ctx, &update, profile)
-		reviewUpdate := d.checkTaskReviewPoll(ctx, update.Active, profile)
-		update = mergeTaskStateUpdates(update, reviewUpdate)
-		return update
+		return d.continuePRFollowUpPolls(ctx, update, profile)
 	}
 	if !merged {
-		d.handlePRMergeablePoll(ctx, &update, profile)
-		reviewUpdate := d.checkTaskReviewPoll(ctx, update.Active, profile)
-		update = mergeTaskStateUpdates(update, reviewUpdate)
-		return update
+		return d.continuePRFollowUpPolls(ctx, update, profile)
 	}
 
 	update.PRMerged = true
 	return update
+}
+
+func (d *Daemon) continuePRFollowUpPolls(ctx context.Context, update TaskStateUpdate, profile AgentProfile) TaskStateUpdate {
+	d.handlePRMergeablePoll(ctx, &update, profile)
+	reviewUpdate := d.checkTaskReviewPoll(ctx, update.Active, profile)
+	return mergeTaskStateUpdates(update, reviewUpdate)
 }
 
 func mergeTaskStateUpdates(base, next TaskStateUpdate) TaskStateUpdate {
