@@ -258,6 +258,7 @@ func (d *Daemon) storeResumedTaskForProject(ctx context.Context, projectPath str
 			ClonePath:    task.ClonePath,
 			Issue:        task.Issue,
 			RestartCount: worker.RestartCount,
+			FirstCrashAt: worker.FirstCrashAt,
 			CreatedAt:    now,
 			LastSeenAt:   now,
 		}
@@ -282,7 +283,6 @@ func (d *Daemon) storeResumedTaskForProject(ctx context.Context, projectPath str
 	resumedWorker.NudgeCount = 0
 	resumedWorker.LastCapture = ""
 	resumedWorker.LastActivityAt = now
-	resetExitedPaneRestartWindow(&resumedWorker)
 	resumedWorker.LastSeenAt = now
 	resumedWorker.UpdatedAt = now
 	if oldPaneID != "" && oldPaneID != pane.ID {
