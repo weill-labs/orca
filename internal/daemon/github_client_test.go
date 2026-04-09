@@ -363,6 +363,50 @@ func TestGitHubCLIClientLookupPRReviewsIncludesIssueComments(t *testing.T) {
 	}
 }
 
+func TestGitHubCLIClientLookupPRReviewsIncludesInlineReviewComments(t *testing.T) {
+	t.Parallel()
+
+	commands := newFakeCommands()
+	client := newGitHubCLIClient(gitHubCLIClientConfig{
+		project:     "/tmp/project",
+		commands:    commands,
+		sleep:       noSleep,
+		maxAttempts: 1,
+	})
+	viewArgs := []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}
+	apiArgs := []string{"api", "repos/{owner}/{repo}/pulls/42/comments?per_page=100"}
+	commands.queue("gh", viewArgs, `{"reviewDecision":"CHANGES_REQUESTED","reviews":[],"comments":[]}`, nil)
+	commands.queue("gh", apiArgs, `[
+		{
+			"user":{"login":"alice"},
+			"path":"internal/daemon/review.go",
+			"line":174,
+			"body":"Include reviewer details in the worker nudge.",
+			"created_at":"2026-04-02T09:05:00Z"
+		}
+	]`, nil)
+
+	payload, ok, err := client.lookupPRReviews(context.Background(), 42)
+	if err != nil {
+		t.Fatalf("lookupPRReviews() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("lookupPRReviews() ok = false, want true")
+	}
+	if got, want := len(payload.ReviewComments), 1; got != want {
+		t.Fatalf("len(payload.ReviewComments) = %d, want %d", got, want)
+	}
+	if got, want := payload.ReviewComments[0].User.Login, "alice"; got != want {
+		t.Fatalf("first review comment author = %q, want %q", got, want)
+	}
+	if got, want := payload.ReviewComments[0].Path, "internal/daemon/review.go"; got != want {
+		t.Fatalf("first review comment path = %q, want %q", got, want)
+	}
+	if got, want := payload.ReviewComments[0].Line, 174; got != want {
+		t.Fatalf("first review comment line = %d, want %d", got, want)
+	}
+}
+
 func TestGitHubCLIClientStopsWhenBackoffSleepFails(t *testing.T) {
 	t.Parallel()
 

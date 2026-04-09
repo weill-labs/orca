@@ -85,6 +85,55 @@ func TestPRReviewPollingNudgesWorkerOncePerNewBlockingReviewBatch(t *testing.T) 
 	}
 }
 
+func TestPRReviewPollingNudgesWorkerWithInlineReviewCommentLocation(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	captureTicker := newFakeTicker()
+	prTicker := newFakeTicker()
+	deps.tickers.enqueue(captureTicker, prTicker)
+	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--state", "open", "--json", "number"}, `[]`, nil)
+	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, `{"reviewDecision":"CHANGES_REQUESTED","reviews":[],"comments":[]}`, nil)
+	deps.commands.queue("gh", []string{"api", "repos/{owner}/{repo}/pulls/42/comments?per_page=100"}, `[
+		{
+			"user":{"login":"alice"},
+			"path":"internal/daemon/review.go",
+			"line":174,
+			"body":"Include reviewer details in the worker nudge.",
+			"created_at":"2026-04-02T09:05:00Z"
+		}
+	]`, nil)
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-689", "Implement daemon core", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+	makeWorkerIdleForReviewNudge(deps)
+
+	nudge := "New blocking PR review feedback on #42:\n- alice on internal/daemon/review.go:174: Include reviewer details in the worker nudge.\n\nAddress the feedback in the PR review and push an update."
+	nudgeSent := nudge + "\n"
+
+	prTicker.tick(deps.clock.Now())
+	waitFor(t, "inline review comment nudge", func() bool {
+		worker, ok := deps.state.worker("pane-1")
+		return ok && deps.amux.countKey("pane-1", nudgeSent) == 1 && worker.LastReviewCount == 1
+	})
+
+	deps.amux.requireSentKeys(t, "pane-1", []string{
+		wrappedCodexPrompt("Implement daemon core") + "\n",
+		nudgeSent,
+	})
+}
+
 func TestPRReviewPollingAdvancesCountWithoutNudgingForNonBlockingReviews(t *testing.T) {
 	t.Parallel()
 
