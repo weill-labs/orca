@@ -1293,6 +1293,29 @@ func TestWriteProjectStatusAndTaskStatus(t *testing.T) {
 			},
 		},
 		{
+			name: "task status shows github rate limit warning",
+			write: func(buf *bytes.Buffer) error {
+				return writeTaskStatus(buf, state.TaskStatus{
+					Task: state.Task{
+						Issue:     "LAB-804",
+						Status:    "active",
+						UpdatedAt: now,
+					},
+					Events: []state.Event{
+						{
+							Kind:    "pr.rate_limited",
+							Message: "github: rate limited until 09:02",
+							Payload: []byte(`{"github_rate_limited_until":"2099-04-02T09:02:00Z"}`),
+						},
+					},
+				})
+			},
+			wants: []string{
+				"issue: LAB-804",
+				"\ngithub: rate limited until 09:02\n",
+			},
+		},
+		{
 			name: "task status without events",
 			write: func(buf *bytes.Buffer) error {
 				return writeTaskStatus(buf, state.TaskStatus{

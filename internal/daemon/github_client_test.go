@@ -448,21 +448,30 @@ func TestGitHubCLIClientReturnsRateLimitErrorAfterMaxAttempts(t *testing.T) {
 	t.Parallel()
 
 	commands := newFakeCommands()
+	clock := &fakeClock{now: time.Date(2026, 4, 2, 9, 0, 0, 0, time.UTC)}
 	client := newGitHubCLIClient(gitHubCLIClientConfig{
 		project:        "/tmp/project",
 		commands:       commands,
+		now:            clock.Now,
 		sleep:          noSleep,
 		initialBackoff: time.Second,
 		maxAttempts:    2,
 	})
 	args := []string{"pr", "view", "42", "--json", "mergedAt"}
-	wantErr := errors.New("gh: secondary rate limit")
-	commands.queue("gh", args, ``, wantErr)
-	commands.queue("gh", args, ``, wantErr)
+	wantErr := errors.New("gh: HTTP 429")
+	commands.queue("gh", args, "HTTP 429: API rate limit exceeded\nRetry-After: 120\n", wantErr)
+	commands.queue("gh", args, "HTTP 429: API rate limit exceeded\nRetry-After: 120\n", wantErr)
 
 	_, err := client.isPRMerged(context.Background(), 42)
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("isPRMerged() error = %v, want %v", err, wantErr)
+	}
+	var rateLimited interface{ RateLimitedUntil() time.Time }
+	if !errors.As(err, &rateLimited) {
+		t.Fatalf("isPRMerged() error = %v, want rate limit metadata", err)
+	}
+	if got, want := rateLimited.RateLimitedUntil(), clock.Now().Add(120*time.Second); !got.Equal(want) {
+		t.Fatalf("rate limited until = %v, want %v", got, want)
 	}
 	if got, want := commands.countCalls("gh", args), 2; got != want {
 		t.Fatalf("gh call count = %d, want %d", got, want)
@@ -507,6 +516,8 @@ func TestIsGitHubRateLimitError(t *testing.T) {
 		{name: "auth error", err: errors.New("authentication failed")},
 		{name: "secondary rate limit in error", err: errors.New("Secondary Rate Limit"), want: true},
 		{name: "rate limit in output", err: errors.New("gh failed"), output: []byte("API rate limit exceeded"), want: true},
+		{name: "http 403 rate limit", err: errors.New("gh: HTTP 403"), output: []byte("rate limit exceeded"), want: true},
+		{name: "http 429 retry after", err: errors.New("gh: HTTP 429"), output: []byte("Retry-After: 120"), want: true},
 	}
 
 	for _, tc := range testCases {
