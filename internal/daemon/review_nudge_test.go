@@ -43,6 +43,17 @@ func TestPRReviewPollingSkipsNudgesForApprovalOrLGTM(t *testing.T) {
 			wantIssueCommentCount: 1,
 		},
 		{
+			name: "github-actions review progress comment does not nudge worker",
+			payload: marshalReviewPayload(t,
+				"CHANGES_REQUESTED",
+				nil,
+				[]prComment{
+					testIssueComment("github-actions", "### PR Review: LAB-985\n\nReviewing...\n\n- [x] Gather context\n- [ ] Read changed files\n- [ ] Post final review\n\n[View job run](https://github.com/weill-labs/orca/actions/runs/24174001351)"),
+				},
+			),
+			wantIssueCommentCount: 1,
+		},
+		{
 			name: "latest review lgtm skips older blocking reviews",
 			payload: marshalReviewPayload(t,
 				"CHANGES_REQUESTED",
