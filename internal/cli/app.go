@@ -939,6 +939,11 @@ func writeTaskStatus(w io.Writer, taskStatus state.TaskStatus) error {
 	if _, err := fmt.Fprintf(w, "updated: %s\n", formatTimestamp(task.UpdatedAt)); err != nil {
 		return err
 	}
+	if warning := taskGitHubRateLimitWarning(taskStatus, time.Now().UTC()); warning != "" {
+		if _, err := fmt.Fprintf(w, "%s\n", warning); err != nil {
+			return err
+		}
+	}
 	if len(taskStatus.Events) == 0 {
 		return nil
 	}

@@ -58,6 +58,7 @@ func (d *Daemon) checkTaskPRPoll(ctx context.Context, active ActiveAssignment) T
 	if update.Active.Task.PRNumber == 0 {
 		prNumber, err := d.lookupPRNumber(ctx, update.Active.Task.Project, update.Active.Task.Branch)
 		if err != nil {
+			d.appendGitHubRateLimitEvent(&update, profile, err)
 			return update
 		}
 		if prNumber > 0 {
@@ -83,7 +84,16 @@ func (d *Daemon) checkTaskPRPoll(ctx context.Context, active ActiveAssignment) T
 	d.handlePRChecksPoll(ctx, &update, profile)
 
 	merged, err := d.isPRMerged(ctx, update.Active.Task.Project, update.Active.Task.PRNumber)
-	if err != nil || !merged {
+	if err != nil {
+		if d.appendGitHubRateLimitEvent(&update, profile, err) {
+			return update
+		}
+		d.handlePRMergeablePoll(ctx, &update, profile)
+		reviewUpdate := d.checkTaskReviewPoll(ctx, update.Active, profile)
+		update = mergeTaskStateUpdates(update, reviewUpdate)
+		return update
+	}
+	if !merged {
 		d.handlePRMergeablePoll(ctx, &update, profile)
 		reviewUpdate := d.checkTaskReviewPoll(ctx, update.Active, profile)
 		update = mergeTaskStateUpdates(update, reviewUpdate)
