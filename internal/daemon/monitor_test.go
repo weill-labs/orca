@@ -75,9 +75,6 @@ func TestDaemonCaptureMonitorOpensAmuxCircuitAfterThreeFailures(t *testing.T) {
 	t.Parallel()
 
 	deps := newTestDeps(t)
-	captureTicker := newFakeTicker()
-	pollTicker := newFakeTicker()
-	deps.tickers.enqueue(captureTicker, pollTicker)
 	seedTaskMonitorAssignment(t, deps, "LAB-924", "pane-1", 0)
 	deps.amux.capturePaneErr = errors.New("amux unavailable")
 
@@ -116,9 +113,6 @@ func TestDaemonPollMonitorOpensGitHubCircuitAfterThreeFailures(t *testing.T) {
 	t.Parallel()
 
 	deps := newTestDeps(t)
-	captureTicker := newFakeTicker()
-	pollTicker := newFakeTicker()
-	deps.tickers.enqueue(captureTicker, pollTicker)
 	seedTaskMonitorAssignment(t, deps, "LAB-924", "pane-1", 0)
 
 	lookupArgs := []string{"pr", "list", "--head", "LAB-924", "--json", "number"}
@@ -129,11 +123,8 @@ func TestDaemonPollMonitorOpensGitHubCircuitAfterThreeFailures(t *testing.T) {
 
 	d := deps.newDaemon(t)
 	ctx := context.Background()
-	if err := d.Start(ctx); err != nil {
-		t.Fatalf("Start() error = %v", err)
-	}
 	t.Cleanup(func() {
-		_ = d.Stop(context.Background())
+		d.stopAllTaskMonitors(true)
 	})
 
 	for i := 0; i < 3; i++ {
