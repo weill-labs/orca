@@ -125,20 +125,321 @@ func TestCircuitGitHubClientLookupPRReviewsSharesBreakerState(t *testing.T) {
 	}
 }
 
+func TestCircuitAmuxClientWrapsBaseMethods(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		call func(t *testing.T, client AmuxClient, base *fakeAmux)
+	}{
+		{
+			name: "spawn",
+			call: func(t *testing.T, client AmuxClient, base *fakeAmux) {
+				t.Helper()
+
+				req := SpawnRequest{Name: "worker-1", Command: "orca"}
+				got, err := client.Spawn(context.Background(), req)
+				if err != nil {
+					t.Fatalf("Spawn() error = %v", err)
+				}
+				if got != base.spawnPane {
+					t.Fatalf("Spawn() pane = %#v, want %#v", got, base.spawnPane)
+				}
+				if got := len(base.spawnRequests); got != 1 {
+					t.Fatalf("len(spawnRequests) = %d, want 1", got)
+				}
+			},
+		},
+		{
+			name: "pane exists",
+			call: func(t *testing.T, client AmuxClient, base *fakeAmux) {
+				t.Helper()
+
+				got, err := client.PaneExists(context.Background(), base.spawnPane.ID)
+				if err != nil {
+					t.Fatalf("PaneExists() error = %v", err)
+				}
+				if !got {
+					t.Fatalf("PaneExists() = false, want true")
+				}
+			},
+		},
+		{
+			name: "list panes",
+			call: func(t *testing.T, client AmuxClient, base *fakeAmux) {
+				t.Helper()
+
+				got, err := client.ListPanes(context.Background())
+				if err != nil {
+					t.Fatalf("ListPanes() error = %v", err)
+				}
+				if want := []Pane{base.spawnPane}; !reflect.DeepEqual(got, want) {
+					t.Fatalf("ListPanes() = %#v, want %#v", got, want)
+				}
+			},
+		},
+		{
+			name: "metadata",
+			call: func(t *testing.T, client AmuxClient, base *fakeAmux) {
+				t.Helper()
+
+				got, err := client.Metadata(context.Background(), base.spawnPane.ID)
+				if err != nil {
+					t.Fatalf("Metadata() error = %v", err)
+				}
+				if want := map[string]string{"role": "worker", "status": "active"}; !reflect.DeepEqual(got, want) {
+					t.Fatalf("Metadata() = %#v, want %#v", got, want)
+				}
+			},
+		},
+		{
+			name: "set metadata",
+			call: func(t *testing.T, client AmuxClient, base *fakeAmux) {
+				t.Helper()
+
+				if err := client.SetMetadata(context.Background(), base.spawnPane.ID, map[string]string{"owner": "orca"}); err != nil {
+					t.Fatalf("SetMetadata() error = %v", err)
+				}
+				base.requireMetadata(t, base.spawnPane.ID, map[string]string{
+					"owner":  "orca",
+					"role":   "worker",
+					"status": "active",
+				})
+			},
+		},
+		{
+			name: "remove metadata",
+			call: func(t *testing.T, client AmuxClient, base *fakeAmux) {
+				t.Helper()
+
+				if err := client.RemoveMetadata(context.Background(), base.spawnPane.ID, "status"); err != nil {
+					t.Fatalf("RemoveMetadata() error = %v", err)
+				}
+				base.requireMetadata(t, base.spawnPane.ID, map[string]string{"role": "worker"})
+			},
+		},
+		{
+			name: "send keys",
+			call: func(t *testing.T, client AmuxClient, base *fakeAmux) {
+				t.Helper()
+
+				if err := client.SendKeys(context.Background(), base.spawnPane.ID, "status", "Enter"); err != nil {
+					t.Fatalf("SendKeys() error = %v", err)
+				}
+				base.requireSentKeys(t, base.spawnPane.ID, []string{"status", "Enter"})
+			},
+		},
+		{
+			name: "kill pane",
+			call: func(t *testing.T, client AmuxClient, base *fakeAmux) {
+				t.Helper()
+
+				if err := client.KillPane(context.Background(), base.spawnPane.ID); err != nil {
+					t.Fatalf("KillPane() error = %v", err)
+				}
+				if got := len(base.killCalls); got != 1 {
+					t.Fatalf("len(killCalls) = %d, want 1", got)
+				}
+			},
+		},
+		{
+			name: "wait idle",
+			call: func(t *testing.T, client AmuxClient, base *fakeAmux) {
+				t.Helper()
+
+				timeout := 5 * time.Second
+				if err := client.WaitIdle(context.Background(), base.spawnPane.ID, timeout); err != nil {
+					t.Fatalf("WaitIdle() error = %v", err)
+				}
+				if got, want := base.waitIdleCalls, []waitIdleCall{{PaneID: base.spawnPane.ID, Timeout: timeout}}; !reflect.DeepEqual(got, want) {
+					t.Fatalf("waitIdleCalls = %#v, want %#v", got, want)
+				}
+			},
+		},
+		{
+			name: "wait idle settle",
+			call: func(t *testing.T, client AmuxClient, base *fakeAmux) {
+				t.Helper()
+
+				timeout := 5 * time.Second
+				settle := 2 * time.Second
+				if err := client.WaitIdleSettle(context.Background(), base.spawnPane.ID, timeout, settle); err != nil {
+					t.Fatalf("WaitIdleSettle() error = %v", err)
+				}
+				if got, want := base.waitIdleCalls, []waitIdleCall{{PaneID: base.spawnPane.ID, Timeout: timeout, Settle: settle}}; !reflect.DeepEqual(got, want) {
+					t.Fatalf("waitIdleCalls = %#v, want %#v", got, want)
+				}
+			},
+		},
+		{
+			name: "wait content",
+			call: func(t *testing.T, client AmuxClient, base *fakeAmux) {
+				t.Helper()
+
+				base.waitContentResults = []error{nil}
+				timeout := 5 * time.Second
+				if err := client.WaitContent(context.Background(), base.spawnPane.ID, "ready", timeout); err != nil {
+					t.Fatalf("WaitContent() error = %v", err)
+				}
+				if got, want := base.waitContentCalls, []waitContentCall{{PaneID: base.spawnPane.ID, Substring: "ready", Timeout: timeout}}; !reflect.DeepEqual(got, want) {
+					t.Fatalf("waitContentCalls = %#v, want %#v", got, want)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			pane := Pane{ID: "pane-1", Name: "worker-1"}
+			base := &fakeAmux{
+				spawnPane:  pane,
+				paneExists: map[string]bool{pane.ID: true},
+				listPanes:  []Pane{pane},
+				metadata: map[string]map[string]string{
+					pane.ID: {"role": "worker", "status": "active"},
+				},
+			}
+			client := newCircuitAmuxClient(base, NewCircuitBreaker(time.Now, 3, time.Minute))
+			tt.call(t, client, base)
+		})
+	}
+}
+
+func TestCircuitCommandRunnerBypassesNonGitHubCommandsWhenCircuitIsOpen(t *testing.T) {
+	t.Parallel()
+
+	breaker := NewCircuitBreaker(time.Now, 3, time.Minute)
+	for i := 0; i < 3; i++ {
+		breaker.RecordFailure()
+	}
+
+	commands := newFakeCommands()
+	commands.queue("git", []string{"status"}, "working tree clean", nil)
+
+	runner := newCircuitCommandRunner(commands, breaker)
+	got, err := runner.Run(context.Background(), "/tmp/repo", "git", "status")
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if string(got) != "working tree clean" {
+		t.Fatalf("Run() output = %q, want %q", got, "working tree clean")
+	}
+	if got := commands.countCall("git", "status"); got != 1 {
+		t.Fatalf("countCall(git status) = %d, want 1", got)
+	}
+}
+
+func TestCircuitGitHubClientWrapsLookupMethods(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		call func(t *testing.T, client gitHubClient)
+	}{
+		{
+			name: "lookup pr number",
+			call: func(t *testing.T, client gitHubClient) {
+				t.Helper()
+
+				got, err := client.lookupPRNumber(context.Background(), "LAB-924")
+				if err != nil {
+					t.Fatalf("lookupPRNumber() error = %v", err)
+				}
+				if got != 42 {
+					t.Fatalf("lookupPRNumber() = %d, want 42", got)
+				}
+			},
+		},
+		{
+			name: "lookup open pr number",
+			call: func(t *testing.T, client gitHubClient) {
+				t.Helper()
+
+				got, err := client.lookupOpenPRNumber(context.Background(), "LAB-924")
+				if err != nil {
+					t.Fatalf("lookupOpenPRNumber() error = %v", err)
+				}
+				if got != 43 {
+					t.Fatalf("lookupOpenPRNumber() = %d, want 43", got)
+				}
+			},
+		},
+		{
+			name: "is pr merged",
+			call: func(t *testing.T, client gitHubClient) {
+				t.Helper()
+
+				got, err := client.isPRMerged(context.Background(), 42)
+				if err != nil {
+					t.Fatalf("isPRMerged() error = %v", err)
+				}
+				if !got {
+					t.Fatalf("isPRMerged() = false, want true")
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			client := newCircuitGitHubClient(&circuitGitHubClientStub{
+				prNumber:     42,
+				openPRNumber: 43,
+				merged:       true,
+			}, NewCircuitBreaker(time.Now, 3, time.Minute))
+			tt.call(t, client)
+		})
+	}
+}
+
+func TestMonitorCircuitDependencyAccessorsFallbackToBaseDependencies(t *testing.T) {
+	t.Parallel()
+
+	baseAmux := &fakeAmux{}
+	baseCommands := newFakeCommands()
+	baseGitHub := &circuitGitHubClientStub{prNumber: 42}
+
+	daemon := &Daemon{
+		project:  "orca",
+		amux:     baseAmux,
+		commands: baseCommands,
+		github:   baseGitHub,
+	}
+
+	if got := daemon.amuxClient(context.Background()); got != baseAmux {
+		t.Fatalf("amuxClient() = %#v, want base amux %#v", got, baseAmux)
+	}
+	if got := daemon.commandRunner(context.Background()); got != baseCommands {
+		t.Fatalf("commandRunner() = %#v, want base commands %#v", got, baseCommands)
+	}
+	if got := daemon.gitHubClientForContext(context.Background(), daemon.project); got != baseGitHub {
+		t.Fatalf("gitHubClientForContext() = %#v, want base github %#v", got, baseGitHub)
+	}
+}
+
 type circuitGitHubClientStub struct {
-	err error
+	err          error
+	prNumber     int
+	openPRNumber int
+	merged       bool
 }
 
 func (c circuitGitHubClientStub) lookupPRNumber(context.Context, string) (int, error) {
-	return 0, c.err
+	return c.prNumber, c.err
 }
 
 func (c circuitGitHubClientStub) lookupOpenPRNumber(context.Context, string) (int, error) {
-	return 0, c.err
+	return c.openPRNumber, c.err
 }
 
 func (c circuitGitHubClientStub) isPRMerged(context.Context, int) (bool, error) {
-	return false, c.err
+	return c.merged, c.err
 }
 
 func (c circuitGitHubClientStub) lookupPRReviews(context.Context, int) (prReviewPayload, bool, error) {

@@ -94,11 +94,7 @@ func (c *CircuitBreaker) RecordFailure() {
 		c.closeLocked()
 	}
 	if c.isOpenLocked() {
-		onClose := c.hooks.OnClose
 		c.mu.Unlock()
-		if shouldClose && onClose != nil {
-			onClose()
-		}
 		return
 	}
 
