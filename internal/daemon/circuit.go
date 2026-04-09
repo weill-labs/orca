@@ -5,6 +5,8 @@ import (
 	"errors"
 	"sync"
 	"time"
+
+	"github.com/weill-labs/orca/internal/amux"
 )
 
 const (
@@ -167,6 +169,8 @@ type circuitAmuxClient struct {
 	breaker *CircuitBreaker
 }
 
+var _ AmuxClient = (*circuitAmuxClient)(nil)
+
 func newCircuitAmuxClient(base AmuxClient, breaker *CircuitBreaker) AmuxClient {
 	if base == nil || breaker == nil {
 		return base
@@ -190,6 +194,10 @@ func (c *circuitAmuxClient) ListPanes(ctx context.Context) ([]Pane, error) {
 	return withCircuit(c.breaker, func() ([]Pane, error) {
 		return c.base.ListPanes(ctx)
 	})
+}
+
+func (c *circuitAmuxClient) Events(ctx context.Context, req amux.EventsRequest) (<-chan amux.Event, <-chan error) {
+	return c.base.Events(ctx, req)
 }
 
 func (c *circuitAmuxClient) Metadata(ctx context.Context, paneID string) (map[string]string, error) {
