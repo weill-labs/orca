@@ -8,8 +8,6 @@ import (
 const (
 	watchdogWarningMultiplier   = 2
 	watchdogUnhealthyMultiplier = 5
-	daemonStatusRunning         = "running"
-	daemonStatusUnhealthy       = "unhealthy"
 )
 
 type daemonStatusWriter interface {

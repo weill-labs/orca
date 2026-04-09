@@ -23,6 +23,9 @@ const (
 	WorkerHealthStuck     = "stuck"
 	WorkerHealthEscalated = "escalated"
 
+	daemonStatusRunning   = "running"
+	daemonStatusUnhealthy = "unhealthy"
+
 	MergeQueueStatusQueued         = "queued"
 	MergeQueueStatusAwaitingChecks = "awaiting_checks"
 	MergeQueueStatusCheckingCI     = "checking_ci"
