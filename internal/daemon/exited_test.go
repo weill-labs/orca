@@ -3,125 +3,210 @@ package daemon
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
 
-func TestExitedPaneDetectionEscalatesWorker(t *testing.T) {
+type sleepRecorder struct {
+	mu        sync.Mutex
+	durations []time.Duration
+}
+
+func (r *sleepRecorder) Sleep(ctx context.Context, delay time.Duration) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.durations = append(r.durations, delay)
+	return nil
+}
+
+func (r *sleepRecorder) snapshot() []time.Duration {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]time.Duration(nil), r.durations...)
+}
+
+func TestExitedPaneDetectionRestartsWithExponentialBackoff(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name             string
-		initialHealth    string
-		initialNudge     int
-		initialCapture   string
-		snapshot         PaneCapture
-		wantLastCapture  string
-		wantNoRecoveries bool
-	}{
-		{
-			name:           "same output still escalates exited pane",
-			initialHealth:  WorkerHealthHealthy,
-			initialCapture: "shell prompt",
-			snapshot: PaneCapture{
-				Content:        []string{"shell prompt"},
-				CurrentCommand: "bash",
-				Exited:         true,
-			},
-			wantLastCapture: "shell prompt",
-		},
-		{
-			name:           "changed output does not recover exited pane",
-			initialHealth:  WorkerHealthStuck,
-			initialNudge:   1,
-			initialCapture: "old output",
-			snapshot: PaneCapture{
-				Content:        []string{"final shell output"},
-				CurrentCommand: "bash",
-				Exited:         true,
-			},
-			wantLastCapture:  "final shell output",
-			wantNoRecoveries: true,
-		},
+	deps := newTestDeps(t)
+	sleep := &sleepRecorder{}
+	deps.sleep = sleep.Sleep
+	captureTicker := newFakeTicker()
+	pollTicker := newFakeTicker()
+	deps.tickers.enqueue(captureTicker, pollTicker)
+	seedActiveAssignment(t, deps, "LAB-739", "pane-1")
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	firstCrashAt := deps.clock.Now()
+	staleExit := firstCrashAt.Add(-31 * time.Second).Format(time.RFC3339)
+	deps.amux.capturePaneSequence("pane-1", []PaneCapture{
+		{Content: []string{"shell prompt"}, CurrentCommand: "bash", Exited: true, ExitedSince: staleExit},
+		{Content: []string{"shell prompt"}, CurrentCommand: "bash", Exited: true, ExitedSince: staleExit},
+		{Content: []string{"shell prompt"}, CurrentCommand: "bash", Exited: true, ExitedSince: staleExit},
+		{Content: []string{"shell prompt"}, CurrentCommand: "bash", Exited: true, ExitedSince: staleExit},
+	})
+
+	captureTicker.tick(firstCrashAt)
+	waitFor(t, "first restart after exited pane", func() bool {
+		worker, ok := deps.state.worker("pane-1")
+		return ok && worker.RestartCount == 1 && deps.amux.countKey("pane-1", "codex --yolo\n") == 1
+	})
+
+	worker, ok := deps.state.worker("pane-1")
+	if !ok {
+		t.Fatal("worker missing after first restart")
+	}
+	if got, want := worker.Health, WorkerHealthHealthy; got != want {
+		t.Fatalf("worker.Health after first restart = %q, want %q", got, want)
+	}
+	if got, want := worker.FirstCrashAt, firstCrashAt; !got.Equal(want) {
+		t.Fatalf("worker.FirstCrashAt after first restart = %v, want %v", got, want)
+	}
+	if got := sleep.snapshot(); len(got) != 0 {
+		t.Fatalf("sleep calls after first restart = %#v, want none", got)
 	}
 
-	for _, tt := range tests {
-		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
+	deps.clock.Advance(time.Minute)
+	captureTicker.tick(deps.clock.Now())
+	waitFor(t, "second restart after exited pane", func() bool {
+		worker, ok := deps.state.worker("pane-1")
+		return ok && worker.RestartCount == 2 && deps.amux.countKey("pane-1", "codex --yolo\n") == 2
+	})
+	if got, want := sleep.snapshot(), []time.Duration{10 * time.Second}; !equalDurations(got, want) {
+		t.Fatalf("sleep calls after second restart = %#v, want %#v", got, want)
+	}
 
-			deps := newTestDeps(t)
-			captureTicker := newFakeTicker()
-			pollTicker := newFakeTicker()
-			deps.tickers.enqueue(captureTicker, pollTicker)
-			seedActiveAssignment(t, deps, "LAB-739", "pane-1")
+	deps.clock.Advance(time.Minute)
+	captureTicker.tick(deps.clock.Now())
+	waitFor(t, "third restart after exited pane", func() bool {
+		worker, ok := deps.state.worker("pane-1")
+		return ok && worker.RestartCount == 3 && deps.amux.countKey("pane-1", "codex --yolo\n") == 3
+	})
+	if got, want := sleep.snapshot(), []time.Duration{10 * time.Second, 60 * time.Second}; !equalDurations(got, want) {
+		t.Fatalf("sleep calls after third restart = %#v, want %#v", got, want)
+	}
 
-			worker, ok := deps.state.worker("pane-1")
-			if !ok {
-				t.Fatal("seeded worker missing")
-			}
-			worker.Health = tt.initialHealth
-			worker.NudgeCount = tt.initialNudge
-			worker.LastCapture = tt.initialCapture
-			if err := deps.state.PutWorker(context.Background(), worker); err != nil {
-				t.Fatalf("PutWorker() error = %v", err)
-			}
+	deps.clock.Advance(time.Minute)
+	captureTicker.tick(deps.clock.Now())
+	waitFor(t, "fourth crash escalates worker", func() bool {
+		worker, ok := deps.state.worker("pane-1")
+		return ok && worker.Health == WorkerHealthEscalated
+	})
 
-			deps.amux.capturePaneSequence("pane-1", []PaneCapture{tt.snapshot})
+	worker, ok = deps.state.worker("pane-1")
+	if !ok {
+		t.Fatal("worker missing after escalation")
+	}
+	if got, want := worker.RestartCount, 3; got != want {
+		t.Fatalf("worker.RestartCount after escalation = %d, want %d", got, want)
+	}
+	if got, want := worker.FirstCrashAt, firstCrashAt; !got.Equal(want) {
+		t.Fatalf("worker.FirstCrashAt after escalation = %v, want %v", got, want)
+	}
+	if got, want := deps.amux.countKey("pane-1", "codex --yolo\n"), 3; got != want {
+		t.Fatalf("restart send count = %d, want %d", got, want)
+	}
+	if got, want := deps.events.countType(EventWorkerEscalated), 1; got != want {
+		t.Fatalf("worker escalated events = %d, want %d", got, want)
+	}
+	if got := deps.events.countType(EventWorkerRecovered); got != 0 {
+		t.Fatalf("worker recovered events = %d, want 0", got)
+	}
 
-			d := deps.newDaemon(t)
-			ctx := context.Background()
-			if err := d.Start(ctx); err != nil {
-				t.Fatalf("Start() error = %v", err)
-			}
-			t.Cleanup(func() {
-				_ = d.Stop(context.Background())
-			})
+	event, ok := deps.events.lastEventOfType(EventWorkerEscalated)
+	if !ok {
+		t.Fatal("worker escalation event missing")
+	}
+	if !strings.Contains(event.Message, "pane exited") {
+		t.Fatalf("event.Message = %q, want to contain %q", event.Message, "pane exited")
+	}
 
-			captureTicker.tick(deps.clock.Now())
-			waitFor(t, "worker escalation after exited pane capture", func() bool {
-				worker, ok := deps.state.worker("pane-1")
-				return ok && worker.Health == WorkerHealthEscalated
-			})
+	task, ok := deps.state.task("LAB-739")
+	if !ok {
+		t.Fatal("task missing after exited pane detection")
+	}
+	if got, want := task.Status, TaskStatusActive; got != want {
+		t.Fatalf("task.Status = %q, want %q", got, want)
+	}
+}
 
-			worker, ok = deps.state.worker("pane-1")
-			if !ok {
-				t.Fatal("worker missing after exited pane detection")
-			}
-			if got, want := worker.Health, WorkerHealthEscalated; got != want {
-				t.Fatalf("worker.Health = %q, want %q", got, want)
-			}
-			if got, want := worker.LastCapture, tt.wantLastCapture; got != want {
-				t.Fatalf("worker.LastCapture = %q, want %q", got, want)
-			}
-			if got := deps.amux.countKey("pane-1", "\n"); got != 0 {
-				t.Fatalf("nudge count = %d, want 0", got)
-			}
-			if got, want := deps.events.countType(EventWorkerEscalated), 1; got != want {
-				t.Fatalf("worker escalated events = %d, want %d", got, want)
-			}
-			if tt.wantNoRecoveries {
-				if got := deps.events.countType(EventWorkerRecovered); got != 0 {
-					t.Fatalf("worker recovered events = %d, want 0", got)
-				}
-			}
+func TestExitedPaneDetectionResetsCrashWindowAfterHealthyRun(t *testing.T) {
+	t.Parallel()
 
-			event, ok := deps.events.lastEventOfType(EventWorkerEscalated)
-			if !ok {
-				t.Fatal("worker escalation event missing")
-			}
-			if !strings.Contains(event.Message, "pane exited") {
-				t.Fatalf("event.Message = %q, want to contain %q", event.Message, "pane exited")
-			}
+	deps := newTestDeps(t)
+	sleep := &sleepRecorder{}
+	deps.sleep = sleep.Sleep
+	captureTicker := newFakeTicker()
+	pollTicker := newFakeTicker()
+	deps.tickers.enqueue(captureTicker, pollTicker)
+	seedActiveAssignment(t, deps, "LAB-739", "pane-1")
 
-			task, ok := deps.state.task("LAB-739")
-			if !ok {
-				t.Fatal("task missing after exited pane detection")
-			}
-			if got, want := task.Status, TaskStatusActive; got != want {
-				t.Fatalf("task.Status = %q, want %q", got, want)
-			}
-		})
+	worker, ok := deps.state.worker("pane-1")
+	if !ok {
+		t.Fatal("seeded worker missing")
+	}
+	worker.Health = WorkerHealthHealthy
+	worker.LastCapture = "still running"
+	worker.RestartCount = 2
+	worker.FirstCrashAt = deps.clock.Now().Add(-6 * time.Minute)
+	if err := deps.state.PutWorker(context.Background(), worker); err != nil {
+		t.Fatalf("PutWorker() error = %v", err)
+	}
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	deps.amux.capturePaneSequence("pane-1", []PaneCapture{
+		paneCaptureFromOutput("still running"),
+		{
+			Content:        []string{"shell prompt"},
+			CurrentCommand: "bash",
+			Exited:         true,
+			ExitedSince:    deps.clock.Now().Add(-31 * time.Second).Format(time.RFC3339),
+		},
+	})
+
+	captureTicker.tick(deps.clock.Now())
+	waitFor(t, "healthy worker reset after restart window", func() bool {
+		worker, ok := deps.state.worker("pane-1")
+		return ok && worker.RestartCount == 0 && worker.FirstCrashAt.IsZero()
+	})
+
+	deps.clock.Advance(time.Second)
+	secondCrashAt := deps.clock.Now()
+	captureTicker.tick(secondCrashAt)
+	waitFor(t, "restart after reset crash window", func() bool {
+		worker, ok := deps.state.worker("pane-1")
+		return ok && worker.RestartCount == 1 && deps.amux.countKey("pane-1", "codex --yolo\n") == 1
+	})
+
+	worker, ok = deps.state.worker("pane-1")
+	if !ok {
+		t.Fatal("worker missing after restart window reset")
+	}
+	if got, want := worker.FirstCrashAt, secondCrashAt; !got.Equal(want) {
+		t.Fatalf("worker.FirstCrashAt after reset = %v, want %v", got, want)
+	}
+	if got := sleep.snapshot(); len(got) != 0 {
+		t.Fatalf("sleep calls after reset crash = %#v, want none", got)
 	}
 }
 
@@ -136,6 +221,15 @@ func TestExitedPaneDetectionWaitsForPersistentExitedState(t *testing.T) {
 
 	recentExit := deps.clock.Now().Add(-5 * time.Second).Format(time.RFC3339)
 	staleExit := deps.clock.Now().Add(-31 * time.Second).Format(time.RFC3339)
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
 	deps.amux.capturePaneSequence("pane-1", []PaneCapture{
 		{
 			Content:        []string{"shell prompt"},
@@ -157,20 +251,7 @@ func TestExitedPaneDetectionWaitsForPersistentExitedState(t *testing.T) {
 		},
 	})
 
-	d := deps.newDaemon(t)
-	ctx := context.Background()
-	if err := d.Start(ctx); err != nil {
-		t.Fatalf("Start() error = %v", err)
-	}
-	t.Cleanup(func() {
-		_ = d.Stop(context.Background())
-	})
-
 	captureTicker.tick(deps.clock.Now())
-	waitFor(t, "first exited capture", func() bool {
-		return deps.amux.captureCount("pane-1") >= 2
-	})
-
 	worker, ok := deps.state.worker("pane-1")
 	if !ok {
 		t.Fatal("worker missing after first exited capture")
@@ -178,14 +259,14 @@ func TestExitedPaneDetectionWaitsForPersistentExitedState(t *testing.T) {
 	if got, want := worker.Health, WorkerHealthHealthy; got != want {
 		t.Fatalf("worker.Health after recent exited capture = %q, want %q", got, want)
 	}
-	if got := deps.events.countType(EventWorkerEscalated); got != 0 {
-		t.Fatalf("worker escalated events after recent exited capture = %d, want 0", got)
+	if got := deps.amux.countKey("pane-1", "codex --yolo\n"); got != 0 {
+		t.Fatalf("restart send count after recent exited capture = %d, want 0", got)
 	}
 
 	captureTicker.tick(deps.clock.Now())
-	waitFor(t, "persistent exited escalation", func() bool {
+	waitFor(t, "persistent exited restart", func() bool {
 		worker, ok := deps.state.worker("pane-1")
-		return ok && worker.Health == WorkerHealthEscalated
+		return ok && worker.RestartCount == 1 && deps.amux.countKey("pane-1", "codex --yolo\n") == 1
 	})
 }
 
@@ -252,4 +333,16 @@ func TestShouldEscalateExitedPane(t *testing.T) {
 			}
 		})
 	}
+}
+
+func equalDurations(got, want []time.Duration) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
 }

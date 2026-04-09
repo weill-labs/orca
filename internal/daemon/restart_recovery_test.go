@@ -26,6 +26,8 @@ func TestDaemonStartReconcilesNonTerminalAssignments(t *testing.T) {
 		wantFailedEvents  int
 		wantEscalateEvent int
 		wantCaptureCount  int
+		wantRestartCount  int
+		wantRestartSend   int
 		wantEventType     string
 		wantEventMessage  string
 	}{
@@ -122,15 +124,16 @@ func TestDaemonStartReconcilesNonTerminalAssignments(t *testing.T) {
 			wantEventMessage: "worker pane exited on daemon startup",
 		},
 		{
-			name:              "active worker escalates when pane already exited",
-			taskStatus:        TaskStatusActive,
-			paneID:            "pane-1",
-			startupSnapshot:   []PaneCapture{{Content: []string{"shell prompt"}, CurrentCommand: "bash", Exited: true}},
-			wantTaskStatus:    TaskStatusActive,
-			wantWorker:        true,
-			wantWorkerHealth:  WorkerHealthEscalated,
-			wantEscalateEvent: 1,
-			wantCaptureCount:  1,
+			name:             "active worker restarts when pane already exited",
+			taskStatus:       TaskStatusActive,
+			paneID:           "pane-1",
+			startupSnapshot:  []PaneCapture{{Content: []string{"shell prompt"}, CurrentCommand: "bash", Exited: true}},
+			wantTaskStatus:   TaskStatusActive,
+			wantWorker:       true,
+			wantWorkerHealth: WorkerHealthHealthy,
+			wantCaptureCount: 1,
+			wantRestartCount: 1,
+			wantRestartSend:  1,
 		},
 		{
 			name:              "active worker escalates when pane liveness check errors",
@@ -210,6 +213,9 @@ func TestDaemonStartReconcilesNonTerminalAssignments(t *testing.T) {
 				if got, want := worker.Health, tt.wantWorkerHealth; got != want {
 					t.Fatalf("worker.Health = %q, want %q", got, want)
 				}
+				if got, want := worker.RestartCount, tt.wantRestartCount; got != want {
+					t.Fatalf("worker.RestartCount = %d, want %d", got, want)
+				}
 				if tt.wantTaskStatus == TaskStatusFailed {
 					if got := worker.PaneID; got != "" {
 						t.Fatalf("worker.PaneID = %q, want empty after release", got)
@@ -247,7 +253,9 @@ func TestDaemonStartReconcilesNonTerminalAssignments(t *testing.T) {
 			if got, want := deps.amux.captureCount(tt.paneID), tt.wantCaptureCount; got != want {
 				t.Fatalf("capture count = %d, want %d", got, want)
 			}
-			deps.amux.requireSentKeys(t, tt.paneID, nil)
+			if got, want := deps.amux.countKey(tt.paneID, "codex --yolo\n"), tt.wantRestartSend; got != want {
+				t.Fatalf("restart send count = %d, want %d", got, want)
+			}
 		})
 	}
 }

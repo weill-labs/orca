@@ -238,6 +238,8 @@ func TestSQLiteStateAdapterNonTerminalTasksAndWorkerByPane(t *testing.T) {
 		NudgeCount:                   3,
 		LastCapture:                  "permission prompt",
 		LastActivityAt:               now,
+		RestartCount:                 2,
+		FirstCrashAt:                 now.Add(-3 * time.Minute),
 		UpdatedAt:                    now.Add(time.Minute),
 	}); err != nil {
 		t.Fatalf("PutWorker() error = %v", err)
@@ -308,6 +310,12 @@ func TestSQLiteStateAdapterNonTerminalTasksAndWorkerByPane(t *testing.T) {
 	}
 	if got, want := worker.NudgeCount, 3; got != want {
 		t.Fatalf("worker.NudgeCount = %d, want %d", got, want)
+	}
+	if got, want := worker.RestartCount, 2; got != want {
+		t.Fatalf("worker.RestartCount = %d, want %d", got, want)
+	}
+	if got, want := worker.FirstCrashAt, now.Add(-3*time.Minute); !got.Equal(want) {
+		t.Fatalf("worker.FirstCrashAt = %v, want %v", got, want)
 	}
 	if _, err := adapter.WorkerByPane(context.Background(), "/repo", "missing"); !errors.Is(err, ErrWorkerNotFound) {
 		t.Fatalf("WorkerByPane() missing error = %v, want ErrWorkerNotFound", err)
