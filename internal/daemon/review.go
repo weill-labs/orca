@@ -49,7 +49,7 @@ func (d *Daemon) checkTaskCapture(ctx context.Context, active ActiveAssignment) 
 		return update
 	}
 
-	snapshot, err := d.amux.CapturePane(ctx, active.Task.PaneID)
+	snapshot, err := d.amuxClient(ctx).CapturePane(ctx, active.Task.PaneID)
 	if err != nil {
 		return update
 	}
@@ -109,7 +109,7 @@ func (d *Daemon) checkExitedPaneCapture(active ActiveAssignment, profile AgentPr
 func (d *Daemon) checkTaskReviewPoll(ctx context.Context, active ActiveAssignment, profile AgentProfile) TaskStateUpdate {
 	update := TaskStateUpdate{Active: active}
 
-	payload, ok, err := d.lookupPRReviews(ctx, active.Task.PRNumber)
+	payload, ok, err := d.lookupPRReviews(ctx, active.Task.Project, active.Task.PRNumber)
 	if err != nil || !ok {
 		return update
 	}
@@ -187,7 +187,7 @@ func (d *Daemon) workerAppearsIdleForReviewNudge(ctx context.Context, update *Ta
 		return false
 	}
 
-	snapshot, err := d.amux.CapturePane(ctx, update.Active.Task.PaneID)
+	snapshot, err := d.amuxClient(ctx).CapturePane(ctx, update.Active.Task.PaneID)
 	if err != nil {
 		return true
 	}
@@ -242,8 +242,8 @@ func (d *Daemon) recordWorkerOutput(update *TaskStateUpdate, profile AgentProfil
 	return true
 }
 
-func (d *Daemon) lookupPRReviews(ctx context.Context, prNumber int) (prReviewPayload, bool, error) {
-	return d.github.lookupPRReviews(ctx, prNumber)
+func (d *Daemon) lookupPRReviews(ctx context.Context, projectPath string, prNumber int) (prReviewPayload, bool, error) {
+	return d.gitHubClientForContext(ctx, projectPath).lookupPRReviews(ctx, prNumber)
 }
 
 func blockingReviewFeedback(reviewDecision string, reviews []prReview, comments []prComment) []prFeedback {
@@ -309,7 +309,7 @@ func (d *Daemon) notifyCallerPaneReviewEscalation(ctx context.Context, active Ac
 		return
 	}
 
-	_ = d.amux.SendKeys(ctx, targetPane, formatLeadReviewEscalation(active, feedback), "Enter")
+	_ = d.amuxClient(ctx).SendKeys(ctx, targetPane, formatLeadReviewEscalation(active, feedback), "Enter")
 }
 
 func formatLeadReviewEscalation(active ActiveAssignment, feedback []prFeedback) string {

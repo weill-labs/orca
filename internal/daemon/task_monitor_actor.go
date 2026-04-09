@@ -318,7 +318,7 @@ func (d *Daemon) applyTaskStateUpdate(ctx context.Context, update TaskStateUpdat
 		_ = d.state.PutTask(ctx, active.Task)
 	}
 	if len(update.PaneMetadataRemovals) > 0 {
-		_ = d.amux.RemoveMetadata(ctx, active.Task.PaneID, update.PaneMetadataRemovals...)
+		_ = d.amuxClient(ctx).RemoveMetadata(ctx, active.Task.PaneID, update.PaneMetadataRemovals...)
 	}
 	if len(update.PaneMetadata) > 0 {
 		_ = d.setPaneMetadata(ctx, active.Task.PaneID, update.PaneMetadata)

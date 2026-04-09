@@ -22,26 +22,28 @@ const (
 )
 
 type Daemon struct {
-	project          string
-	session          string
-	leadPane         string
-	pidPath          string
-	config           ConfigProvider
-	state            StateStore
-	pool             Pool
-	amux             AmuxClient
-	issueTracker     IssueTracker
-	commands         CommandRunner
-	github           gitHubClient
-	githubMu         sync.Mutex
-	githubClients    map[string]gitHubClient
-	events           EventSink
-	now              func() time.Time
-	newTicker        func(time.Duration) Ticker
-	sleep            func(context.Context, time.Duration) error
-	captureInterval  time.Duration
-	pollInterval     time.Duration
-	mergeGracePeriod time.Duration
+	project              string
+	session              string
+	leadPane             string
+	pidPath              string
+	config               ConfigProvider
+	state                StateStore
+	pool                 Pool
+	amux                 AmuxClient
+	issueTracker         IssueTracker
+	commands             CommandRunner
+	github               gitHubClient
+	githubMu             sync.Mutex
+	githubClients        map[string]gitHubClient
+	events               EventSink
+	now                  func() time.Time
+	newTicker            func(time.Duration) Ticker
+	sleep                func(context.Context, time.Duration) error
+	captureInterval      time.Duration
+	pollInterval         time.Duration
+	mergeGracePeriod     time.Duration
+	monitorAmuxCircuit   *CircuitBreaker
+	monitorGitHubCircuit *CircuitBreaker
 
 	started           atomic.Bool
 	stopContext       context.Context
@@ -111,25 +113,27 @@ func New(opts Options) (*Daemon, error) {
 	}
 
 	return &Daemon{
-		project:          opts.Project,
-		session:          opts.Session,
-		leadPane:         opts.LeadPane,
-		pidPath:          opts.PIDPath,
-		config:           opts.Config,
-		state:            opts.State,
-		pool:             opts.Pool,
-		amux:             opts.Amux,
-		issueTracker:     opts.IssueTracker,
-		commands:         opts.Commands,
-		github:           newDefaultGitHubClient(opts.Project, opts.Commands),
-		githubClients:    make(map[string]gitHubClient),
-		events:           opts.Events,
-		now:              opts.Now,
-		newTicker:        opts.NewTicker,
-		sleep:            opts.Sleep,
-		captureInterval:  opts.CaptureInterval,
-		pollInterval:     opts.PollInterval,
-		mergeGracePeriod: opts.MergeGracePeriod,
+		project:              opts.Project,
+		session:              opts.Session,
+		leadPane:             opts.LeadPane,
+		pidPath:              opts.PIDPath,
+		config:               opts.Config,
+		state:                opts.State,
+		pool:                 opts.Pool,
+		amux:                 opts.Amux,
+		issueTracker:         opts.IssueTracker,
+		commands:             opts.Commands,
+		github:               newDefaultGitHubClient(opts.Project, opts.Commands),
+		githubClients:        make(map[string]gitHubClient),
+		events:               opts.Events,
+		now:                  opts.Now,
+		newTicker:            opts.NewTicker,
+		sleep:                opts.Sleep,
+		captureInterval:      opts.CaptureInterval,
+		pollInterval:         opts.PollInterval,
+		mergeGracePeriod:     opts.MergeGracePeriod,
+		monitorAmuxCircuit:   NewCircuitBreaker(opts.Now, defaultCircuitBreakerFailureThreshold, defaultCircuitBreakerCooldown),
+		monitorGitHubCircuit: NewCircuitBreaker(opts.Now, defaultCircuitBreakerFailureThreshold, defaultCircuitBreakerCooldown),
 	}, nil
 }
 

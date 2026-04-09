@@ -76,6 +76,7 @@ func drainMonitorTicks(tickCh <-chan time.Time) {
 }
 
 func (d *Daemon) runCaptureTick(ctx context.Context) {
+	ctx = d.withMonitorCircuits(ctx)
 	assignments, err := d.state.ActiveAssignments(ctx, d.project)
 	if err != nil {
 		return
@@ -85,6 +86,7 @@ func (d *Daemon) runCaptureTick(ctx context.Context) {
 }
 
 func (d *Daemon) runPollTick(ctx context.Context) {
+	ctx = d.withMonitorCircuits(ctx)
 	d.applyMergeQueueUpdates(ctx)
 
 	assignments, err := d.state.ActiveAssignments(ctx, d.project)

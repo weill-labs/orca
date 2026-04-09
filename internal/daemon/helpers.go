@@ -223,7 +223,7 @@ func completedTaskTitle(title string) string {
 }
 
 func (d *Daemon) paneTaskTitle(ctx context.Context, paneID, issue string) (string, error) {
-	metadata, err := d.amux.Metadata(ctx, paneID)
+	metadata, err := d.amuxClient(ctx).Metadata(ctx, paneID)
 	if err != nil {
 		return "", fmt.Errorf("load pane metadata: %w", err)
 	}
@@ -477,7 +477,7 @@ func (d *Daemon) completionPaneMetadata(ctx context.Context, active ActiveAssign
 }
 
 func (d *Daemon) setPaneMetadata(ctx context.Context, paneID string, metadata map[string]string) error {
-	return d.amux.SetMetadata(ctx, paneID, metadata)
+	return d.amuxClient(ctx).SetMetadata(ctx, paneID, metadata)
 }
 
 func (d *Daemon) resolveAssignmentTitle(ctx context.Context, issue string, title string) string {
@@ -645,13 +645,14 @@ func (d *Daemon) sendPromptAndEnter(ctx context.Context, paneID, prompt string) 
 	if trimmed == "" {
 		return errors.New("prompt is empty")
 	}
-	if err := d.amux.SendKeys(ctx, paneID, trimmed); err != nil {
+	client := d.amuxClient(ctx)
+	if err := client.SendKeys(ctx, paneID, trimmed); err != nil {
 		return err
 	}
-	if err := d.amux.WaitIdleSettle(ctx, paneID, defaultAgentHandshakeTimeout, defaultPromptSettleDuration); err != nil {
+	if err := client.WaitIdleSettle(ctx, paneID, defaultAgentHandshakeTimeout, defaultPromptSettleDuration); err != nil {
 		return err
 	}
-	return d.amux.SendKeys(ctx, paneID, "Enter")
+	return client.SendKeys(ctx, paneID, "Enter")
 }
 
 func (d *Daemon) startAgentInPane(ctx context.Context, paneID string, profile AgentProfile) error {

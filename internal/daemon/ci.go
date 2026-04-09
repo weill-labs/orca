@@ -96,7 +96,7 @@ func (d *Daemon) nudgeForCIFailure(ctx context.Context, update *TaskStateUpdate,
 	if profile.NudgeCommand == "" {
 		return false
 	}
-	if err := d.amux.SendKeys(ctx, update.Active.Task.PaneID, profile.NudgeCommand); err != nil {
+	if err := d.amuxClient(ctx).SendKeys(ctx, update.Active.Task.PaneID, profile.NudgeCommand); err != nil {
 		return false
 	}
 
@@ -105,7 +105,7 @@ func (d *Daemon) nudgeForCIFailure(ctx context.Context, update *TaskStateUpdate,
 }
 
 func (d *Daemon) lookupPRChecksState(ctx context.Context, projectPath string, prNumber int) (string, error) {
-	return lookupPRChecksState(ctx, d.commands, projectPath, prNumber)
+	return lookupPRChecksState(ctx, d.commandRunner(ctx), projectPath, prNumber)
 }
 
 func lookupPRChecksState(ctx context.Context, commands CommandRunner, project string, prNumber int) (string, error) {

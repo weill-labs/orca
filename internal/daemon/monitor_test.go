@@ -83,22 +83,21 @@ func TestDaemonCaptureMonitorOpensAmuxCircuitAfterThreeFailures(t *testing.T) {
 
 	d := deps.newDaemon(t)
 	ctx := context.Background()
-	if err := d.Start(ctx); err != nil {
-		t.Fatalf("Start() error = %v", err)
-	}
 	t.Cleanup(func() {
-		_ = d.Stop(context.Background())
+		d.stopAllTaskMonitors(true)
 	})
 
 	for i := 0; i < 3; i++ {
-		captureTicker.tick(deps.clock.Now())
-		waitFor(t, "capture attempt", func() bool {
-			return deps.amux.captureCount("pane-1") == i+1
-		})
+		d.runCaptureTick(ctx)
+		if got, want := deps.amux.captureCount("pane-1"), i+1; got != want {
+			t.Fatalf("capture count after failure %d = %d, want %d", i+1, got, want)
+		}
+	}
+	if err := d.monitorAmuxCircuit.Allow(); !errors.Is(err, ErrCircuitBreakerOpen) {
+		t.Fatalf("amux circuit Allow() error = %v, want %v", err, ErrCircuitBreakerOpen)
 	}
 
-	captureTicker.tick(deps.clock.Now())
-	<-time.After(50 * time.Millisecond)
+	d.runCaptureTick(ctx)
 	if got, want := deps.amux.captureCount("pane-1"), 3; got != want {
 		t.Fatalf("capture count with open circuit = %d, want %d", got, want)
 	}
@@ -107,10 +106,10 @@ func TestDaemonCaptureMonitorOpensAmuxCircuitAfterThreeFailures(t *testing.T) {
 	deps.amux.capturePaneErr = nil
 	deps.amux.capturePaneSequence("pane-1", []PaneCapture{paneCaptureFromOutput("worker output")})
 
-	captureTicker.tick(deps.clock.Now())
-	waitFor(t, "capture after cooldown", func() bool {
-		return deps.amux.captureCount("pane-1") == 4
-	})
+	d.runCaptureTick(ctx)
+	if got, want := deps.amux.captureCount("pane-1"), 4; got != want {
+		t.Fatalf("capture count after cooldown = %d, want %d", got, want)
+	}
 }
 
 func TestDaemonPollMonitorOpensGitHubCircuitAfterThreeFailures(t *testing.T) {
@@ -138,21 +137,23 @@ func TestDaemonPollMonitorOpensGitHubCircuitAfterThreeFailures(t *testing.T) {
 	})
 
 	for i := 0; i < 3; i++ {
-		pollTicker.tick(deps.clock.Now())
-		waitFor(t, "poll attempt", func() bool {
-			return deps.commands.countCalls("gh", lookupArgs) == i+1
-		})
+		d.runPollTick(ctx)
+		if got, want := deps.commands.countCalls("gh", lookupArgs), i+1; got != want {
+			t.Fatalf("github call count after failure %d = %d, want %d", i+1, got, want)
+		}
+	}
+	if err := d.monitorGitHubCircuit.Allow(); !errors.Is(err, ErrCircuitBreakerOpen) {
+		t.Fatalf("github circuit Allow() error = %v, want %v", err, ErrCircuitBreakerOpen)
 	}
 
-	pollTicker.tick(deps.clock.Now())
-	<-time.After(50 * time.Millisecond)
+	d.runPollTick(ctx)
 	if got, want := deps.commands.countCalls("gh", lookupArgs), 3; got != want {
 		t.Fatalf("github call count with open circuit = %d, want %d", got, want)
 	}
 
 	deps.clock.Advance(60 * time.Second)
-	pollTicker.tick(deps.clock.Now())
-	waitFor(t, "poll after cooldown", func() bool {
-		return deps.commands.countCalls("gh", lookupArgs) == 4
-	})
+	d.runPollTick(ctx)
+	if got, want := deps.commands.countCalls("gh", lookupArgs), 4; got != want {
+		t.Fatalf("github call count after cooldown = %d, want %d", got, want)
+	}
 }
