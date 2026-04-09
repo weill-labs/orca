@@ -60,7 +60,7 @@ func (d *Daemon) reconcileTaskOnStartup(ctx context.Context, task Task) {
 		return
 	}
 	if !exists {
-		_ = d.failAssignment(ctx, active, EventTaskFailed, "worker pane missing on daemon startup")
+		d.escalateAssignmentOnStartupError(ctx, active, "worker pane missing on daemon startup")
 		return
 	}
 
@@ -114,11 +114,6 @@ func (d *Daemon) reconcileWorkerHealthFromPaneMetadata(ctx context.Context, acti
 
 func (d *Daemon) handleTaskStartupPaneError(ctx context.Context, active ActiveAssignment, message string, err error) {
 	detail := fmt.Sprintf("%s: %v", message, err)
-	if active.Task.Status == TaskStatusStarting {
-		_ = d.failAssignment(ctx, active, EventTaskFailed, detail)
-		return
-	}
-
 	d.escalateAssignmentOnStartupError(ctx, active, detail)
 }
 
