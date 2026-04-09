@@ -258,6 +258,7 @@ func (d *Daemon) storeResumedTaskForProject(ctx context.Context, projectPath str
 			ClonePath:    task.ClonePath,
 			Issue:        task.Issue,
 			RestartCount: worker.RestartCount,
+			FirstCrashAt: worker.FirstCrashAt,
 			CreatedAt:    now,
 			LastSeenAt:   now,
 		}

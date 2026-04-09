@@ -9,7 +9,7 @@ import (
 	amuxapi "github.com/weill-labs/orca/internal/amux"
 )
 
-func TestExitedEventEscalatesWorkerImmediately(t *testing.T) {
+func TestExitedEventRestartsWorkerImmediately(t *testing.T) {
 	t.Parallel()
 
 	deps := newTestDeps(t)
@@ -38,22 +38,28 @@ func TestExitedEventEscalatesWorkerImmediately(t *testing.T) {
 		_ = d.Stop(context.Background())
 	})
 
-	waitFor(t, "worker escalation from exited event", func() bool {
+	waitFor(t, "worker restart from exited event", func() bool {
 		worker, ok := deps.state.worker("pane-1")
-		return ok && worker.Health == WorkerHealthEscalated
+		return ok && worker.Health == WorkerHealthHealthy && worker.RestartCount == 1
 	})
 
 	worker, ok := deps.state.worker("pane-1")
 	if !ok {
 		t.Fatal("worker missing after exited event")
 	}
-	if got, want := worker.Health, WorkerHealthEscalated; got != want {
+	if got, want := worker.Health, WorkerHealthHealthy; got != want {
 		t.Fatalf("worker.Health = %q, want %q", got, want)
 	}
-	if got, want := deps.amux.captureCount("pane-1"), 2; got != want {
+	if got, want := worker.RestartCount, 1; got != want {
+		t.Fatalf("worker.RestartCount = %d, want %d", got, want)
+	}
+	if got, want := deps.amux.captureCount("pane-1"), 3; got != want {
 		t.Fatalf("capture count = %d, want %d", got, want)
 	}
-	if got, want := deps.events.countType(EventWorkerEscalated), 1; got != want {
+	if got, want := deps.amux.countKey("pane-1", "codex --yolo\n"), 1; got != want {
+		t.Fatalf("restart send count = %d, want %d", got, want)
+	}
+	if got, want := deps.events.countType(EventWorkerEscalated), 0; got != want {
 		t.Fatalf("worker escalated events = %d, want %d", got, want)
 	}
 }
@@ -64,11 +70,17 @@ func TestExitedEventListenerReconnectsAfterStreamError(t *testing.T) {
 	deps := newTestDeps(t)
 	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
 	seedActiveAssignment(t, deps, "LAB-922", "pane-1")
-	deps.amux.capturePaneSequence("pane-1", []PaneCapture{{
-		Content:        []string{"shell prompt"},
-		CurrentCommand: "bash",
-		Exited:         true,
-	}})
+	deps.amux.capturePaneSequence("pane-1", []PaneCapture{
+		{
+			Content:        []string{"shell prompt"},
+			CurrentCommand: "bash",
+		},
+		{
+			Content:        []string{"shell prompt"},
+			CurrentCommand: "bash",
+			Exited:         true,
+		},
+	})
 	deps.amux.enqueueEventSequence(fakeAmuxEventSequence{err: errors.New("stream dropped")})
 	deps.amux.enqueueEventSequence(fakeAmuxEventSequence{
 		events: []amuxapi.Event{{Type: "exited", PaneName: "pane-1"}},
@@ -91,9 +103,9 @@ func TestExitedEventListenerReconnectsAfterStreamError(t *testing.T) {
 	waitFor(t, "event stream reconnect", func() bool {
 		return deps.amux.eventsCallCount() >= 2
 	})
-	waitFor(t, "worker escalation after reconnect", func() bool {
+	waitFor(t, "worker restart after reconnect", func() bool {
 		worker, ok := deps.state.worker("pane-1")
-		return ok && worker.Health == WorkerHealthEscalated
+		return ok && worker.Health == WorkerHealthHealthy && worker.RestartCount == 1
 	})
 
 	if got, want := len(sleeps), 1; got != want {
@@ -101,6 +113,9 @@ func TestExitedEventListenerReconnectsAfterStreamError(t *testing.T) {
 	}
 	if sleeps[0] <= 0 {
 		t.Fatalf("sleep[0] = %s, want positive backoff", sleeps[0])
+	}
+	if got, want := deps.amux.countKey("pane-1", "codex --yolo\n"), 1; got != want {
+		t.Fatalf("restart send count = %d, want %d", got, want)
 	}
 }
 
@@ -131,23 +146,40 @@ func TestCheckTaskExitedEventPreservesLastCaptureOnCaptureError(t *testing.T) {
 	if got, want := update.Active.Worker.LastCapture, "last useful output"; got != want {
 		t.Fatalf("update.Active.Worker.LastCapture = %q, want %q", got, want)
 	}
-	if got, want := update.Active.Worker.Health, WorkerHealthEscalated; got != want {
+	if got, want := update.Active.Worker.Health, WorkerHealthHealthy; got != want {
 		t.Fatalf("update.Active.Worker.Health = %q, want %q", got, want)
 	}
-	if !update.WorkerChanged {
-		t.Fatal("update.WorkerChanged = false, want true")
+	if update.WorkerChanged {
+		t.Fatal("update.WorkerChanged = true, want false before queued restart runs")
 	}
-	if !update.TaskChanged {
-		t.Fatal("update.TaskChanged = false, want true")
+	if update.TaskChanged {
+		t.Fatal("update.TaskChanged = true, want false before queued restart runs")
 	}
-	if got, want := len(update.Events), 1; got != want {
+	if got, want := len(update.Events), 0; got != want {
 		t.Fatalf("len(update.Events) = %d, want %d", got, want)
 	}
-	if got, want := update.Events[0].Type, EventWorkerEscalated; got != want {
-		t.Fatalf("update.Events[0].Type = %q, want %q", got, want)
+	if !update.hasNudges() {
+		t.Fatal("update.hasNudges() = false, want true")
 	}
 	if got, want := deps.amux.captureCount("pane-1"), 1; got != want {
 		t.Fatalf("capture count = %d, want %d", got, want)
+	}
+
+	update.runNudges(context.Background(), d)
+	if got, want := update.Active.Worker.LastCapture, "last useful output"; got != want {
+		t.Fatalf("update.Active.Worker.LastCapture after restart = %q, want %q", got, want)
+	}
+	if got, want := update.Active.Worker.Health, WorkerHealthHealthy; got != want {
+		t.Fatalf("update.Active.Worker.Health after restart = %q, want %q", got, want)
+	}
+	if got, want := update.Active.Worker.RestartCount, 1; got != want {
+		t.Fatalf("update.Active.Worker.RestartCount after restart = %d, want %d", got, want)
+	}
+	if got, want := update.Active.Worker.FirstCrashAt, deps.clock.Now(); !got.Equal(want) {
+		t.Fatalf("update.Active.Worker.FirstCrashAt after restart = %v, want %v", got, want)
+	}
+	if got, want := deps.amux.countKey("pane-1", "codex --yolo\n"), 1; got != want {
+		t.Fatalf("restart send count = %d, want %d", got, want)
 	}
 }
 

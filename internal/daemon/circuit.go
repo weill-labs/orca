@@ -196,10 +196,6 @@ func (c *circuitAmuxClient) ListPanes(ctx context.Context) ([]Pane, error) {
 	})
 }
 
-func (c *circuitAmuxClient) Events(ctx context.Context, req amux.EventsRequest) (<-chan amux.Event, <-chan error) {
-	return c.base.Events(ctx, req)
-}
-
 func (c *circuitAmuxClient) Metadata(ctx context.Context, paneID string) (map[string]string, error) {
 	return withCircuit(c.breaker, func() (map[string]string, error) {
 		return c.base.Metadata(ctx, paneID)
@@ -264,6 +260,53 @@ func (c *circuitAmuxClient) WaitContent(ctx context.Context, paneID, substring s
 	return withCircuitErr(c.breaker, func() error {
 		return c.base.WaitContent(ctx, paneID, substring, timeout)
 	})
+}
+
+func (c *circuitAmuxClient) Events(ctx context.Context, req amux.EventsRequest) (<-chan amux.Event, <-chan error) {
+	if err := c.breaker.Allow(); err != nil {
+		eventsCh := make(chan amux.Event)
+		errCh := make(chan error, 1)
+		close(eventsCh)
+		errCh <- err
+		close(errCh)
+		return eventsCh, errCh
+	}
+
+	eventsCh, errCh := c.base.Events(ctx, req)
+	outEvents := make(chan amux.Event)
+	outErr := make(chan error, 1)
+
+	go func() {
+		defer close(outEvents)
+		defer close(outErr)
+
+		for eventsCh != nil || errCh != nil {
+			select {
+			case <-ctx.Done():
+				return
+			case event, ok := <-eventsCh:
+				if !ok {
+					eventsCh = nil
+					continue
+				}
+				outEvents <- event
+			case err, ok := <-errCh:
+				if !ok {
+					errCh = nil
+					continue
+				}
+				if err != nil {
+					c.breaker.RecordFailure()
+					outErr <- err
+					return
+				}
+			}
+		}
+
+		c.breaker.RecordSuccess()
+	}()
+
+	return outEvents, outErr
 }
 
 type circuitCommandRunner struct {

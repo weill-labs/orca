@@ -65,6 +65,7 @@ func (d *Daemon) checkTaskCapture(ctx context.Context, active ActiveAssignment) 
 
 	output := snapshot.Output()
 	d.recordWorkerOutput(&update, profile, output, now)
+	d.maybeResetExitedPaneRestartWindow(&update, now)
 
 	if d.shouldNudgeIdleWorkerToOpenPR(update.Active, output, now) {
 		d.nudgeIdleWorkerToOpenPR(ctx, &update, profile, now)

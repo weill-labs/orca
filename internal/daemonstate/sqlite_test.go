@@ -749,6 +749,8 @@ func TestSQLiteStorePersistsWorkerMonitorStateAndMergeQueue(t *testing.T) {
 		NudgeCount:                   3,
 		LastCapture:                  "permission prompt",
 		LastActivityAt:               now,
+		RestartCount:                 2,
+		FirstCrashAt:                 now.Add(-3 * time.Minute),
 		CreatedAt:                    now,
 		LastSeenAt:                   now,
 	}); err != nil {
@@ -798,6 +800,12 @@ func TestSQLiteStorePersistsWorkerMonitorStateAndMergeQueue(t *testing.T) {
 	}
 	if got, want := worker.LastActivityAt, now; !got.Equal(want) {
 		t.Fatalf("worker.LastActivityAt = %v, want %v", got, want)
+	}
+	if got, want := worker.RestartCount, 2; got != want {
+		t.Fatalf("worker.RestartCount = %d, want %d", got, want)
+	}
+	if got, want := worker.FirstCrashAt, now.Add(-3*time.Minute); !got.Equal(want) {
+		t.Fatalf("worker.FirstCrashAt = %v, want %v", got, want)
 	}
 
 	position, err := store.EnqueueMergeEntry(context.Background(), MergeQueueEntry{
@@ -934,6 +942,8 @@ func TestSQLiteStoreWorkerByPaneAndNonTerminalTasks(t *testing.T) {
 		NudgeCount:                   3,
 		LastCapture:                  "permission prompt",
 		LastActivityAt:               now,
+		RestartCount:                 2,
+		FirstCrashAt:                 now.Add(-2 * time.Minute),
 		CreatedAt:                    now,
 		LastSeenAt:                   now.Add(time.Minute),
 	}); err != nil {
@@ -1007,6 +1017,12 @@ func TestSQLiteStoreWorkerByPaneAndNonTerminalTasks(t *testing.T) {
 	}
 	if got, want := worker.LastCapture, "permission prompt"; got != want {
 		t.Fatalf("worker.LastCapture = %q, want %q", got, want)
+	}
+	if got, want := worker.RestartCount, 2; got != want {
+		t.Fatalf("worker.RestartCount = %d, want %d", got, want)
+	}
+	if got, want := worker.FirstCrashAt, now.Add(-2*time.Minute); !got.Equal(want) {
+		t.Fatalf("worker.FirstCrashAt = %v, want %v", got, want)
 	}
 	if _, err := store.WorkerByPane(context.Background(), project, "missing"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("WorkerByPane() missing error = %v, want ErrNotFound", err)

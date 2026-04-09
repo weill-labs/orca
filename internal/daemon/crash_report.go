@@ -30,10 +30,11 @@ func (d *Daemon) captureCrashReportForRestart(ctx context.Context, task Task, wo
 	}
 
 	now := d.now()
-	restartAttempt := nextRestartAttempt(worker)
+	restartAttempt, firstCrashAt := nextRestartAttempt(worker, now)
 
 	updatedWorker := worker
 	updatedWorker.RestartCount = restartAttempt
+	updatedWorker.FirstCrashAt = firstCrashAt
 	if strings.TrimSpace(updatedWorker.WorkerID) != "" {
 		updatedWorker.UpdatedAt = now
 		if updatedWorker.CreatedAt.IsZero() {
@@ -66,12 +67,22 @@ func crashReportScrollback(lines []string) []string {
 	return append([]string(nil), lines[len(lines)-crashReportScrollbackLimit:]...)
 }
 
-func nextRestartAttempt(worker Worker) int {
-	restartAttempt := worker.RestartCount + 1
+func nextRestartAttempt(worker Worker, now time.Time) (restartAttempt int, firstCrashAt time.Time) {
+	restartAttempt = worker.RestartCount + 1
 	if restartAttempt <= 0 {
-		return 1
+		restartAttempt = 1
 	}
-	return restartAttempt
+
+	firstCrashAt = worker.FirstCrashAt
+	switch {
+	case firstCrashAt.IsZero() || firstCrashAt.After(now):
+		firstCrashAt = now
+	case now.Sub(firstCrashAt) > exitedPaneRestartWindow:
+		restartAttempt = 1
+		firstCrashAt = now
+	}
+
+	return restartAttempt, firstCrashAt
 }
 
 func crashReportEvent(task Task, worker Worker, profile AgentProfile, history []string, restartAttempt int, now time.Time) Event {
