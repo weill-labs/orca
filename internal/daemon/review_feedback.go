@@ -77,7 +77,7 @@ func blockingReviewFeedback(reviewDecision string, items []prReviewItem, comment
 				Author: item.Author,
 				Path:   item.Path,
 				Line:   item.Line,
-				Body:   normalizeReviewBody(item.Body),
+				Body:   item.Body,
 			})
 		}
 	}
