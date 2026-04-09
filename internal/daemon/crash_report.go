@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 const crashReportScrollbackLimit = 100
@@ -16,8 +17,11 @@ func (d *Daemon) captureCrashReportForRestart(ctx context.Context, task Task, wo
 	}
 
 	snapshot, err := d.amux.CapturePane(ctx, paneID)
-	if err != nil || !snapshot.Exited {
-		return worker, err
+	if err != nil {
+		return worker, fmt.Errorf("capture pane %s before restart: %w", paneID, err)
+	}
+	if !snapshot.Exited {
+		return worker, nil
 	}
 
 	history, err := d.amux.CaptureHistory(ctx, paneID)
@@ -26,10 +30,7 @@ func (d *Daemon) captureCrashReportForRestart(ctx context.Context, task Task, wo
 	}
 
 	now := d.now()
-	restartAttempt := worker.RestartCount + 1
-	if restartAttempt <= 0 {
-		restartAttempt = 1
-	}
+	restartAttempt := nextRestartAttempt(worker)
 
 	updatedWorker := worker
 	updatedWorker.RestartCount = restartAttempt
@@ -46,28 +47,7 @@ func (d *Daemon) captureCrashReportForRestart(ctx context.Context, task Task, wo
 		}
 	}
 
-	event := Event{
-		Time:           now,
-		Type:           EventWorkerCrashReport,
-		Project:        task.Project,
-		Issue:          task.Issue,
-		WorkerID:       firstNonEmpty(updatedWorker.WorkerID, task.WorkerID),
-		PaneID:         paneID,
-		PaneName:       assignmentPaneName(task, updatedWorker),
-		CloneName:      task.CloneName,
-		ClonePath:      task.ClonePath,
-		Branch:         task.Branch,
-		AgentProfile:   profile.Name,
-		RestartAttempt: restartAttempt,
-		Scrollback:     crashReportScrollback(history.Content),
-		Message:        fmt.Sprintf("captured crash report before restart attempt %d", restartAttempt),
-	}
-	if event.CloneName == "" && event.ClonePath != "" {
-		event.CloneName = filepath.Base(event.ClonePath)
-	}
-	if event.AgentProfile == "" {
-		event.AgentProfile = task.AgentProfile
-	}
+	event := crashReportEvent(task, updatedWorker, profile, history.Content, restartAttempt, now)
 
 	if err := d.state.RecordEvent(ctx, event); err != nil {
 		return worker, fmt.Errorf("record crash report: %w", err)
@@ -84,4 +64,39 @@ func crashReportScrollback(lines []string) []string {
 		return append([]string(nil), lines...)
 	}
 	return append([]string(nil), lines[len(lines)-crashReportScrollbackLimit:]...)
+}
+
+func nextRestartAttempt(worker Worker) int {
+	restartAttempt := worker.RestartCount + 1
+	if restartAttempt <= 0 {
+		return 1
+	}
+	return restartAttempt
+}
+
+func crashReportEvent(task Task, worker Worker, profile AgentProfile, history []string, restartAttempt int, now time.Time) Event {
+	scrollback := crashReportScrollback(history)
+	event := Event{
+		Time:           now,
+		Type:           EventWorkerCrashReport,
+		Project:        firstNonEmpty(task.Project, worker.Project),
+		Issue:          task.Issue,
+		WorkerID:       firstNonEmpty(worker.WorkerID, task.WorkerID),
+		PaneID:         strings.TrimSpace(task.PaneID),
+		PaneName:       assignmentPaneName(task, worker),
+		CloneName:      task.CloneName,
+		ClonePath:      task.ClonePath,
+		Branch:         task.Branch,
+		AgentProfile:   profile.Name,
+		RestartAttempt: restartAttempt,
+		Scrollback:     scrollback,
+		Message:        fmt.Sprintf("captured crash report before restart attempt %d (%d lines)", restartAttempt, len(scrollback)),
+	}
+	if event.CloneName == "" && event.ClonePath != "" {
+		event.CloneName = filepath.Base(event.ClonePath)
+	}
+	if event.AgentProfile == "" {
+		event.AgentProfile = task.AgentProfile
+	}
+	return event
 }
