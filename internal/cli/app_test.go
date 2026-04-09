@@ -377,6 +377,9 @@ func TestAppRunDispatchesCommands(t *testing.T) {
 				Cwd: func() (string, error) {
 					return cwdPath, nil
 				},
+				ProjectStatusRPC: func(context.Context, string) (daemon.ProjectStatusRPCResult, error) {
+					return daemon.ProjectStatusRPCResult{ProjectStatus: s.projectStatus}, nil
+				},
 			})
 
 			if err := app.Run(context.Background(), tt.args(repoRoot, otherRepo)); err != nil {
