@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-func TestDaemonStartFailsMissingPaneAssignmentsAndReleasesClone(t *testing.T) {
+func TestDaemonStartEscalatesMissingPaneAssignmentsAndKeepsClone(t *testing.T) {
 	t.Parallel()
 
 	deps := newTestDeps(t)
@@ -27,40 +27,38 @@ func TestDaemonStartFailsMissingPaneAssignmentsAndReleasesClone(t *testing.T) {
 
 	waitFor(t, "startup reconciliation", func() bool {
 		task, ok := deps.state.task("LAB-721")
-		if !ok || task.Status != TaskStatusFailed {
+		if !ok || task.Status != TaskStatusActive {
 			return false
 		}
 		worker, workerOK := deps.state.worker(task.WorkerID)
-		return workerOK && worker.PaneID == "" && worker.Issue == ""
+		return workerOK && worker.Health == WorkerHealthEscalated
 	})
 
 	task, ok := deps.state.task("LAB-721")
 	if !ok {
 		t.Fatal("task missing after startup reconciliation")
 	}
-	if got, want := task.Status, TaskStatusFailed; got != want {
+	if got, want := task.Status, TaskStatusActive; got != want {
 		t.Fatalf("task.Status = %q, want %q", got, want)
 	}
 	worker, ok := deps.state.worker(task.WorkerID)
 	if !ok {
 		t.Fatal("worker missing after missing-pane reconciliation")
 	}
-	if got := worker.PaneID; got != "" {
-		t.Fatalf("worker.PaneID = %q, want empty", got)
+	if got, want := worker.Health, WorkerHealthEscalated; got != want {
+		t.Fatalf("worker.Health = %q, want %q", got, want)
 	}
-	if got, want := deps.pool.releasedClones(), []Clone{{
-		Name:          deps.pool.clone.Name,
-		Path:          deps.pool.clone.Path,
-		CurrentBranch: "LAB-721",
-		AssignedTask:  "LAB-721",
-	}}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("released clones = %#v, want %#v", got, want)
+	if got, want := worker.PaneID, "pane-1"; got != want {
+		t.Fatalf("worker.PaneID = %q, want %q", got, want)
+	}
+	if got := deps.pool.releasedClones(); len(got) != 0 {
+		t.Fatalf("released clones = %#v, want none", got)
 	}
 
-	deps.events.requireTypes(t, EventDaemonStarted, EventTaskFailed)
-	event, ok := deps.events.lastEventOfType(EventTaskFailed)
+	deps.events.requireTypes(t, EventDaemonStarted, EventWorkerEscalated)
+	event, ok := deps.events.lastEventOfType(EventWorkerEscalated)
 	if !ok {
-		t.Fatal("task failure event missing")
+		t.Fatal("worker escalation event missing")
 	}
 	if got, want := event.Message, "worker pane missing on daemon startup"; got != want {
 		t.Fatalf("event.Message = %q, want %q", got, want)
@@ -288,7 +286,8 @@ func TestDaemonStartMissingPaneRecoveryIsIdempotentAcrossRestart(t *testing.T) {
 		if !ok {
 			return false
 		}
-		return task.Status == TaskStatusFailed
+		worker, workerOK := deps.state.worker(task.WorkerID)
+		return workerOK && task.Status == TaskStatusActive && worker.Health == WorkerHealthEscalated
 	})
 	if err := first.Stop(ctx); err != nil {
 		t.Fatalf("first Stop() error = %v", err)
@@ -302,16 +301,28 @@ func TestDaemonStartMissingPaneRecoveryIsIdempotentAcrossRestart(t *testing.T) {
 		_ = second.Stop(context.Background())
 	})
 
-	if got, want := deps.pool.releasedClones(), []Clone{{
-		Name:          deps.pool.clone.Name,
-		Path:          deps.pool.clone.Path,
-		CurrentBranch: "LAB-723",
-		AssignedTask:  "LAB-723",
-	}}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("released clones = %#v, want %#v", got, want)
+	task, ok := deps.state.task("LAB-723")
+	if !ok {
+		t.Fatal("task missing after second startup reconciliation")
 	}
-	if got, want := deps.events.countType(EventTaskFailed), 1; got != want {
+	if got, want := task.Status, TaskStatusActive; got != want {
+		t.Fatalf("task.Status = %q, want %q", got, want)
+	}
+	worker, ok := deps.state.worker(task.WorkerID)
+	if !ok {
+		t.Fatal("worker missing after second startup reconciliation")
+	}
+	if got, want := worker.Health, WorkerHealthEscalated; got != want {
+		t.Fatalf("worker.Health = %q, want %q", got, want)
+	}
+	if got := deps.pool.releasedClones(); len(got) != 0 {
+		t.Fatalf("released clones = %#v, want none", got)
+	}
+	if got, want := deps.events.countType(EventTaskFailed), 0; got != want {
 		t.Fatalf("task failed events = %d, want %d", got, want)
+	}
+	if got, want := deps.events.countType(EventWorkerEscalated), 1; got != want {
+		t.Fatalf("worker escalated events = %d, want %d", got, want)
 	}
 }
 
