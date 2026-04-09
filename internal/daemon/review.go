@@ -89,7 +89,11 @@ func (d *Daemon) checkTaskReviewPoll(ctx context.Context, active ActiveAssignmen
 	update := TaskStateUpdate{Active: active}
 
 	payload, ok, err := d.lookupPRReviews(ctx, active.Task.Project, active.Task.PRNumber)
-	if err != nil || !ok {
+	if err != nil {
+		d.appendGitHubRateLimitEvent(&update, profile, err)
+		return update
+	}
+	if !ok {
 		return update
 	}
 	now := d.now()

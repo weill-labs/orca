@@ -55,6 +55,7 @@ const (
 	EventPREnqueued            = "pr.enqueued"
 	EventPRLandingStarted      = "pr.landing_started"
 	EventPRLandingFailed       = "pr.landing_failed"
+	EventPRRateLimited         = "pr.rate_limited"
 	EventPRMerged              = "pr.merged"
 )
 
@@ -245,20 +246,21 @@ type MergeQueueUpdate struct {
 }
 
 type Event struct {
-	Time           time.Time `json:"time"`
-	Type           string    `json:"type"`
-	Project        string    `json:"project,omitempty"`
-	Issue          string    `json:"issue,omitempty"`
-	WorkerID       string    `json:"worker_id,omitempty"`
-	PaneID         string    `json:"pane_id,omitempty"`
-	PaneName       string    `json:"pane_name,omitempty"`
-	CloneName      string    `json:"clone_name,omitempty"`
-	ClonePath      string    `json:"clone_path,omitempty"`
-	Branch         string    `json:"branch,omitempty"`
-	AgentProfile   string    `json:"agent_profile,omitempty"`
-	PRNumber       int       `json:"pr_number,omitempty"`
-	Retry          int       `json:"retry,omitempty"`
-	RestartAttempt int       `json:"restart_attempt,omitempty"`
-	Scrollback     []string  `json:"scrollback,omitempty"`
-	Message        string    `json:"message,omitempty"`
+	Time                   time.Time `json:"time"`
+	Type                   string    `json:"type"`
+	Project                string    `json:"project,omitempty"`
+	Issue                  string    `json:"issue,omitempty"`
+	WorkerID               string    `json:"worker_id,omitempty"`
+	PaneID                 string    `json:"pane_id,omitempty"`
+	PaneName               string    `json:"pane_name,omitempty"`
+	CloneName              string    `json:"clone_name,omitempty"`
+	ClonePath              string    `json:"clone_path,omitempty"`
+	Branch                 string    `json:"branch,omitempty"`
+	AgentProfile           string    `json:"agent_profile,omitempty"`
+	PRNumber               int       `json:"pr_number,omitempty"`
+	Retry                  int       `json:"retry,omitempty"`
+	RestartAttempt         int       `json:"restart_attempt,omitempty"`
+	Scrollback             []string  `json:"scrollback,omitempty"`
+	Message                string    `json:"message,omitempty"`
+	GitHubRateLimitedUntil time.Time `json:"github_rate_limited_until,omitempty"`
 }

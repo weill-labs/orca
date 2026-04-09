@@ -447,25 +447,58 @@ func TestGitHubCLIClientStopsWhenBackoffSleepFails(t *testing.T) {
 func TestGitHubCLIClientReturnsRateLimitErrorAfterMaxAttempts(t *testing.T) {
 	t.Parallel()
 
-	commands := newFakeCommands()
-	client := newGitHubCLIClient(gitHubCLIClientConfig{
-		project:        "/tmp/project",
-		commands:       commands,
-		sleep:          noSleep,
-		initialBackoff: time.Second,
-		maxAttempts:    2,
-	})
-	args := []string{"pr", "view", "42", "--json", "mergedAt"}
-	wantErr := errors.New("gh: secondary rate limit")
-	commands.queue("gh", args, ``, wantErr)
-	commands.queue("gh", args, ``, wantErr)
-
-	_, err := client.isPRMerged(context.Background(), 42)
-	if !errors.Is(err, wantErr) {
-		t.Fatalf("isPRMerged() error = %v, want %v", err, wantErr)
+	tests := []struct {
+		name      string
+		output    string
+		wantUntil time.Time
+	}{
+		{
+			name:      "retry after header",
+			output:    "HTTP 429: API rate limit exceeded\nRetry-After: 120\n",
+			wantUntil: time.Date(2026, 4, 2, 9, 2, 0, 0, time.UTC),
+		},
+		{
+			name:      "reset header",
+			output:    "HTTP 403: API rate limit exceeded\nX-RateLimit-Reset: 1775725560\n",
+			wantUntil: time.Unix(1775725560, 0).UTC(),
+		},
 	}
-	if got, want := commands.countCalls("gh", args), 2; got != want {
-		t.Fatalf("gh call count = %d, want %d", got, want)
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			commands := newFakeCommands()
+			clock := &fakeClock{now: time.Date(2026, 4, 2, 9, 0, 0, 0, time.UTC)}
+			client := newGitHubCLIClient(gitHubCLIClientConfig{
+				project:        "/tmp/project",
+				commands:       commands,
+				now:            clock.Now,
+				sleep:          noSleep,
+				initialBackoff: time.Second,
+				maxAttempts:    2,
+			})
+			args := []string{"pr", "view", "42", "--json", "mergedAt"}
+			wantErr := errors.New("gh: HTTP 429")
+			commands.queue("gh", args, tt.output, wantErr)
+			commands.queue("gh", args, tt.output, wantErr)
+
+			_, err := client.isPRMerged(context.Background(), 42)
+			if !errors.Is(err, wantErr) {
+				t.Fatalf("isPRMerged() error = %v, want %v", err, wantErr)
+			}
+			var rateLimited interface{ RateLimitedUntil() time.Time }
+			if !errors.As(err, &rateLimited) {
+				t.Fatalf("isPRMerged() error = %v, want rate limit metadata", err)
+			}
+			if got := rateLimited.RateLimitedUntil(); !got.Equal(tt.wantUntil) {
+				t.Fatalf("rate limited until = %v, want %v", got, tt.wantUntil)
+			}
+			if got, want := commands.countCalls("gh", args), 2; got != want {
+				t.Fatalf("gh call count = %d, want %d", got, want)
+			}
+		})
 	}
 }
 
@@ -507,6 +540,8 @@ func TestIsGitHubRateLimitError(t *testing.T) {
 		{name: "auth error", err: errors.New("authentication failed")},
 		{name: "secondary rate limit in error", err: errors.New("Secondary Rate Limit"), want: true},
 		{name: "rate limit in output", err: errors.New("gh failed"), output: []byte("API rate limit exceeded"), want: true},
+		{name: "http 403 rate limit", err: errors.New("gh: HTTP 403"), output: []byte("rate limit exceeded"), want: true},
+		{name: "http 429 retry after", err: errors.New("gh: HTTP 429"), output: []byte("Retry-After: 120"), want: true},
 	}
 
 	for _, tc := range testCases {
@@ -515,6 +550,45 @@ func TestIsGitHubRateLimitError(t *testing.T) {
 			t.Parallel()
 			if got := isGitHubRateLimitError(tc.err, tc.output); got != tc.want {
 				t.Fatalf("isGitHubRateLimitError() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestGitHubRateLimitDeadline(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 2, 9, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name     string
+		err      error
+		output   []byte
+		fallback time.Duration
+		want     time.Time
+	}{
+		{
+			name:     "invalid retry-after falls back to explicit backoff",
+			err:      errors.New("gh: HTTP 429"),
+			output:   []byte("Retry-After: 0"),
+			fallback: 8 * time.Second,
+			want:     now.Add(8 * time.Second),
+		},
+		{
+			name:   "invalid reset header falls back to default minute",
+			err:    errors.New("gh: HTTP 403"),
+			output: []byte("X-RateLimit-Reset: 0"),
+			want:   now.Add(time.Minute),
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := gitHubRateLimitDeadline(tt.err, tt.output, now, tt.fallback); !got.Equal(tt.want) {
+				t.Fatalf("gitHubRateLimitDeadline() = %v, want %v", got, tt.want)
 			}
 		})
 	}

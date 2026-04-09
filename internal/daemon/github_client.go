@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -14,6 +16,11 @@ const (
 	defaultGitHubAPIInitialBackoff = 1 * time.Second
 	defaultGitHubAPIMaxBackoff     = 8 * time.Second
 	defaultGitHubAPIMaxAttempts    = 3
+)
+
+var (
+	retryAfterPattern     = regexp.MustCompile(`(?im)retry-after:\s*(\d+)`)
+	rateLimitResetPattern = regexp.MustCompile(`(?im)x-ratelimit-reset:\s*(\d+)`)
 )
 
 type gitHubClient interface {
@@ -226,8 +233,14 @@ func (c *gitHubCLIClient) run(ctx context.Context, args ...string) ([]byte, erro
 		if err == nil {
 			return output, nil
 		}
-		if !isGitHubRateLimitError(err, output) || attempt == c.maxAttempts {
+		if !isGitHubRateLimitError(err, output) {
 			return output, err
+		}
+		if attempt == c.maxAttempts {
+			return output, &gitHubRateLimitError{
+				err:   err,
+				until: gitHubRateLimitDeadline(err, output, c.now(), backoff),
+			}
 		}
 		if sleepErr := c.sleep(ctx, backoff); sleepErr != nil {
 			return nil, sleepErr
@@ -279,7 +292,27 @@ func isGitHubRateLimitError(err error, output []byte) bool {
 	message := strings.ToLower(err.Error() + " " + string(output))
 	return strings.Contains(message, "secondary rate limit") ||
 		strings.Contains(message, "api rate limit exceeded") ||
-		strings.Contains(message, "rate limit exceeded")
+		strings.Contains(message, "rate limit exceeded") ||
+		strings.Contains(message, "http 429") ||
+		(strings.Contains(message, "http 403") && (strings.Contains(message, "rate limit") || strings.Contains(message, "retry-after")))
+}
+
+func gitHubRateLimitDeadline(err error, output []byte, now time.Time, fallback time.Duration) time.Time {
+	message := err.Error() + "\n" + string(output)
+	if match := retryAfterPattern.FindStringSubmatch(message); len(match) == 2 {
+		if seconds, convErr := strconv.Atoi(match[1]); convErr == nil && seconds > 0 {
+			return now.Add(time.Duration(seconds) * time.Second)
+		}
+	}
+	if match := rateLimitResetPattern.FindStringSubmatch(message); len(match) == 2 {
+		if unixSeconds, convErr := strconv.ParseInt(match[1], 10, 64); convErr == nil && unixSeconds > 0 {
+			return time.Unix(unixSeconds, 0).UTC()
+		}
+	}
+	if fallback <= 0 {
+		fallback = time.Minute
+	}
+	return now.Add(fallback)
 }
 
 func sleepContext(ctx context.Context, delay time.Duration) error {

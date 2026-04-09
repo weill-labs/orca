@@ -253,6 +253,120 @@ func TestPRDetectionSyncsPaneMetadata(t *testing.T) {
 	})
 }
 
+func TestPRPollingLogsGitHubRateLimitWarnings(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	captureTicker := newFakeTicker()
+	prTicker := newFakeTicker()
+	deps.tickers.enqueue(captureTicker, prTicker)
+	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, "HTTP 429: API rate limit exceeded\nRetry-After: 120\n", errors.New("gh: HTTP 429"))
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-689", "Implement daemon core", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	prTicker.tick(deps.clock.Now())
+	waitFor(t, "github rate limit warning event", func() bool {
+		return deps.events.countType("pr.rate_limited") == 1
+	})
+
+	event, ok := deps.events.lastEventOfType("pr.rate_limited")
+	if !ok {
+		t.Fatal("missing GitHub rate limit event")
+	}
+	if got, want := event.Message, "github: rate limited until 09:02"; got != want {
+		t.Fatalf("event.Message = %q, want %q", got, want)
+	}
+	if task, ok := deps.state.task("LAB-689"); !ok {
+		t.Fatal("task missing after poll")
+	} else if got, want := task.PRNumber, 42; got != want {
+		t.Fatalf("task.PRNumber = %d, want %d", got, want)
+	}
+}
+
+func TestPRPollingLogsGitHubRateLimitWarningsDuringPRDiscovery(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	captureTicker := newFakeTicker()
+	prTicker := newFakeTicker()
+	deps.tickers.enqueue(captureTicker, prTicker)
+	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, "HTTP 429: API rate limit exceeded\nRetry-After: 120\n", errors.New("gh: HTTP 429"))
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-689", "Implement daemon core", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	prTicker.tick(deps.clock.Now())
+	waitFor(t, "discovery rate limit warning event", func() bool {
+		return deps.events.countType(EventPRRateLimited) == 1
+	})
+
+	if task, ok := deps.state.task("LAB-689"); !ok {
+		t.Fatal("task missing after discovery poll")
+	} else if got := task.PRNumber; got != 0 {
+		t.Fatalf("task.PRNumber = %d, want 0", got)
+	}
+}
+
+func TestPRPollingContinuesFollowUpPollsAfterNonRateLimitMergeLookupError(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	captureTicker := newFakeTicker()
+	prTicker := newFakeTicker()
+	deps.tickers.enqueue(captureTicker, prTicker)
+	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, ``, errors.New("gh failed"))
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergeable"}, `{"mergeable":"MERGEABLE"}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, ``, nil)
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-689", "Implement daemon core", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	prTicker.tick(deps.clock.Now())
+	waitFor(t, "follow-up polls after merge lookup failure", func() bool {
+		worker, ok := deps.state.worker("pane-1")
+		return ok &&
+			worker.LastMergeableState == "MERGEABLE" &&
+			deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}) == 1
+	})
+
+	if got, want := deps.events.countType(EventPRRateLimited), 0; got != want {
+		t.Fatalf("GitHub rate limit event count = %d, want %d", got, want)
+	}
+}
+
 func TestPRPollingSkipsDiscoveryWhenAssignmentAlreadyTracksPR(t *testing.T) {
 	t.Parallel()
 
