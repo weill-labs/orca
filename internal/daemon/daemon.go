@@ -290,6 +290,7 @@ func (d *Daemon) Stop(ctx context.Context) error {
 	}
 	if d.eventStreamDone != nil {
 		<-d.eventStreamDone
+	}
 	if d.watchdogDone != nil {
 		<-d.watchdogDone
 	}
