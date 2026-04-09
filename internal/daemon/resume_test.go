@@ -62,7 +62,7 @@ func TestResumeRestartsExistingWorkerInPlace(t *testing.T) {
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("waitIdle calls = %#v, want %#v", got, want)
 	}
-	if got, want := deps.amux.captureCount("pane-1"), 1; got != want {
+	if got, want := deps.amux.captureCount("pane-1"), 2; got != want {
 		t.Fatalf("capture count = %d, want %d", got, want)
 	}
 	if got, want := len(deps.amux.spawnRequests), 0; got != want {

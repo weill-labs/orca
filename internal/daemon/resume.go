@@ -112,6 +112,11 @@ func (d *Daemon) resumeExistingPaneForProject(ctx context.Context, projectPath s
 	if paneID == "" {
 		return fmt.Errorf("task %s has no worker pane", task.Issue)
 	}
+	updatedWorker, err := d.captureCrashReportForRestart(ctx, task, worker, profile)
+	if err != nil {
+		return err
+	}
+	worker = updatedWorker
 	if err := d.startAgentInPane(ctx, paneID, profile); err != nil {
 		return err
 	}
@@ -252,6 +257,7 @@ func (d *Daemon) storeResumedTaskForProject(ctx context.Context, projectPath str
 			AgentProfile: task.AgentProfile,
 			ClonePath:    task.ClonePath,
 			Issue:        task.Issue,
+			RestartCount: worker.RestartCount,
 			CreatedAt:    now,
 			LastSeenAt:   now,
 		}

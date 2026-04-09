@@ -46,6 +46,7 @@ const (
 	EventWorkerNudgedReview    = "worker.nudged_review"
 	EventWorkerReviewEscalated = "worker.review_escalated"
 	EventWorkerEscalated       = "worker.escalated"
+	EventWorkerCrashReport     = "worker.crash_report"
 	EventWorkerRecovered       = "worker.recovered"
 	EventWorkerPostmortem      = "worker.postmortem"
 	EventPRDetected            = "pr.detected"
@@ -204,6 +205,7 @@ type Worker struct {
 	CIEscalated           bool      `json:"ci_escalated,omitempty"`
 	LastMergeableState    string    `json:"last_mergeable_state,omitempty"`
 	NudgeCount            int       `json:"nudge_count,omitempty"`
+	RestartCount          int       `json:"restart_count,omitempty"`
 	LastCapture           string    `json:"last_capture,omitempty"`
 	LastActivityAt        time.Time `json:"last_activity_at,omitempty"`
 	CreatedAt             time.Time `json:"created_at,omitempty"`
@@ -239,18 +241,20 @@ type MergeQueueUpdate struct {
 }
 
 type Event struct {
-	Time         time.Time `json:"time"`
-	Type         string    `json:"type"`
-	Project      string    `json:"project,omitempty"`
-	Issue        string    `json:"issue,omitempty"`
-	WorkerID     string    `json:"worker_id,omitempty"`
-	PaneID       string    `json:"pane_id,omitempty"`
-	PaneName     string    `json:"pane_name,omitempty"`
-	CloneName    string    `json:"clone_name,omitempty"`
-	ClonePath    string    `json:"clone_path,omitempty"`
-	Branch       string    `json:"branch,omitempty"`
-	AgentProfile string    `json:"agent_profile,omitempty"`
-	PRNumber     int       `json:"pr_number,omitempty"`
-	Retry        int       `json:"retry,omitempty"`
-	Message      string    `json:"message,omitempty"`
+	Time           time.Time `json:"time"`
+	Type           string    `json:"type"`
+	Project        string    `json:"project,omitempty"`
+	Issue          string    `json:"issue,omitempty"`
+	WorkerID       string    `json:"worker_id,omitempty"`
+	PaneID         string    `json:"pane_id,omitempty"`
+	PaneName       string    `json:"pane_name,omitempty"`
+	CloneName      string    `json:"clone_name,omitempty"`
+	ClonePath      string    `json:"clone_path,omitempty"`
+	Branch         string    `json:"branch,omitempty"`
+	AgentProfile   string    `json:"agent_profile,omitempty"`
+	PRNumber       int       `json:"pr_number,omitempty"`
+	Retry          int       `json:"retry,omitempty"`
+	RestartAttempt int       `json:"restart_attempt,omitempty"`
+	Scrollback     []string  `json:"scrollback,omitempty"`
+	Message        string    `json:"message,omitempty"`
 }

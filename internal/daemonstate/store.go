@@ -102,6 +102,7 @@ type Worker struct {
 	CIEscalated           bool      `json:"ci_escalated,omitempty"`
 	LastMergeableState    string    `json:"last_mergeable_state,omitempty"`
 	NudgeCount            int       `json:"nudge_count,omitempty"`
+	RestartCount          int       `json:"restart_count,omitempty"`
 	LastCapture           string    `json:"last_capture,omitempty"`
 	LastActivityAt        time.Time `json:"last_activity_at,omitempty"`
 	CreatedAt             time.Time `json:"created_at"`
