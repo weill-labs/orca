@@ -16,6 +16,8 @@ type fakeAmux struct {
 	spawnPane             Pane
 	spawnResults          []Pane
 	spawnPanes            []Pane
+	eventSequences        []fakeAmuxEventSequence
+	eventsCalls           int
 	spawnErr              error
 	paneExists            map[string]bool
 	paneExistsErr         error
@@ -62,6 +64,11 @@ type waitContentCall struct {
 	PaneID    string
 	Substring string
 	Timeout   time.Duration
+}
+
+type fakeAmuxEventSequence struct {
+	events []amuxapi.Event
+	err    error
 }
 
 func (a *fakeAmux) Spawn(ctx context.Context, req SpawnRequest) (Pane, error) {
@@ -484,6 +491,24 @@ func (a *fakeAmux) requireSentKeys(t *testing.T, paneID string, want []string) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("sentKeys[%q] = %#v, want %#v", paneID, got, want)
 	}
+}
+
+func (a *fakeAmux) enqueueEventSequence(sequence fakeAmuxEventSequence) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	copied := fakeAmuxEventSequence{
+		err: sequence.err,
+	}
+	if len(sequence.events) > 0 {
+		copied.events = append([]amuxapi.Event(nil), sequence.events...)
+	}
+	a.eventSequences = append(a.eventSequences, copied)
+}
+
+func (a *fakeAmux) eventsCallCount() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.eventsCalls
 }
 
 func normalizeSentKeys(keys ...string) []string {
