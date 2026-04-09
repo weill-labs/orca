@@ -105,6 +105,9 @@ func TestResumeRecordsCrashReportBeforeRestartingExitedWorker(t *testing.T) {
 	if got, want := updatedWorker.RestartCount, 3; got != want {
 		t.Fatalf("worker.RestartCount = %d, want %d", got, want)
 	}
+	if got, want := updatedWorker.FirstCrashAt, deps.clock.Now(); !got.Equal(want) {
+		t.Fatalf("worker.FirstCrashAt = %v, want %v", got, want)
+	}
 }
 
 func TestResumeRecordsCrashReportBeforeRestartingExitedPaneWithoutStoredWorker(t *testing.T) {
@@ -251,6 +254,23 @@ func TestResumeReturnsErrorWhenCrashReportCaptureFails(t *testing.T) {
 		t.Fatalf("worker crash report events = %d, want %d", got, want)
 	}
 	deps.amux.requireSentKeys(t, "pane-1", nil)
+}
+
+func TestNextRestartAttemptResetsWindow(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 9, 12, 0, 0, 0, time.UTC)
+	restartAttempt, firstCrashAt := nextRestartAttempt(Worker{
+		RestartCount: 2,
+		FirstCrashAt: now.Add(-6 * time.Minute),
+	}, now)
+
+	if got, want := restartAttempt, 1; got != want {
+		t.Fatalf("restartAttempt = %d, want %d", got, want)
+	}
+	if got, want := firstCrashAt, now; !got.Equal(want) {
+		t.Fatalf("firstCrashAt = %v, want %v", got, want)
+	}
 }
 
 func TestSQLiteStateAdapterRecordsCrashReportPayload(t *testing.T) {
