@@ -489,6 +489,9 @@ func TestPRDetectionContinuesForEscalatedStartingWorkers(t *testing.T) {
 	if !ok {
 		t.Fatal("task missing after poll")
 	}
+	if got, want := task.Status, TaskStatusStarting; got != want {
+		t.Fatalf("task.Status = %q, want %q", got, want)
+	}
 	if got, want := task.PRNumber, 42; got != want {
 		t.Fatalf("task.PRNumber = %d, want %d", got, want)
 	}
