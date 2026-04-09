@@ -854,6 +854,10 @@ func (a *App) projectStatus(ctx context.Context, projectPath string) (state.Proj
 }
 
 func writeProjectStatus(w io.Writer, status state.ProjectStatus, daemonBuildCommit, installedBuildCommit string) error {
+	return writeProjectStatusAt(w, status, daemonBuildCommit, installedBuildCommit, time.Now().UTC())
+}
+
+func writeProjectStatusAt(w io.Writer, status state.ProjectStatus, daemonBuildCommit, installedBuildCommit string, now time.Time) error {
 	if _, err := fmt.Fprintf(w, "project: %s\n", status.Project); err != nil {
 		return err
 	}
@@ -866,6 +870,11 @@ func writeProjectStatus(w io.Writer, status state.ProjectStatus, daemonBuildComm
 		}
 		if status.Daemon.PID > 0 {
 			if _, err := fmt.Fprintf(w, "pid: %d\n", status.Daemon.PID); err != nil {
+				return err
+			}
+		}
+		if shouldPrintHeartbeatAge(status.Daemon) {
+			if _, err := fmt.Fprintf(w, "heartbeat age: %s\n", heartbeatAge(now, status.Daemon.UpdatedAt)); err != nil {
 				return err
 			}
 		}
@@ -894,6 +903,29 @@ func writeProjectStatus(w io.Writer, status state.ProjectStatus, daemonBuildComm
 		}
 	}
 	return tw.Flush()
+}
+
+func shouldPrintHeartbeatAge(daemon *state.DaemonStatus) bool {
+	if daemon == nil || daemon.UpdatedAt.IsZero() {
+		return false
+	}
+	switch daemon.Status {
+	case "running", "unhealthy":
+		return true
+	default:
+		return false
+	}
+}
+
+func heartbeatAge(now, heartbeatAt time.Time) string {
+	if heartbeatAt.IsZero() || now.Before(heartbeatAt) {
+		return "0s"
+	}
+	age := now.Sub(heartbeatAt)
+	if age < time.Second {
+		return "0s"
+	}
+	return age.Round(time.Second).String()
 }
 
 func defaultProjectStatusRPC(ctx context.Context, projectPath string) (daemon.ProjectStatusRPCResult, error) {

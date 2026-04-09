@@ -12,18 +12,18 @@ import (
 )
 
 type testDeps struct {
-	clock        *fakeClock
-	config       *fakeConfig
-	state        *fakeState
-	pool         *fakePool
-	amux         *fakeAmux
-	issueTracker *fakeIssueTracker
-	commands     *fakeCommands
-	events       *fakeEvents
-	tickers      *fakeTickerFactory
+	clock           *fakeClock
+	config          *fakeConfig
+	state           *fakeState
+	pool            *fakePool
+	amux            *fakeAmux
+	issueTracker    *fakeIssueTracker
+	commands        *fakeCommands
+	events          *fakeEvents
+	tickers         *fakeTickerFactory
 	watchdogTickers *fakeTickerFactory
-	pidPath      string
-	sleep        func(context.Context, time.Duration) error
+	pidPath         string
+	sleep           func(context.Context, time.Duration) error
 }
 
 func noSleep(context.Context, time.Duration) error { return nil }
@@ -52,16 +52,16 @@ func newTestDeps(t *testing.T) *testDeps {
 				},
 			},
 		},
-		state:        newFakeState(),
-		pool:         &fakePool{clone: Clone{Name: "clone-01", Path: clonePath}},
-		amux:         &fakeAmux{spawnPane: Pane{ID: "pane-1", Name: "worker-1"}, captures: make(map[string][]string)},
-		issueTracker: &fakeIssueTracker{},
-		commands:     newFakeCommands(),
-		events:       newFakeEvents(),
-		tickers:      &fakeTickerFactory{},
+		state:           newFakeState(),
+		pool:            &fakePool{clone: Clone{Name: "clone-01", Path: clonePath}},
+		amux:            &fakeAmux{spawnPane: Pane{ID: "pane-1", Name: "worker-1"}, captures: make(map[string][]string)},
+		issueTracker:    &fakeIssueTracker{},
+		commands:        newFakeCommands(),
+		events:          newFakeEvents(),
+		tickers:         &fakeTickerFactory{},
 		watchdogTickers: &fakeTickerFactory{},
-		pidPath:      filepath.Join(tmp, "orca.pid"),
-		sleep:        noSleep,
+		pidPath:         filepath.Join(tmp, "orca.pid"),
+		sleep:           noSleep,
 	}
 }
 
@@ -86,7 +86,6 @@ func (d *testDeps) newDaemonWithOptions(t *testing.T, mutate func(*Options)) *Da
 		Events:           d.events,
 		Now:              d.clock.Now,
 		NewTicker:        d.tickers.NewTicker,
-		NewWatchdogTicker: d.watchdogTickers.NewTicker,
 		Sleep:            d.sleep,
 		CaptureInterval:  5 * time.Second,
 		PollInterval:     30 * time.Second,

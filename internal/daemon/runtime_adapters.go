@@ -72,8 +72,39 @@ type sqliteStateAdapter struct {
 	store *state.SQLiteStore
 }
 
+type sqliteDaemonStatusWriter struct {
+	store     *state.SQLiteStore
+	project   string
+	session   string
+	pid       int
+	startedAt time.Time
+}
+
 func newSQLiteStateAdapter(store *state.SQLiteStore) *sqliteStateAdapter {
 	return &sqliteStateAdapter{store: store}
+}
+
+func newSQLiteDaemonStatusWriter(store *state.SQLiteStore, project, session string, pid int, startedAt time.Time) *sqliteDaemonStatusWriter {
+	return &sqliteDaemonStatusWriter{
+		store:     store,
+		project:   project,
+		session:   session,
+		pid:       pid,
+		startedAt: startedAt,
+	}
+}
+
+func (w *sqliteDaemonStatusWriter) Update(ctx context.Context, status string, heartbeatAt time.Time) error {
+	if heartbeatAt.IsZero() {
+		heartbeatAt = w.startedAt
+	}
+	return w.store.UpsertDaemon(ctx, w.project, state.DaemonStatus{
+		Session:   w.session,
+		PID:       w.pid,
+		Status:    status,
+		StartedAt: w.startedAt,
+		UpdatedAt: heartbeatAt,
+	})
 }
 
 func convertStateTask(project string, task state.Task) Task {

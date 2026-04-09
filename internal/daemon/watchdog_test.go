@@ -64,6 +64,7 @@ func TestDaemonWatchdogWarnsAndMarksUnhealthyAfterStaleHeartbeat(t *testing.T) {
 	startedAt := deps.clock.Now()
 	d := deps.newDaemonWithOptions(t, func(opts *Options) {
 		opts.DaemonStatusWriter = statusWriter
+		opts.NewWatchdogTicker = deps.watchdogTickers.NewTicker
 		opts.Logf = logs.Printf
 	})
 
