@@ -1534,6 +1534,7 @@ func newRepoRoot(t *testing.T) string {
 type fakeDaemon struct {
 	startRequest   *daemon.StartRequest
 	stopRequest    *daemon.StopRequest
+	reloadRequest  *daemon.ReloadRequest
 	assignRequest  *daemon.AssignRequest
 	batchRequest   *daemon.BatchRequest
 	spawnRequest   *daemon.SpawnPaneRequest
@@ -1543,6 +1544,7 @@ type fakeDaemon struct {
 
 	startResult   daemon.StartResult
 	stopResult    daemon.StopResult
+	reloadResult  daemon.ReloadResult
 	assignResult  daemon.TaskActionResult
 	batchResult   daemon.BatchResult
 	spawnResult   daemon.SpawnPaneResult
@@ -1567,6 +1569,14 @@ func (f *fakeDaemon) Stop(_ context.Context, req daemon.StopRequest) (daemon.Sto
 	}
 	f.stopRequest = &req
 	return f.stopResult, nil
+}
+
+func (f *fakeDaemon) Reload(_ context.Context, req daemon.ReloadRequest) (daemon.ReloadResult, error) {
+	if f.err != nil {
+		return daemon.ReloadResult{}, f.err
+	}
+	f.reloadRequest = &req
+	return f.reloadResult, nil
 }
 
 func (f *fakeDaemon) Assign(_ context.Context, req daemon.AssignRequest) (daemon.TaskActionResult, error) {
