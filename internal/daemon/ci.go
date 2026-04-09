@@ -100,7 +100,7 @@ func (d *Daemon) nudgeForCIFailure(ctx context.Context, update *TaskStateUpdate,
 
 	failedChecks, err := d.lookupFailedPRChecks(ctx, update.Active.Task.Project, update.Active.Task.PRNumber)
 	if err != nil {
-		return false
+		failedChecks = nil
 	}
 	prompt := ciFailurePrompt(update.Active.Task.PRNumber, failedChecks)
 
