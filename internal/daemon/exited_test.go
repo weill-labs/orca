@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -267,6 +268,62 @@ func TestExitedPaneDetectionWaitsForPersistentExitedState(t *testing.T) {
 		worker, ok := deps.state.worker("pane-1")
 		return ok && worker.RestartCount == 1 && deps.amux.countKey("pane-1", "codex --yolo\n") == 1
 	})
+}
+
+func TestExitedPaneDetectionEscalatesWhenRestartFails(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	captureTicker := newFakeTicker()
+	pollTicker := newFakeTicker()
+	deps.tickers.enqueue(captureTicker, pollTicker)
+	seedActiveAssignment(t, deps, "LAB-739", "pane-1")
+	deps.amux.sendKeysErr = errors.New("restart failed")
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	crashAt := deps.clock.Now()
+	deps.amux.capturePaneSequence("pane-1", []PaneCapture{{
+		Content:        []string{"shell prompt"},
+		CurrentCommand: "bash",
+		Exited:         true,
+		ExitedSince:    crashAt.Add(-31 * time.Second).Format(time.RFC3339),
+	}})
+
+	captureTicker.tick(crashAt)
+	waitFor(t, "restart failure escalates worker", func() bool {
+		worker, ok := deps.state.worker("pane-1")
+		return ok && worker.Health == WorkerHealthEscalated && deps.events.countType(EventWorkerEscalated) == 1
+	})
+
+	worker, ok := deps.state.worker("pane-1")
+	if !ok {
+		t.Fatal("worker missing after failed restart")
+	}
+	if got, want := worker.RestartCount, 1; got != want {
+		t.Fatalf("worker.RestartCount after failed restart = %d, want %d", got, want)
+	}
+	if got, want := worker.FirstCrashAt, crashAt; !got.Equal(want) {
+		t.Fatalf("worker.FirstCrashAt after failed restart = %v, want %v", got, want)
+	}
+	if got, want := deps.amux.countKey("pane-1", "codex --yolo\n"), 0; got != want {
+		t.Fatalf("restart send count after failed restart = %d, want %d", got, want)
+	}
+
+	event, ok := deps.events.lastEventOfType(EventWorkerEscalated)
+	if !ok {
+		t.Fatal("worker escalation event missing")
+	}
+	if !strings.Contains(event.Message, "auto restart failed") {
+		t.Fatalf("event.Message = %q, want to contain %q", event.Message, "auto restart failed")
+	}
 }
 
 func TestShouldEscalateExitedPane(t *testing.T) {
