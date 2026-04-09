@@ -26,11 +26,7 @@ func taskGitHubRateLimitWarning(taskStatus state.TaskStatus, now time.Time) stri
 			continue
 		}
 
-		return formatGitHubRateLimitWarning(payload.GitHubRateLimitedUntil)
+		return event.Message
 	}
 	return ""
-}
-
-func formatGitHubRateLimitWarning(until time.Time) string {
-	return "github: rate limited until " + until.UTC().Format("15:04")
 }

@@ -262,8 +262,6 @@ func TestPRPollingLogsGitHubRateLimitWarnings(t *testing.T) {
 	deps.tickers.enqueue(captureTicker, prTicker)
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, "HTTP 429: API rate limit exceeded\nRetry-After: 120\n", errors.New("gh: HTTP 429"))
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergeable"}, ``, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, ``, nil)
 
 	d := deps.newDaemon(t)
 	ctx := context.Background()

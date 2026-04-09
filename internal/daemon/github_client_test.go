@@ -447,34 +447,58 @@ func TestGitHubCLIClientStopsWhenBackoffSleepFails(t *testing.T) {
 func TestGitHubCLIClientReturnsRateLimitErrorAfterMaxAttempts(t *testing.T) {
 	t.Parallel()
 
-	commands := newFakeCommands()
-	clock := &fakeClock{now: time.Date(2026, 4, 2, 9, 0, 0, 0, time.UTC)}
-	client := newGitHubCLIClient(gitHubCLIClientConfig{
-		project:        "/tmp/project",
-		commands:       commands,
-		now:            clock.Now,
-		sleep:          noSleep,
-		initialBackoff: time.Second,
-		maxAttempts:    2,
-	})
-	args := []string{"pr", "view", "42", "--json", "mergedAt"}
-	wantErr := errors.New("gh: HTTP 429")
-	commands.queue("gh", args, "HTTP 429: API rate limit exceeded\nRetry-After: 120\n", wantErr)
-	commands.queue("gh", args, "HTTP 429: API rate limit exceeded\nRetry-After: 120\n", wantErr)
+	tests := []struct {
+		name      string
+		output    string
+		wantUntil time.Time
+	}{
+		{
+			name:      "retry after header",
+			output:    "HTTP 429: API rate limit exceeded\nRetry-After: 120\n",
+			wantUntil: time.Date(2026, 4, 2, 9, 2, 0, 0, time.UTC),
+		},
+		{
+			name:      "reset header",
+			output:    "HTTP 403: API rate limit exceeded\nX-RateLimit-Reset: 1775725560\n",
+			wantUntil: time.Unix(1775725560, 0).UTC(),
+		},
+	}
 
-	_, err := client.isPRMerged(context.Background(), 42)
-	if !errors.Is(err, wantErr) {
-		t.Fatalf("isPRMerged() error = %v, want %v", err, wantErr)
-	}
-	var rateLimited interface{ RateLimitedUntil() time.Time }
-	if !errors.As(err, &rateLimited) {
-		t.Fatalf("isPRMerged() error = %v, want rate limit metadata", err)
-	}
-	if got, want := rateLimited.RateLimitedUntil(), clock.Now().Add(120*time.Second); !got.Equal(want) {
-		t.Fatalf("rate limited until = %v, want %v", got, want)
-	}
-	if got, want := commands.countCalls("gh", args), 2; got != want {
-		t.Fatalf("gh call count = %d, want %d", got, want)
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			commands := newFakeCommands()
+			clock := &fakeClock{now: time.Date(2026, 4, 2, 9, 0, 0, 0, time.UTC)}
+			client := newGitHubCLIClient(gitHubCLIClientConfig{
+				project:        "/tmp/project",
+				commands:       commands,
+				now:            clock.Now,
+				sleep:          noSleep,
+				initialBackoff: time.Second,
+				maxAttempts:    2,
+			})
+			args := []string{"pr", "view", "42", "--json", "mergedAt"}
+			wantErr := errors.New("gh: HTTP 429")
+			commands.queue("gh", args, tt.output, wantErr)
+			commands.queue("gh", args, tt.output, wantErr)
+
+			_, err := client.isPRMerged(context.Background(), 42)
+			if !errors.Is(err, wantErr) {
+				t.Fatalf("isPRMerged() error = %v, want %v", err, wantErr)
+			}
+			var rateLimited interface{ RateLimitedUntil() time.Time }
+			if !errors.As(err, &rateLimited) {
+				t.Fatalf("isPRMerged() error = %v, want rate limit metadata", err)
+			}
+			if got := rateLimited.RateLimitedUntil(); !got.Equal(tt.wantUntil) {
+				t.Fatalf("rate limited until = %v, want %v", got, tt.wantUntil)
+			}
+			if got, want := commands.countCalls("gh", args), 2; got != want {
+				t.Fatalf("gh call count = %d, want %d", got, want)
+			}
+		})
 	}
 }
 
