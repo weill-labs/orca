@@ -350,6 +350,150 @@ func TestPRDetectionPreservesTrackedHistoryForReusedPane(t *testing.T) {
 	})
 }
 
+func TestPRDetectionContinuesForEscalatedWorkers(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	captureTicker := newFakeTicker()
+	prTicker := newFakeTicker()
+	deps.tickers.enqueue(captureTicker, prTicker)
+	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-984", "--state", "open", "--json", "number"}, `[]`, nil)
+	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-984", "--json", "number"}, `[{"number":42}]`, nil)
+	deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[{"bucket":"pending"}]`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergeable"}, ``, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, ``, nil)
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-984", "Keep polling PRs after escalation", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	worker, ok := deps.state.worker("pane-1")
+	if !ok {
+		t.Fatal("worker missing after assignment")
+	}
+	worker.Health = WorkerHealthEscalated
+	if err := deps.state.PutWorker(ctx, worker); err != nil {
+		t.Fatalf("PutWorker() error = %v", err)
+	}
+
+	prTicker.tick(deps.clock.Now())
+	waitFor(t, "pr detection for escalated worker", func() bool {
+		task, ok := deps.state.task("LAB-984")
+		return ok && task.PRNumber == 42
+	})
+
+	task, ok := deps.state.task("LAB-984")
+	if !ok {
+		t.Fatal("task missing after poll")
+	}
+	if got, want := task.PRNumber, 42; got != want {
+		t.Fatalf("task.PRNumber = %d, want %d", got, want)
+	}
+
+	worker, ok = deps.state.worker("pane-1")
+	if !ok {
+		t.Fatal("worker missing after poll")
+	}
+	if got, want := worker.Health, WorkerHealthEscalated; got != want {
+		t.Fatalf("worker.Health = %q, want %q", got, want)
+	}
+	if got, want := deps.events.countType(EventPRDetected), 1; got != want {
+		t.Fatalf("PR detected event count = %d, want %d", got, want)
+	}
+}
+
+func TestPRDetectionContinuesForEscalatedStartingWorkers(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	captureTicker := newFakeTicker()
+	prTicker := newFakeTicker()
+	deps.tickers.enqueue(captureTicker, prTicker)
+	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-985", "--json", "number"}, `[{"number":42}]`, nil)
+	deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[{"bucket":"pending"}]`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergeable"}, ``, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, ``, nil)
+
+	now := deps.clock.Now()
+	deps.state.putTaskForTest(Task{
+		Project:      "/tmp/project",
+		Issue:        "LAB-985",
+		Status:       TaskStatusStarting,
+		Prompt:       "Resume after startup escalation",
+		WorkerID:     "worker-01",
+		PaneID:       "pane-1",
+		PaneName:     "pane-1",
+		CloneName:    "clone-LAB-985",
+		ClonePath:    "/tmp/LAB-985",
+		Branch:       "LAB-985",
+		AgentProfile: "codex",
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	})
+	if err := deps.state.PutWorker(context.Background(), Worker{
+		Project:      "/tmp/project",
+		WorkerID:     "worker-01",
+		PaneID:       "pane-1",
+		PaneName:     "pane-1",
+		Issue:        "LAB-985",
+		ClonePath:    "/tmp/LAB-985",
+		AgentProfile: "codex",
+		Health:       WorkerHealthHealthy,
+		CreatedAt:    now,
+		LastSeenAt:   now,
+		UpdatedAt:    now,
+	}); err != nil {
+		t.Fatalf("PutWorker() error = %v", err)
+	}
+
+	deps.amux.capturePaneErr = errors.New("capture failed on startup")
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	waitFor(t, "startup escalation", func() bool {
+		task, ok := deps.state.task("LAB-985")
+		if !ok || task.Status != TaskStatusStarting {
+			return false
+		}
+		worker, ok := deps.state.worker("worker-01")
+		return ok && worker.Health == WorkerHealthEscalated
+	})
+
+	deps.amux.capturePaneErr = nil
+
+	prTicker.tick(deps.clock.Now())
+	waitFor(t, "pr detection for escalated starting worker", func() bool {
+		task, ok := deps.state.task("LAB-985")
+		return ok && task.PRNumber == 42
+	})
+
+	task, ok := deps.state.task("LAB-985")
+	if !ok {
+		t.Fatal("task missing after poll")
+	}
+	if got, want := task.PRNumber, 42; got != want {
+		t.Fatalf("task.PRNumber = %d, want %d", got, want)
+	}
+}
+
 func TestPRMergeablePollingNudgesWorkerOnConflictTransitions(t *testing.T) {
 	t.Parallel()
 
