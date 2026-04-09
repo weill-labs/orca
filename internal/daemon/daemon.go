@@ -47,6 +47,7 @@ type Daemon struct {
 	stopContext       context.Context
 	stopCancel        context.CancelFunc
 	loopDone          chan struct{}
+	eventStreamDone   chan struct{}
 	mergeQueueInbox   chan ProcessQueue
 	mergeQueueUpdates chan MergeQueueUpdate
 	mergeQueueDone    chan struct{}
@@ -152,6 +153,8 @@ func (d *Daemon) Start(ctx context.Context) error {
 	d.mergeQueueDone = make(chan struct{})
 	actor := newMergeQueueActor(d.project, d.commands, d.mergeQueueUpdates)
 	go actor.run(d.stopContext, d.mergeQueueInbox, d.mergeQueueDone)
+	d.eventStreamDone = make(chan struct{})
+	go d.runExitedEventLoop(d.stopContext, d.eventStreamDone)
 	d.loopDone = make(chan struct{})
 	go d.runLoop(d.stopContext, d.loopDone)
 
@@ -240,6 +243,9 @@ func (d *Daemon) Stop(ctx context.Context) error {
 	if d.loopDone != nil {
 		<-d.loopDone
 	}
+	if d.eventStreamDone != nil {
+		<-d.eventStreamDone
+	}
 	if d.mergeQueueDone != nil {
 		<-d.mergeQueueDone
 	}
@@ -251,6 +257,7 @@ func (d *Daemon) Stop(ctx context.Context) error {
 	d.mergeQueueInbox = nil
 	d.mergeQueueUpdates = nil
 	d.mergeQueueDone = nil
+	d.eventStreamDone = nil
 
 	d.emit(ctx, Event{
 		Time:    d.now(),

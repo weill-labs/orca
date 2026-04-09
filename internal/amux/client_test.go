@@ -1382,6 +1382,14 @@ func TestMockClientRecordsCalls(t *testing.T) {
 		ListPanesFunc: func(_ context.Context) ([]Pane, error) {
 			return []Pane{{ID: "20", Name: "worker-20", CWD: "/tmp/worker-20"}}, nil
 		},
+		EventsFunc: func(_ context.Context, req EventsRequest) (<-chan Event, <-chan error) {
+			eventsCh := make(chan Event, 1)
+			errCh := make(chan error, 1)
+			eventsCh <- Event{Type: strings.Join(req.Filter, ","), PaneName: req.Pane}
+			close(eventsCh)
+			close(errCh)
+			return eventsCh, errCh
+		},
 		CaptureFunc: func(_ context.Context, paneID string) (string, error) {
 			return "captured output", nil
 		},
@@ -1420,6 +1428,33 @@ func TestMockClientRecordsCalls(t *testing.T) {
 	if !reflect.DeepEqual(gotPanes, []Pane{{ID: "20", Name: "worker-20", CWD: "/tmp/worker-20"}}) {
 		t.Fatalf("ListPanes() = %#v", gotPanes)
 	}
+	eventsCh, errCh := mock.Events(context.Background(), EventsRequest{
+		Pane:        "20",
+		Filter:      []string{"exited"},
+		NoReconnect: true,
+	})
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case event, ok := <-eventsCh:
+			if !ok {
+				t.Fatal("Events() closed before returning the first event")
+			}
+			if got, want := event, (Event{Type: "exited", PaneName: "20"}); got != want {
+				t.Fatalf("Events() first event = %#v, want %#v", got, want)
+			}
+			goto eventAssertions
+		case err, ok := <-errCh:
+			if !ok {
+				continue
+			}
+			t.Fatalf("Events() unexpected error = %v", err)
+		case <-deadline:
+			t.Fatal("timed out waiting for mock event")
+		}
+	}
+
+eventAssertions:
 	gotCapture, err := mock.Capture(context.Background(), "20")
 	if err != nil {
 		t.Fatalf("Capture() error = %v", err)
@@ -1466,6 +1501,13 @@ func TestMockClientRecordsCalls(t *testing.T) {
 	if got, want := mock.ListPanesCalls, 1; got != want {
 		t.Fatalf("ListPanesCalls = %d, want %d", got, want)
 	}
+	if got, want := mock.EventsCalls, []EventsRequest{{
+		Pane:        "20",
+		Filter:      []string{"exited"},
+		NoReconnect: true,
+	}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("EventsCalls = %#v, want %#v", got, want)
+	}
 	if !reflect.DeepEqual(mock.SendKeysCalls, []SendKeysCall{{PaneID: "20", Text: "make test"}}) {
 		t.Fatalf("SendKeysCalls = %#v", mock.SendKeysCalls)
 	}
@@ -1496,6 +1538,47 @@ func TestMockClientRecordsCalls(t *testing.T) {
 	}
 	if got, want := len(mock.WaitContentCalls), 1; got != want {
 		t.Fatalf("WaitContentCalls count = %d, want %d", got, want)
+	}
+}
+
+func TestNewClientConfiguresEventStarter(t *testing.T) {
+	t.Parallel()
+
+	client := NewClient(Config{
+		Binary:  "/usr/local/bin/amux",
+		Session: "orca-dev",
+	})
+
+	if got, want := client.binary, "/usr/local/bin/amux"; got != want {
+		t.Fatalf("client.binary = %q, want %q", got, want)
+	}
+	if got, want := client.session, "orca-dev"; got != want {
+		t.Fatalf("client.session = %q, want %q", got, want)
+	}
+	if client.runner == nil {
+		t.Fatal("client.runner = nil, want runner")
+	}
+	if client.eventStarter == nil {
+		t.Fatal("client.eventStarter = nil, want event starter")
+	}
+}
+
+func TestMockClientEventsDefaultsToClosedChannels(t *testing.T) {
+	t.Parallel()
+
+	mock := &MockClient{}
+	eventsCh, errCh := mock.Events(context.Background(), EventsRequest{
+		Filter: []string{"exited"},
+	})
+
+	if _, ok := <-eventsCh; ok {
+		t.Fatal("eventsCh open, want closed")
+	}
+	if _, ok := <-errCh; ok {
+		t.Fatal("errCh open, want closed")
+	}
+	if got, want := mock.EventsCalls, []EventsRequest{{Filter: []string{"exited"}}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("EventsCalls = %#v, want %#v", got, want)
 	}
 }
 

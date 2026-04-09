@@ -33,6 +33,7 @@ type taskMonitorCheckKind int
 const (
 	taskMonitorCheckCapture taskMonitorCheckKind = iota
 	taskMonitorCheckPRPoll
+	taskMonitorCheckExitedEvent
 )
 
 type taskMonitorRequest struct {
@@ -84,6 +85,8 @@ func (m *TaskMonitor) handle(ctx context.Context, kind taskMonitorCheckKind, act
 		return m.daemon.checkTaskCapture(ctx, active)
 	case taskMonitorCheckPRPoll:
 		return m.daemon.checkTaskPRPoll(ctx, active)
+	case taskMonitorCheckExitedEvent:
+		return m.daemon.checkTaskExitedEvent(ctx, active)
 	default:
 		return TaskStateUpdate{Active: active}
 	}
@@ -279,6 +282,29 @@ func (d *Daemon) applyTaskMonitorResults(ctx context.Context, results []taskMoni
 	for _, result := range results {
 		if !d.isCurrentTaskMonitor(result.key, result.monitor) {
 			continue
+		}
+		d.applyTaskStateUpdate(ctx, result.update)
+	}
+}
+
+func (d *Daemon) dispatchTaskMonitorCheck(ctx context.Context, active ActiveAssignment, kind taskMonitorCheckKind) {
+	monitor := d.ensureTaskMonitorForProject(active.Task.Project, active.Task.Issue)
+	if monitor == nil {
+		return
+	}
+
+	response := monitor.dispatch(ctx, kind, active)
+	if response == nil {
+		return
+	}
+
+	select {
+	case <-ctx.Done():
+		return
+	case result := <-response:
+		d.executeTaskMonitorNudges(ctx, []taskMonitorResult{result})
+		if !d.isCurrentTaskMonitor(result.key, result.monitor) {
+			return
 		}
 		d.applyTaskStateUpdate(ctx, result.update)
 	}

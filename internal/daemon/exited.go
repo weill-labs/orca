@@ -32,51 +32,60 @@ func (d *Daemon) shouldEscalateExitedPane(snapshot PaneCapture, now time.Time) b
 }
 
 func (d *Daemon) handleExitedPaneCapture(ctx context.Context, active ActiveAssignment, profile AgentProfile, snapshot PaneCapture, now time.Time) {
+	d.applyTaskStateUpdate(ctx, d.exitedPaneStateUpdate(active, profile, snapshot, now, true))
+}
+
+func (d *Daemon) checkTaskExitedEvent(ctx context.Context, active ActiveAssignment) TaskStateUpdate {
+	update := TaskStateUpdate{Active: active}
+
+	profile, err := d.profileForTask(ctx, active.Task)
+	if err != nil {
+		return update
+	}
+
+	snapshot, err := d.amux.CapturePane(ctx, active.Task.PaneID)
+	if err != nil {
+		snapshot = PaneCapture{}
+	}
+	snapshot.Exited = true
+
+	return d.exitedPaneStateUpdate(active, profile, snapshot, d.now(), true)
+}
+
+func (d *Daemon) exitedPaneStateUpdate(active ActiveAssignment, profile AgentProfile, snapshot PaneCapture, now time.Time, force bool) TaskStateUpdate {
+	update := TaskStateUpdate{Active: active}
 	output := snapshot.Output()
-	workerChanged := false
-	taskChanged := false
 
-	if output != active.Worker.LastCapture {
-		active.Worker.LastCapture = output
-		active.Worker.LastSeenAt = now
-		active.Task.UpdatedAt = now
-		workerChanged = true
-		taskChanged = true
+	if shouldUpdateExitedCapture(output, update.Active.Worker.LastCapture) {
+		update.Active.Worker.LastCapture = output
+		update.Active.Worker.LastSeenAt = now
+		update.Active.Task.UpdatedAt = now
+		update.WorkerChanged = true
+		update.TaskChanged = true
 	}
 
-	if active.Worker.Health == WorkerHealthEscalated {
-		if workerChanged {
-			_ = d.state.PutWorker(ctx, active.Worker)
-		}
-		if taskChanged {
-			_ = d.state.PutTask(ctx, active.Task)
-		}
-		return
+	if update.Active.Worker.Health == WorkerHealthEscalated {
+		return update
+	}
+	if !force && !d.shouldEscalateExitedPane(snapshot, now) {
+		return update
 	}
 
-	active.Worker.Health = WorkerHealthEscalated
-	active.Worker.LastSeenAt = now
-	active.Task.UpdatedAt = now
-	workerChanged = true
-	taskChanged = true
+	update.Active.Worker.Health = WorkerHealthEscalated
+	update.Active.Worker.LastSeenAt = now
+	update.Active.Task.UpdatedAt = now
+	update.WorkerChanged = true
+	update.TaskChanged = true
+	update.Events = append(update.Events, d.assignmentEvent(update.Active, profile, EventWorkerEscalated, exitedPaneMessage(snapshot)))
 
-	_ = d.state.PutWorker(ctx, active.Worker)
-	_ = d.state.PutTask(ctx, active.Task)
+	return update
+}
 
-	d.emit(ctx, Event{
-		Time:         now,
-		Type:         EventWorkerEscalated,
-		Project:      active.Task.Project,
-		Issue:        active.Task.Issue,
-		PaneID:       active.Task.PaneID,
-		PaneName:     active.Task.PaneName,
-		CloneName:    active.Task.CloneName,
-		ClonePath:    active.Task.ClonePath,
-		Branch:       active.Task.Branch,
-		AgentProfile: profile.Name,
-		Retry:        active.Worker.NudgeCount,
-		Message:      exitedPaneMessage(snapshot),
-	})
+func shouldUpdateExitedCapture(next, current string) bool {
+	if next == "" && current != "" {
+		return false
+	}
+	return next != current
 }
 
 func exitedPaneMessage(snapshot PaneCapture) string {

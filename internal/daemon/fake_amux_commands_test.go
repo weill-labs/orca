@@ -16,6 +16,8 @@ type fakeAmux struct {
 	spawnPane             Pane
 	spawnResults          []Pane
 	spawnPanes            []Pane
+	eventSequences        []fakeAmuxEventSequence
+	eventsCalls           int
 	spawnErr              error
 	paneExists            map[string]bool
 	paneExistsErr         error
@@ -64,6 +66,11 @@ type waitContentCall struct {
 	Timeout   time.Duration
 }
 
+type fakeAmuxEventSequence struct {
+	events []amuxapi.Event
+	err    error
+}
+
 func (a *fakeAmux) Spawn(ctx context.Context, req SpawnRequest) (Pane, error) {
 	if a.rejectCanceledContext && ctx.Err() != nil {
 		return Pane{}, ctx.Err()
@@ -109,6 +116,44 @@ func (a *fakeAmux) ListPanes(ctx context.Context) ([]Pane, error) {
 	out := make([]Pane, len(a.listPanes))
 	copy(out, a.listPanes)
 	return out, nil
+}
+
+func (a *fakeAmux) Events(ctx context.Context, _ amuxapi.EventsRequest) (<-chan amuxapi.Event, <-chan error) {
+	eventsCh := make(chan amuxapi.Event)
+	errCh := make(chan error, 1)
+
+	a.mu.Lock()
+	a.eventsCalls++
+	var sequence fakeAmuxEventSequence
+	if len(a.eventSequences) > 0 {
+		sequence = a.eventSequences[0]
+		if len(a.eventSequences) == 1 {
+			a.eventSequences = nil
+		} else {
+			a.eventSequences = append([]fakeAmuxEventSequence(nil), a.eventSequences[1:]...)
+		}
+	}
+	a.mu.Unlock()
+
+	go func() {
+		defer close(eventsCh)
+		defer close(errCh)
+
+		for _, event := range sequence.events {
+			select {
+			case <-ctx.Done():
+				return
+			case eventsCh <- event:
+			}
+		}
+		if sequence.err != nil && ctx.Err() == nil {
+			errCh <- sequence.err
+			return
+		}
+		<-ctx.Done()
+	}()
+
+	return eventsCh, errCh
 }
 
 func (a *fakeAmux) PaneExists(ctx context.Context, paneID string) (bool, error) {
@@ -484,6 +529,24 @@ func (a *fakeAmux) requireSentKeys(t *testing.T, paneID string, want []string) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("sentKeys[%q] = %#v, want %#v", paneID, got, want)
 	}
+}
+
+func (a *fakeAmux) enqueueEventSequence(sequence fakeAmuxEventSequence) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	copied := fakeAmuxEventSequence{
+		err: sequence.err,
+	}
+	if len(sequence.events) > 0 {
+		copied.events = append([]amuxapi.Event(nil), sequence.events...)
+	}
+	a.eventSequences = append(a.eventSequences, copied)
+}
+
+func (a *fakeAmux) eventsCallCount() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.eventsCalls
 }
 
 func normalizeSentKeys(keys ...string) []string {

@@ -78,32 +78,7 @@ func (d *Daemon) checkTaskCapture(ctx context.Context, active ActiveAssignment) 
 }
 
 func (d *Daemon) checkExitedPaneCapture(active ActiveAssignment, profile AgentProfile, snapshot PaneCapture, now time.Time) TaskStateUpdate {
-	update := TaskStateUpdate{Active: active}
-	output := snapshot.Output()
-
-	if output != update.Active.Worker.LastCapture {
-		update.Active.Worker.LastCapture = output
-		update.Active.Worker.LastSeenAt = now
-		update.Active.Task.UpdatedAt = now
-		update.WorkerChanged = true
-		update.TaskChanged = true
-	}
-
-	if update.Active.Worker.Health == WorkerHealthEscalated {
-		return update
-	}
-	if !d.shouldEscalateExitedPane(snapshot, now) {
-		return update
-	}
-
-	update.Active.Worker.Health = WorkerHealthEscalated
-	update.Active.Worker.LastSeenAt = now
-	update.Active.Task.UpdatedAt = now
-	update.WorkerChanged = true
-	update.TaskChanged = true
-	update.Events = append(update.Events, d.assignmentEvent(update.Active, profile, EventWorkerEscalated, exitedPaneMessage(snapshot)))
-
-	return update
+	return d.exitedPaneStateUpdate(active, profile, snapshot, now, false)
 }
 
 func (d *Daemon) checkTaskReviewPoll(ctx context.Context, active ActiveAssignment, profile AgentProfile) TaskStateUpdate {
