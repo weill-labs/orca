@@ -114,9 +114,10 @@ func (c *CLIClient) Events(ctx context.Context, req EventsRequest) (<-chan Event
 		defer cancel()
 		defer close(eventsCh)
 		defer close(errCh)
-		defer process.Reader().Close()
+		reader := process.Reader()
+		defer reader.Close()
 
-		scanner := bufio.NewScanner(process.Reader())
+		scanner := bufio.NewScanner(reader)
 		var streamErr error
 		for scanner.Scan() {
 			var event Event

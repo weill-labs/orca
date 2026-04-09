@@ -21,10 +21,7 @@ func (d *Daemon) runExitedEventLoop(ctx context.Context, done chan struct{}) {
 			return
 		}
 
-		eventsCh, errCh := d.amux.Events(ctx, amux.EventsRequest{
-			Filter:      []string{"exited"},
-			NoReconnect: true,
-		})
+		eventsCh, errCh := d.subscribeExitedEvents(ctx)
 
 		if !d.consumeExitedEventStream(ctx, eventsCh, errCh) {
 			return
@@ -68,15 +65,39 @@ func (d *Daemon) handleExitedEvent(ctx context.Context, event amux.Event) {
 		return
 	}
 
-	worker, err := d.state.WorkerByPane(ctx, d.project, paneID)
-	if err != nil || worker.Issue == "" {
-		return
-	}
-
-	active, err := d.state.ActiveAssignmentByIssue(ctx, worker.Project, worker.Issue)
-	if err != nil {
+	active, ok := d.activeAssignmentByPane(ctx, paneID)
+	if !ok {
 		return
 	}
 
 	d.dispatchTaskMonitorCheck(ctx, active, taskMonitorCheckExitedEvent)
+}
+
+func (d *Daemon) activeAssignmentByPane(ctx context.Context, paneID string) (ActiveAssignment, bool) {
+	worker, err := d.state.WorkerByPane(ctx, d.project, paneID)
+	if err != nil || worker.Issue == "" {
+		return ActiveAssignment{}, false
+	}
+
+	active, err := d.state.ActiveAssignmentByIssue(ctx, worker.Project, worker.Issue)
+	if err != nil {
+		return ActiveAssignment{}, false
+	}
+
+	return active, true
+}
+
+func (d *Daemon) subscribeExitedEvents(ctx context.Context) (<-chan amux.Event, <-chan error) {
+	if ctx.Err() != nil {
+		eventsCh := make(chan amux.Event)
+		errCh := make(chan error)
+		close(eventsCh)
+		close(errCh)
+		return eventsCh, errCh
+	}
+
+	return d.amux.Events(ctx, amux.EventsRequest{
+		Filter:      []string{"exited"},
+		NoReconnect: true,
+	})
 }
