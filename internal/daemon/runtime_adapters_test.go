@@ -417,6 +417,45 @@ func TestSQLiteStateAdapterMergeQueueRoundTrip(t *testing.T) {
 	}
 }
 
+func TestSQLiteDaemonStatusWriterUpdatesHeartbeatAndStatus(t *testing.T) {
+	t.Parallel()
+
+	store := openDaemonStateStore(t)
+	startedAt := time.Date(2026, 4, 8, 10, 0, 0, 0, time.UTC)
+	writer := newSQLiteDaemonStatusWriter(store, "", "orca", 42, startedAt)
+	heartbeatAt := startedAt.Add(15 * time.Second)
+
+	if err := writer.Update(context.Background(), "running", heartbeatAt); err != nil {
+		t.Fatalf("Update(running) error = %v", err)
+	}
+	if err := writer.Update(context.Background(), "unhealthy", heartbeatAt); err != nil {
+		t.Fatalf("Update(unhealthy) error = %v", err)
+	}
+
+	status, err := store.ProjectStatus(context.Background(), "")
+	if err != nil {
+		t.Fatalf("ProjectStatus(global) error = %v", err)
+	}
+	if status.Daemon == nil {
+		t.Fatal("status.Daemon = nil, want daemon status")
+	}
+	if got, want := status.Daemon.Session, "orca"; got != want {
+		t.Fatalf("status.Daemon.Session = %q, want %q", got, want)
+	}
+	if got, want := status.Daemon.PID, 42; got != want {
+		t.Fatalf("status.Daemon.PID = %d, want %d", got, want)
+	}
+	if got, want := status.Daemon.Status, "unhealthy"; got != want {
+		t.Fatalf("status.Daemon.Status = %q, want %q", got, want)
+	}
+	if got, want := status.Daemon.StartedAt, startedAt; !got.Equal(want) {
+		t.Fatalf("status.Daemon.StartedAt = %v, want %v", got, want)
+	}
+	if got, want := status.Daemon.UpdatedAt, heartbeatAt; !got.Equal(want) {
+		t.Fatalf("status.Daemon.UpdatedAt = %v, want %v", got, want)
+	}
+}
+
 func TestExecCommandRunner(t *testing.T) {
 	t.Parallel()
 

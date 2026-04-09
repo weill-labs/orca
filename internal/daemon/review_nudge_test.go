@@ -93,7 +93,7 @@ func TestPRReviewPollingSkipsNudgesForApprovalOrLGTM(t *testing.T) {
 				t.Fatalf("Assign() error = %v", err)
 			}
 
-			prTicker.tick(deps.clock.Now())
+			tickAndWaitForHeartbeat(t, d, deps, prTicker, time.Second, "review poll cycle completion")
 			waitFor(t, "review poll processed", func() bool {
 				worker, ok := deps.state.worker("pane-1")
 				return ok &&
@@ -171,22 +171,22 @@ func TestPRReviewPollingEscalatesAfterThreeNudgesAndResetsAfterApprovalCycle(t *
 	daveNudge := "New blocking PR review feedback on #42:\n- dave: Persist the nudge counter.\n\nAddress the feedback in the PR review and push an update.\n"
 	erinNudge := "New blocking PR review feedback on #42:\n- erin: Add reset coverage.\n\nAddress the feedback in the PR review and push an update.\n"
 
-	prTicker.tick(deps.clock.Now())
+	tickAndWaitForHeartbeat(t, d, deps, prTicker, time.Second, "first review poll cycle completion")
 	waitFor(t, "first review nudge", func() bool {
 		return deps.amux.countKey("pane-1", aliceNudge) == 1
 	})
 
-	prTicker.tick(deps.clock.Now())
+	tickAndWaitForHeartbeat(t, d, deps, prTicker, time.Second, "second review poll cycle completion")
 	waitFor(t, "second review nudge", func() bool {
 		return deps.amux.countKey("pane-1", bobNudge) == 1
 	})
 
-	prTicker.tick(deps.clock.Now())
+	tickAndWaitForHeartbeat(t, d, deps, prTicker, time.Second, "third review poll cycle completion")
 	waitFor(t, "third review nudge", func() bool {
 		return deps.amux.countKey("pane-1", carolNudge) == 1
 	})
 
-	prTicker.tick(deps.clock.Now())
+	tickAndWaitForHeartbeat(t, d, deps, prTicker, time.Second, "review escalation poll cycle completion")
 	waitFor(t, "review escalation", func() bool {
 		worker, ok := deps.state.worker("pane-1")
 		return ok &&
@@ -197,12 +197,12 @@ func TestPRReviewPollingEscalatesAfterThreeNudgesAndResetsAfterApprovalCycle(t *
 		t.Fatalf("fourth review nudge count = %d, want 0", got)
 	}
 
-	prTicker.tick(deps.clock.Now())
+	tickAndWaitForHeartbeat(t, d, deps, prTicker, time.Second, "approval poll cycle completion")
 	waitFor(t, "approval poll processed", func() bool {
 		return deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}) == 5
 	})
 
-	prTicker.tick(deps.clock.Now())
+	tickAndWaitForHeartbeat(t, d, deps, prTicker, time.Second, "post-reset review poll cycle completion")
 	waitFor(t, "review nudge after reset", func() bool {
 		worker, ok := deps.state.worker("pane-1")
 		return ok &&
@@ -273,22 +273,22 @@ func TestPRReviewPollingNotifiesCallerPaneWhenReviewNudgesAreExhausted(t *testin
 	carolNudge := "New blocking PR review feedback on #42:\n- carol: Cover the restart flow.\n\nAddress the feedback in the PR review and push an update.\n"
 	leadNotification := "Review nudges exhausted for LAB-689 in w-LAB-689 on PR #42.\nUnresolved review feedback:\n- alice: Please add tests.\n- bob: Handle the nil case too.\n- carol: Cover the restart flow.\n- dave: Persist the nudge counter.\n\nIntervene in w-LAB-689 to address the feedback or reassign the task.\n"
 
-	prTicker.tick(deps.clock.Now())
+	tickAndWaitForHeartbeat(t, d, deps, prTicker, time.Second, "first review poll cycle completion")
 	waitFor(t, "first review nudge", func() bool {
 		return deps.amux.countKey("pane-1", aliceNudge) == 1
 	})
 
-	prTicker.tick(deps.clock.Now())
+	tickAndWaitForHeartbeat(t, d, deps, prTicker, time.Second, "second review poll cycle completion")
 	waitFor(t, "second review nudge", func() bool {
 		return deps.amux.countKey("pane-1", bobNudge) == 1
 	})
 
-	prTicker.tick(deps.clock.Now())
+	tickAndWaitForHeartbeat(t, d, deps, prTicker, time.Second, "third review poll cycle completion")
 	waitFor(t, "third review nudge", func() bool {
 		return deps.amux.countKey("pane-1", carolNudge) == 1
 	})
 
-	prTicker.tick(deps.clock.Now())
+	tickAndWaitForHeartbeat(t, d, deps, prTicker, time.Second, "lead escalation poll cycle completion")
 	waitFor(t, "lead review escalation notification", func() bool {
 		worker, ok := deps.state.worker("pane-1")
 		return ok &&
@@ -375,7 +375,7 @@ func TestPRReviewPollingDefersReviewNudgeUntilWorkerAppearsIdle(t *testing.T) {
 
 			tt.prepareWorker(deps)
 
-			prTicker.tick(deps.clock.Now())
+			tickAndWaitForHeartbeat(t, d, deps, prTicker, time.Second, "review poll cycle completion")
 			waitFor(t, "review poll processed", func() bool {
 				return deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}) == 1
 			})

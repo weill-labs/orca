@@ -40,13 +40,13 @@ func TestPRReviewPollingNudgesWorkerOncePerNewBlockingReviewBatch(t *testing.T) 
 	firstNudgeSent := firstNudge + "\n"
 	secondNudgeSent := secondNudge + "\n"
 
-	prTicker.tick(deps.clock.Now())
+	tickAndWaitForHeartbeat(t, d, deps, prTicker, time.Second, "first review poll cycle completion")
 	waitFor(t, "first review nudge", func() bool {
 		worker, ok := deps.state.worker("pane-1")
 		return ok && deps.amux.countKey("pane-1", firstNudgeSent) == 1 && worker.LastReviewCount == 1
 	})
 
-	prTicker.tick(deps.clock.Now())
+	tickAndWaitForHeartbeat(t, d, deps, prTicker, time.Second, "second review poll cycle completion")
 	waitFor(t, "second review poll processed", func() bool {
 		return deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}) == 2
 	})
@@ -54,7 +54,7 @@ func TestPRReviewPollingNudgesWorkerOncePerNewBlockingReviewBatch(t *testing.T) 
 		t.Fatalf("first review nudge count = %d, want %d", got, want)
 	}
 
-	prTicker.tick(deps.clock.Now())
+	tickAndWaitForHeartbeat(t, d, deps, prTicker, time.Second, "third review poll cycle completion")
 	waitFor(t, "second review nudge", func() bool {
 		worker, ok := deps.state.worker("pane-1")
 		return ok && deps.amux.countKey("pane-1", secondNudgeSent) == 1 && worker.LastReviewCount == 2
@@ -223,13 +223,13 @@ func TestPRReviewPollingAdvancesCountWithoutNudgingForNonBlockingReviews(t *test
 	firstNudge := "New blocking PR review feedback on #42:\n- alice: Please add tests.\n\nAddress the feedback in the PR review and push an update."
 	firstNudgeSent := firstNudge + "\n"
 
-	prTicker.tick(deps.clock.Now())
+	tickAndWaitForHeartbeat(t, d, deps, prTicker, time.Second, "initial blocking review poll cycle completion")
 	waitFor(t, "initial blocking review nudge", func() bool {
 		worker, ok := deps.state.worker("pane-1")
 		return ok && deps.amux.countKey("pane-1", firstNudgeSent) == 1 && worker.LastReviewCount == 1
 	})
 
-	prTicker.tick(deps.clock.Now())
+	tickAndWaitForHeartbeat(t, d, deps, prTicker, time.Second, "non-blocking review poll cycle completion")
 	waitFor(t, "non-blocking review poll processed", func() bool {
 		worker, ok := deps.state.worker("pane-1")
 		return ok &&
@@ -289,13 +289,13 @@ func TestPRReviewPollingIgnoresEmptyReviewPayload(t *testing.T) {
 	firstNudge := "New blocking PR review feedback on #42:\n- alice: Please add tests.\n\nAddress the feedback in the PR review and push an update."
 	firstNudgeSent := firstNudge + "\n"
 
-	prTicker.tick(deps.clock.Now())
+	tickAndWaitForHeartbeat(t, d, deps, prTicker, time.Second, "initial review poll cycle completion")
 	waitFor(t, "initial review nudge", func() bool {
 		worker, ok := deps.state.worker("pane-1")
 		return ok && deps.amux.countKey("pane-1", firstNudgeSent) == 1 && worker.LastReviewCount == 1
 	})
 
-	prTicker.tick(deps.clock.Now())
+	tickAndWaitForHeartbeat(t, d, deps, prTicker, time.Second, "empty review poll cycle completion")
 	waitFor(t, "empty review poll processed", func() bool {
 		return deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}) == 2
 	})
@@ -341,7 +341,7 @@ func TestPRReviewPollingNudgesWorkerForGitHubActionsIssueCommentsWithoutLGTM(t *
 	firstNudge := "New blocking PR review feedback on #42:\n- github-actions: Potential bug: stale local branch in prepareAdoptedClone.\n\nAddress the feedback in the PR review and push an update."
 	firstNudgeSent := firstNudge + "\n"
 
-	prTicker.tick(deps.clock.Now())
+	tickAndWaitForHeartbeat(t, d, deps, prTicker, time.Second, "issue comment review poll cycle completion")
 	waitFor(t, "issue comment review nudge", func() bool {
 		worker, ok := deps.state.worker("pane-1")
 		return ok &&
@@ -350,7 +350,7 @@ func TestPRReviewPollingNudgesWorkerForGitHubActionsIssueCommentsWithoutLGTM(t *
 			worker.LastIssueCommentCount == 1
 	})
 
-	prTicker.tick(deps.clock.Now())
+	tickAndWaitForHeartbeat(t, d, deps, prTicker, time.Second, "non-bot comment review poll cycle completion")
 	waitFor(t, "non-bot comment poll processed", func() bool {
 		worker, ok := deps.state.worker("pane-1")
 		return ok &&
@@ -409,7 +409,7 @@ func TestPRReviewPollingResumesFromPersistedWorkerStateAfterRestart(t *testing.T
 	firstNudgeSent := firstNudge + "\n"
 	secondNudgeSent := secondNudge + "\n"
 
-	firstPollTicker.tick(deps.clock.Now())
+	tickAndWaitForHeartbeat(t, first, deps, firstPollTicker, time.Second, "first persisted review poll cycle completion")
 	waitFor(t, "first persisted review nudge", func() bool {
 		worker, ok := deps.state.worker("pane-1")
 		return ok && worker.LastReviewCount == 1 && deps.amux.countKey("pane-1", firstNudgeSent) == 1
@@ -427,7 +427,7 @@ func TestPRReviewPollingResumesFromPersistedWorkerStateAfterRestart(t *testing.T
 		_ = second.Stop(context.Background())
 	})
 
-	secondPollTicker.tick(deps.clock.Now())
+	tickAndWaitForHeartbeat(t, second, deps, secondPollTicker, time.Second, "restart review poll cycle completion")
 	waitFor(t, "restart review poll", func() bool {
 		return deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}) >= 2
 	})
@@ -435,7 +435,7 @@ func TestPRReviewPollingResumesFromPersistedWorkerStateAfterRestart(t *testing.T
 		t.Fatalf("first review nudge count after restart = %d, want %d", got, want)
 	}
 
-	secondPollTicker.tick(deps.clock.Now())
+	tickAndWaitForHeartbeat(t, second, deps, secondPollTicker, time.Second, "second persisted review poll cycle completion")
 	waitFor(t, "second persisted review nudge", func() bool {
 		worker, ok := deps.state.worker("pane-1")
 		return ok && worker.LastReviewCount == 2 && deps.amux.countKey("pane-1", secondNudgeSent) == 1
@@ -476,7 +476,7 @@ func TestPRReviewPollingResumesIssueCommentCursorAfterRestart(t *testing.T) {
 	firstNudgeSent := firstNudge + "\n"
 	secondNudgeSent := secondNudge + "\n"
 
-	firstPollTicker.tick(deps.clock.Now())
+	tickAndWaitForHeartbeat(t, first, deps, firstPollTicker, time.Second, "first persisted issue comment poll cycle completion")
 	waitFor(t, "first persisted issue comment nudge", func() bool {
 		worker, ok := deps.state.worker("pane-1")
 		return ok && worker.LastIssueCommentCount == 1 && deps.amux.countKey("pane-1", firstNudgeSent) == 1
@@ -494,7 +494,7 @@ func TestPRReviewPollingResumesIssueCommentCursorAfterRestart(t *testing.T) {
 		_ = second.Stop(context.Background())
 	})
 
-	secondPollTicker.tick(deps.clock.Now())
+	tickAndWaitForHeartbeat(t, second, deps, secondPollTicker, time.Second, "restart issue comment poll cycle completion")
 	waitFor(t, "restart issue comment poll", func() bool {
 		return deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}) >= 2
 	})
@@ -502,7 +502,7 @@ func TestPRReviewPollingResumesIssueCommentCursorAfterRestart(t *testing.T) {
 		t.Fatalf("first issue comment nudge count after restart = %d, want %d", got, want)
 	}
 
-	secondPollTicker.tick(deps.clock.Now())
+	tickAndWaitForHeartbeat(t, second, deps, secondPollTicker, time.Second, "second persisted issue comment poll cycle completion")
 	waitFor(t, "second persisted issue comment nudge", func() bool {
 		worker, ok := deps.state.worker("pane-1")
 		return ok && worker.LastIssueCommentCount == 2 && deps.amux.countKey("pane-1", secondNudgeSent) == 1
@@ -538,7 +538,7 @@ func TestPRReviewPollingDefersBlockingReviewNudgeUntilWorkerIsIdle(t *testing.T)
 	nudge := "New blocking PR review feedback on #42:\n- alice: Please add tests.\n\nAddress the feedback in the PR review and push an update."
 	nudgeSent := nudge + "\n"
 
-	prTicker.tick(deps.clock.Now())
+	tickAndWaitForHeartbeat(t, d, deps, prTicker, time.Second, "busy worker review poll cycle completion")
 	waitFor(t, "busy worker review poll", func() bool {
 		return deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}) == 1
 	})
@@ -555,7 +555,7 @@ func TestPRReviewPollingDefersBlockingReviewNudgeUntilWorkerIsIdle(t *testing.T)
 	}
 
 	makeWorkerIdleForReviewNudge(deps)
-	prTicker.tick(deps.clock.Now())
+	tickAndWaitForHeartbeat(t, d, deps, prTicker, time.Second, "idle worker review poll cycle completion")
 	waitFor(t, "deferred review nudge after idle", func() bool {
 		worker, ok := deps.state.worker("pane-1")
 		return ok && worker.LastReviewCount == 1 && deps.amux.countKey("pane-1", nudgeSent) == 1
@@ -593,7 +593,7 @@ func TestPRReviewPollingDefersBlockingReviewNudgeWhenFreshCaptureShowsActivity(t
 	nudge := "New blocking PR review feedback on #42:\n- alice: Please add tests.\n\nAddress the feedback in the PR review and push an update."
 	nudgeSent := nudge + "\n"
 
-	prTicker.tick(deps.clock.Now())
+	tickAndWaitForHeartbeat(t, d, deps, prTicker, time.Second, "fresh capture review poll cycle completion")
 	waitFor(t, "fresh capture review deferral", func() bool {
 		worker, ok := deps.state.worker("pane-1")
 		return ok && worker.LastCapture == "still coding"
@@ -611,7 +611,7 @@ func TestPRReviewPollingDefersBlockingReviewNudgeWhenFreshCaptureShowsActivity(t
 	}
 
 	makeWorkerIdleForReviewNudge(deps)
-	prTicker.tick(deps.clock.Now())
+	tickAndWaitForHeartbeat(t, d, deps, prTicker, time.Second, "post-deferral review poll cycle completion")
 	waitFor(t, "fresh capture review nudge after idle", func() bool {
 		worker, ok := deps.state.worker("pane-1")
 		return ok && worker.LastReviewCount == 1 && deps.amux.countKey("pane-1", nudgeSent) == 1

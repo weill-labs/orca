@@ -38,6 +38,7 @@ func (d *Daemon) runLoop(ctx context.Context, done chan struct{}) {
 			}
 			captureInFlight = true
 			d.runCaptureTick(ctx)
+			d.recordHeartbeat(ctx)
 			drainMonitorTicks(captureTickCh)
 			captureInFlight = false
 		case <-pollTickCh:
@@ -46,6 +47,7 @@ func (d *Daemon) runLoop(ctx context.Context, done chan struct{}) {
 			}
 			pollInFlight = true
 			d.runPollTick(ctx)
+			d.recordHeartbeat(ctx)
 			drainMonitorTicks(pollTickCh)
 			pollInFlight = false
 		}

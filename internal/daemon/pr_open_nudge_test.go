@@ -74,20 +74,18 @@ func TestStuckDetectionNudgesIdleWorkerToOpenPROnceTestsPass(t *testing.T) {
 		t.Fatalf("Assign() error = %v", err)
 	}
 
-	captureTicker.tick(deps.clock.Now())
+	tickAndWaitForHeartbeat(t, d, deps, captureTicker, time.Second, "initial capture cycle completion")
 	waitFor(t, "initial passing capture", func() bool {
 		worker, ok := deps.state.worker("pane-1")
 		return ok && worker.LastCapture != ""
 	})
 
-	deps.clock.Advance(119 * time.Second)
-	captureTicker.tick(deps.clock.Now())
+	tickAndWaitForHeartbeat(t, d, deps, captureTicker, 119*time.Second, "pre-threshold capture processed")
 	if got := deps.amux.countKey("pane-1", openPRNudgePrompt+"\n"); got != 0 {
 		t.Fatalf("pr-open nudge count before 2m idle = %d, want 0", got)
 	}
 
-	deps.clock.Advance(2 * time.Second)
-	captureTicker.tick(deps.clock.Now())
+	tickAndWaitForHeartbeat(t, d, deps, captureTicker, 2*time.Second, "threshold-crossing capture processed")
 	waitFor(t, "pr-open nudge", func() bool {
 		worker, ok := deps.state.worker("pane-1")
 		return ok &&

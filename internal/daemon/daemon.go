@@ -38,18 +38,23 @@ type Daemon struct {
 	events               EventSink
 	now                  func() time.Time
 	newTicker            func(time.Duration) Ticker
+	newWatchdogTicker    func(time.Duration) Ticker
 	sleep                func(context.Context, time.Duration) error
 	captureInterval      time.Duration
 	pollInterval         time.Duration
 	mergeGracePeriod     time.Duration
+	statusWriter         daemonStatusWriter
+	logf                 func(string, ...any)
 	monitorAmuxCircuit   *CircuitBreaker
 	monitorGitHubCircuit *CircuitBreaker
 
 	started           atomic.Bool
+	lastHeartbeat     atomic.Int64
 	stopContext       context.Context
 	stopCancel        context.CancelFunc
 	loopDone          chan struct{}
 	eventStreamDone   chan struct{}
+	watchdogDone      chan struct{}
 	mergeQueueInbox   chan ProcessQueue
 	mergeQueueUpdates chan MergeQueueUpdate
 	mergeQueueDone    chan struct{}
@@ -114,25 +119,28 @@ func New(opts Options) (*Daemon, error) {
 	}
 
 	return &Daemon{
-		project:          opts.Project,
-		session:          opts.Session,
-		leadPane:         opts.LeadPane,
-		pidPath:          opts.PIDPath,
-		config:           opts.Config,
-		state:            opts.State,
-		pool:             opts.Pool,
-		amux:             opts.Amux,
-		issueTracker:     opts.IssueTracker,
-		commands:         opts.Commands,
-		github:           newDefaultGitHubClient(opts.Project, opts.Commands),
-		githubClients:    make(map[string]gitHubClient),
-		events:           opts.Events,
-		now:              opts.Now,
-		newTicker:        opts.NewTicker,
-		sleep:            opts.Sleep,
-		captureInterval:  opts.CaptureInterval,
-		pollInterval:     opts.PollInterval,
-		mergeGracePeriod: opts.MergeGracePeriod,
+		project:           opts.Project,
+		session:           opts.Session,
+		leadPane:          opts.LeadPane,
+		pidPath:           opts.PIDPath,
+		config:            opts.Config,
+		state:             opts.State,
+		pool:              opts.Pool,
+		amux:              opts.Amux,
+		issueTracker:      opts.IssueTracker,
+		commands:          opts.Commands,
+		github:            newDefaultGitHubClient(opts.Project, opts.Commands),
+		githubClients:     make(map[string]gitHubClient),
+		events:            opts.Events,
+		now:               opts.Now,
+		newTicker:         opts.NewTicker,
+		newWatchdogTicker: opts.NewWatchdogTicker,
+		sleep:             opts.Sleep,
+		captureInterval:   opts.CaptureInterval,
+		pollInterval:      opts.PollInterval,
+		mergeGracePeriod:  opts.MergeGracePeriod,
+		statusWriter:      opts.DaemonStatusWriter,
+		logf:              opts.Logf,
 		// Monitor circuits are daemon-wide by design so broad amux/GitHub
 		// outages pause all monitor traffic instead of retrying per task.
 		monitorAmuxCircuit:   NewCircuitBreakerWithHooks(opts.Now, defaultCircuitBreakerFailureThreshold, defaultCircuitBreakerCooldown, daemonCircuitHooks(opts.Project, opts.Now, opts.State, opts.Events, "monitor amux")),
@@ -177,6 +185,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 
 	d.normalizeLeadPane(ctx)
 	d.stopContext, d.stopCancel = context.WithCancel(context.Background())
+	d.lastHeartbeat.Store(d.now().UnixMilli())
 	d.reconcileNonTerminalAssignments(ctx)
 	d.refreshTaskMonitors(ctx)
 	d.resetMergeQueueTransientStatuses(ctx)
@@ -189,6 +198,10 @@ func (d *Daemon) Start(ctx context.Context) error {
 	go d.runExitedEventLoop(d.stopContext, d.eventStreamDone)
 	d.loopDone = make(chan struct{})
 	go d.runLoop(d.stopContext, d.loopDone)
+	if d.newWatchdogTicker != nil {
+		d.watchdogDone = make(chan struct{})
+		go d.runWatchdog(d.stopContext, d.watchdogDone)
+	}
 
 	d.emit(ctx, Event{
 		Time:    d.now(),
@@ -278,6 +291,9 @@ func (d *Daemon) Stop(ctx context.Context) error {
 	if d.eventStreamDone != nil {
 		<-d.eventStreamDone
 	}
+	if d.watchdogDone != nil {
+		<-d.watchdogDone
+	}
 	if d.mergeQueueDone != nil {
 		<-d.mergeQueueDone
 	}
@@ -290,6 +306,7 @@ func (d *Daemon) Stop(ctx context.Context) error {
 	d.mergeQueueUpdates = nil
 	d.mergeQueueDone = nil
 	d.eventStreamDone = nil
+	d.watchdogDone = nil
 
 	d.emit(ctx, Event{
 		Time:    d.now(),

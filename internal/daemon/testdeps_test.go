@@ -12,17 +12,18 @@ import (
 )
 
 type testDeps struct {
-	clock        *fakeClock
-	config       *fakeConfig
-	state        *fakeState
-	pool         *fakePool
-	amux         *fakeAmux
-	issueTracker *fakeIssueTracker
-	commands     *fakeCommands
-	events       *fakeEvents
-	tickers      *fakeTickerFactory
-	pidPath      string
-	sleep        func(context.Context, time.Duration) error
+	clock           *fakeClock
+	config          *fakeConfig
+	state           *fakeState
+	pool            *fakePool
+	amux            *fakeAmux
+	issueTracker    *fakeIssueTracker
+	commands        *fakeCommands
+	events          *fakeEvents
+	tickers         *fakeTickerFactory
+	watchdogTickers *fakeTickerFactory
+	pidPath         string
+	sleep           func(context.Context, time.Duration) error
 }
 
 func noSleep(context.Context, time.Duration) error { return nil }
@@ -51,22 +52,28 @@ func newTestDeps(t *testing.T) *testDeps {
 				},
 			},
 		},
-		state:        newFakeState(),
-		pool:         &fakePool{clone: Clone{Name: "clone-01", Path: clonePath}},
-		amux:         &fakeAmux{spawnPane: Pane{ID: "pane-1", Name: "worker-1"}, captures: make(map[string][]string)},
-		issueTracker: &fakeIssueTracker{},
-		commands:     newFakeCommands(),
-		events:       newFakeEvents(),
-		tickers:      &fakeTickerFactory{},
-		pidPath:      filepath.Join(tmp, "orca.pid"),
-		sleep:        noSleep,
+		state:           newFakeState(),
+		pool:            &fakePool{clone: Clone{Name: "clone-01", Path: clonePath}},
+		amux:            &fakeAmux{spawnPane: Pane{ID: "pane-1", Name: "worker-1"}, captures: make(map[string][]string)},
+		issueTracker:    &fakeIssueTracker{},
+		commands:        newFakeCommands(),
+		events:          newFakeEvents(),
+		tickers:         &fakeTickerFactory{},
+		watchdogTickers: &fakeTickerFactory{},
+		pidPath:         filepath.Join(tmp, "orca.pid"),
+		sleep:           noSleep,
 	}
 }
 
 func (d *testDeps) newDaemon(t *testing.T) *Daemon {
 	t.Helper()
+	return d.newDaemonWithOptions(t, nil)
+}
 
-	daemon, err := New(Options{
+func (d *testDeps) newDaemonWithOptions(t *testing.T, mutate func(*Options)) *Daemon {
+	t.Helper()
+
+	opts := Options{
 		Project:          "/tmp/project",
 		Session:          "test-session",
 		PIDPath:          d.pidPath,
@@ -83,7 +90,12 @@ func (d *testDeps) newDaemon(t *testing.T) *Daemon {
 		CaptureInterval:  5 * time.Second,
 		PollInterval:     30 * time.Second,
 		MergeGracePeriod: 2 * time.Minute,
-	})
+	}
+	if mutate != nil {
+		mutate(&opts)
+	}
+
+	daemon, err := New(opts)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
@@ -108,6 +120,18 @@ func waitFor(t *testing.T, name string, condition func() bool) {
 		<-time.After(10 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %s", name)
+}
+
+func tickAndWaitForHeartbeat(t *testing.T, d *Daemon, deps *testDeps, ticker *fakeTicker, advance time.Duration, name string) time.Time {
+	t.Helper()
+
+	deps.clock.Advance(advance)
+	now := deps.clock.Now()
+	ticker.tick(now)
+	waitFor(t, name, func() bool {
+		return d.lastHeartbeat.Load() == now.UnixMilli()
+	})
+	return now
 }
 
 func nextTestWorkerID(deps *testDeps) string {

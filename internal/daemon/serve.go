@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"path/filepath"
@@ -86,32 +87,32 @@ func runProcess(ctx context.Context, req ServeRequest, deps serveDeps) error {
 
 	daemonState := newSQLiteStateAdapter(store)
 	daemonPool := newMultiProjectPool(store, detectOrigin, amuxClient, deps.poolRunner)
+	startedAt := time.Now().UTC()
+	statusWriter := newSQLiteDaemonStatusWriter(store, "", req.Session, os.Getpid(), startedAt)
 	instance, err := New(Options{
-		Project:          "",
-		Session:          req.Session,
-		LeadPane:         req.LeadPane,
-		PIDPath:          req.PIDFile,
-		Config:           builtinConfigProvider{},
-		State:            daemonState,
-		Pool:             daemonPool,
-		Amux:             amuxClient,
-		IssueTracker:     issueTracker,
-		Commands:         commandRunner,
-		Events:           deps.events,
-		MergeGracePeriod: defaultMergeGracePeriod,
+		Project:      "",
+		Session:      req.Session,
+		LeadPane:     req.LeadPane,
+		PIDPath:      req.PIDFile,
+		Config:       builtinConfigProvider{},
+		State:        daemonState,
+		Pool:         daemonPool,
+		Amux:         amuxClient,
+		IssueTracker: issueTracker,
+		Commands:     commandRunner,
+		Events:       deps.events,
+		NewWatchdogTicker: func(interval time.Duration) Ticker {
+			return realTicker{Ticker: time.NewTicker(interval)}
+		},
+		MergeGracePeriod:   defaultMergeGracePeriod,
+		DaemonStatusWriter: statusWriter,
+		Logf:               log.Printf,
 	})
 	if err != nil {
 		return fmt.Errorf("create daemon: %w", err)
 	}
 
-	startedAt := time.Now().UTC()
-	if err := store.UpsertDaemon(ctx, "", state.DaemonStatus{
-		Session:   req.Session,
-		PID:       os.Getpid(),
-		Status:    "running",
-		StartedAt: startedAt,
-		UpdatedAt: startedAt,
-	}); err != nil {
+	if err := statusWriter.Update(ctx, daemonStatusRunning, startedAt); err != nil {
 		return err
 	}
 
