@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"testing"
+	"time"
 )
 
 func TestPRPollResumesFromPersistedCIStateAfterRestart(t *testing.T) {
@@ -34,13 +35,13 @@ func TestPRPollResumesFromPersistedCIStateAfterRestart(t *testing.T) {
 		t.Fatalf("Assign() error = %v", err)
 	}
 
-	firstPollTicker.tick(deps.clock.Now())
+	tickAndWaitForHeartbeat(t, first, deps, firstPollTicker, time.Second, "initial CI poll cycle completion")
 	waitFor(t, "initial CI nudge", func() bool {
 		worker, ok := deps.state.worker("pane-1")
 		return ok && worker.LastCIState == ciStateFail && deps.amux.countKey("pane-1", "\n") == 1
 	})
 
-	firstPollTicker.tick(deps.clock.Now())
+	tickAndWaitForHeartbeat(t, first, deps, firstPollTicker, time.Second, "persisted failing CI schedule cycle completion")
 	waitFor(t, "persisted failing CI schedule before restart", func() bool {
 		return deps.commands.countCall("gh", "pr", "checks", "42", "--json", "bucket") == 2
 	})
@@ -60,18 +61,18 @@ func TestPRPollResumesFromPersistedCIStateAfterRestart(t *testing.T) {
 		_ = second.Stop(context.Background())
 	})
 
-	secondPollTicker.tick(deps.clock.Now())
+	tickAndWaitForHeartbeat(t, second, deps, secondPollTicker, time.Second, "scheduled CI nudge after restart cycle completion")
 	waitFor(t, "scheduled CI nudge after restart", func() bool {
 		return deps.amux.countKey("pane-1", "\n") == 2 && deps.events.countType(EventWorkerNudgedCI) == 2
 	})
 
-	secondPollTicker.tick(deps.clock.Now())
+	tickAndWaitForHeartbeat(t, second, deps, secondPollTicker, time.Second, "CI recovery poll cycle completion")
 	waitFor(t, "CI recovery poll", func() bool {
 		worker, ok := deps.state.worker("pane-1")
 		return ok && worker.LastCIState == ciStatePass
 	})
 
-	secondPollTicker.tick(deps.clock.Now())
+	tickAndWaitForHeartbeat(t, second, deps, secondPollTicker, time.Second, "CI nudge after recovery cycle completion")
 	waitFor(t, "CI nudge after recovery", func() bool {
 		return deps.amux.countKey("pane-1", "\n") == 3 && deps.events.countType(EventWorkerNudgedCI) == 3
 	})

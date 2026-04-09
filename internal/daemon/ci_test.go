@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 )
 
 func TestPRPollRenudgesFailingCIOnScheduleAndEscalatesAfterMax(t *testing.T) {
@@ -34,21 +35,21 @@ func TestPRPollRenudgesFailingCIOnScheduleAndEscalatesAfterMax(t *testing.T) {
 		t.Fatalf("Assign() error = %v", err)
 	}
 
-	prTicker.tick(deps.clock.Now())
+	tickAndWaitForHeartbeat(t, d, deps, prTicker, time.Second, "initial CI poll cycle completion")
 	waitFor(t, "initial CI nudge", func() bool {
 		return deps.amux.countKey("pane-1", "\n") == 1 && deps.events.countType(EventWorkerNudgedCI) == 1
 	})
 
-	prTicker.tick(deps.clock.Now())
+	tickAndWaitForHeartbeat(t, d, deps, prTicker, time.Second, "first deferred CI poll cycle completion")
 	waitFor(t, "first repeated failing CI poll", func() bool {
 		return deps.commands.countCall("gh", "pr", "checks", "42", "--json", "bucket") == 2
 	})
-	prTicker.tick(deps.clock.Now())
+	tickAndWaitForHeartbeat(t, d, deps, prTicker, time.Second, "scheduled second CI nudge cycle completion")
 	waitFor(t, "scheduled second CI nudge", func() bool {
 		return deps.amux.countKey("pane-1", "\n") == 2 && deps.events.countType(EventWorkerNudgedCI) == 2
 	})
 
-	prTicker.tick(deps.clock.Now())
+	tickAndWaitForHeartbeat(t, d, deps, prTicker, time.Second, "second deferred CI poll cycle completion")
 	waitFor(t, "second repeated failing CI poll", func() bool {
 		return deps.commands.countCall("gh", "pr", "checks", "42", "--json", "bucket") == 4
 	})
@@ -56,16 +57,16 @@ func TestPRPollRenudgesFailingCIOnScheduleAndEscalatesAfterMax(t *testing.T) {
 		t.Fatalf("nudge count after deferred failing poll = %d, want %d", got, want)
 	}
 
-	prTicker.tick(deps.clock.Now())
+	tickAndWaitForHeartbeat(t, d, deps, prTicker, time.Second, "scheduled third CI nudge cycle completion")
 	waitFor(t, "scheduled third CI nudge", func() bool {
 		return deps.amux.countKey("pane-1", "\n") == 3 && deps.events.countType(EventWorkerNudgedCI) == 3
 	})
 
-	prTicker.tick(deps.clock.Now())
+	tickAndWaitForHeartbeat(t, d, deps, prTicker, time.Second, "third deferred CI poll cycle completion")
 	waitFor(t, "third repeated failing CI poll", func() bool {
 		return deps.commands.countCall("gh", "pr", "checks", "42", "--json", "bucket") == 6
 	})
-	prTicker.tick(deps.clock.Now())
+	tickAndWaitForHeartbeat(t, d, deps, prTicker, time.Second, "CI escalation cycle completion")
 	waitFor(t, "ci escalation after nudge exhaustion", func() bool {
 		return deps.events.countType(EventWorkerCIEscalated) == 1
 	})
@@ -73,7 +74,7 @@ func TestPRPollRenudgesFailingCIOnScheduleAndEscalatesAfterMax(t *testing.T) {
 		t.Fatalf("nudge count after CI escalation = %d, want %d", got, want)
 	}
 
-	prTicker.tick(deps.clock.Now())
+	tickAndWaitForHeartbeat(t, d, deps, prTicker, time.Second, "passing CI recovery poll cycle completion")
 	waitFor(t, "passing CI poll resets schedule", func() bool {
 		worker, ok := deps.state.worker("pane-1")
 		return ok &&
@@ -81,7 +82,7 @@ func TestPRPollRenudgesFailingCIOnScheduleAndEscalatesAfterMax(t *testing.T) {
 			worker.LastCIState == ciStatePass
 	})
 
-	prTicker.tick(deps.clock.Now())
+	tickAndWaitForHeartbeat(t, d, deps, prTicker, time.Second, "failing CI nudge after reset cycle completion")
 	waitFor(t, "failing CI nudge after reset", func() bool {
 		return deps.amux.countKey("pane-1", "\n") == 4 &&
 			deps.events.countType(EventWorkerNudgedCI) == 4 &&
@@ -124,7 +125,7 @@ func TestPRPollRetriesCINudgeAfterSendKeysFailure(t *testing.T) {
 		t.Fatalf("Assign() error = %v", err)
 	}
 
-	prTicker.tick(deps.clock.Now())
+	tickAndWaitForHeartbeat(t, d, deps, prTicker, time.Second, "failed CI nudge attempt cycle completion")
 	waitFor(t, "failed CI nudge attempt", func() bool {
 		return deps.commands.countCall("gh", "pr", "checks", "42", "--json", "bucket") == 1
 	})
@@ -136,7 +137,7 @@ func TestPRPollRetriesCINudgeAfterSendKeysFailure(t *testing.T) {
 		t.Fatalf("ci nudge event count after failed send = %d, want %d", got, want)
 	}
 
-	prTicker.tick(deps.clock.Now())
+	tickAndWaitForHeartbeat(t, d, deps, prTicker, time.Second, "retried CI nudge cycle completion")
 	waitFor(t, "retried CI nudge", func() bool {
 		return deps.amux.countKey("pane-1", "\n") == 1 && deps.events.countType(EventWorkerNudgedCI) == 1
 	})
@@ -168,17 +169,17 @@ func TestPRPollRetriesScheduledCIRenudgeAfterSendKeysFailure(t *testing.T) {
 		t.Fatalf("Assign() error = %v", err)
 	}
 
-	prTicker.tick(deps.clock.Now())
+	tickAndWaitForHeartbeat(t, d, deps, prTicker, time.Second, "initial scheduled CI nudge cycle completion")
 	waitFor(t, "initial CI nudge", func() bool {
 		return deps.amux.countKey("pane-1", "\n") == 1 && deps.events.countType(EventWorkerNudgedCI) == 1
 	})
 
-	prTicker.tick(deps.clock.Now())
+	tickAndWaitForHeartbeat(t, d, deps, prTicker, time.Second, "deferred scheduled re-nudge cycle completion")
 	waitFor(t, "deferred scheduled re-nudge", func() bool {
 		return deps.commands.countCall("gh", "pr", "checks", "42", "--json", "bucket") == 2
 	})
 
-	prTicker.tick(deps.clock.Now())
+	tickAndWaitForHeartbeat(t, d, deps, prTicker, time.Second, "failed scheduled re-nudge cycle completion")
 	waitFor(t, "failed scheduled re-nudge attempt", func() bool {
 		worker, ok := deps.state.worker("pane-1")
 		return ok &&
@@ -192,7 +193,7 @@ func TestPRPollRetriesScheduledCIRenudgeAfterSendKeysFailure(t *testing.T) {
 		t.Fatalf("ci nudge event count after failed scheduled re-nudge = %d, want %d", got, want)
 	}
 
-	prTicker.tick(deps.clock.Now())
+	tickAndWaitForHeartbeat(t, d, deps, prTicker, time.Second, "retried scheduled re-nudge cycle completion")
 	waitFor(t, "retried scheduled re-nudge", func() bool {
 		worker, ok := deps.state.worker("pane-1")
 		return ok &&
