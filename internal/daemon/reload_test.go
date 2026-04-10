@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -100,6 +101,53 @@ func TestHandleReloadRPCRequestRejectsBadParams(t *testing.T) {
 	}
 }
 
+func TestHandleReloadRPCRequestRejectsUnavailableReload(t *testing.T) {
+	t.Parallel()
+
+	response, ready, handled := handleReloadRPCRequest(rpcRequest{
+		ID:     json.RawMessage(`1`),
+		Method: "reload",
+		Params: mustJSON(t, reloadRPCParams{Project: "/repo"}),
+	}, nil)
+	if !handled {
+		t.Fatal("handleReloadRPCRequest() = not handled, want handled")
+	}
+	if ready != nil {
+		t.Fatalf("ready = %#v, want nil", ready)
+	}
+	if response.Error == nil || response.Error.Code != -32000 {
+		t.Fatalf("response = %#v, want unavailable reload error", response)
+	}
+	if got, want := response.Error.Message, "reload unavailable"; got != want {
+		t.Fatalf("response.Error.Message = %q, want %q", got, want)
+	}
+}
+
+func TestHandleReloadRPCRequestReturnsEnqueueError(t *testing.T) {
+	t.Parallel()
+
+	wantErr := errors.New("reload busy")
+	response, ready, handled := handleReloadRPCRequest(rpcRequest{
+		ID:     json.RawMessage(`1`),
+		Method: "reload",
+		Params: mustJSON(t, reloadRPCParams{Project: "/repo"}),
+	}, func(reloadRPCParams, chan struct{}) error {
+		return wantErr
+	})
+	if !handled {
+		t.Fatal("handleReloadRPCRequest() = not handled, want handled")
+	}
+	if ready != nil {
+		t.Fatalf("ready = %#v, want nil", ready)
+	}
+	if response.Error == nil || response.Error.Code != -32000 {
+		t.Fatalf("response = %#v, want enqueue error", response)
+	}
+	if got, want := response.Error.Message, wantErr.Error(); got != want {
+		t.Fatalf("response.Error.Message = %q, want %q", got, want)
+	}
+}
+
 func TestLocalControllerReloadRPC(t *testing.T) {
 	projectPath := testProjectPath(t)
 	tempDir := t.TempDir()
@@ -180,6 +228,102 @@ func TestLocalControllerReloadRPC(t *testing.T) {
 	}
 	if got, want := params, (reloadRPCParams{Project: projectPath}); !reflect.DeepEqual(got, want) {
 		t.Fatalf("reload params = %#v, want %#v", got, want)
+	}
+}
+
+func TestLocalControllerReloadErrorPaths(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		request         func(*testing.T) ReloadRequest
+		prepare         func(*testing.T, Paths)
+		wantErr         error
+		wantErrContains string
+	}{
+		{
+			name: "invalid project path",
+			request: func(t *testing.T) ReloadRequest {
+				return ReloadRequest{Project: t.TempDir()}
+			},
+			wantErrContains: "is not inside a git repository",
+		},
+		{
+			name: "daemon not running",
+			request: func(t *testing.T) ReloadRequest {
+				return ReloadRequest{Project: testProjectPath(t)}
+			},
+			wantErr: ErrDaemonNotRunning,
+		},
+		{
+			name: "rpc failure",
+			request: func(t *testing.T) ReloadRequest {
+				return ReloadRequest{Project: testProjectPath(t)}
+			},
+			prepare: func(t *testing.T, paths Paths) {
+				t.Helper()
+
+				if err := os.MkdirAll(paths.PIDDir, 0o755); err != nil {
+					t.Fatalf("MkdirAll(%q) error = %v", paths.PIDDir, err)
+				}
+				if err := os.WriteFile(paths.pidFile(), []byte(strconv.Itoa(os.Getpid())), 0o644); err != nil {
+					t.Fatalf("WriteFile(%q) error = %v", paths.pidFile(), err)
+				}
+
+				listener, err := listenUnixSocket(paths.socketFile())
+				if err != nil {
+					t.Fatalf("listenUnixSocket(%q) error = %v", paths.socketFile(), err)
+				}
+				t.Cleanup(func() {
+					_ = listener.Close()
+				})
+
+				go func() {
+					conn, err := listener.Accept()
+					if err != nil {
+						return
+					}
+					var req rpcRequest
+					_ = json.NewDecoder(conn).Decode(&req)
+					_ = conn.Close()
+				}()
+			},
+			wantErrContains: "decode reload response",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			tempDir := t.TempDir()
+			paths := Paths{
+				ConfigDir: tempDir,
+				StateDB:   filepath.Join(tempDir, "state.db"),
+				PIDDir:    filepath.Join(tempDir, "pids"),
+			}
+
+			if tt.prepare != nil {
+				tt.prepare(t, paths)
+			}
+
+			controller, err := NewLocalController(ControllerOptions{
+				Store: &fakeStore{},
+				Paths: paths,
+			})
+			if err != nil {
+				t.Fatalf("NewLocalController() error = %v", err)
+			}
+
+			_, err = controller.Reload(context.Background(), tt.request(t))
+			if tt.wantErr != nil && !errors.Is(err, tt.wantErr) {
+				t.Fatalf("Reload() error = %v, want %v", err, tt.wantErr)
+			}
+			if tt.wantErrContains != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErrContains)) {
+				t.Fatalf("Reload() error = %v, want message containing %q", err, tt.wantErrContains)
+			}
+		})
 	}
 }
 
@@ -433,6 +577,101 @@ func TestDaemonStartAllowsCurrentPIDReuseDuringReload(t *testing.T) {
 	})
 }
 
+func TestInheritedListenerFileErrors(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		listener        net.Listener
+		wantErrContains string
+	}{
+		{
+			name:            "listener does not expose File",
+			listener:        &reloadTestListener{},
+			wantErrContains: "daemon listener does not expose File",
+		},
+		{
+			name: "listener File returns error",
+			listener: &reloadTestFileListener{
+				fileErr: errors.New("duplicate failed"),
+			},
+			wantErrContains: "duplicate daemon listener: duplicate failed",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := inheritedListenerFile(tt.listener)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErrContains) {
+				t.Fatalf("inheritedListenerFile() error = %v, want message containing %q", err, tt.wantErrContains)
+			}
+		})
+	}
+}
+
+func TestCloseListenerForReloadError(t *testing.T) {
+	t.Parallel()
+
+	err := closeListenerForReload(&reloadTestListener{
+		closeErr: errors.New("close failed"),
+	})
+	if err == nil || !strings.Contains(err.Error(), "close daemon listener for reload: close failed") {
+		t.Fatalf("closeListenerForReload() error = %v, want close failure", err)
+	}
+}
+
+func TestReloadProcessPropagatesSetupErrors(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		listener        func(*testing.T) net.Listener
+		wantErrContains string
+	}{
+		{
+			name: "listener file setup fails",
+			listener: func(*testing.T) net.Listener {
+				return &reloadTestListener{}
+			},
+			wantErrContains: "daemon listener does not expose File",
+		},
+		{
+			name: "listener close fails",
+			listener: func(t *testing.T) net.Listener {
+				t.Helper()
+
+				file, err := os.CreateTemp(t.TempDir(), "reload-listener-*")
+				if err != nil {
+					t.Fatalf("CreateTemp() error = %v", err)
+				}
+				t.Cleanup(func() {
+					_ = file.Close()
+				})
+				return &reloadTestFileListener{
+					reloadTestListener: reloadTestListener{closeErr: errors.New("close failed")},
+					file:               file,
+				}
+			},
+			wantErrContains: "close daemon listener for reload: close failed",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := reloadProcess(ServeRequest{}, tt.listener(t), nil, nil)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErrContains) {
+				t.Fatalf("reloadProcess() error = %v, want message containing %q", err, tt.wantErrContains)
+			}
+		})
+	}
+}
+
 func containsArgPair(args []string, flag, value string) bool {
 	for i := 0; i+1 < len(args); i++ {
 		if args[i] == flag && args[i+1] == value {
@@ -451,3 +690,40 @@ func envValue(env []string, key string) string {
 	}
 	return ""
 }
+
+type reloadTestListener struct {
+	closeErr error
+}
+
+func (l *reloadTestListener) Accept() (net.Conn, error) { return nil, net.ErrClosed }
+
+func (l *reloadTestListener) Close() error { return l.closeErr }
+
+func (l *reloadTestListener) Addr() net.Addr { return reloadTestAddr("reload-test") }
+
+type reloadTestFileListener struct {
+	reloadTestListener
+	file    *os.File
+	fileErr error
+}
+
+func (l *reloadTestFileListener) File() (*os.File, error) {
+	if l.fileErr != nil {
+		return nil, l.fileErr
+	}
+	if l.file == nil {
+		return nil, errors.New("missing listener file")
+	}
+
+	fd, err := syscall.Dup(int(l.file.Fd()))
+	if err != nil {
+		return nil, err
+	}
+	return os.NewFile(uintptr(fd), l.file.Name()), nil
+}
+
+type reloadTestAddr string
+
+func (a reloadTestAddr) Network() string { return "unix" }
+
+func (a reloadTestAddr) String() string { return string(a) }
