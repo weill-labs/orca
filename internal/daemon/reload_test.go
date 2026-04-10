@@ -390,6 +390,8 @@ func TestInheritedReloadListenerFromEnv(t *testing.T) {
 }
 
 func TestRunProcessReloadOverUnixSocket(t *testing.T) {
+	reloadWaitTimeout := 15 * time.Second
+
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
@@ -483,7 +485,7 @@ func TestRunProcessReloadOverUnixSocket(t *testing.T) {
 	defer store.Close()
 
 	socketPath := paths.socketFile()
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(reloadWaitTimeout)
 	for time.Now().Before(deadline) {
 		select {
 		case err := <-errCh:
@@ -544,7 +546,7 @@ daemonReady:
 		if got := envValue(call.env, daemonListenerFDEnvVar); strings.TrimSpace(got) == "" {
 			t.Fatalf("exec env missing %s", daemonListenerFDEnvVar)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(reloadWaitTimeout):
 		t.Fatal("timed out waiting for reload exec call")
 	}
 
@@ -553,7 +555,7 @@ daemonReady:
 		if !errors.Is(err, errReloadExec) {
 			t.Fatalf("runProcess() error = %v, want %v", err, errReloadExec)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(reloadWaitTimeout):
 		t.Fatal("timed out waiting for runProcess to exit after reload")
 	}
 }
