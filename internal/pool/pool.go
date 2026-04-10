@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -57,6 +58,7 @@ type Manager struct {
 	poolDir         string
 	cloneOrigin     string
 	baseBranch      string
+	logf            func(string, ...any)
 	store           Store
 	runner          Runner
 	cwdUsageChecker CWDUsageChecker
@@ -83,6 +85,7 @@ func New(project string, cfg Config, store Store, opts ...Option) (*Manager, err
 		poolDir:     cfg.PoolDir(),
 		cloneOrigin: cfg.CloneOrigin(),
 		baseBranch:  defaultBaseBranch(cfg.BaseBranch()),
+		logf:        log.Printf,
 		store:       store,
 		runner:      execRunner{},
 	}
@@ -93,6 +96,9 @@ func New(project string, cfg Config, store Store, opts ...Option) (*Manager, err
 
 	if manager.runner == nil {
 		manager.runner = execRunner{}
+	}
+	if manager.logf == nil {
+		manager.logf = log.Printf
 	}
 
 	return manager, nil
@@ -113,6 +119,12 @@ func WithCloneOrigin(origin string) Option {
 func WithCWDUsageChecker(checker CWDUsageChecker) Option {
 	return func(manager *Manager) {
 		manager.cwdUsageChecker = checker
+	}
+}
+
+func WithLogf(logf func(string, ...any)) Option {
+	return func(manager *Manager) {
+		manager.logf = logf
 	}
 }
 
@@ -321,7 +333,10 @@ func (m *Manager) CreateClone(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("resolve clone path %q: %w", clonePath, err)
 	}
 
-	return filepath.Clean(absPath), nil
+	resolvedPath := filepath.Clean(absPath)
+	m.runCloneSetupHook(ctx, resolvedPath)
+
+	return resolvedPath, nil
 }
 
 func (m *Manager) nextCloneName() (string, error) {
