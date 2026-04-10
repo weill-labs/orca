@@ -93,6 +93,85 @@ func TestPRMergePollingSendsWrapUpAndCleansClone(t *testing.T) {
 	}
 }
 
+func TestQueuedPRMergePollingCompletesTaskWithoutExtraTick(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	captureTicker := newFakeTicker()
+	prTicker := newFakeTicker()
+	deps.tickers.enqueue(captureTicker, prTicker)
+	deps.amux.rejectCanceledContext = true
+	deps.pool.rejectCanceledContext = true
+	deps.state.rejectCanceledContext = true
+	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--state", "open", "--json", "number"}, `[]`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":"2026-04-02T12:00:00Z"}`, nil)
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-689", "Implement daemon core", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	task, ok := deps.state.task("LAB-689")
+	if !ok {
+		t.Fatal("LAB-689 task missing from state")
+	}
+	task.PRNumber = 42
+	deps.state.putTaskForTest(task)
+
+	if _, err := d.Enqueue(ctx, 42); err != nil {
+		t.Fatalf("Enqueue(42) error = %v", err)
+	}
+
+	prTicker.tick(deps.clock.Now())
+	waitFor(t, "queued task completion after merge", func() bool {
+		task, ok := deps.state.task("LAB-689")
+		return ok && task.Status == TaskStatusDone
+	})
+
+	if _, ok := deps.state.worker("pane-1"); ok {
+		t.Fatal("worker still present after queued PR merge cleanup")
+	}
+	entry, err := deps.state.MergeEntry(context.Background(), "/tmp/project", 42)
+	if err != nil {
+		t.Fatalf("MergeEntry() error = %v", err)
+	}
+	if entry != nil {
+		t.Fatalf("MergeEntry() = %#v, want nil after queued PR merge cleanup", entry)
+	}
+	if got, want := deps.pool.releasedClones(), []Clone{{
+		Name:          deps.pool.clone.Name,
+		Path:          deps.pool.clone.Path,
+		CurrentBranch: "LAB-689",
+		AssignedTask:  "LAB-689",
+	}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("released clones = %#v, want %#v", got, want)
+	}
+	if got, want := deps.issueTracker.statuses(), []issueStatusUpdate{
+		{Issue: "LAB-689", State: IssueStateInProgress},
+		{Issue: "LAB-689", State: IssueStateDone},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("issue tracker statuses = %#v, want %#v", got, want)
+	}
+	if got := deps.commands.countCalls("gh", []string{"pr", "update-branch", "42", "--rebase"}); got != 0 {
+		t.Fatalf("rebase call count = %d, want 0 for already-merged queued PR", got)
+	}
+	if got := deps.commands.countCalls("gh", []string{"pr", "merge", "42", "--squash"}); got != 0 {
+		t.Fatalf("merge call count = %d, want 0 for already-merged queued PR", got)
+	}
+	if got := deps.events.countType(EventPRLandingStarted); got != 0 {
+		t.Fatalf("landing started event count = %d, want 0", got)
+	}
+	deps.events.requireTypes(t, EventDaemonStarted, EventTaskAssigned, EventPREnqueued, EventPRMerged, EventWorkerPostmortem, EventTaskCompleted)
+}
+
 func TestPRMergeCleanupContinuesWhenIssueTrackerDoneUpdateFails(t *testing.T) {
 	t.Parallel()
 
