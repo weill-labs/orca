@@ -372,6 +372,76 @@ func TestStopForceKillsProcessAfterGracePeriod(t *testing.T) {
 	}
 }
 
+func TestLocalControllerCancelHonorsCallerDeadline(t *testing.T) {
+	projectPath := testProjectPath(t)
+	tempDir := t.TempDir()
+	paths := Paths{
+		ConfigDir: tempDir,
+		StateDB:   filepath.Join(tempDir, "state.db"),
+		PIDDir:    filepath.Join(tempDir, "pids"),
+	}
+	store := &fakeStore{
+		projectStatus: state.ProjectStatus{
+			Project: projectPath,
+			Daemon: &state.DaemonStatus{
+				PID:    os.Getpid(),
+				Status: "running",
+			},
+		},
+	}
+
+	if err := os.MkdirAll(paths.PIDDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", paths.PIDDir, err)
+	}
+	if err := os.WriteFile(paths.pidFile(), []byte(fmt.Sprintf("%d", os.Getpid())), 0o644); err != nil {
+		t.Fatalf("WriteFile(pidFile) error = %v", err)
+	}
+
+	socketPath := paths.socketFile()
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("Listen(%q) error = %v", socketPath, err)
+	}
+	defer listener.Close()
+
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+
+		var req rpcRequest
+		if err := json.NewDecoder(conn).Decode(&req); err != nil {
+			return
+		}
+		_ = amux.Wait(context.Background(), 200*time.Millisecond)
+	}()
+
+	controller, err := NewLocalController(ControllerOptions{
+		Store: store,
+		Paths: paths,
+	})
+	if err != nil {
+		t.Fatalf("NewLocalController() error = %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+
+	startedAt := time.Now()
+	_, err = controller.Cancel(ctx, CancelRequest{
+		Project: projectPath,
+		Issue:   "LAB-718",
+	})
+	if !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("Cancel() error = %v, want deadline exceeded", err)
+	}
+	if elapsed := time.Since(startedAt); elapsed >= time.Second {
+		t.Fatalf("Cancel() elapsed = %s, want caller deadline to abort before 1s", elapsed)
+	}
+}
+
 func TestLocalControllerAssignAndBatchRPC(t *testing.T) {
 	projectPath := testProjectPath(t)
 	tempDir := t.TempDir()

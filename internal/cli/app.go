@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -21,6 +22,7 @@ import (
 const defaultAgent = "claude"
 const amuxSessionEnvVar = "AMUX_SESSION"
 const amuxPaneEnvVar = "AMUX_PANE"
+const cancelClientTimeout = 10 * time.Second
 
 const usageText = `orca: agent orchestration daemon
 usage: orca <command>
@@ -71,7 +73,7 @@ Assign multiple issues from a manifest.`,
 	"enqueue": `usage: orca enqueue PR_NUMBER [--project PATH] [--json]
 
 Queue a PR for serialized landing.`,
-	"cancel": `usage: orca cancel ISSUE [--project PATH] [--json]
+	"cancel": `usage: orca cancel ISSUE [--project PATH] [--force] [--json]
 
 Cancel a task.`,
 	"resume": `usage: orca resume ISSUE [--project PATH] [--json]
@@ -630,8 +632,10 @@ func pluralize(word string, count int) string {
 func (a *App) runCancel(ctx context.Context, args []string) error {
 	fs := newFlagSet("cancel")
 	var projectPath string
+	var force bool
 	var jsonOutput bool
 	fs.StringVar(&projectPath, "project", "", "project path")
+	fs.BoolVar(&force, "force", false, "wait for the daemon without the 10s client timeout")
 	fs.BoolVar(&jsonOutput, "json", false, "emit JSON output")
 
 	issue, err := parseRequiredSinglePositional(fs, args, "cancel requires ISSUE")
@@ -644,11 +648,24 @@ func (a *App) runCancel(ctx context.Context, args []string) error {
 		return err
 	}
 
-	result, err := a.daemon.Cancel(ctx, daemon.CancelRequest{
+	cancelCtx := ctx
+	cancel := func() {}
+	if !force {
+		cancelCtx, cancel = context.WithTimeout(ctx, cancelClientTimeout)
+	}
+	defer cancel()
+
+	result, err := a.daemon.Cancel(cancelCtx, daemon.CancelRequest{
 		Project: projectPath,
 		Issue:   issue,
 	})
 	if err != nil {
+		if isCancelTimeoutError(err) {
+			if force {
+				return fmt.Errorf("cancel timed out waiting for the daemon; try `orca stop --force`")
+			}
+			return fmt.Errorf("cancel timed out after %s waiting for the daemon; try `orca cancel --force %s` or `orca stop --force`", cancelClientTimeout, issue)
+		}
 		return err
 	}
 
@@ -658,6 +675,18 @@ func (a *App) runCancel(ctx context.Context, args []string) error {
 
 	_, err = fmt.Fprintf(a.stdout, "%s cancelled\n", result.Issue)
 	return err
+}
+
+func isCancelTimeoutError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, os.ErrDeadlineExceeded) {
+		return true
+	}
+
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
 func (a *App) runResume(ctx context.Context, args []string) error {

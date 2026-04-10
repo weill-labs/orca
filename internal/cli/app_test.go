@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -387,6 +388,148 @@ func TestAppRunDispatchesCommands(t *testing.T) {
 			}
 
 			tt.assert(t, d, s, stdout.String(), stderr.String(), repoRoot, otherRepo)
+		})
+	}
+}
+
+func TestRunCancelClientTimeoutBehavior(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		args         []string
+		wantDeadline bool
+	}{
+		{
+			name:         "default cancel sets 10s deadline",
+			args:         []string{"cancel", "LAB-690"},
+			wantDeadline: true,
+		},
+		{
+			name:         "force cancel skips client deadline",
+			args:         []string{"cancel", "--force", "LAB-690"},
+			wantDeadline: false,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			repoRoot := newRepoRoot(t)
+			cwdPath := filepath.Join(repoRoot, "internal", "cli")
+			if err := os.MkdirAll(cwdPath, 0o755); err != nil {
+				t.Fatalf("MkdirAll(%q): %v", cwdPath, err)
+			}
+
+			d := &fakeDaemon{
+				cancelHook: func(ctx context.Context, req daemon.CancelRequest) (daemon.TaskActionResult, error) {
+					t.Helper()
+
+					if got, want := req.Issue, "LAB-690"; got != want {
+						t.Fatalf("cancel issue = %q, want %q", got, want)
+					}
+
+					deadline, ok := ctx.Deadline()
+					if got, want := ok, tt.wantDeadline; got != want {
+						t.Fatalf("ctx has deadline = %t, want %t", got, want)
+					}
+					if tt.wantDeadline {
+						remaining := time.Until(deadline)
+						if remaining < 9*time.Second || remaining > 10*time.Second {
+							t.Fatalf("deadline remaining = %s, want between 9s and 10s", remaining)
+						}
+					}
+
+					return daemon.TaskActionResult{
+						Project:   repoRoot,
+						Issue:     req.Issue,
+						Status:    "cancelled",
+						UpdatedAt: time.Now().UTC(),
+					}, nil
+				},
+			}
+
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			app := New(Options{
+				Daemon:  d,
+				State:   &fakeState{},
+				Stdout:  &stdout,
+				Stderr:  &stderr,
+				Version: "build-123",
+				Cwd: func() (string, error) {
+					return cwdPath, nil
+				},
+			})
+
+			if err := app.Run(context.Background(), tt.args); err != nil {
+				t.Fatalf("Run() error = %v", err)
+			}
+			if got, want := strings.TrimSpace(stdout.String()), "LAB-690 cancelled"; got != want {
+				t.Fatalf("stdout = %q, want %q", got, want)
+			}
+			if stderr.Len() != 0 {
+				t.Fatalf("stderr = %q, want empty", stderr.String())
+			}
+		})
+	}
+}
+
+func TestRunCancelTimeoutGuidance(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		args    []string
+		err     error
+		wantErr string
+	}{
+		{
+			name:    "default cancel suggests force and stop",
+			args:    []string{"cancel", "LAB-690"},
+			err:     fmt.Errorf("decode cancel response: %w", os.ErrDeadlineExceeded),
+			wantErr: "cancel timed out after 10s waiting for the daemon; try `orca cancel --force LAB-690` or `orca stop --force`",
+		},
+		{
+			name:    "force cancel suggests stop force",
+			args:    []string{"cancel", "--force", "LAB-690"},
+			err:     context.DeadlineExceeded,
+			wantErr: "cancel timed out waiting for the daemon; try `orca stop --force`",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			repoRoot := newRepoRoot(t)
+			cwdPath := filepath.Join(repoRoot, "internal", "cli")
+			if err := os.MkdirAll(cwdPath, 0o755); err != nil {
+				t.Fatalf("MkdirAll(%q): %v", cwdPath, err)
+			}
+
+			app := New(Options{
+				Daemon: &fakeDaemon{
+					cancelHook: func(context.Context, daemon.CancelRequest) (daemon.TaskActionResult, error) {
+						return daemon.TaskActionResult{}, tt.err
+					},
+				},
+				State:   &fakeState{},
+				Stdout:  &bytes.Buffer{},
+				Stderr:  &bytes.Buffer{},
+				Version: "build-123",
+				Cwd: func() (string, error) {
+					return cwdPath, nil
+				},
+			})
+
+			err := app.Run(context.Background(), tt.args)
+			if err == nil || err.Error() != tt.wantErr {
+				t.Fatalf("Run() error = %v, want %q", err, tt.wantErr)
+			}
 		})
 	}
 }
@@ -1555,7 +1698,8 @@ type fakeDaemon struct {
 	cancelResult  daemon.TaskActionResult
 	resumeResult  daemon.TaskActionResult
 
-	err error
+	cancelHook func(context.Context, daemon.CancelRequest) (daemon.TaskActionResult, error)
+	err        error
 }
 
 func (f *fakeDaemon) Start(_ context.Context, req daemon.StartRequest) (daemon.StartResult, error) {
@@ -1614,11 +1758,14 @@ func (f *fakeDaemon) Enqueue(_ context.Context, req daemon.EnqueueRequest) (daem
 	return f.enqueueResult, nil
 }
 
-func (f *fakeDaemon) Cancel(_ context.Context, req daemon.CancelRequest) (daemon.TaskActionResult, error) {
+func (f *fakeDaemon) Cancel(ctx context.Context, req daemon.CancelRequest) (daemon.TaskActionResult, error) {
 	if f.err != nil {
 		return daemon.TaskActionResult{}, f.err
 	}
 	f.cancelRequest = &req
+	if f.cancelHook != nil {
+		return f.cancelHook(ctx, req)
+	}
 	return f.cancelResult, nil
 }
 
