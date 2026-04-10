@@ -22,6 +22,7 @@ import (
 const defaultAgent = "claude"
 const amuxSessionEnvVar = "AMUX_SESSION"
 const amuxPaneEnvVar = "AMUX_PANE"
+const cancelClientTimeout = 10 * time.Second
 
 const usageText = `orca: agent orchestration daemon
 usage: orca <command>
@@ -650,7 +651,7 @@ func (a *App) runCancel(ctx context.Context, args []string) error {
 	cancelCtx := ctx
 	cancel := func() {}
 	if !force {
-		cancelCtx, cancel = context.WithTimeout(ctx, 10*time.Second)
+		cancelCtx, cancel = context.WithTimeout(ctx, cancelClientTimeout)
 	}
 	defer cancel()
 
@@ -659,12 +660,11 @@ func (a *App) runCancel(ctx context.Context, args []string) error {
 		Issue:   issue,
 	})
 	if err != nil {
-		var netErr net.Error
-		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, os.ErrDeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout()) {
+		if isCancelTimeoutError(err) {
 			if force {
 				return fmt.Errorf("cancel timed out waiting for the daemon; try `orca stop --force`")
 			}
-			return fmt.Errorf("cancel timed out after 10s waiting for the daemon; try `orca cancel --force %s` or `orca stop --force`", issue)
+			return fmt.Errorf("cancel timed out after %s waiting for the daemon; try `orca cancel --force %s` or `orca stop --force`", cancelClientTimeout, issue)
 		}
 		return err
 	}
@@ -675,6 +675,18 @@ func (a *App) runCancel(ctx context.Context, args []string) error {
 
 	_, err = fmt.Fprintf(a.stdout, "%s cancelled\n", result.Issue)
 	return err
+}
+
+func isCancelTimeoutError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, os.ErrDeadlineExceeded) {
+		return true
+	}
+
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
 func (a *App) runResume(ctx context.Context, args []string) error {
