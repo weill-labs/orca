@@ -3,6 +3,7 @@ package pool_test
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -34,10 +35,10 @@ printf '%s' "$count" > .setup-count
 			verify: func(t *testing.T, project, clonePath string, logs []string, manager *pool.Manager) {
 				t.Helper()
 
-				if got, want := strings.TrimSpace(mustOutput(t, clonePath, "cat", ".setup-parent")), project; got != want {
+				if got, want := readTrimmedFile(t, filepath.Join(clonePath, ".setup-parent")), project; got != want {
 					t.Fatalf("setup parent = %q, want %q", got, want)
 				}
-				if got, want := strings.TrimSpace(mustOutput(t, clonePath, "cat", ".setup-count")), "1"; got != want {
+				if got, want := readTrimmedFile(t, filepath.Join(clonePath, ".setup-count")), "1"; got != want {
 					t.Fatalf("setup count after CreateClone() = %q, want %q", got, want)
 				}
 				if joined := strings.Join(logs, "\n"); !strings.Contains(joined, "hook parent: "+project) {
@@ -47,7 +48,7 @@ printf '%s' "$count" > .setup-count
 				if _, err := manager.Allocate(context.Background(), "LAB-1008", "LAB-1008"); err != nil {
 					t.Fatalf("Allocate() error = %v", err)
 				}
-				if got, want := strings.TrimSpace(mustOutput(t, clonePath, "cat", ".setup-count")), "1"; got != want {
+				if got, want := readTrimmedFile(t, filepath.Join(clonePath, ".setup-count")), "1"; got != want {
 					t.Fatalf("setup count after Allocate() = %q, want %q", got, want)
 				}
 			},
@@ -127,4 +128,15 @@ func newOriginWithSetupHook(t *testing.T, baseBranch, script string) string {
 	mustRun(t, "", "git", "clone", "--bare", source, origin)
 
 	return origin
+}
+
+func readTrimmedFile(t *testing.T, path string) string {
+	t.Helper()
+
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", path, err)
+	}
+
+	return strings.TrimSpace(string(contents))
 }
