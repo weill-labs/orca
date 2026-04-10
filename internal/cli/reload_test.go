@@ -54,6 +54,49 @@ func TestAppRunReload(t *testing.T) {
 	}
 }
 
+func TestAppRunReloadGlobal(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := newRepoRoot(t)
+	cwdPath := filepath.Join(repoRoot, "internal", "cli")
+	if err := os.MkdirAll(cwdPath, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", cwdPath, err)
+	}
+
+	d := &fakeDaemon{
+		reloadResult: daemon.ReloadResult{PID: 321},
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	app := New(Options{
+		Daemon:  d,
+		State:   &fakeState{},
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		Version: "build-123",
+		Cwd: func() (string, error) {
+			return cwdPath, nil
+		},
+	})
+
+	if err := app.Run(context.Background(), []string{"reload", "--global"}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if d.reloadRequest == nil {
+		t.Fatal("expected reload to be called")
+	}
+	if got, want := d.reloadRequest.Project, ""; got != want {
+		t.Fatalf("reload project = %q, want empty project for --global", got)
+	}
+	if !strings.Contains(stdout.String(), "reloaded global daemon") {
+		t.Fatalf("stdout = %q, want global reload output", stdout.String())
+	}
+	if stderr.String() != "" {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+}
+
 func TestAppRunReloadRejectsPositionalArguments(t *testing.T) {
 	t.Parallel()
 

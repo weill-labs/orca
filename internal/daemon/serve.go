@@ -223,6 +223,9 @@ func inheritedListenerFile(listener net.Listener) (*os.File, error) {
 		return nil, fmt.Errorf("duplicate daemon listener: %w", err)
 	}
 
+	// net.UnixListener.File already duplicates the socket fd, but the returned
+	// *os.File owns that duplicate. Take one more dup so the inherited descriptor
+	// lifetime is independent of the temporary File wrapper and survives exec.
 	name := file.Name()
 	fd, err := syscall.Dup(int(file.Fd()))
 	_ = file.Close()
@@ -270,6 +273,9 @@ func stopDaemonForReload(instance *Daemon) {
 	if instance == nil {
 		return
 	}
+	// Reload intentionally mirrors Daemon.Stop's unbounded teardown waits. If a
+	// daemon goroutine is stuck, reload can stall after the RPC success response
+	// has been sent and the caller must recover with a fresh `orca start`.
 	if instance.stopCancel != nil {
 		instance.stopCancel()
 	}
