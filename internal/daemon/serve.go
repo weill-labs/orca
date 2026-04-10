@@ -9,7 +9,9 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/weill-labs/orca/internal/amux"
@@ -20,6 +22,7 @@ import (
 )
 
 const orcaPoolSubdir = ".orca/pool"
+const daemonListenerFDEnvVar = "ORCA_DAEMON_LISTENER_FD"
 
 type ServeRequest struct {
 	Session     string
@@ -36,6 +39,11 @@ type serveDeps struct {
 	events       EventSink
 	poolRunner   pool.Runner
 	socketPath   string
+	execProcess  func(string, []string, []string) error
+}
+
+type pendingReload struct {
+	ready chan struct{}
 }
 
 func RunProcess(ctx context.Context, req ServeRequest) error {
@@ -76,9 +84,15 @@ func runProcess(ctx context.Context, req ServeRequest, deps serveDeps) error {
 		socketPath = socketFile(filepath.Dir(req.StateDB))
 	}
 
-	listener, err := listenUnixSocket(socketPath)
+	listener, inheritedListener, err := inheritedListenerFromEnv(socketPath)
 	if err != nil {
 		return err
+	}
+	if listener == nil {
+		listener, err = listenUnixSocket(socketPath)
+		if err != nil {
+			return err
+		}
 	}
 	defer func() {
 		_ = listener.Close()
@@ -90,17 +104,18 @@ func runProcess(ctx context.Context, req ServeRequest, deps serveDeps) error {
 	startedAt := time.Now().UTC()
 	statusWriter := newSQLiteDaemonStatusWriter(store, "", req.Session, os.Getpid(), startedAt)
 	instance, err := New(Options{
-		Project:      "",
-		Session:      req.Session,
-		LeadPane:     req.LeadPane,
-		PIDPath:      req.PIDFile,
-		Config:       builtinConfigProvider{},
-		State:        daemonState,
-		Pool:         daemonPool,
-		Amux:         amuxClient,
-		IssueTracker: issueTracker,
-		Commands:     commandRunner,
-		Events:       deps.events,
+		Project:              "",
+		Session:              req.Session,
+		LeadPane:             req.LeadPane,
+		PIDPath:              req.PIDFile,
+		AllowCurrentPIDReuse: inheritedListener,
+		Config:               builtinConfigProvider{},
+		State:                daemonState,
+		Pool:                 daemonPool,
+		Amux:                 amuxClient,
+		IssueTracker:         issueTracker,
+		Commands:             commandRunner,
+		Events:               deps.events,
 		NewWatchdogTicker: func(interval time.Duration) Ticker {
 			return realTicker{Ticker: time.NewTicker(interval)}
 		},
@@ -121,9 +136,10 @@ func runProcess(ctx context.Context, req ServeRequest, deps serveDeps) error {
 		return err
 	}
 
+	reloadCh := make(chan pendingReload, 1)
 	serverErrCh := make(chan error, 1)
 	go func() {
-		serverErrCh <- serveRPC(ctx, listener, instance, store, req.BuildCommit)
+		serverErrCh <- serveRPC(ctx, listener, instance, store, req.BuildCommit, reloadCh)
 	}()
 
 	var serverErr error
@@ -131,6 +147,11 @@ func runProcess(ctx context.Context, req ServeRequest, deps serveDeps) error {
 	case <-ctx.Done():
 		_ = listener.Close()
 		serverErr = <-serverErrCh
+	case reload := <-reloadCh:
+		if reload.ready != nil {
+			<-reload.ready
+		}
+		serverErr = reloadProcess(req, listener, instance, deps.execProcess)
 	case serverErr = <-serverErrCh:
 	}
 
@@ -162,7 +183,137 @@ func listenUnixSocket(socketPath string) (net.Listener, error) {
 	return listener, nil
 }
 
-func serveRPC(ctx context.Context, listener net.Listener, instance *Daemon, store *state.SQLiteStore, buildCommit string) error {
+func inheritedListenerFromEnv(socketPath string) (net.Listener, bool, error) {
+	rawFD := strings.TrimSpace(os.Getenv(daemonListenerFDEnvVar))
+	if rawFD == "" {
+		return nil, false, nil
+	}
+	if err := os.Unsetenv(daemonListenerFDEnvVar); err != nil {
+		return nil, false, fmt.Errorf("clear %s: %w", daemonListenerFDEnvVar, err)
+	}
+
+	fd, err := strconv.Atoi(rawFD)
+	if err != nil {
+		return nil, false, fmt.Errorf("parse %s: %w", daemonListenerFDEnvVar, err)
+	}
+
+	file := os.NewFile(uintptr(fd), socketPath)
+	if file == nil {
+		return nil, false, fmt.Errorf("open inherited daemon listener fd %d", fd)
+	}
+	defer file.Close()
+
+	listener, err := net.FileListener(file)
+	if err != nil {
+		return nil, false, fmt.Errorf("restore inherited daemon listener: %w", err)
+	}
+	return listener, true, nil
+}
+
+func inheritedListenerFile(listener net.Listener) (*os.File, error) {
+	fileListener, ok := listener.(interface {
+		File() (*os.File, error)
+	})
+	if !ok {
+		return nil, fmt.Errorf("daemon listener does not expose File")
+	}
+
+	file, err := fileListener.File()
+	if err != nil {
+		return nil, fmt.Errorf("duplicate daemon listener: %w", err)
+	}
+
+	// net.UnixListener.File already duplicates the socket fd, but the returned
+	// *os.File owns that duplicate. Take one more dup so the inherited descriptor
+	// lifetime is independent of the temporary File wrapper and survives exec.
+	name := file.Name()
+	fd, err := syscall.Dup(int(file.Fd()))
+	_ = file.Close()
+	if err != nil {
+		return nil, fmt.Errorf("duplicate inherited daemon listener: %w", err)
+	}
+	return os.NewFile(uintptr(fd), name), nil
+}
+
+func reloadProcess(req ServeRequest, listener net.Listener, instance *Daemon, execProcess func(string, []string, []string) error) error {
+	reloadListenerFile, err := inheritedListenerFile(listener)
+	if err != nil {
+		return err
+	}
+	defer reloadListenerFile.Close()
+	if err := closeListenerForReload(listener); err != nil {
+		return err
+	}
+
+	stopDaemonForReload(instance)
+
+	executable, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("resolve current executable: %w", err)
+	}
+	if execProcess == nil {
+		execProcess = syscall.Exec
+	}
+
+	env := append(os.Environ(), fmt.Sprintf("%s=%d", daemonListenerFDEnvVar, reloadListenerFile.Fd()))
+	return execProcess(executable, daemonServeArgs(executable, req), env)
+}
+
+func closeListenerForReload(listener net.Listener) error {
+	if unixListener, ok := listener.(*net.UnixListener); ok {
+		unixListener.SetUnlinkOnClose(false)
+	}
+	if err := listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+		return fmt.Errorf("close daemon listener for reload: %w", err)
+	}
+	return nil
+}
+
+func stopDaemonForReload(instance *Daemon) {
+	if instance == nil {
+		return
+	}
+	// Reload intentionally mirrors Daemon.Stop's unbounded teardown waits. If a
+	// daemon goroutine is stuck, reload can stall after the RPC success response
+	// has been sent and the caller must recover with a fresh `orca start`.
+	if instance.stopCancel != nil {
+		instance.stopCancel()
+	}
+	if instance.loopDone != nil {
+		<-instance.loopDone
+	}
+	if instance.eventStreamDone != nil {
+		<-instance.eventStreamDone
+	}
+	if instance.watchdogDone != nil {
+		<-instance.watchdogDone
+	}
+	if instance.mergeQueueDone != nil {
+		<-instance.mergeQueueDone
+	}
+}
+
+func daemonServeArgs(executable string, req ServeRequest) []string {
+	return []string{
+		executable,
+		"__daemon-serve",
+		"--session", req.Session,
+		"--lead-pane", req.LeadPane,
+		"--state-db", req.StateDB,
+		"--pid-file", req.PIDFile,
+	}
+}
+
+func serveRPC(ctx context.Context, listener net.Listener, instance *Daemon, store *state.SQLiteStore, buildCommit string, reloadCh chan<- pendingReload) error {
+	enqueueReload := func(_ reloadRPCParams, ready chan struct{}) error {
+		select {
+		case reloadCh <- pendingReload{ready: ready}:
+			return nil
+		default:
+			return errors.New("daemon reload already in progress")
+		}
+	}
+
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
@@ -172,11 +323,15 @@ func serveRPC(ctx context.Context, listener net.Listener, instance *Daemon, stor
 			return fmt.Errorf("accept daemon socket connection: %w", err)
 		}
 
-		go handleRPCConn(ctx, conn, instance, store, buildCommit)
+		go handleRPCConnWithReload(ctx, conn, instance, store, buildCommit, enqueueReload)
 	}
 }
 
 func handleRPCConn(ctx context.Context, conn net.Conn, instance *Daemon, store *state.SQLiteStore, buildCommit string, defaultProject ...string) {
+	handleRPCConnWithReload(ctx, conn, instance, store, buildCommit, nil, defaultProject...)
+}
+
+func handleRPCConnWithReload(ctx context.Context, conn net.Conn, instance *Daemon, store *state.SQLiteStore, buildCommit string, enqueueReload func(reloadRPCParams, chan struct{}) error, defaultProject ...string) {
 	defer conn.Close()
 	if err := conn.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
 		_ = json.NewEncoder(conn).Encode(rpcFailure(nil, -32000, fmt.Errorf("set read deadline: %w", err)))
@@ -186,6 +341,14 @@ func handleRPCConn(ctx context.Context, conn net.Conn, instance *Daemon, store *
 	var request rpcRequest
 	if err := json.NewDecoder(conn).Decode(&request); err != nil {
 		_ = json.NewEncoder(conn).Encode(rpcFailure(nil, -32700, fmt.Errorf("decode request: %w", err)))
+		return
+	}
+
+	if response, ready, handled := handleReloadRPCRequest(request, enqueueReload); handled {
+		_ = json.NewEncoder(conn).Encode(response)
+		if ready != nil {
+			close(ready)
+		}
 		return
 	}
 

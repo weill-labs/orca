@@ -26,6 +26,7 @@ type Daemon struct {
 	session              string
 	leadPane             string
 	pidPath              string
+	allowCurrentPIDReuse bool
 	config               ConfigProvider
 	state                StateStore
 	pool                 Pool
@@ -119,28 +120,29 @@ func New(opts Options) (*Daemon, error) {
 	}
 
 	return &Daemon{
-		project:           opts.Project,
-		session:           opts.Session,
-		leadPane:          opts.LeadPane,
-		pidPath:           opts.PIDPath,
-		config:            opts.Config,
-		state:             opts.State,
-		pool:              opts.Pool,
-		amux:              opts.Amux,
-		issueTracker:      opts.IssueTracker,
-		commands:          opts.Commands,
-		github:            newDefaultGitHubClient(opts.Project, opts.Commands),
-		githubClients:     make(map[string]gitHubClient),
-		events:            opts.Events,
-		now:               opts.Now,
-		newTicker:         opts.NewTicker,
-		newWatchdogTicker: opts.NewWatchdogTicker,
-		sleep:             opts.Sleep,
-		captureInterval:   opts.CaptureInterval,
-		pollInterval:      opts.PollInterval,
-		mergeGracePeriod:  opts.MergeGracePeriod,
-		statusWriter:      opts.DaemonStatusWriter,
-		logf:              opts.Logf,
+		project:              opts.Project,
+		session:              opts.Session,
+		leadPane:             opts.LeadPane,
+		pidPath:              opts.PIDPath,
+		allowCurrentPIDReuse: opts.AllowCurrentPIDReuse,
+		config:               opts.Config,
+		state:                opts.State,
+		pool:                 opts.Pool,
+		amux:                 opts.Amux,
+		issueTracker:         opts.IssueTracker,
+		commands:             opts.Commands,
+		github:               newDefaultGitHubClient(opts.Project, opts.Commands),
+		githubClients:        make(map[string]gitHubClient),
+		events:               opts.Events,
+		now:                  opts.Now,
+		newTicker:            opts.NewTicker,
+		newWatchdogTicker:    opts.NewWatchdogTicker,
+		sleep:                opts.Sleep,
+		captureInterval:      opts.CaptureInterval,
+		pollInterval:         opts.PollInterval,
+		mergeGracePeriod:     opts.MergeGracePeriod,
+		statusWriter:         opts.DaemonStatusWriter,
+		logf:                 opts.Logf,
 		// Monitor circuits are daemon-wide by design so broad amux/GitHub
 		// outages pause all monitor traffic instead of retrying per task.
 		monitorAmuxCircuit:   NewCircuitBreakerWithHooks(opts.Now, defaultCircuitBreakerFailureThreshold, defaultCircuitBreakerCooldown, daemonCircuitHooks(opts.Project, opts.Now, opts.State, opts.Events, "monitor amux")),
@@ -269,6 +271,9 @@ func (d *Daemon) removeStalePIDFileWithProcessCheck(processCheck func(int) (bool
 		return fmt.Errorf("check pid file process: %w", err)
 	}
 	if alive {
+		if d.allowCurrentPIDReuse && pid == os.Getpid() {
+			return nil
+		}
 		return fmt.Errorf("daemon already running: %w", ErrAlreadyStarted)
 	}
 	if err := os.Remove(d.pidPath); err != nil && !errors.Is(err, os.ErrNotExist) {

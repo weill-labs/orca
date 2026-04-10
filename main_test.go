@@ -458,6 +458,10 @@ func (*stubController) Stop(context.Context, daemon.StopRequest) (daemon.StopRes
 	return daemon.StopResult{}, nil
 }
 
+func (*stubController) Reload(context.Context, daemon.ReloadRequest) (daemon.ReloadResult, error) {
+	return daemon.ReloadResult{}, nil
+}
+
 func (*stubController) Assign(context.Context, daemon.AssignRequest) (daemon.TaskActionResult, error) {
 	return daemon.TaskActionResult{}, nil
 }
