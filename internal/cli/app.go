@@ -19,7 +19,7 @@ import (
 	"github.com/weill-labs/orca/internal/project"
 )
 
-const defaultAgent = "claude"
+const defaultAgent = "codex"
 const amuxSessionEnvVar = "AMUX_SESSION"
 const amuxPaneEnvVar = "AMUX_PANE"
 const cancelClientTimeout = 10 * time.Second
