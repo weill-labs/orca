@@ -167,13 +167,25 @@ func daemonCircuitHooks(project string, now func() time.Time, state StateStore, 
 	}
 
 	return CircuitBreakerHooks{
-		OnOpen: func() {
-			emit(EventDaemonCircuitOpened, name+" circuit opened after 3 consecutive failures")
+		OnOpen: func(info CircuitBreakerTransition) {
+			emit(EventDaemonCircuitOpened, formatCircuitOpenedMessage(name, info))
 		},
-		OnClose: func() {
+		OnClose: func(CircuitBreakerTransition) {
 			emit(EventDaemonCircuitClosed, name+" circuit closed after cooldown")
 		},
 	}
+}
+
+func formatCircuitOpenedMessage(name string, info CircuitBreakerTransition) string {
+	message := fmt.Sprintf("%s circuit opened after %d consecutive failures", name, info.FailureCount)
+	if info.Err == nil {
+		return message
+	}
+	errMessage := strings.TrimSpace(info.Err.Error())
+	if errMessage == "" {
+		return message
+	}
+	return message + ": " + errMessage
 }
 
 func (d *Daemon) Start(ctx context.Context) error {

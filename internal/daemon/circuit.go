@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"math"
 	"sync"
 	"time"
 
@@ -16,9 +17,15 @@ const (
 
 var ErrCircuitBreakerOpen = errors.New("circuit breaker open")
 
+type CircuitBreakerTransition struct {
+	FailureCount int
+	Cooldown     time.Duration
+	Err          error
+}
+
 type CircuitBreakerHooks struct {
-	OnOpen  func()
-	OnClose func()
+	OnOpen  func(CircuitBreakerTransition)
+	OnClose func(CircuitBreakerTransition)
 }
 
 type CircuitBreaker struct {
@@ -30,6 +37,9 @@ type CircuitBreaker struct {
 	mu                  sync.Mutex
 	consecutiveFailures int
 	openedAt            time.Time
+	activeCooldown      time.Duration
+	reopenStreak        int
+	lastFailure         error
 }
 
 func NewCircuitBreaker(now func() time.Time, threshold int, cooldown time.Duration) *CircuitBreaker {
@@ -42,6 +52,9 @@ func NewCircuitBreakerWithHooks(now func() time.Time, threshold int, cooldown ti
 	}
 	if threshold <= 0 {
 		threshold = 1
+	}
+	if cooldown < 0 {
+		cooldown = 0
 	}
 
 	return &CircuitBreaker{
@@ -58,16 +71,15 @@ func (c *CircuitBreaker) Allow() error {
 	}
 
 	c.mu.Lock()
-	shouldClose := c.shouldCloseLocked()
+	closeInfo, shouldClose := c.expireOpenLocked()
 	if shouldClose {
-		c.closeLocked()
 	}
 	isOpen := c.isOpenLocked()
 	onClose := c.hooks.OnClose
 	c.mu.Unlock()
 
 	if shouldClose && onClose != nil {
-		onClose()
+		onClose(closeInfo)
 	}
 	if isOpen {
 		return ErrCircuitBreakerOpen
@@ -81,53 +93,103 @@ func (c *CircuitBreaker) RecordSuccess() {
 	}
 
 	c.mu.Lock()
-	c.closeLocked()
+	c.resetLocked()
 	c.mu.Unlock()
 }
 
-func (c *CircuitBreaker) RecordFailure() {
+func (c *CircuitBreaker) RecordFailure(err error) {
 	if c == nil {
 		return
 	}
 
 	c.mu.Lock()
-	shouldClose := c.shouldCloseLocked()
+	closeInfo, shouldClose := c.expireOpenLocked()
 	if shouldClose {
-		c.closeLocked()
 	}
 	if c.isOpenLocked() {
 		c.mu.Unlock()
+		if shouldClose && c.hooks.OnClose != nil {
+			c.hooks.OnClose(closeInfo)
+		}
 		return
 	}
 
 	c.consecutiveFailures++
+	c.lastFailure = err
 	shouldOpen := c.consecutiveFailures >= c.threshold
+	var openInfo CircuitBreakerTransition
 	if shouldOpen {
-		c.openedAt = c.now()
+		openInfo = c.openLocked()
 	}
 	onOpen := c.hooks.OnOpen
 	onClose := c.hooks.OnClose
 	c.mu.Unlock()
 
 	if shouldClose && onClose != nil {
-		onClose()
+		onClose(closeInfo)
 	}
 	if shouldOpen && onOpen != nil {
-		onOpen()
+		onOpen(openInfo)
 	}
 }
 
 func (c *CircuitBreaker) shouldCloseLocked() bool {
-	return c.isOpenLocked() && !c.now().Before(c.openedAt.Add(c.cooldown))
+	return c.isOpenLocked() && !c.now().Before(c.openedAt.Add(c.activeCooldown))
 }
 
 func (c *CircuitBreaker) isOpenLocked() bool {
 	return !c.openedAt.IsZero()
 }
 
+func (c *CircuitBreaker) openLocked() CircuitBreakerTransition {
+	c.openedAt = c.now()
+	c.activeCooldown = exponentialCircuitCooldown(c.cooldown, c.reopenStreak)
+	c.reopenStreak++
+	return c.transitionLocked()
+}
+
+func (c *CircuitBreaker) expireOpenLocked() (CircuitBreakerTransition, bool) {
+	if !c.shouldCloseLocked() {
+		return CircuitBreakerTransition{}, false
+	}
+	info := c.transitionLocked()
+	c.closeLocked()
+	return info, true
+}
+
+func (c *CircuitBreaker) transitionLocked() CircuitBreakerTransition {
+	return CircuitBreakerTransition{
+		FailureCount: c.consecutiveFailures,
+		Cooldown:     c.activeCooldown,
+		Err:          c.lastFailure,
+	}
+}
+
 func (c *CircuitBreaker) closeLocked() {
 	c.consecutiveFailures = 0
 	c.openedAt = time.Time{}
+	c.activeCooldown = 0
+	c.lastFailure = nil
+}
+
+func (c *CircuitBreaker) resetLocked() {
+	c.closeLocked()
+	c.reopenStreak = 0
+}
+
+func exponentialCircuitCooldown(base time.Duration, reopenStreak int) time.Duration {
+	if base <= 0 {
+		return 0
+	}
+
+	cooldown := base
+	for i := 0; i < reopenStreak; i++ {
+		if cooldown > time.Duration(math.MaxInt64/2) {
+			return time.Duration(math.MaxInt64)
+		}
+		cooldown *= 2
+	}
+	return cooldown
 }
 
 type amuxClientContextKey struct{}
@@ -296,7 +358,7 @@ func (c *circuitAmuxClient) Events(ctx context.Context, req amux.EventsRequest) 
 					continue
 				}
 				if err != nil {
-					c.breaker.RecordFailure()
+					c.breaker.RecordFailure(err)
 					outErr <- err
 					return
 				}
@@ -375,7 +437,7 @@ func withCircuit[T any](breaker *CircuitBreaker, call func() (T, error)) (T, err
 	value, err := call()
 	if err != nil {
 		if shouldRecordCircuitFailure(err) {
-			breaker.RecordFailure()
+			breaker.RecordFailure(err)
 		}
 		return zero, err
 	}
@@ -394,7 +456,7 @@ func withCircuit3[T1 any, T2 any](breaker *CircuitBreaker, call func() (T1, T2, 
 	value1, value2, err := call()
 	if err != nil {
 		if shouldRecordCircuitFailure(err) {
-			breaker.RecordFailure()
+			breaker.RecordFailure(err)
 		}
 		return zero1, zero2, err
 	}
@@ -410,7 +472,7 @@ func withCircuitErr(breaker *CircuitBreaker, call func() error) error {
 
 	if err := call(); err != nil {
 		if shouldRecordCircuitFailure(err) {
-			breaker.RecordFailure()
+			breaker.RecordFailure(err)
 		}
 		return err
 	}

@@ -15,18 +15,19 @@ func TestCircuitBreakerOpensAfterThreeFailuresAndClosesAfterCooldown(t *testing.
 
 	clock := &fakeClock{now: time.Date(2026, 4, 9, 12, 0, 0, 0, time.UTC)}
 	breaker := NewCircuitBreaker(clock.Now, 3, 60*time.Second)
+	fail := errors.New("amux unavailable")
 
 	for i := 0; i < 2; i++ {
 		if err := breaker.Allow(); err != nil {
 			t.Fatalf("Allow() before threshold error = %v", err)
 		}
-		breaker.RecordFailure()
+		breaker.RecordFailure(fail)
 	}
 
 	if err := breaker.Allow(); err != nil {
 		t.Fatalf("Allow() at threshold error = %v", err)
 	}
-	breaker.RecordFailure()
+	breaker.RecordFailure(fail)
 
 	if err := breaker.Allow(); !errors.Is(err, ErrCircuitBreakerOpen) {
 		t.Fatalf("Allow() after threshold error = %v, want %v", err, ErrCircuitBreakerOpen)
@@ -43,17 +44,85 @@ func TestCircuitBreakerOpensAfterThreeFailuresAndClosesAfterCooldown(t *testing.
 	}
 }
 
+func TestCircuitBreakerBacksOffRepeatedReopeningsUntilSuccess(t *testing.T) {
+	t.Parallel()
+
+	clock := &fakeClock{now: time.Date(2026, 4, 9, 12, 0, 0, 0, time.UTC)}
+	breaker := NewCircuitBreaker(clock.Now, 3, 60*time.Second)
+	fail := errors.New("amux unavailable")
+
+	for i := 0; i < 3; i++ {
+		if err := breaker.Allow(); err != nil {
+			t.Fatalf("Allow() before first open error = %v", err)
+		}
+		breaker.RecordFailure(fail)
+	}
+
+	clock.Advance(60 * time.Second)
+	if err := breaker.Allow(); err != nil {
+		t.Fatalf("Allow() after first cooldown error = %v", err)
+	}
+
+	for i := 0; i < 3; i++ {
+		if err := breaker.Allow(); err != nil {
+			t.Fatalf("Allow() before second open error = %v", err)
+		}
+		breaker.RecordFailure(fail)
+	}
+
+	clock.Advance(119 * time.Second)
+	if err := breaker.Allow(); !errors.Is(err, ErrCircuitBreakerOpen) {
+		t.Fatalf("Allow() before second cooldown expiry error = %v, want %v", err, ErrCircuitBreakerOpen)
+	}
+
+	clock.Advance(1 * time.Second)
+	if err := breaker.Allow(); err != nil {
+		t.Fatalf("Allow() after second cooldown error = %v", err)
+	}
+
+	breaker.RecordSuccess()
+	for i := 0; i < 3; i++ {
+		if err := breaker.Allow(); err != nil {
+			t.Fatalf("Allow() before reset open error = %v", err)
+		}
+		breaker.RecordFailure(fail)
+	}
+
+	clock.Advance(59 * time.Second)
+	if err := breaker.Allow(); !errors.Is(err, ErrCircuitBreakerOpen) {
+		t.Fatalf("Allow() before reset cooldown expiry error = %v, want %v", err, ErrCircuitBreakerOpen)
+	}
+
+	clock.Advance(1 * time.Second)
+	if err := breaker.Allow(); err != nil {
+		t.Fatalf("Allow() after reset cooldown error = %v", err)
+	}
+}
+
 func TestCircuitBreakerHooksEmitOnOpenAndCloseTransitions(t *testing.T) {
 	t.Parallel()
 
 	clock := &fakeClock{now: time.Date(2026, 4, 9, 12, 0, 0, 0, time.UTC)}
 	var transitions []string
+	fail := errors.New("amux capture pane-1: exit status 1: connection refused")
 	breaker := NewCircuitBreakerWithHooks(clock.Now, 3, 60*time.Second, CircuitBreakerHooks{
-		OnOpen: func() {
+		OnOpen: func(info CircuitBreakerTransition) {
 			transitions = append(transitions, "open")
+			if got, want := info.FailureCount, 3; got != want {
+				t.Fatalf("OnOpen failure count = %d, want %d", got, want)
+			}
+			if got, want := info.Cooldown, 60*time.Second; got != want {
+				t.Fatalf("OnOpen cooldown = %s, want %s", got, want)
+			}
+			if !errors.Is(info.Err, fail) {
+				t.Fatalf("OnOpen err = %v, want %v", info.Err, fail)
+			}
 		},
-		OnClose: func() {
+		OnClose: func(info CircuitBreakerTransition) {
 			transitions = append(transitions, "close")
+			if got, want := info.Cooldown, 60*time.Second; got != want {
+				t.Fatalf("OnClose cooldown = %s, want %s", got, want)
+			}
 		},
 	})
 
@@ -61,7 +130,7 @@ func TestCircuitBreakerHooksEmitOnOpenAndCloseTransitions(t *testing.T) {
 		if err := breaker.Allow(); err != nil {
 			t.Fatalf("Allow() before open error = %v", err)
 		}
-		breaker.RecordFailure()
+		breaker.RecordFailure(fail)
 	}
 
 	clock.Advance(60 * time.Second)
@@ -350,7 +419,7 @@ func TestCircuitCommandRunnerBypassesNonGitHubCommandsWhenCircuitIsOpen(t *testi
 
 	breaker := NewCircuitBreaker(time.Now, 3, time.Minute)
 	for i := 0; i < 3; i++ {
-		breaker.RecordFailure()
+		breaker.RecordFailure(errors.New("github unavailable"))
 	}
 
 	commands := newFakeCommands()
