@@ -41,20 +41,15 @@ func TestHandleReloadRPCRequest(t *testing.T) {
 	}
 
 	var gotParams reloadRPCParams
-	var gotReady chan struct{}
-	response, ready, handled := handleReloadRPCRequest(request, func(params reloadRPCParams, ready chan struct{}) error {
+	response, shouldReload, handled := handleReloadRPCRequest(request, func(params reloadRPCParams) error {
 		gotParams = params
-		gotReady = ready
 		return nil
 	})
 	if !handled {
 		t.Fatal("handleReloadRPCRequest() = not handled, want handled")
 	}
-	if ready == nil {
-		t.Fatal("handleReloadRPCRequest() ready = nil, want channel")
-	}
-	if gotReady != ready {
-		t.Fatal("queued ready channel does not match returned channel")
+	if !shouldReload {
+		t.Fatal("handleReloadRPCRequest() shouldReload = false, want true")
 	}
 	if got, want := gotParams.Project, "/repo"; got != want {
 		t.Fatalf("queued project = %q, want %q", got, want)
@@ -82,19 +77,19 @@ func TestHandleReloadRPCRequest(t *testing.T) {
 func TestHandleReloadRPCRequestRejectsBadParams(t *testing.T) {
 	t.Parallel()
 
-	response, ready, handled := handleReloadRPCRequest(rpcRequest{
+	response, shouldReload, handled := handleReloadRPCRequest(rpcRequest{
 		ID:     json.RawMessage(`1`),
 		Method: "reload",
 		Params: json.RawMessage(`{"project":`),
-	}, func(reloadRPCParams, chan struct{}) error {
+	}, func(reloadRPCParams) error {
 		t.Fatal("enqueue called for invalid params")
 		return nil
 	})
 	if !handled {
 		t.Fatal("handleReloadRPCRequest() = not handled, want handled")
 	}
-	if ready != nil {
-		t.Fatalf("ready = %#v, want nil", ready)
+	if shouldReload {
+		t.Fatal("handleReloadRPCRequest() shouldReload = true, want false")
 	}
 	if response.Error == nil || response.Error.Code != -32602 {
 		t.Fatalf("response = %#v, want invalid params error", response)
@@ -104,7 +99,7 @@ func TestHandleReloadRPCRequestRejectsBadParams(t *testing.T) {
 func TestHandleReloadRPCRequestRejectsUnavailableReload(t *testing.T) {
 	t.Parallel()
 
-	response, ready, handled := handleReloadRPCRequest(rpcRequest{
+	response, shouldReload, handled := handleReloadRPCRequest(rpcRequest{
 		ID:     json.RawMessage(`1`),
 		Method: "reload",
 		Params: mustJSON(t, reloadRPCParams{Project: "/repo"}),
@@ -112,8 +107,8 @@ func TestHandleReloadRPCRequestRejectsUnavailableReload(t *testing.T) {
 	if !handled {
 		t.Fatal("handleReloadRPCRequest() = not handled, want handled")
 	}
-	if ready != nil {
-		t.Fatalf("ready = %#v, want nil", ready)
+	if shouldReload {
+		t.Fatal("handleReloadRPCRequest() shouldReload = true, want false")
 	}
 	if response.Error == nil || response.Error.Code != -32000 {
 		t.Fatalf("response = %#v, want unavailable reload error", response)
@@ -127,18 +122,18 @@ func TestHandleReloadRPCRequestReturnsEnqueueError(t *testing.T) {
 	t.Parallel()
 
 	wantErr := errors.New("reload busy")
-	response, ready, handled := handleReloadRPCRequest(rpcRequest{
+	response, shouldReload, handled := handleReloadRPCRequest(rpcRequest{
 		ID:     json.RawMessage(`1`),
 		Method: "reload",
 		Params: mustJSON(t, reloadRPCParams{Project: "/repo"}),
-	}, func(reloadRPCParams, chan struct{}) error {
+	}, func(reloadRPCParams) error {
 		return wantErr
 	})
 	if !handled {
 		t.Fatal("handleReloadRPCRequest() = not handled, want handled")
 	}
-	if ready != nil {
-		t.Fatalf("ready = %#v, want nil", ready)
+	if shouldReload {
+		t.Fatal("handleReloadRPCRequest() shouldReload = true, want false")
 	}
 	if response.Error == nil || response.Error.Code != -32000 {
 		t.Fatalf("response = %#v, want enqueue error", response)
@@ -671,6 +666,65 @@ func TestReloadProcessPropagatesSetupErrors(t *testing.T) {
 				t.Fatalf("reloadProcess() error = %v, want message containing %q", err, tt.wantErrContains)
 			}
 		})
+	}
+}
+
+func TestReloadProcessDoesNotWaitForDaemonShutdown(t *testing.T) {
+	t.Parallel()
+
+	file, err := os.CreateTemp(t.TempDir(), "reload-listener-*")
+	if err != nil {
+		t.Fatalf("CreateTemp() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = file.Close()
+	})
+
+	blockedDone := make(chan struct{})
+	t.Cleanup(func() {
+		close(blockedDone)
+	})
+
+	stopCalled := make(chan struct{}, 1)
+	instance := &Daemon{
+		stopCancel: func() {
+			select {
+			case stopCalled <- struct{}{}:
+			default:
+			}
+		},
+		loopDone: blockedDone,
+	}
+
+	errExec := errors.New("reload exec invoked")
+	execCalled := make(chan struct{}, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- reloadProcess(ServeRequest{}, &reloadTestFileListener{file: file}, instance, func(string, []string, []string) error {
+			execCalled <- struct{}{}
+			return errExec
+		})
+	}()
+
+	select {
+	case <-stopCalled:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for reloadProcess to cancel daemon")
+	}
+
+	select {
+	case <-execCalled:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for reloadProcess to call execProcess without waiting for daemon shutdown")
+	}
+
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, errExec) {
+			t.Fatalf("reloadProcess() error = %v, want %v", err, errExec)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for reloadProcess to return exec error")
 	}
 }
 
