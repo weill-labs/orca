@@ -29,7 +29,7 @@ func TestSpawnPlacementArgsAgainstRealAmux(t *testing.T) {
 	}{
 		{
 			name:      "targets an explicit pane",
-			leadPane:  " pane-1 ",
+			leadPane:  " " + session.initialPane + " ",
 			spawnName: "integration-targeted",
 		},
 		{
@@ -69,8 +69,9 @@ func TestSpawnPlacementArgsAgainstRealAmux(t *testing.T) {
 }
 
 type realAmuxSession struct {
-	binary string
-	name   string
+	binary      string
+	name        string
+	initialPane string
 }
 
 func newRealAmuxSession(t *testing.T, binary string) realAmuxSession {
@@ -94,7 +95,7 @@ func newRealAmuxSession(t *testing.T, binary string) realAmuxSession {
 	return session
 }
 
-func (s realAmuxSession) start(t *testing.T) error {
+func (s *realAmuxSession) start(t *testing.T) error {
 	t.Helper()
 
 	createArgs, err := realAmuxSessionCreateArgs(s.binary)
@@ -114,7 +115,9 @@ func (s realAmuxSession) start(t *testing.T) error {
 	var (
 		outputMu sync.Mutex
 		output   []byte
-		waitErr  = make(chan error, 1)
+		waitErr  error
+		waitMu   sync.Mutex
+		done     = make(chan struct{})
 		updates  = make(chan struct{}, 1)
 	)
 
@@ -138,10 +141,16 @@ func (s realAmuxSession) start(t *testing.T) error {
 	}()
 
 	go func() {
-		waitErr <- cmd.Wait()
+		waitMu.Lock()
+		waitErr = cmd.Wait()
+		waitMu.Unlock()
+		close(done)
 	}()
 
-	if !waitForRealAmuxOutput(t, &outputMu, &output, waitErr, updates, []byte("[pane-1]"), 10*time.Second) {
+	if !waitForRealAmuxOutput(t, &outputMu, &output, done, updates, []byte(s.name), 10*time.Second) {
+		if err := realAmuxWaitResult(&waitMu, &waitErr, done); err != nil {
+			return fmt.Errorf("session exited before bootstrap: %w\n%s", err, string(copyBytes(&outputMu, output)))
+		}
 		return fmt.Errorf("timed out waiting for session bootstrap\n%s", string(copyBytes(&outputMu, output)))
 	}
 
@@ -150,22 +159,27 @@ func (s realAmuxSession) start(t *testing.T) error {
 	}
 
 	select {
-	case err := <-waitErr:
+	case <-done:
+		err := realAmuxWaitResult(&waitMu, &waitErr, done)
 		if err != nil {
 			return fmt.Errorf("wait for detached client exit: %w\n%s", err, string(copyBytes(&outputMu, output)))
 		}
 	case <-time.After(10 * time.Second):
 		_ = cmd.Process.Kill()
-		<-waitErr
+		<-done
 		return fmt.Errorf("timed out waiting for detached client exit\n%s", string(copyBytes(&outputMu, output)))
 	}
 
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		_, err := runRealAmux(ctx, s.binary, s.name, "list", "--no-cwd")
+		panes, err := s.listPanes(ctx)
 		cancel()
 		if err == nil {
+			if len(panes) == 0 {
+				return fmt.Errorf("session %q became reachable without panes", s.name)
+			}
+			s.initialPane = panes[0].ID
 			return nil
 		}
 		if time.Now().After(deadline) {
@@ -313,7 +327,7 @@ func upsertRealAmuxEnv(env []string, key, value string) []string {
 	return append(env, prefix+value)
 }
 
-func waitForRealAmuxOutput(t *testing.T, outputMu *sync.Mutex, output *[]byte, waitErr <-chan error, updates <-chan struct{}, want []byte, timeout time.Duration) bool {
+func waitForRealAmuxOutput(t *testing.T, outputMu *sync.Mutex, output *[]byte, done <-chan struct{}, updates <-chan struct{}, want []byte, timeout time.Duration) bool {
 	t.Helper()
 
 	deadline := time.Now().Add(timeout)
@@ -331,10 +345,7 @@ func waitForRealAmuxOutput(t *testing.T, outputMu *sync.Mutex, output *[]byte, w
 		}
 
 		select {
-		case err := <-waitErr:
-			if err != nil {
-				t.Fatalf("real amux session exited before bootstrap completed: %v\n%s", err, string(copyBytes(outputMu, *output)))
-			}
+		case <-done:
 			return bytes.Contains(copyBytes(outputMu, *output), want)
 		case <-updates:
 		case <-time.After(remaining):
@@ -352,5 +363,21 @@ func realAmuxSessionMissing(err error) bool {
 	if err == nil {
 		return false
 	}
-	return strings.Contains(err.Error(), "no such file or directory")
+
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "no such file or directory") ||
+		strings.Contains(message, "session not found") ||
+		strings.Contains(message, "unknown session")
+}
+
+func realAmuxWaitResult(waitMu *sync.Mutex, waitErr *error, done <-chan struct{}) error {
+	select {
+	case <-done:
+	default:
+		return nil
+	}
+
+	waitMu.Lock()
+	defer waitMu.Unlock()
+	return *waitErr
 }
