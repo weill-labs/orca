@@ -42,10 +42,6 @@ type serveDeps struct {
 	execProcess  func(string, []string, []string) error
 }
 
-type pendingReload struct {
-	ready chan struct{}
-}
-
 type daemonLifecycle interface {
 	Start(context.Context) error
 	Stop(context.Context) error
@@ -138,10 +134,9 @@ func runProcess(ctx context.Context, req ServeRequest, deps serveDeps) error {
 		return err
 	}
 
-	reloadCh := make(chan pendingReload, 1)
 	serverErrCh := make(chan error, 1)
 	go func() {
-		serverErrCh <- serveRPC(ctx, listener, instance, store, req.BuildCommit, reloadCh)
+		serverErrCh <- serveRPC(ctx, listener, req, instance, store, req.BuildCommit, deps.execProcess)
 	}()
 
 	var serverErr error
@@ -149,11 +144,6 @@ func runProcess(ctx context.Context, req ServeRequest, deps serveDeps) error {
 	case <-ctx.Done():
 		_ = listener.Close()
 		serverErr = <-serverErrCh
-	case reload := <-reloadCh:
-		if reload.ready != nil {
-			<-reload.ready
-		}
-		serverErr = reloadProcess(req, listener, instance, deps.execProcess)
 	case serverErr = <-serverErrCh:
 	}
 
@@ -298,23 +288,12 @@ func stopDaemonForReload(instance *Daemon) {
 	if instance == nil {
 		return
 	}
-	// Reload intentionally mirrors Daemon.Stop's unbounded teardown waits. If a
-	// daemon goroutine is stuck, reload can stall after the RPC success response
-	// has been sent and the caller must recover with a fresh `orca start`.
+	// Reload must hand off to exec promptly after the RPC response is sent.
+	// Waiting for daemon goroutines to drain here can stall hot reload behind a
+	// slow background loop. On exec failure, runProcess still falls back to the
+	// normal Stop path, which waits for full teardown before returning.
 	if instance.stopCancel != nil {
 		instance.stopCancel()
-	}
-	if instance.loopDone != nil {
-		<-instance.loopDone
-	}
-	if instance.eventStreamDone != nil {
-		<-instance.eventStreamDone
-	}
-	if instance.watchdogDone != nil {
-		<-instance.watchdogDone
-	}
-	if instance.mergeQueueDone != nil {
-		<-instance.mergeQueueDone
 	}
 }
 
@@ -329,16 +308,8 @@ func daemonServeArgs(executable string, req ServeRequest) []string {
 	}
 }
 
-func serveRPC(ctx context.Context, listener net.Listener, instance *Daemon, store *state.SQLiteStore, buildCommit string, reloadCh chan<- pendingReload) error {
-	enqueueReload := func(_ reloadRPCParams, ready chan struct{}) error {
-		select {
-		case reloadCh <- pendingReload{ready: ready}:
-			return nil
-		default:
-			return errors.New("daemon reload already in progress")
-		}
-	}
-
+func serveRPC(ctx context.Context, listener net.Listener, req ServeRequest, instance *Daemon, store *state.SQLiteStore, buildCommit string, execProcess func(string, []string, []string) error) error {
+	reloadReserved := false
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
@@ -348,37 +319,66 @@ func serveRPC(ctx context.Context, listener net.Listener, instance *Daemon, stor
 			return fmt.Errorf("accept daemon socket connection: %w", err)
 		}
 
-		go handleRPCConnWithReload(ctx, conn, instance, store, buildCommit, enqueueReload)
+		request, response, err := readRPCRequest(conn)
+		if err != nil {
+			_ = json.NewEncoder(conn).Encode(response)
+			_ = conn.Close()
+			continue
+		}
+
+		reserveReload := func(reloadRPCParams) error {
+			if reloadReserved {
+				return errors.New("daemon reload already in progress")
+			}
+			reloadReserved = true
+			return nil
+		}
+		if response, shouldReload, handled := handleReloadRPCRequest(request, reserveReload); handled {
+			if err := json.NewEncoder(conn).Encode(response); err != nil {
+				reloadReserved = false
+				_ = conn.Close()
+				continue
+			}
+			_ = conn.Close()
+			if shouldReload {
+				return reloadProcess(req, listener, instance, execProcess)
+			}
+			continue
+		}
+
+		go handleRPCRequest(ctx, conn, request, instance, store, buildCommit)
 	}
 }
 
 func handleRPCConn(ctx context.Context, conn net.Conn, instance *Daemon, store *state.SQLiteStore, buildCommit string, defaultProject ...string) {
-	handleRPCConnWithReload(ctx, conn, instance, store, buildCommit, nil, defaultProject...)
+	defer conn.Close()
+	request, response, err := readRPCRequest(conn)
+	if err != nil {
+		_ = json.NewEncoder(conn).Encode(response)
+		return
+	}
+
+	response = dispatchRPCRequest(ctx, request, instance, store, buildCommit, defaultProject...)
+	_ = json.NewEncoder(conn).Encode(response)
 }
 
-func handleRPCConnWithReload(ctx context.Context, conn net.Conn, instance *Daemon, store *state.SQLiteStore, buildCommit string, enqueueReload func(reloadRPCParams, chan struct{}) error, defaultProject ...string) {
+func handleRPCRequest(ctx context.Context, conn net.Conn, request rpcRequest, instance *Daemon, store *state.SQLiteStore, buildCommit string, defaultProject ...string) {
 	defer conn.Close()
+
+	response := dispatchRPCRequest(ctx, request, instance, store, buildCommit, defaultProject...)
+	_ = json.NewEncoder(conn).Encode(response)
+}
+
+func readRPCRequest(conn net.Conn) (rpcRequest, rpcResponse, error) {
 	if err := conn.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
-		_ = json.NewEncoder(conn).Encode(rpcFailure(nil, -32000, fmt.Errorf("set read deadline: %w", err)))
-		return
+		return rpcRequest{}, rpcFailure(nil, -32000, fmt.Errorf("set read deadline: %w", err)), err
 	}
 
 	var request rpcRequest
 	if err := json.NewDecoder(conn).Decode(&request); err != nil {
-		_ = json.NewEncoder(conn).Encode(rpcFailure(nil, -32700, fmt.Errorf("decode request: %w", err)))
-		return
+		return rpcRequest{}, rpcFailure(nil, -32700, fmt.Errorf("decode request: %w", err)), err
 	}
-
-	if response, ready, handled := handleReloadRPCRequest(request, enqueueReload); handled {
-		_ = json.NewEncoder(conn).Encode(response)
-		if ready != nil {
-			close(ready)
-		}
-		return
-	}
-
-	response := dispatchRPCRequest(ctx, request, instance, store, buildCommit, defaultProject...)
-	_ = json.NewEncoder(conn).Encode(response)
+	return request, rpcResponse{}, nil
 }
 
 func dispatchRPCRequest(ctx context.Context, request rpcRequest, instance *Daemon, store *state.SQLiteStore, buildCommit string, defaultProject ...string) rpcResponse {

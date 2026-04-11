@@ -162,28 +162,27 @@ func ProjectStatusRPC(ctx context.Context, paths Paths, projectPath string) (Pro
 	return result, nil
 }
 
-func handleReloadRPCRequest(request rpcRequest, enqueue func(reloadRPCParams, chan struct{}) error) (rpcResponse, chan struct{}, bool) {
+func handleReloadRPCRequest(request rpcRequest, enqueue func(reloadRPCParams) error) (rpcResponse, bool, bool) {
 	if request.Method != "reload" {
-		return rpcResponse{}, nil, false
+		return rpcResponse{}, false, false
 	}
 
 	var params reloadRPCParams
 	if err := decodeRPCParams(request.Params, &params); err != nil {
-		return rpcFailure(request.ID, -32602, fmt.Errorf("decode reload params: %w", err)), nil, true
+		return rpcFailure(request.ID, -32602, fmt.Errorf("decode reload params: %w", err)), false, true
 	}
 	if enqueue == nil {
-		return rpcFailure(request.ID, -32000, errors.New("reload unavailable")), nil, true
+		return rpcFailure(request.ID, -32000, errors.New("reload unavailable")), false, true
 	}
 
-	ready := make(chan struct{})
-	if err := enqueue(params, ready); err != nil {
-		return rpcFailure(request.ID, -32000, err), nil, true
+	if err := enqueue(params); err != nil {
+		return rpcFailure(request.ID, -32000, err), false, true
 	}
 
 	return rpcSuccess(request.ID, ReloadResult{
 		Project: params.Project,
 		PID:     os.Getpid(),
-	}), ready, true
+	}), true, true
 }
 
 func rpcSuccess(id json.RawMessage, result any) rpcResponse {
