@@ -618,6 +618,76 @@ func TestPRReviewPollingDefersBlockingReviewNudgeWhenFreshCaptureShowsActivity(t
 	})
 }
 
+func TestPRReviewPollingRetriesIssueCommentNudgeAfterBusyDeferral(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	captureTicker := newFakeTicker()
+	prTicker := newFakeTicker()
+	deps.tickers.enqueue(captureTicker, prTicker)
+	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--state", "open", "--json", "number"}, `[]`, nil)
+	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
+	deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[{"bucket":"pending"}]`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergeable"}, ``, nil)
+	payload := marshalReviewPayload(t, "", nil, []prComment{
+		testIssueComment("github-actions", "Potential bug: add regression coverage."),
+	})
+	queuePRReviewPayload(deps, 42, payload)
+	deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[{"bucket":"pending"}]`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergeable"}, ``, nil)
+	queuePRReviewPayload(deps, 42, payload)
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-689", "Implement daemon core", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	nudge := "New blocking PR review feedback on #42:\n- github-actions: Potential bug: add regression coverage.\n\nAddress the feedback in the PR review and push an update."
+	nudgeSent := nudge + "\n"
+
+	tickAndWaitForHeartbeat(t, d, deps, prTicker, time.Second, "busy worker issue comment poll cycle completion")
+	waitFor(t, "busy worker issue comment poll", func() bool {
+		worker, ok := deps.state.worker("pane-1")
+		return ok &&
+			deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}) == 1 &&
+			worker.LastCIState == ciStatePending
+	})
+
+	worker, ok := deps.state.worker("pane-1")
+	if !ok {
+		t.Fatal("worker not found after deferred issue comment poll")
+	}
+	if got, want := worker.LastIssueCommentCount, 0; got != want {
+		t.Fatalf("worker.LastIssueCommentCount after deferred poll = %d, want %d", got, want)
+	}
+	if got, want := worker.ReviewNudgeCount, 0; got != want {
+		t.Fatalf("worker.ReviewNudgeCount after deferred poll = %d, want %d", got, want)
+	}
+	if got := deps.amux.countKey("pane-1", nudgeSent); got != 0 {
+		t.Fatalf("issue comment nudge count while worker active = %d, want 0", got)
+	}
+
+	makeWorkerIdleForReviewNudge(deps)
+	tickAndWaitForHeartbeat(t, d, deps, prTicker, time.Second, "idle worker issue comment poll cycle completion")
+	waitFor(t, "deferred issue comment nudge after idle", func() bool {
+		worker, ok := deps.state.worker("pane-1")
+		return ok &&
+			worker.LastIssueCommentCount == 1 &&
+			worker.ReviewNudgeCount == 1 &&
+			deps.amux.countKey("pane-1", nudgeSent) == 1
+	})
+}
+
 func TestPRReviewPollingLogsGitHubRateLimitWarnings(t *testing.T) {
 	t.Parallel()
 

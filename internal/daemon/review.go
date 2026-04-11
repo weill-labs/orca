@@ -148,6 +148,7 @@ func (d *Daemon) checkTaskReviewPoll(ctx context.Context, active ActiveAssignmen
 	feedback := formatBlockingReviewFeedback(update.Active.Task.PRNumber, blocking)
 	// A fresh capture can update LastCapture/LastActivityAt before we decide whether to defer.
 	if !d.workerAppearsIdleForReviewNudge(ctx, &update, profile, now) {
+		restoreReviewWorkerWatermarks(&update.Active.Worker, previousReviewCount, previousInlineCommentCount, previousCommentCount)
 		return update
 	}
 	update.queueNudge(func(ctx context.Context, d *Daemon, update *TaskStateUpdate) {
@@ -168,6 +169,12 @@ func (d *Daemon) persistReviewWorkerState(worker *Worker, reviewCount, inlineCom
 	worker.LastInlineReviewCommentCount = inlineCommentCount
 	worker.LastIssueCommentCount = commentCount
 	worker.LastSeenAt = now
+}
+
+func restoreReviewWorkerWatermarks(worker *Worker, reviewCount, inlineCommentCount, commentCount int) {
+	worker.LastReviewCount = reviewCount
+	worker.LastInlineReviewCommentCount = inlineCommentCount
+	worker.LastIssueCommentCount = commentCount
 }
 
 func (d *Daemon) workerAppearsIdleForReviewNudge(ctx context.Context, update *TaskStateUpdate, profile AgentProfile, now time.Time) bool {

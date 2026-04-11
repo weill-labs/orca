@@ -179,6 +179,39 @@ func TestTaskMonitorStaleResultIsDropped(t *testing.T) {
 	}
 }
 
+func TestApplyTaskStateUpdateDoesNotPersistUnflaggedWorkerFieldsFromMergedUpdate(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	seedTaskMonitorAssignment(t, deps, "LAB-1051", "pane-1", 42)
+
+	d := deps.newDaemon(t)
+	active := activeTaskMonitorAssignment(t, deps, "LAB-1051")
+
+	base := TaskStateUpdate{
+		Active:        active,
+		WorkerChanged: true,
+	}
+	base.Active.Worker.LastMergeableState = "MERGEABLE"
+	base.Active.Worker.LastSeenAt = deps.clock.Now()
+
+	next := TaskStateUpdate{Active: base.Active}
+	next.Active.Worker.LastIssueCommentCount = 2
+
+	d.applyTaskStateUpdate(context.Background(), mergeTaskStateUpdates(base, next))
+
+	worker, ok := deps.state.worker("pane-1")
+	if !ok {
+		t.Fatal("worker missing after applyTaskStateUpdate()")
+	}
+	if got, want := worker.LastMergeableState, "MERGEABLE"; got != want {
+		t.Fatalf("worker.LastMergeableState = %q, want %q", got, want)
+	}
+	if got, want := worker.LastIssueCommentCount, 0; got != want {
+		t.Fatalf("worker.LastIssueCommentCount = %d, want %d", got, want)
+	}
+}
+
 func TestTaskMonitorPollRunsConflictNudgesWithBoundedConcurrency(t *testing.T) {
 	t.Parallel()
 
