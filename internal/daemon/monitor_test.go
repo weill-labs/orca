@@ -76,7 +76,7 @@ func TestDaemonCaptureMonitorOpensAmuxCircuitAfterThreeFailures(t *testing.T) {
 
 	deps := newTestDeps(t)
 	seedTaskMonitorAssignment(t, deps, "LAB-924", "pane-1", 0)
-	deps.amux.capturePaneErr = errors.New("amux unavailable")
+	deps.amux.capturePaneErr = errors.New("amux capture pane-1: exit status 1: connection refused")
 
 	d := deps.newDaemon(t)
 	ctx := context.Background()
@@ -96,7 +96,7 @@ func TestDaemonCaptureMonitorOpensAmuxCircuitAfterThreeFailures(t *testing.T) {
 	if got, want := deps.events.countType(EventDaemonCircuitOpened), 1; got != want {
 		t.Fatalf("circuit opened event count = %d, want %d", got, want)
 	}
-	if got, want := deps.events.lastMessage(EventDaemonCircuitOpened), "monitor amux circuit opened after 3 consecutive failures"; got != want {
+	if got, want := deps.events.lastMessage(EventDaemonCircuitOpened), "monitor amux circuit opened after 3 consecutive failures: amux capture pane-1: exit status 1: connection refused"; got != want {
 		t.Fatalf("opened event message = %q, want %q", got, want)
 	}
 
@@ -129,7 +129,7 @@ func TestDaemonPollMonitorOpensGitHubCircuitAfterThreeFailures(t *testing.T) {
 
 	lookupArgs := []string{"pr", "list", "--head", "LAB-924", "--json", "number"}
 	for i := 0; i < 3; i++ {
-		deps.commands.queue("gh", lookupArgs, ``, errors.New("github unavailable"))
+		deps.commands.queue("gh", lookupArgs, ``, errors.New("gh pr list --head LAB-924 --json number: exit status 1: github unavailable"))
 	}
 	deps.commands.queue("gh", lookupArgs, `[]`, nil)
 
@@ -151,7 +151,7 @@ func TestDaemonPollMonitorOpensGitHubCircuitAfterThreeFailures(t *testing.T) {
 	if got, want := deps.events.countType(EventDaemonCircuitOpened), 1; got != want {
 		t.Fatalf("circuit opened event count = %d, want %d", got, want)
 	}
-	if got, want := deps.events.lastMessage(EventDaemonCircuitOpened), "monitor github circuit opened after 3 consecutive failures"; got != want {
+	if got, want := deps.events.lastMessage(EventDaemonCircuitOpened), "monitor github circuit opened after 3 consecutive failures: gh pr list --head LAB-924 --json number: exit status 1: github unavailable"; got != want {
 		t.Fatalf("opened event message = %q, want %q", got, want)
 	}
 
