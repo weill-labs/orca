@@ -32,9 +32,9 @@ func TestCLIClientSpawnFallsBackToNewWindowWhenTargetWindowHasNoSplitSpace(t *te
 	}
 
 	wantCmds := []recordedCommand{
-		{name: "amux", args: []string{"-s", "main", "spawn", "--auto", "--at", "lead-pane", "--name", "w-LAB-976"}},
+		{name: "amux", args: []string{"-s", "main", "spawn", "--at", "lead-pane", "--name", "w-LAB-976"}},
 		{name: "amux", args: []string{"-s", "main", "new-window"}},
-		{name: "amux", args: []string{"-s", "main", "spawn", "--auto", "--root", "--name", "w-LAB-976"}},
+		{name: "amux", args: []string{"-s", "main", "spawn", "--auto", "--name", "w-LAB-976"}},
 		{name: "amux", args: []string{"-s", "main", "send-keys", "w-LAB-976", "--delay-final", "250ms", "cd '/tmp/clone-01'"}},
 		{name: "amux", args: []string{"-s", "main", "send-keys", "w-LAB-976", "--delay-final", "250ms", "Enter"}},
 		{name: "amux", args: []string{"-s", "main", "wait", "idle", "w-LAB-976", "--timeout", "5s"}},

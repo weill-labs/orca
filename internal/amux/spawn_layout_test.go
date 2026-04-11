@@ -14,19 +14,19 @@ func TestSpawnPlacementArgs(t *testing.T) {
 		want     []string
 	}{
 		{
-			name:     "targets explicit lead pane with auto layout",
+			name:     "targets explicit lead pane",
 			leadPane: "lead-pane",
-			want:     []string{"--auto", "--at", "lead-pane"},
+			want:     []string{"--at", "lead-pane"},
 		},
 		{
 			name:     "trims lead pane before targeting it",
 			leadPane: "  lead-pane  ",
-			want:     []string{"--auto", "--at", "lead-pane"},
+			want:     []string{"--at", "lead-pane"},
 		},
 		{
-			name:     "falls back to root with auto layout",
+			name:     "falls back to auto layout without lead pane",
 			leadPane: " \t ",
-			want:     []string{"--auto", "--root"},
+			want:     []string{"--auto"},
 		},
 	}
 
