@@ -114,19 +114,24 @@ func (d *Daemon) continuePRFollowUpPolls(ctx context.Context, update TaskStateUp
 
 func mergeTaskStateUpdates(base, next TaskStateUpdate) TaskStateUpdate {
 	merged := base
-	merged.Active = next.Active
-	if merged.TaskChanged && !next.TaskChanged {
-		merged.Active.Task = base.Active.Task
-	}
-	if merged.WorkerChanged && !next.WorkerChanged {
-		merged.Active.Worker = base.Active.Worker
-	}
+	merged.Active = mergeActiveAssignment(base, next)
 	merged.TaskChanged = merged.TaskChanged || next.TaskChanged
 	merged.WorkerChanged = merged.WorkerChanged || next.WorkerChanged
 	merged.PaneMetadata = mergeMetadata(merged.PaneMetadata, next.PaneMetadata)
 	merged.Events = append(merged.Events, next.Events...)
 	merged.PRMerged = merged.PRMerged || next.PRMerged
 	merged.nudges = append(merged.nudges, next.nudges...)
+	return merged
+}
+
+func mergeActiveAssignment(base, next TaskStateUpdate) ActiveAssignment {
+	merged := next.Active
+	if base.TaskChanged && !next.TaskChanged {
+		merged.Task = base.Active.Task
+	}
+	if base.WorkerChanged && !next.WorkerChanged {
+		merged.Worker = base.Active.Worker
+	}
 	return merged
 }
 
