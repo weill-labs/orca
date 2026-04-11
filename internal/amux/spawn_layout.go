@@ -4,7 +4,7 @@ import "strings"
 
 func spawnPlacementArgs(leadPane string) []string {
 	if trimmedLeadPane := strings.TrimSpace(leadPane); trimmedLeadPane != "" {
-		return []string{"--at", trimmedLeadPane}
+		return []string{"--auto", "--at", trimmedLeadPane}
 	}
-	return []string{"--root"}
+	return []string{"--auto", "--root"}
 }
