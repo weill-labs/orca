@@ -46,6 +46,11 @@ type pendingReload struct {
 	ready chan struct{}
 }
 
+type daemonLifecycle interface {
+	Start(context.Context) error
+	Stop(context.Context) error
+}
+
 func RunProcess(ctx context.Context, req ServeRequest) error {
 	return runProcess(ctx, req, serveDeps{})
 }
@@ -127,12 +132,9 @@ func runProcess(ctx context.Context, req ServeRequest, deps serveDeps) error {
 		return fmt.Errorf("create daemon: %w", err)
 	}
 
-	if err := statusWriter.Update(ctx, daemonStatusRunning, startedAt); err != nil {
-		return err
-	}
-
-	if err := instance.Start(ctx); err != nil {
-		_ = store.MarkDaemonStopped(context.Background(), "", time.Now().UTC())
+	if err := startDaemonLifecycle(ctx, instance, statusWriter, startedAt, func(stopCtx context.Context, updatedAt time.Time) error {
+		return store.MarkDaemonStopped(stopCtx, "", updatedAt)
+	}); err != nil {
 		return err
 	}
 
@@ -162,6 +164,29 @@ func runProcess(ctx context.Context, req ServeRequest, deps serveDeps) error {
 		return errors.Join(serverErr, stopErr, markStoppedErr)
 	}
 	return errors.Join(stopErr, markStoppedErr)
+}
+
+func startDaemonLifecycle(ctx context.Context, instance daemonLifecycle, statusWriter daemonStatusWriter, startedAt time.Time, markStopped func(context.Context, time.Time) error) error {
+	if err := instance.Start(ctx); err != nil {
+		if markStopped != nil {
+			_ = markStopped(context.Background(), time.Now().UTC())
+		}
+		return err
+	}
+
+	if statusWriter == nil {
+		return nil
+	}
+	if err := statusWriter.Update(ctx, daemonStatusRunning, startedAt); err != nil {
+		stopErr := instance.Stop(context.Background())
+		var markStoppedErr error
+		if markStopped != nil {
+			markStoppedErr = markStopped(context.Background(), time.Now().UTC())
+		}
+		return errors.Join(err, stopErr, markStoppedErr)
+	}
+
+	return nil
 }
 
 func listenUnixSocket(socketPath string) (net.Listener, error) {
