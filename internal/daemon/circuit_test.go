@@ -15,18 +15,19 @@ func TestCircuitBreakerOpensAfterThreeFailuresAndClosesAfterCooldown(t *testing.
 
 	clock := &fakeClock{now: time.Date(2026, 4, 9, 12, 0, 0, 0, time.UTC)}
 	breaker := NewCircuitBreaker(clock.Now, 3, 60*time.Second)
+	fail := errors.New("amux unavailable")
 
 	for i := 0; i < 2; i++ {
 		if err := breaker.Allow(); err != nil {
 			t.Fatalf("Allow() before threshold error = %v", err)
 		}
-		breaker.RecordFailure()
+		breaker.RecordFailure(fail)
 	}
 
 	if err := breaker.Allow(); err != nil {
 		t.Fatalf("Allow() at threshold error = %v", err)
 	}
-	breaker.RecordFailure()
+	breaker.RecordFailure(fail)
 
 	if err := breaker.Allow(); !errors.Is(err, ErrCircuitBreakerOpen) {
 		t.Fatalf("Allow() after threshold error = %v, want %v", err, ErrCircuitBreakerOpen)
@@ -158,11 +159,11 @@ func TestWithCircuitDoesNotRecordCanceledContextAsFailure(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-	breaker := NewCircuitBreaker(time.Now, 3, time.Minute)
-	for i := 0; i < 3; i++ {
-		_, err := withCircuit(breaker, func() (int, error) {
-			return 0, tt.err
-		})
+			breaker := NewCircuitBreaker(time.Now, 3, time.Minute)
+			for i := 0; i < 3; i++ {
+				_, err := withCircuit(breaker, func() (int, error) {
+					return 0, tt.err
+				})
 				if !errors.Is(err, tt.err) {
 					t.Fatalf("withCircuit() error = %v, want %v", err, tt.err)
 				}
