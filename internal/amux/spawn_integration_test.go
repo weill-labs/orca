@@ -270,18 +270,18 @@ func realAmuxSessionCreateArgs(binary string) ([]string, error) {
 
 func realAmuxEnv() []string {
 	blocked := map[string]struct{}{
-		"AMUX_PANE":       {},
-		"AMUX_SESSION":    {},
-		"BASH_ENV":        {},
-		"COLORTERM":       {},
-		"CLICOLOR":        {},
-		"CLICOLOR_FORCE":  {},
-		"ENV":             {},
-		"NO_COLOR":        {},
-		"PROMPT_COMMAND":  {},
-		"SSH_CONNECTION":  {},
-		"TERM_PROGRAM":    {},
-		"TMUX":            {},
+		"AMUX_PANE":      {},
+		"AMUX_SESSION":   {},
+		"BASH_ENV":       {},
+		"COLORTERM":      {},
+		"CLICOLOR":       {},
+		"CLICOLOR_FORCE": {},
+		"ENV":            {},
+		"NO_COLOR":       {},
+		"PROMPT_COMMAND": {},
+		"SSH_CONNECTION": {},
+		"TERM_PROGRAM":   {},
+		"TMUX":           {},
 	}
 
 	env := make([]string, 0, len(os.Environ())+3)
