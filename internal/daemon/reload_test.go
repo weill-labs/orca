@@ -626,15 +626,14 @@ func TestReloadProcessPropagatesSetupErrors(t *testing.T) {
 	tests := []struct {
 		name            string
 		listener        func(*testing.T) net.Listener
-		reloadFile      func(*testing.T) *os.File
 		wantErrContains string
 	}{
 		{
-			name: "missing reload listener file",
+			name: "listener file setup fails",
 			listener: func(*testing.T) net.Listener {
 				return &reloadTestListener{}
 			},
-			wantErrContains: "missing reload listener file",
+			wantErrContains: "daemon listener does not expose File",
 		},
 		{
 			name: "listener close fails",
@@ -653,18 +652,6 @@ func TestReloadProcessPropagatesSetupErrors(t *testing.T) {
 					file:               file,
 				}
 			},
-			reloadFile: func(t *testing.T) *os.File {
-				t.Helper()
-
-				file, err := os.CreateTemp(t.TempDir(), "reload-inherited-*")
-				if err != nil {
-					t.Fatalf("CreateTemp() error = %v", err)
-				}
-				t.Cleanup(func() {
-					_ = file.Close()
-				})
-				return file
-			},
 			wantErrContains: "close daemon listener for reload: close failed",
 		},
 	}
@@ -674,11 +661,7 @@ func TestReloadProcessPropagatesSetupErrors(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			var reloadFile *os.File
-			if tt.reloadFile != nil {
-				reloadFile = tt.reloadFile(t)
-			}
-			err := reloadProcess(ServeRequest{}, tt.listener(t), reloadFile, nil, nil)
+			err := reloadProcess(ServeRequest{}, tt.listener(t), nil, nil)
 			if err == nil || !strings.Contains(err.Error(), tt.wantErrContains) {
 				t.Fatalf("reloadProcess() error = %v, want message containing %q", err, tt.wantErrContains)
 			}
@@ -717,7 +700,7 @@ func TestReloadProcessDoesNotWaitForDaemonShutdown(t *testing.T) {
 	execCalled := make(chan struct{}, 1)
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- reloadProcess(ServeRequest{}, &reloadTestFileListener{file: file}, file, instance, func(string, []string, []string) error {
+		errCh <- reloadProcess(ServeRequest{}, &reloadTestFileListener{file: file}, instance, func(string, []string, []string) error {
 			execCalled <- struct{}{}
 			return errExec
 		})
