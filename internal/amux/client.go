@@ -99,7 +99,7 @@ func (c *CLIClient) Spawn(ctx context.Context, req SpawnRequest) (Pane, error) {
 	}
 
 	session := c.resolveSession(req.Session)
-	pane, err := c.spawnPaneWithNewWindowFallback(ctx, session, req.AtPane, name)
+	pane, err := c.spawnPaneWithNewWindowFallback(ctx, session, req.Window, name)
 	if err != nil {
 		return Pane{}, err
 	}

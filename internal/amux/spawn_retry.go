@@ -11,8 +11,8 @@ import (
 var createdWindowPattern = regexp.MustCompile(`(?m)^Created\s+(\S+)\s*$`)
 const fallbackWindowLabel = "new window"
 
-func (c *CLIClient) spawnPane(ctx context.Context, session, atPane, name string) (Pane, error) {
-	args := spawnPlacementArgs(atPane)
+func (c *CLIClient) spawnPane(ctx context.Context, session, window, name string) (Pane, error) {
+	args := spawnPlacementArgs(window)
 	args = append(args, "--name", name)
 
 	output, err := c.run(ctx, session, "spawn", args...)
@@ -29,8 +29,8 @@ func (c *CLIClient) spawnPane(ctx context.Context, session, atPane, name string)
 	}, nil
 }
 
-func (c *CLIClient) spawnPaneWithNewWindowFallback(ctx context.Context, session, atPane, name string) (Pane, error) {
-	pane, err := c.spawnPane(ctx, session, atPane, name)
+func (c *CLIClient) spawnPaneWithNewWindowFallback(ctx context.Context, session, window, name string) (Pane, error) {
+	pane, err := c.spawnPane(ctx, session, window, name)
 	if err == nil || !splitSpaceSpawnError(err) {
 		return pane, err
 	}

@@ -117,6 +117,24 @@ func (d *Daemon) spawnPaneTarget(ctx context.Context, task Task) string {
 	return target
 }
 
+func (d *Daemon) spawnWindowTarget(ctx context.Context, task Task) string {
+	target := d.taskPaneTarget(task)
+	if target == "" {
+		return ""
+	}
+
+	panes, err := d.amux.ListPanes(ctx)
+	if err != nil {
+		return ""
+	}
+
+	pane, ok := paneByReference(panes, target)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(pane.Window)
+}
+
 func (d *Daemon) sameWindowNonLeadPane(ctx context.Context, callerPane string) string {
 	panes, err := d.amux.ListPanes(ctx)
 	if err != nil {
@@ -168,7 +186,7 @@ func workerPaneSpawnName(task Task, stableRef string) string {
 func (d *Daemon) spawnWorkerPane(ctx context.Context, task Task, stableRef, clonePath string, profile AgentProfile) (Pane, error) {
 	return d.amux.Spawn(ctx, SpawnRequest{
 		Session: d.session,
-		AtPane:  d.spawnPaneTarget(ctx, task),
+		Window:  d.spawnWindowTarget(ctx, task),
 		Name:    workerPaneSpawnName(task, stableRef),
 		CWD:     clonePath,
 		Command: profile.StartCommand,

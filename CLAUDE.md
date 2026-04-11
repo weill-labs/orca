@@ -111,6 +111,7 @@ Before any irreversible action on worker panes, state what information will be l
 
 ## Safety Rules
 
+- **Never run `amux kill` on any pane without explicit user confirmation.** Worker panes contain in-progress work that is destroyed on kill and cannot be recovered. When a spawn or assign fails, report the error and wait — do not kill existing panes to "fix" the problem. If you believe a pane needs to be killed, state which pane, what work it contains, and ask the user before proceeding. This applies to both `amux kill` and `orca cancel` (which kills the pane).
 - **Orca must never kill worker panes automatically.** Stuck detection should notify and set health to "escalated", but leave panes running. Only `orca cancel` (explicit user action) may kill panes. Destroying panes destroys in-progress work.
 - **Orca must never merge PRs.** Merge is a user decision. Orca can detect PR state and notify, but never call `gh pr merge`.
 
