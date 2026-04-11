@@ -338,6 +338,20 @@ daemonReady:
 		}
 		return status.Summary.Cancelled == 1 && status.Summary.Workers == 1 && status.Summary.FreeClones == 1
 	})
+
+	cancel()
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("runProcess() error = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for runProcess to exit")
+	}
+
+	if _, err := os.Stat(socketPath); !os.IsNotExist(err) {
+		t.Fatalf("socket file still present after shutdown: %v", err)
+	}
 }
 
 func TestRunProcessBatchOverUnixSocket(t *testing.T) {
