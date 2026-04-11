@@ -312,7 +312,7 @@ func TestDaemonStartNormalizesLeadPaneToStableName(t *testing.T) {
 
 	deps := newTestDeps(t)
 	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
-	deps.amux.listPanes = []Pane{{ID: "7", Name: "lead-pane-stable"}}
+	deps.amux.listPanes = []Pane{{ID: "7", Name: "lead-pane-stable", Window: "orca"}}
 	d := deps.newDaemon(t)
 	d.leadPane = "7"
 	ctx := context.Background()
@@ -336,8 +336,8 @@ func TestDaemonStartNormalizesLeadPaneToStableName(t *testing.T) {
 		return len(deps.amux.spawnRequests) == 1
 	})
 
-	if got, want := deps.amux.spawnRequests[0].AtPane, "lead-pane-stable"; got != want {
-		t.Fatalf("spawn.AtPane = %q, want %q", got, want)
+	if got, want := deps.amux.spawnRequests[0].Window, "orca"; got != want {
+		t.Fatalf("spawn.Window = %q, want %q", got, want)
 	}
 }
 
@@ -346,6 +346,9 @@ func TestAssignWithCallerPaneUsesCallerPaneForWorkerSpawn(t *testing.T) {
 
 	deps := newTestDeps(t)
 	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	deps.amux.listPanes = []Pane{
+		{ID: "13", Name: "pane-13", Window: "alphaos"},
+	}
 	d := deps.newDaemon(t)
 	d.leadPane = "fallback-lead-pane"
 	ctx := context.Background()
@@ -365,8 +368,8 @@ func TestAssignWithCallerPaneUsesCallerPaneForWorkerSpawn(t *testing.T) {
 		return len(deps.amux.spawnRequests) == 1
 	})
 
-	if got, want := deps.amux.spawnRequests[0].AtPane, "pane-13"; got != want {
-		t.Fatalf("spawn.AtPane = %q, want %q", got, want)
+	if got, want := deps.amux.spawnRequests[0].Window, "alphaos"; got != want {
+		t.Fatalf("spawn.Window = %q, want %q", got, want)
 	}
 
 	task, ok := deps.state.task("LAB-932")
@@ -407,8 +410,8 @@ func TestAssignWithCallerLeadPaneUsesNonLeadPaneInSameWindowForWorkerSpawn(t *te
 		return len(deps.amux.spawnRequests) == 1
 	})
 
-	if got, want := deps.amux.spawnRequests[0].AtPane, "worker-07"; got != want {
-		t.Fatalf("spawn.AtPane = %q, want %q", got, want)
+	if got, want := deps.amux.spawnRequests[0].Window, "orca"; got != want {
+		t.Fatalf("spawn.Window = %q, want %q", got, want)
 	}
 
 	task, ok := deps.state.task("LAB-943")

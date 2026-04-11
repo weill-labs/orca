@@ -2,9 +2,9 @@ package amux
 
 import "strings"
 
-func spawnPlacementArgs(leadPane string) []string {
-	if trimmedLeadPane := strings.TrimSpace(leadPane); trimmedLeadPane != "" {
-		return []string{"--at", trimmedLeadPane}
+func spawnPlacementArgs(window string) []string {
+	if w := strings.TrimSpace(window); w != "" {
+		return []string{"--auto", "--window", w}
 	}
 	return []string{"--auto"}
 }

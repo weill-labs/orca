@@ -76,7 +76,7 @@ func TestCLIClientSpawn(t *testing.T) {
 				{output: []byte("Spawned clone-01 in pane 7\n")},
 			},
 			wantCmds: []recordedCommand{
-				{name: "/usr/local/bin/amux", args: []string{"-s", "override-session", "spawn", "--at", "lead-pane", "--name", "clone-01"}},
+				{name: "/usr/local/bin/amux", args: []string{"-s", "override-session", "spawn", "--auto", "--name", "clone-01"}},
 				{name: "/usr/local/bin/amux", args: []string{"-s", "orca-dev", "send-keys", "clone-01", "--delay-final", "250ms", "cd '/tmp/clone-01'"}},
 				{name: "/usr/local/bin/amux", args: []string{"-s", "orca-dev", "send-keys", "clone-01", "--delay-final", "250ms", "Enter"}},
 				{name: "/usr/local/bin/amux", args: []string{"-s", "orca-dev", "wait", "idle", "clone-01", "--timeout", "5s"}},
@@ -99,7 +99,7 @@ func TestCLIClientSpawn(t *testing.T) {
 				{output: []byte("Spawned worker-2 in pane 12\n")},
 			},
 			wantCmds: []recordedCommand{
-				{name: "amux", args: []string{"-s", "default", "spawn", "--at", "lead-pane", "--name", "worker-2"}},
+				{name: "amux", args: []string{"-s", "default", "spawn", "--auto", "--name", "worker-2"}},
 				{name: "amux", args: []string{"-s", "default", "send-keys", "worker-2", "--delay-final", "250ms", "cd '/tmp/worker-2'"}},
 				{name: "amux", args: []string{"-s", "default", "send-keys", "worker-2", "--delay-final", "250ms", "Enter"}},
 				{name: "amux", args: []string{"-s", "default", "wait", "idle", "worker-2", "--timeout", "5s"}},
@@ -145,7 +145,7 @@ func TestCLIClientSpawn(t *testing.T) {
 				{output: []byte("Split vertical: new pane w-LAB-99\n")},
 			},
 			wantCmds: []recordedCommand{
-				{name: "amux", args: []string{"-s", "main", "spawn", "--at", "lead-pane", "--name", "w-LAB-99"}},
+				{name: "amux", args: []string{"-s", "main", "spawn", "--auto", "--name", "w-LAB-99"}},
 				{name: "amux", args: []string{"-s", "main", "send-keys", "w-LAB-99", "--delay-final", "250ms", "cd '/tmp/clone-5'"}},
 				{name: "amux", args: []string{"-s", "main", "send-keys", "w-LAB-99", "--delay-final", "250ms", "Enter"}},
 				{name: "amux", args: []string{"-s", "main", "wait", "idle", "w-LAB-99", "--timeout", "5s"}},
@@ -167,7 +167,7 @@ func TestCLIClientSpawn(t *testing.T) {
 				{err: errors.New("exit status 1")},
 			},
 			wantCmds: []recordedCommand{
-				{name: "amux", args: []string{"-s", "default", "spawn", "--at", "lead-pane", "--name", "worker-3"}},
+				{name: "amux", args: []string{"-s", "default", "spawn", "--auto", "--name", "worker-3"}},
 			},
 			wantErr: "exit status 1",
 		},
@@ -184,7 +184,7 @@ func TestCLIClientSpawn(t *testing.T) {
 				{output: []byte("Spawned worker-4\n")},
 			},
 			wantCmds: []recordedCommand{
-				{name: "amux", args: []string{"-s", "default", "spawn", "--at", "lead-pane", "--name", "worker-4"}},
+				{name: "amux", args: []string{"-s", "default", "spawn", "--auto", "--name", "worker-4"}},
 			},
 			wantErr: "parse pane id",
 		},
@@ -241,7 +241,7 @@ func TestCLIClientSpawnDoesNotInspectSessionLayout(t *testing.T) {
 	}
 
 	wantCmds := []recordedCommand{
-		{name: "amux", args: []string{"-s", "orca-dev", "spawn", "--at", "lead-pane", "--name", "clone-01"}},
+		{name: "amux", args: []string{"-s", "orca-dev", "spawn", "--auto", "--name", "clone-01"}},
 		{name: "amux", args: []string{"-s", "orca-dev", "send-keys", "clone-01", "--delay-final", "250ms", "cd '/tmp/clone-01'"}},
 		{name: "amux", args: []string{"-s", "orca-dev", "send-keys", "clone-01", "--delay-final", "250ms", "Enter"}},
 		{name: "amux", args: []string{"-s", "orca-dev", "wait", "idle", "clone-01", "--timeout", "5s"}},

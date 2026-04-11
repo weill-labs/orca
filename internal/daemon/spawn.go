@@ -32,9 +32,10 @@ func (c *LocalController) Spawn(ctx context.Context, req SpawnPaneRequest) (Spaw
 		return SpawnPaneResult{}, err
 	}
 
+	window := resolveWindowFromPane(ctx, amuxClient, req.LeadPane)
 	pane, err := amuxClient.Spawn(ctx, amux.SpawnRequest{
 		Session: req.Session,
-		AtPane:  req.LeadPane,
+		Window:  window,
 		Name:    req.Title,
 		CWD:     clone.Path,
 	})
@@ -117,6 +118,28 @@ func (d *Daemon) spawnPaneTarget(ctx context.Context, task Task) string {
 	return target
 }
 
+func resolveWindowFromPane(ctx context.Context, amuxClient AmuxClient, paneRef string) string {
+	ref := strings.TrimSpace(paneRef)
+	if ref == "" {
+		return ""
+	}
+
+	panes, err := amuxClient.ListPanes(ctx)
+	if err != nil {
+		return ""
+	}
+
+	pane, ok := paneByReference(panes, ref)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(pane.Window)
+}
+
+func (d *Daemon) spawnWindowTarget(ctx context.Context, task Task) string {
+	return resolveWindowFromPane(ctx, d.amux, d.taskPaneTarget(task))
+}
+
 func (d *Daemon) sameWindowNonLeadPane(ctx context.Context, callerPane string) string {
 	panes, err := d.amux.ListPanes(ctx)
 	if err != nil {
@@ -168,7 +191,7 @@ func workerPaneSpawnName(task Task, stableRef string) string {
 func (d *Daemon) spawnWorkerPane(ctx context.Context, task Task, stableRef, clonePath string, profile AgentProfile) (Pane, error) {
 	return d.amux.Spawn(ctx, SpawnRequest{
 		Session: d.session,
-		AtPane:  d.spawnPaneTarget(ctx, task),
+		Window:  d.spawnWindowTarget(ctx, task),
 		Name:    workerPaneSpawnName(task, stableRef),
 		CWD:     clonePath,
 		Command: profile.StartCommand,

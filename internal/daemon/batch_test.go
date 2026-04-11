@@ -116,6 +116,9 @@ func TestBatchUsesCallerPaneForEachAssignment(t *testing.T) {
 		{ID: "pane-1", Name: "worker-1"},
 		{ID: "pane-2", Name: "worker-2"},
 	}
+	deps.amux.listPanes = []Pane{
+		{ID: "13", Name: "pane-13", Window: "alphaos"},
+	}
 	d := deps.newDaemon(t)
 	d.leadPane = "fallback-lead-pane"
 	ctx := context.Background()
@@ -148,8 +151,8 @@ func TestBatchUsesCallerPaneForEachAssignment(t *testing.T) {
 	})
 
 	for i, spawn := range deps.amux.spawnRequests {
-		if got, want := spawn.AtPane, "pane-13"; got != want {
-			t.Fatalf("spawnRequests[%d].AtPane = %q, want %q", i, got, want)
+		if got, want := spawn.Window, "alphaos"; got != want {
+			t.Fatalf("spawnRequests[%d].Window = %q, want %q", i, got, want)
 		}
 	}
 

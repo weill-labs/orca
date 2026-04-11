@@ -34,6 +34,7 @@ func TestLocalControllerSpawn(t *testing.T) {
 			name: "allocates clone and opens pane without creating a task",
 			amux: &fakeSpawnAmux{
 				spawnPane: amux.Pane{ID: "pane-7", Name: "Scratch pane"},
+				listPanes: []amux.Pane{{ID: "99", Name: "lead-pane", Window: "orca"}},
 			},
 			assert: func(t *testing.T, store state.Store, result SpawnPaneResult, amuxClient *fakeSpawnAmux, project string) {
 				t.Helper()
@@ -59,8 +60,8 @@ func TestLocalControllerSpawn(t *testing.T) {
 				if got, want := req.Session, "orca-dev"; got != want {
 					t.Fatalf("spawn session = %q, want %q", got, want)
 				}
-				if got, want := req.AtPane, "lead-pane"; got != want {
-					t.Fatalf("spawn lead pane = %q, want %q", got, want)
+				if got, want := req.Window, "orca"; got != want {
+					t.Fatalf("spawn window = %q, want %q", got, want)
 				}
 				if got, want := req.Name, "Scratch pane"; got != want {
 					t.Fatalf("spawn name = %q, want %q", got, want)
@@ -330,6 +331,7 @@ type fakeSpawnAmux struct {
 	spawnRequests []amux.SpawnRequest
 	spawnPane     amux.Pane
 	spawnErr      error
+	listPanes     []amux.Pane
 }
 
 func (f *fakeSpawnAmux) Spawn(_ context.Context, req amux.SpawnRequest) (amux.Pane, error) {
@@ -341,7 +343,7 @@ func (f *fakeSpawnAmux) Spawn(_ context.Context, req amux.SpawnRequest) (amux.Pa
 }
 
 func (f *fakeSpawnAmux) PaneExists(context.Context, string) (bool, error) { return false, nil }
-func (f *fakeSpawnAmux) ListPanes(context.Context) ([]amux.Pane, error)   { return nil, nil }
+func (f *fakeSpawnAmux) ListPanes(context.Context) ([]amux.Pane, error)   { return f.listPanes, nil }
 func (f *fakeSpawnAmux) Events(context.Context, amux.EventsRequest) (<-chan amux.Event, <-chan error) {
 	eventsCh := make(chan amux.Event)
 	errCh := make(chan error)
