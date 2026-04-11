@@ -674,6 +674,65 @@ func TestReloadProcessPropagatesSetupErrors(t *testing.T) {
 	}
 }
 
+func TestReloadProcessDoesNotWaitForDaemonShutdown(t *testing.T) {
+	t.Parallel()
+
+	file, err := os.CreateTemp(t.TempDir(), "reload-listener-*")
+	if err != nil {
+		t.Fatalf("CreateTemp() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = file.Close()
+	})
+
+	blockedDone := make(chan struct{})
+	t.Cleanup(func() {
+		close(blockedDone)
+	})
+
+	stopCalled := make(chan struct{}, 1)
+	instance := &Daemon{
+		stopCancel: func() {
+			select {
+			case stopCalled <- struct{}{}:
+			default:
+			}
+		},
+		loopDone: blockedDone,
+	}
+
+	errExec := errors.New("reload exec invoked")
+	execCalled := make(chan struct{}, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- reloadProcess(ServeRequest{}, &reloadTestFileListener{file: file}, instance, func(string, []string, []string) error {
+			execCalled <- struct{}{}
+			return errExec
+		})
+	}()
+
+	select {
+	case <-stopCalled:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for reloadProcess to cancel daemon")
+	}
+
+	select {
+	case <-execCalled:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for reloadProcess to call execProcess without waiting for daemon shutdown")
+	}
+
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, errExec) {
+			t.Fatalf("reloadProcess() error = %v, want %v", err, errExec)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for reloadProcess to return exec error")
+	}
+}
+
 func containsArgPair(args []string, flag, value string) bool {
 	for i := 0; i+1 < len(args); i++ {
 		if args[i] == flag && args[i+1] == value {
