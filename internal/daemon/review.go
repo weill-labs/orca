@@ -15,6 +15,13 @@ const (
 	reviewNudgeIdleWindowMultiplier = 2
 )
 
+type reviewWorkerState struct {
+	reviewCount        int
+	inlineCommentCount int
+	commentCount       int
+	reviewNudgeCount   int
+}
+
 type prReviewPayload struct {
 	ReviewDecision string     `json:"reviewDecision"`
 	Reviews        []prReview `json:"reviews"`
@@ -106,22 +113,29 @@ func (d *Daemon) checkTaskReviewPoll(ctx context.Context, active ActiveAssignmen
 	previousReviewCount := update.Active.Worker.LastReviewCount
 	previousInlineCommentCount := update.Active.Worker.LastInlineReviewCommentCount
 	previousCommentCount := update.Active.Worker.LastIssueCommentCount
-	resetReviewNudgeCount := payload.ReviewDecision != "CHANGES_REQUESTED" && update.Active.Worker.ReviewNudgeCount != 0
-	if resetReviewNudgeCount {
-		update.Active.Worker.ReviewNudgeCount = 0
-		update.Active.Worker.LastSeenAt = now
-		update.WorkerChanged = true
+	nextReviewState := reviewWorkerState{
+		reviewCount:        reviewCount,
+		inlineCommentCount: inlineCommentCount,
+		commentCount:       commentCount,
+		reviewNudgeCount:   update.Active.Worker.ReviewNudgeCount,
+	}
+	if payload.ReviewDecision != "CHANGES_REQUESTED" && nextReviewState.reviewNudgeCount != 0 {
+		nextReviewState.reviewNudgeCount = 0
 	}
 	if previousReviewCount > reviewCount || previousInlineCommentCount > inlineCommentCount || previousCommentCount > commentCount {
-		d.persistReviewWorkerState(&update.Active.Worker, reviewCount, inlineCommentCount, commentCount, now)
+		d.persistReviewWorkerState(&update.Active.Worker, nextReviewState, now)
 		update.WorkerChanged = true
 		return update
 	}
 	if previousReviewCount == reviewCount && previousInlineCommentCount == inlineCommentCount && previousCommentCount == commentCount {
+		if nextReviewState.reviewNudgeCount != update.Active.Worker.ReviewNudgeCount {
+			d.persistReviewWorkerState(&update.Active.Worker, nextReviewState, now)
+			update.WorkerChanged = true
+		}
 		return update
 	}
 	if payload.ReviewDecision == "APPROVED" || latestReviewContainsLGTM(payload.Reviews) {
-		d.persistReviewWorkerState(&update.Active.Worker, reviewCount, inlineCommentCount, commentCount, now)
+		d.persistReviewWorkerState(&update.Active.Worker, nextReviewState, now)
 		update.WorkerChanged = true
 		return update
 	}
@@ -130,17 +144,17 @@ func (d *Daemon) checkTaskReviewPoll(ctx context.Context, active ActiveAssignmen
 	newComments := payload.Comments[previousCommentCount:]
 	blocking := blockingReviewFeedback(payload.ReviewDecision, newReviews, newComments)
 	if len(blocking) == 0 {
-		d.persistReviewWorkerState(&update.Active.Worker, reviewCount, inlineCommentCount, commentCount, now)
+		d.persistReviewWorkerState(&update.Active.Worker, nextReviewState, now)
 		update.WorkerChanged = true
 		return update
 	}
-	if update.Active.Worker.ReviewNudgeCount >= maxReviewNudges {
-		d.persistReviewWorkerState(&update.Active.Worker, reviewCount, inlineCommentCount, commentCount, now)
+	if nextReviewState.reviewNudgeCount >= maxReviewNudges {
+		d.persistReviewWorkerState(&update.Active.Worker, nextReviewState, now)
 		update.WorkerChanged = true
 		d.notifyCallerPaneReviewEscalation(ctx, update.Active, blockingReviewFeedback(payload.ReviewDecision, items, payload.Comments))
 
-		event := d.assignmentEvent(update.Active, profile, EventWorkerReviewEscalated, fmt.Sprintf("review nudges exhausted after %d attempts; lead intervention required", update.Active.Worker.ReviewNudgeCount))
-		event.Retry = update.Active.Worker.ReviewNudgeCount
+		event := d.assignmentEvent(update.Active, profile, EventWorkerReviewEscalated, fmt.Sprintf("review nudges exhausted after %d attempts; lead intervention required", nextReviewState.reviewNudgeCount))
+		event.Retry = nextReviewState.reviewNudgeCount
 		update.Events = append(update.Events, event)
 		return update
 	}
@@ -148,33 +162,28 @@ func (d *Daemon) checkTaskReviewPoll(ctx context.Context, active ActiveAssignmen
 	feedback := formatBlockingReviewFeedback(update.Active.Task.PRNumber, blocking)
 	// A fresh capture can update LastCapture/LastActivityAt before we decide whether to defer.
 	if !d.workerAppearsIdleForReviewNudge(ctx, &update, profile, now) {
-		restoreReviewWorkerWatermarks(&update.Active.Worker, previousReviewCount, previousInlineCommentCount, previousCommentCount)
 		return update
 	}
+	nudgedReviewState := nextReviewState
+	nudgedReviewState.reviewNudgeCount++
 	update.queueNudge(func(ctx context.Context, d *Daemon, update *TaskStateUpdate) {
 		if err := d.sendPromptAndEnter(ctx, update.Active.Task.PaneID, feedback); err != nil {
 			return
 		}
 
-		update.Active.Worker.ReviewNudgeCount++
-		d.persistReviewWorkerState(&update.Active.Worker, reviewCount, inlineCommentCount, commentCount, now)
+		d.persistReviewWorkerState(&update.Active.Worker, nudgedReviewState, now)
 		update.WorkerChanged = true
 		update.Events = append(update.Events, d.assignmentEvent(update.Active, profile, EventWorkerNudgedReview, fmt.Sprintf("sent %d new blocking review(s) to worker", len(blocking))))
 	})
 	return update
 }
 
-func (d *Daemon) persistReviewWorkerState(worker *Worker, reviewCount, inlineCommentCount, commentCount int, now time.Time) {
-	worker.LastReviewCount = reviewCount
-	worker.LastInlineReviewCommentCount = inlineCommentCount
-	worker.LastIssueCommentCount = commentCount
+func (d *Daemon) persistReviewWorkerState(worker *Worker, state reviewWorkerState, now time.Time) {
+	worker.LastReviewCount = state.reviewCount
+	worker.LastInlineReviewCommentCount = state.inlineCommentCount
+	worker.LastIssueCommentCount = state.commentCount
+	worker.ReviewNudgeCount = state.reviewNudgeCount
 	worker.LastSeenAt = now
-}
-
-func restoreReviewWorkerWatermarks(worker *Worker, reviewCount, inlineCommentCount, commentCount int) {
-	worker.LastReviewCount = reviewCount
-	worker.LastInlineReviewCommentCount = inlineCommentCount
-	worker.LastIssueCommentCount = commentCount
 }
 
 func (d *Daemon) workerAppearsIdleForReviewNudge(ctx context.Context, update *TaskStateUpdate, profile AgentProfile, now time.Time) bool {
