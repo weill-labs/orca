@@ -323,6 +323,20 @@ func TestPRDetectionSyncsPaneMetadata(t *testing.T) {
 		return ok && task.PRNumber == 42
 	})
 
+	worker, ok := deps.state.worker("pane-1")
+	if !ok {
+		t.Fatal("worker missing after PR detection")
+	}
+	if got, want := worker.LastPushAt, deps.clock.Now(); !got.Equal(want) {
+		t.Fatalf("worker.LastPushAt = %v, want %v", got, want)
+	}
+	if got, want := worker.LastPRNumber, 42; got != want {
+		t.Fatalf("worker.LastPRNumber = %d, want %d", got, want)
+	}
+	if got, want := worker.LastPRPollAt, deps.clock.Now(); !got.Equal(want) {
+		t.Fatalf("worker.LastPRPollAt = %v, want %v", got, want)
+	}
+
 	deps.amux.requireMetadata(t, "pane-1", map[string]string{
 		"agent_profile":  "codex",
 		"branch":         "LAB-689",
@@ -330,6 +344,127 @@ func TestPRDetectionSyncsPaneMetadata(t *testing.T) {
 		"tracked_issues": `[{"id":"LAB-689","status":"active"}]`,
 		"tracked_prs":    `[{"number":42,"status":"active"}]`,
 	})
+}
+
+func TestPRDetectionUsesAdaptiveIntervalsAfterPRDiscovery(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	captureTicker := newFakeTicker()
+	prTicker := newFakeTicker()
+	deps.tickers.enqueue(captureTicker, prTicker)
+	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
+	deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[{"bucket":"pending"}]`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergeable"}, ``, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, ``, nil)
+	deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[{"bucket":"pending"}]`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergeable"}, ``, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, ``, nil)
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-689", "Implement daemon core", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	detectedAt := tickAndWaitForHeartbeat(t, d, deps, prTicker, time.Second, "pr detection cycle completion")
+	waitFor(t, "pr detection", func() bool {
+		task, ok := deps.state.task("LAB-689")
+		return ok && task.PRNumber == 42
+	})
+
+	if got, want := deps.commands.countCalls("gh", []string{"pr", "checks", "42", "--json", "bucket"}), 1; got != want {
+		t.Fatalf("gh pr checks calls on detection poll = %d, want %d", got, want)
+	}
+
+	tickAndWaitForHeartbeat(t, d, deps, prTicker, 4*time.Second, "pre-fast-window poll cycle completion")
+	if got, want := deps.commands.countCalls("gh", []string{"pr", "checks", "42", "--json", "bucket"}), 1; got != want {
+		t.Fatalf("gh pr checks calls before 5s = %d, want %d", got, want)
+	}
+
+	followUpAt := tickAndWaitForHeartbeat(t, d, deps, prTicker, time.Second, "fast follow-up poll cycle completion")
+	worker, ok := deps.state.worker("pane-1")
+	if !ok {
+		t.Fatal("worker missing after fast follow-up poll")
+	}
+	if got, want := deps.commands.countCalls("gh", []string{"pr", "checks", "42", "--json", "bucket"}), 2; got != want {
+		t.Fatalf("gh pr checks calls after 5s = %d, want %d", got, want)
+	}
+	if got, want := worker.LastPushAt, detectedAt; !got.Equal(want) {
+		t.Fatalf("worker.LastPushAt = %v, want %v", got, want)
+	}
+	if got, want := worker.LastPRPollAt, followUpAt; !got.Equal(want) {
+		t.Fatalf("worker.LastPRPollAt = %v, want %v", got, want)
+	}
+}
+
+func TestPRPollResetsAdaptiveWindowWhenTaskPRNumberChanges(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	captureTicker := newFakeTicker()
+	prTicker := newFakeTicker()
+	deps.tickers.enqueue(captureTicker, prTicker)
+	seedTaskMonitorAssignment(t, deps, "LAB-689", "pane-1", 42)
+	worker, ok := deps.state.worker("pane-1")
+	if !ok {
+		t.Fatal("worker missing after seed")
+	}
+	worker.LastPRNumber = 41
+	worker.LastPushAt = deps.clock.Now().Add(-40 * time.Minute)
+	worker.LastPRPollAt = deps.clock.Now()
+	if err := deps.state.PutWorker(context.Background(), worker); err != nil {
+		t.Fatalf("PutWorker() error = %v", err)
+	}
+
+	deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[{"bucket":"pending"}]`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergeable"}, ``, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, ``, nil)
+	deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[{"bucket":"pending"}]`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergeable"}, ``, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, ``, nil)
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	resetAt := tickAndWaitForHeartbeat(t, d, deps, prTicker, time.Second, "pr change poll cycle completion")
+	worker, ok = deps.state.worker("pane-1")
+	if !ok {
+		t.Fatal("worker missing after PR change poll")
+	}
+	if got, want := worker.LastPRNumber, 42; got != want {
+		t.Fatalf("worker.LastPRNumber = %d, want %d", got, want)
+	}
+	if got, want := worker.LastPushAt, resetAt; !got.Equal(want) {
+		t.Fatalf("worker.LastPushAt = %v, want %v", got, want)
+	}
+
+	tickAndWaitForHeartbeat(t, d, deps, prTicker, 4*time.Second, "pre-reset-window poll cycle completion")
+	if got, want := deps.commands.countCalls("gh", []string{"pr", "checks", "42", "--json", "bucket"}), 1; got != want {
+		t.Fatalf("gh pr checks calls before reset window elapses = %d, want %d", got, want)
+	}
+
+	tickAndWaitForHeartbeat(t, d, deps, prTicker, time.Second, "reset-window follow-up poll cycle completion")
+	if got, want := deps.commands.countCalls("gh", []string{"pr", "checks", "42", "--json", "bucket"}), 2; got != want {
+		t.Fatalf("gh pr checks calls after reset window elapses = %d, want %d", got, want)
+	}
 }
 
 func TestPRPollingLogsGitHubRateLimitWarnings(t *testing.T) {
@@ -724,7 +859,7 @@ func TestPRMergeablePollingNudgesWorkerOnConflictTransitions(t *testing.T) {
 		t.Fatalf("Assign() error = %v", err)
 	}
 
-	prTicker.tick(deps.clock.Now())
+	tickAndWaitForHeartbeat(t, d, deps, prTicker, adaptivePRFastPollInterval, "initial conflict poll cycle completion")
 	waitFor(t, "initial conflict nudge", func() bool {
 		worker, ok := deps.state.worker("pane-1")
 		return ok &&
@@ -732,7 +867,7 @@ func TestPRMergeablePollingNudgesWorkerOnConflictTransitions(t *testing.T) {
 			worker.LastMergeableState == "CONFLICTING"
 	})
 
-	prTicker.tick(deps.clock.Now())
+	tickAndWaitForHeartbeat(t, d, deps, prTicker, adaptivePRFastPollInterval, "second conflict poll cycle completion")
 	waitFor(t, "conflicting state re-polled", func() bool {
 		return deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "mergeable"}) == 2
 	})
@@ -743,7 +878,7 @@ func TestPRMergeablePollingNudgesWorkerOnConflictTransitions(t *testing.T) {
 		t.Fatalf("conflict nudge event count after repeated conflicting poll = %d, want %d", got, want)
 	}
 
-	prTicker.tick(deps.clock.Now())
+	tickAndWaitForHeartbeat(t, d, deps, prTicker, adaptivePRFastPollInterval, "mergeable recovery poll cycle completion")
 	waitFor(t, "mergeable state recovery", func() bool {
 		worker, ok := deps.state.worker("pane-1")
 		return ok &&
@@ -754,7 +889,7 @@ func TestPRMergeablePollingNudgesWorkerOnConflictTransitions(t *testing.T) {
 		t.Fatalf("conflict nudge count after recovery = %d, want %d", got, want)
 	}
 
-	prTicker.tick(deps.clock.Now())
+	tickAndWaitForHeartbeat(t, d, deps, prTicker, adaptivePRFastPollInterval, "conflict renudge poll cycle completion")
 	waitFor(t, "conflict nudge after recovery", func() bool {
 		worker, ok := deps.state.worker("pane-1")
 		return ok &&
@@ -821,7 +956,7 @@ func TestPRMergeablePollingRetriesConflictNudgeAfterWaitIdleFailure(t *testing.T
 		t.Fatalf("Assign() error = %v", err)
 	}
 
-	prTicker.tick(deps.clock.Now())
+	tickAndWaitForHeartbeat(t, d, deps, prTicker, adaptivePRFastPollInterval, "failed conflict nudge cycle completion")
 	waitFor(t, "failed conflict nudge attempt", func() bool {
 		return deps.amux.countKey("pane-1", conflictNudgePrompt) == 1
 	})
@@ -838,7 +973,7 @@ func TestPRMergeablePollingRetriesConflictNudgeAfterWaitIdleFailure(t *testing.T
 		t.Fatalf("enter key count after failed wait idle = %d, want %d", got, want)
 	}
 
-	prTicker.tick(deps.clock.Now())
+	tickAndWaitForHeartbeat(t, d, deps, prTicker, adaptivePRFastPollInterval, "retried conflict nudge cycle completion")
 	waitFor(t, "retried conflict nudge", func() bool {
 		worker, ok := deps.state.worker("pane-1")
 		return ok &&

@@ -6,6 +6,14 @@ import (
 	"time"
 )
 
+const (
+	adaptivePRFastPollInterval = 5 * time.Second
+	adaptivePRWarmPollInterval = 15 * time.Second
+	adaptivePRSlowPollInterval = 30 * time.Second
+	adaptivePRFastPollWindow   = 10 * time.Minute
+	adaptivePRWarmPollWindow   = 30 * time.Minute
+)
+
 type monitorTickKind int
 
 const (
@@ -20,7 +28,7 @@ func (d *Daemon) runLoop(ctx context.Context, done chan struct{}) {
 
 	captureTick := d.newTicker(d.captureInterval)
 	defer captureTick.Stop()
-	pollTick := d.newTicker(d.pollInterval)
+	pollTick := d.newTicker(prPollSchedulerBaseInterval(d.pollInterval))
 	defer pollTick.Stop()
 	captureTickCh := captureTick.C()
 	pollTickCh := pollTick.C()
@@ -96,6 +104,7 @@ func (d *Daemon) runPollTick(ctx context.Context) {
 	assignments, err := d.prPollAssignments(ctx)
 	if err == nil {
 		assignments = d.reconcileTrackedPanes(ctx, assignments)
+		assignments = dueAssignmentsForPRPoll(d.now(), assignments, d.pollInterval)
 		results := d.dispatchTaskMonitorChecks(ctx, assignments, taskMonitorCheckPRPoll)
 		d.applyTaskMonitorResults(ctx, results)
 	}
@@ -142,4 +151,80 @@ func (d *Daemon) reconcileTrackedPanes(ctx context.Context, assignments []Active
 		d.escalateAssignmentError(ctx, active, "worker pane missing during monitor reconciliation")
 	}
 	return reconciled
+}
+
+func prPollSchedulerBaseInterval(defaultInterval time.Duration) time.Duration {
+	if defaultInterval > 0 && defaultInterval < adaptivePRFastPollInterval {
+		return defaultInterval
+	}
+	return adaptivePRFastPollInterval
+}
+
+func dueAssignmentsForPRPoll(now time.Time, assignments []ActiveAssignment, defaultInterval time.Duration) []ActiveAssignment {
+	due := make([]ActiveAssignment, 0, len(assignments))
+	for _, active := range assignments {
+		if shouldPollAssignmentForPR(now, active, defaultInterval) {
+			due = append(due, active)
+		}
+	}
+	return due
+}
+
+func shouldPollAssignmentForPR(now time.Time, active ActiveAssignment, defaultInterval time.Duration) bool {
+	if active.Task.PRNumber != active.Worker.LastPRNumber {
+		return true
+	}
+	if active.Worker.LastPRPollAt.IsZero() {
+		return true
+	}
+	interval := adaptivePRPollInterval(now, active.Worker, defaultInterval)
+	if interval <= 0 {
+		return true
+	}
+	return !now.Before(active.Worker.LastPRPollAt.Add(interval))
+}
+
+func adaptivePRPollInterval(now time.Time, worker Worker, defaultInterval time.Duration) time.Duration {
+	if defaultInterval <= 0 {
+		defaultInterval = adaptivePRSlowPollInterval
+	}
+	if worker.LastPushAt.IsZero() {
+		return defaultInterval
+	}
+
+	elapsed := now.Sub(worker.LastPushAt)
+	switch {
+	case elapsed < 0:
+		return adaptivePRFastPollInterval
+	case elapsed < adaptivePRFastPollWindow:
+		return adaptivePRFastPollInterval
+	case elapsed < adaptivePRWarmPollWindow:
+		return adaptivePRWarmPollInterval
+	default:
+		return adaptivePRSlowPollInterval
+	}
+}
+
+func syncWorkerPRTracking(now time.Time, active *ActiveAssignment) bool {
+	changed := false
+	if active.Worker.LastPRNumber != active.Task.PRNumber {
+		active.Worker.LastPRNumber = active.Task.PRNumber
+		if active.Task.PRNumber > 0 {
+			active.Worker.LastPushAt = now
+		} else {
+			active.Worker.LastPushAt = time.Time{}
+		}
+		changed = true
+	}
+
+	switch {
+	case active.Task.PRNumber > 0 && active.Worker.LastPushAt.IsZero():
+		active.Worker.LastPushAt = now
+		changed = true
+	case active.Task.PRNumber == 0 && !active.Worker.LastPushAt.IsZero():
+		active.Worker.LastPushAt = time.Time{}
+		changed = true
+	}
+
+	return changed
 }

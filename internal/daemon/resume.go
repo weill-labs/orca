@@ -283,6 +283,10 @@ func (d *Daemon) storeResumedTaskForProject(ctx context.Context, projectPath str
 	resumedWorker.NudgeCount = 0
 	resumedWorker.LastCapture = ""
 	resumedWorker.LastActivityAt = now
+	resumedWorker.LastPRNumber = task.PRNumber
+	if !hasWorker && task.PRNumber > 0 {
+		resumedWorker.LastPushAt = now
+	}
 	resumedWorker.LastSeenAt = now
 	resumedWorker.UpdatedAt = now
 	if oldPaneID != "" && oldPaneID != pane.ID {

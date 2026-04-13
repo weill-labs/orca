@@ -145,9 +145,25 @@ func TestSQLiteStateAdapterRoundTrip(t *testing.T) {
 		ClonePath:    "/clone",
 		AgentProfile: "codex",
 		Health:       WorkerHealthHealthy,
+		LastPRNumber: 17,
+		LastPushAt:   now.Add(-time.Minute),
+		LastPRPollAt: now,
 		UpdatedAt:    now,
 	}); err != nil {
 		t.Fatalf("PutWorker() error = %v", err)
+	}
+	worker, err := adapter.WorkerByPane(context.Background(), "/repo", "pane-1")
+	if err != nil {
+		t.Fatalf("WorkerByPane() error = %v", err)
+	}
+	if got, want := worker.LastPushAt, now.Add(-time.Minute); !got.Equal(want) {
+		t.Fatalf("worker.LastPushAt = %v, want %v", got, want)
+	}
+	if got, want := worker.LastPRNumber, 17; got != want {
+		t.Fatalf("worker.LastPRNumber = %d, want %d", got, want)
+	}
+	if got, want := worker.LastPRPollAt, now; !got.Equal(want) {
+		t.Fatalf("worker.LastPRPollAt = %v, want %v", got, want)
 	}
 	if err := adapter.DeleteWorker(context.Background(), "/repo", "pane-1"); err != nil {
 		t.Fatalf("DeleteWorker() error = %v", err)
@@ -238,6 +254,9 @@ func TestSQLiteStateAdapterNonTerminalTasksAndWorkerByPane(t *testing.T) {
 		NudgeCount:                   3,
 		LastCapture:                  "permission prompt",
 		LastActivityAt:               now,
+		LastPRNumber:                 42,
+		LastPushAt:                   now.Add(-4 * time.Minute),
+		LastPRPollAt:                 now.Add(-time.Minute),
 		RestartCount:                 2,
 		FirstCrashAt:                 now.Add(-3 * time.Minute),
 		UpdatedAt:                    now.Add(time.Minute),
@@ -310,6 +329,15 @@ func TestSQLiteStateAdapterNonTerminalTasksAndWorkerByPane(t *testing.T) {
 	}
 	if got, want := worker.NudgeCount, 3; got != want {
 		t.Fatalf("worker.NudgeCount = %d, want %d", got, want)
+	}
+	if got, want := worker.LastPushAt, now.Add(-4*time.Minute); !got.Equal(want) {
+		t.Fatalf("worker.LastPushAt = %v, want %v", got, want)
+	}
+	if got, want := worker.LastPRNumber, 42; got != want {
+		t.Fatalf("worker.LastPRNumber = %d, want %d", got, want)
+	}
+	if got, want := worker.LastPRPollAt, now.Add(-time.Minute); !got.Equal(want) {
+		t.Fatalf("worker.LastPRPollAt = %v, want %v", got, want)
 	}
 	if got, want := worker.RestartCount, 2; got != want {
 		t.Fatalf("worker.RestartCount = %d, want %d", got, want)

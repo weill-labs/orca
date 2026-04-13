@@ -325,7 +325,7 @@ func seedTaskMonitorAssignment(t *testing.T, deps *testDeps, issue, paneID strin
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	})
-	if err := deps.state.PutWorker(context.Background(), Worker{
+	worker := Worker{
 		Project:        "/tmp/project",
 		PaneID:         paneID,
 		PaneName:       paneID,
@@ -335,7 +335,12 @@ func seedTaskMonitorAssignment(t *testing.T, deps *testDeps, issue, paneID strin
 		Health:         WorkerHealthHealthy,
 		LastActivityAt: now,
 		UpdatedAt:      now,
-	}); err != nil {
+	}
+	if prNumber > 0 {
+		worker.LastPRNumber = prNumber
+		worker.LastPushAt = now
+	}
+	if err := deps.state.PutWorker(context.Background(), worker); err != nil {
 		t.Fatalf("PutWorker() error = %v", err)
 	}
 }

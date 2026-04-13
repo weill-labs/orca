@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 )
 
 var autonomousBacklogPromptPattern = regexp.MustCompile(strings.Join([]string{
@@ -209,8 +210,13 @@ func (d *Daemon) assign(ctx context.Context, projectPath, issue, prompt, agentPr
 		LastCapture:                  "",
 		CreatedAt:                    claimedWorker.CreatedAt,
 		LastActivityAt:               now,
+		LastPRNumber:                 prNumber,
+		LastPushAt:                   time.Time{},
 		LastSeenAt:                   now,
 		UpdatedAt:                    now,
+	}
+	if prNumber > 0 {
+		worker.LastPushAt = now
 	}
 	if err := d.state.PutTask(ctx, task); err != nil {
 		failSpawnedAssignment(err)

@@ -71,6 +71,114 @@ func TestDaemonSkipsBufferedPollTickWhilePollCycleIsRunning(t *testing.T) {
 	}
 }
 
+func TestAdaptivePRPollInterval(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 2, 9, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name       string
+		lastPushAt time.Time
+		want       time.Duration
+	}{
+		{name: "no push uses default interval", want: 30 * time.Second},
+		{name: "fast window", lastPushAt: now.Add(-9 * time.Minute), want: 5 * time.Second},
+		{name: "warm window", lastPushAt: now.Add(-20 * time.Minute), want: 15 * time.Second},
+		{name: "steady state", lastPushAt: now.Add(-31 * time.Minute), want: 30 * time.Second},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := adaptivePRPollInterval(now, Worker{LastPushAt: tt.lastPushAt}, 30*time.Second); got != tt.want {
+				t.Fatalf("adaptivePRPollInterval() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestShouldPollAssignmentForAdaptivePRIntervals(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 2, 9, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name   string
+		worker Worker
+		want   bool
+	}{
+		{
+			name: "never polled is due immediately",
+			worker: Worker{
+				LastPushAt: now,
+			},
+			want: true,
+		},
+		{
+			name: "fast window waits five seconds",
+			worker: Worker{
+				LastPushAt:   now.Add(-time.Minute),
+				LastPRPollAt: now.Add(-4 * time.Second),
+			},
+			want: false,
+		},
+		{
+			name: "warm window waits fifteen seconds",
+			worker: Worker{
+				LastPushAt:   now.Add(-20 * time.Minute),
+				LastPRPollAt: now.Add(-14 * time.Second),
+			},
+			want: false,
+		},
+		{
+			name: "steady state waits thirty seconds",
+			worker: Worker{
+				LastPushAt:   now.Add(-40 * time.Minute),
+				LastPRPollAt: now.Add(-30 * time.Second),
+			},
+			want: true,
+		},
+		{
+			name: "no push uses default interval",
+			worker: Worker{
+				LastPRPollAt: now.Add(-29 * time.Second),
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := shouldPollAssignmentForPR(now, ActiveAssignment{Worker: tt.worker}, 30*time.Second); got != tt.want {
+				t.Fatalf("shouldPollAssignmentForPR() = %t, want %t", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestShouldPollAssignmentImmediatelyWhenPRNumberChanges(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 2, 9, 0, 0, 0, time.UTC)
+	active := ActiveAssignment{
+		Task: Task{
+			PRNumber: 42,
+		},
+		Worker: Worker{
+			LastPRNumber: 41,
+			LastPushAt:   now.Add(-40 * time.Minute),
+			LastPRPollAt: now,
+		},
+	}
+
+	if !shouldPollAssignmentForPR(now, active, 30*time.Second) {
+		t.Fatal("shouldPollAssignmentForPR() = false, want true when PR number changes")
+	}
+}
+
 func TestDaemonCaptureMonitorOpensAmuxCircuitAfterThreeFailures(t *testing.T) {
 	t.Parallel()
 
@@ -144,6 +252,7 @@ func TestDaemonPollMonitorOpensGitHubCircuitAfterThreeFailures(t *testing.T) {
 		if got, want := deps.commands.countCalls("gh", lookupArgs), i+1; got != want {
 			t.Fatalf("github call count after failure %d = %d, want %d", i+1, got, want)
 		}
+		deps.clock.Advance(30 * time.Second)
 	}
 	if err := d.monitorGitHubCircuit.Allow(); !errors.Is(err, ErrCircuitBreakerOpen) {
 		t.Fatalf("github circuit Allow() error = %v, want %v", err, ErrCircuitBreakerOpen)

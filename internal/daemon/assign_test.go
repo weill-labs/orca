@@ -829,6 +829,17 @@ func TestAssignAdoptsOpenPRAndPrepopulatesTask(t *testing.T) {
 		t.Fatalf("task.PRNumber = %d, want %d", got, want)
 	}
 
+	worker, ok := deps.state.worker("pane-1")
+	if !ok {
+		t.Fatal("worker not stored in fake state")
+	}
+	if got, want := worker.LastPushAt, deps.clock.Now(); !got.Equal(want) {
+		t.Fatalf("worker.LastPushAt = %v, want %v", got, want)
+	}
+	if got, want := worker.LastPRNumber, 42; got != want {
+		t.Fatalf("worker.LastPRNumber = %d, want %d", got, want)
+	}
+
 	wantGit := []commandCall{
 		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"fetch", "origin"}},
 		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"config", "user.name", "Orca worker-01"}},

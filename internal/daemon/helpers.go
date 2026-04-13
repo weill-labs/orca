@@ -139,6 +139,9 @@ func (d *Daemon) releaseWorkerClaim(ctx context.Context, worker Worker) error {
 	worker.RestartCount = 0
 	worker.LastCapture = ""
 	worker.LastActivityAt = time.Time{}
+	worker.LastPRNumber = 0
+	worker.LastPushAt = time.Time{}
+	worker.LastPRPollAt = time.Time{}
 	resetExitedPaneRestartWindow(&worker)
 	if worker.CreatedAt.IsZero() {
 		worker.CreatedAt = now
