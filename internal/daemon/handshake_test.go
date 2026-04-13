@@ -193,6 +193,16 @@ func TestAssignRollsBackOnAgentHandshakeFailure(t *testing.T) {
 	if got, want := deps.amux.killCalls, []string{"pane-1"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("kill calls = %#v, want %#v", got, want)
 	}
+	if exists, err := deps.amux.PaneExists(ctx, "pane-1"); err != nil {
+		t.Fatalf("PaneExists() error = %v", err)
+	} else if exists {
+		t.Fatal("PaneExists() = true, want pane removed after rollback")
+	}
+	if panes, err := deps.amux.ListPanes(ctx); err != nil {
+		t.Fatalf("ListPanes() error = %v", err)
+	} else if len(panes) != 0 {
+		t.Fatalf("ListPanes() = %#v, want no panes after rollback", panes)
+	}
 
 	wantGit := []commandCall{
 		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"checkout", "main"}},
