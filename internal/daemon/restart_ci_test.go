@@ -3,7 +3,6 @@ package daemon
 import (
 	"context"
 	"testing"
-	"time"
 )
 
 func TestPRPollResumesFromPersistedCIStateAfterRestart(t *testing.T) {
@@ -38,7 +37,7 @@ func TestPRPollResumesFromPersistedCIStateAfterRestart(t *testing.T) {
 		t.Fatalf("Assign() error = %v", err)
 	}
 
-	tickAndWaitForHeartbeat(t, first, deps, firstPollTicker, time.Second, "initial CI poll cycle completion")
+	tickAndWaitForHeartbeat(t, first, deps, firstPollTicker, adaptivePRFastPollInterval, "initial CI poll cycle completion")
 	waitFor(t, "initial CI nudge", func() bool {
 		worker, ok := deps.state.worker("pane-1")
 		return ok &&
@@ -46,7 +45,7 @@ func TestPRPollResumesFromPersistedCIStateAfterRestart(t *testing.T) {
 			deps.amux.countKey("pane-1", expectedCINudgePrompt(42)+"\n") == 1
 	})
 
-	tickAndWaitForHeartbeat(t, first, deps, firstPollTicker, time.Second, "persisted failing CI schedule cycle completion")
+	tickAndWaitForHeartbeat(t, first, deps, firstPollTicker, adaptivePRFastPollInterval, "persisted failing CI schedule cycle completion")
 	waitFor(t, "persisted failing CI schedule before restart", func() bool {
 		return deps.commands.countCall("gh", "pr", "checks", "42", "--json", "bucket") == 2
 	})
@@ -66,19 +65,19 @@ func TestPRPollResumesFromPersistedCIStateAfterRestart(t *testing.T) {
 		_ = second.Stop(context.Background())
 	})
 
-	tickAndWaitForHeartbeat(t, second, deps, secondPollTicker, time.Second, "scheduled CI nudge after restart cycle completion")
+	tickAndWaitForHeartbeat(t, second, deps, secondPollTicker, adaptivePRFastPollInterval, "scheduled CI nudge after restart cycle completion")
 	waitFor(t, "scheduled CI nudge after restart", func() bool {
 		return deps.amux.countKey("pane-1", expectedCINudgePrompt(42)+"\n") == 2 &&
 			deps.events.countType(EventWorkerNudgedCI) == 2
 	})
 
-	tickAndWaitForHeartbeat(t, second, deps, secondPollTicker, time.Second, "CI recovery poll cycle completion")
+	tickAndWaitForHeartbeat(t, second, deps, secondPollTicker, adaptivePRFastPollInterval, "CI recovery poll cycle completion")
 	waitFor(t, "CI recovery poll", func() bool {
 		worker, ok := deps.state.worker("pane-1")
 		return ok && worker.LastCIState == ciStatePass
 	})
 
-	tickAndWaitForHeartbeat(t, second, deps, secondPollTicker, time.Second, "CI nudge after recovery cycle completion")
+	tickAndWaitForHeartbeat(t, second, deps, secondPollTicker, adaptivePRFastPollInterval, "CI nudge after recovery cycle completion")
 	waitFor(t, "CI nudge after recovery", func() bool {
 		return deps.amux.countKey("pane-1", expectedCINudgePrompt(42)+"\n") == 3 &&
 			deps.events.countType(EventWorkerNudgedCI) == 3
