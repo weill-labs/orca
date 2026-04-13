@@ -9,35 +9,11 @@ import (
 func TestPRReviewPollingRetriesIssueCommentNudgeAfterFreshCaptureDeferral(t *testing.T) {
 	t.Parallel()
 
-	deps := newTestDeps(t)
-	captureTicker := newFakeTicker()
-	prTicker := newFakeTicker()
-	deps.tickers.enqueue(captureTicker, prTicker)
-	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--state", "open", "--json", "number"}, `[]`, nil)
-	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
 	payload := marshalReviewPayload(t, "", nil, []prComment{
 		testIssueComment("github-actions[bot]", "### PR Review\n\n### Blocking Issues\n\n**1. Preserve issue comment watermarks until the nudge lands**"),
 		testIssueComment("cweill", "Checking the failure locally."),
 	})
-	queuePRReviewPayload(deps, 42, payload)
-	queuePRReviewPayload(deps, 42, payload)
-	deps.amux.capturePaneSequence("pane-1", []PaneCapture{
-		paneCaptureFromOutput("still coding after review poll"),
-		paneCaptureFromOutput("still coding after review poll"),
-	})
-
-	d := deps.newDaemon(t)
-	ctx := context.Background()
-	if err := d.Start(ctx); err != nil {
-		t.Fatalf("Start() error = %v", err)
-	}
-	t.Cleanup(func() {
-		_ = d.Stop(context.Background())
-	})
-
-	if err := d.Assign(ctx, "LAB-689", "Implement daemon core", "codex"); err != nil {
-		t.Fatalf("Assign() error = %v", err)
-	}
+	d, deps, prTicker := startFreshCaptureIssueCommentPollTest(t, payload, "still coding after review poll")
 
 	makeWorkerIdleForReviewNudge(deps)
 	nudge := "New blocking PR review feedback on #42:\n- github-actions[bot]: Preserve issue comment watermarks until the nudge lands\n\nAddress the feedback in the PR review and push an update."
@@ -79,35 +55,11 @@ func TestPRReviewPollingRetriesIssueCommentNudgeAfterFreshCaptureDeferral(t *tes
 func TestPRReviewPollingDoesNotResetReviewNudgeCountBeforeDeferredIssueCommentNudgeLands(t *testing.T) {
 	t.Parallel()
 
-	deps := newTestDeps(t)
-	captureTicker := newFakeTicker()
-	prTicker := newFakeTicker()
-	deps.tickers.enqueue(captureTicker, prTicker)
-	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--state", "open", "--json", "number"}, `[]`, nil)
-	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
 	payload := marshalReviewPayload(t, "", nil, []prComment{
 		testIssueComment("github-actions[bot]", "### PR Review\n\n### Blocking Issues\n\n**1. Retry the fresh-capture issue comment nudge**"),
 		testIssueComment("cweill", "Looking at it."),
 	})
-	queuePRReviewPayload(deps, 42, payload)
-	queuePRReviewPayload(deps, 42, payload)
-	deps.amux.capturePaneSequence("pane-1", []PaneCapture{
-		paneCaptureFromOutput("still coding after fresh capture"),
-		paneCaptureFromOutput("still coding after fresh capture"),
-	})
-
-	d := deps.newDaemon(t)
-	ctx := context.Background()
-	if err := d.Start(ctx); err != nil {
-		t.Fatalf("Start() error = %v", err)
-	}
-	t.Cleanup(func() {
-		_ = d.Stop(context.Background())
-	})
-
-	if err := d.Assign(ctx, "LAB-689", "Implement daemon core", "codex"); err != nil {
-		t.Fatalf("Assign() error = %v", err)
-	}
+	d, deps, prTicker := startFreshCaptureIssueCommentPollTest(t, payload, "still coding after fresh capture")
 
 	worker, ok := deps.state.worker("pane-1")
 	if !ok {
@@ -153,4 +105,36 @@ func TestPRReviewPollingDoesNotResetReviewNudgeCountBeforeDeferredIssueCommentNu
 			worker.ReviewNudgeCount == 1 &&
 			deps.amux.countKey("pane-1", nudgeSent) == 1
 	})
+}
+
+func startFreshCaptureIssueCommentPollTest(t *testing.T, payload, captureOutput string) (*Daemon, *testDeps, *fakeTicker) {
+	t.Helper()
+
+	deps := newTestDeps(t)
+	captureTicker := newFakeTicker()
+	prTicker := newFakeTicker()
+	deps.tickers.enqueue(captureTicker, prTicker)
+	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--state", "open", "--json", "number"}, `[]`, nil)
+	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
+	queuePRReviewPayload(deps, 42, payload)
+	queuePRReviewPayload(deps, 42, payload)
+	deps.amux.capturePaneSequence("pane-1", []PaneCapture{
+		paneCaptureFromOutput(captureOutput),
+		paneCaptureFromOutput(captureOutput),
+	})
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-689", "Implement daemon core", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	return d, deps, prTicker
 }
