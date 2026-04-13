@@ -144,10 +144,26 @@ func (d *Daemon) assign(ctx context.Context, projectPath, issue, prompt, agentPr
 		d.emitAssignFailure(ctx, projectPath, issue, claimedWorker.WorkerID, profile.Name, clone, Pane{}, prNumber, err)
 		return err
 	}
+	paneSpawnPendingCleanup := true
+	defer func() {
+		if !paneSpawnPendingCleanup {
+			return
+		}
+		_ = ignorePaneAlreadyGoneError(d.amux.KillPane(context.WithoutCancel(ctx), paneKillRef(pane)))
+	}()
+	var worker Worker
+	rollbackSpawnedPane := func() {
+		paneSpawnPendingCleanup = false
+		_ = d.rollbackAssignmentForProject(ctx, projectPath, clone, pane, issue)
+	}
+	failSpawnedAssignment := func(err error) {
+		paneSpawnPendingCleanup = false
+		d.failPendingAssignment(ctx, projectPath, issue, clone, pane, worker, profile, prNumber, err, restoreReservation)
+	}
 
 	metadata, err := d.assignmentPaneMetadata(ctx, projectPath, pane.ID, profile.Name, assignmentBranch, issue, d.resolveAssignmentTitle(ctx, issue, firstTitle(title)), prNumber)
 	if err != nil {
-		_ = d.rollbackAssignmentForProject(ctx, projectPath, clone, pane, issue)
+		rollbackSpawnedPane()
 		restoreWorkerClaim()
 		restoreReservation()
 		err = fmt.Errorf("build pane metadata: %w", err)
@@ -156,7 +172,7 @@ func (d *Daemon) assign(ctx context.Context, projectPath, issue, prompt, agentPr
 	}
 
 	if err := d.setPaneMetadata(ctx, pane.ID, metadata); err != nil {
-		_ = d.rollbackAssignmentForProject(ctx, projectPath, clone, pane, issue)
+		rollbackSpawnedPane()
 		restoreWorkerClaim()
 		restoreReservation()
 		err = fmt.Errorf("set pane metadata: %w", err)
@@ -171,7 +187,7 @@ func (d *Daemon) assign(ctx context.Context, projectPath, issue, prompt, agentPr
 	task.CloneName = clone.Name
 	task.ClonePath = clone.Path
 	task.UpdatedAt = d.now()
-	worker := Worker{
+	worker = Worker{
 		Project:                      projectPath,
 		WorkerID:                     claimedWorker.WorkerID,
 		PaneID:                       pane.ID,
@@ -197,39 +213,40 @@ func (d *Daemon) assign(ctx context.Context, projectPath, issue, prompt, agentPr
 		UpdatedAt:                    now,
 	}
 	if err := d.state.PutTask(ctx, task); err != nil {
-		d.failPendingAssignment(ctx, projectPath, issue, clone, pane, worker, profile, prNumber, err, restoreReservation)
+		failSpawnedAssignment(err)
 		return fmt.Errorf("store pending task: %w", err)
 	}
 	if err := d.state.PutWorker(ctx, worker); err != nil {
-		d.failPendingAssignment(ctx, projectPath, issue, clone, pane, worker, profile, prNumber, err, restoreReservation)
+		failSpawnedAssignment(err)
 		return fmt.Errorf("store pending worker: %w", err)
 	}
 
 	if err := d.agentHandshake(ctx, pane.ID, profile); err != nil {
-		d.failPendingAssignment(ctx, projectPath, issue, clone, pane, worker, profile, prNumber, err, restoreReservation)
+		failSpawnedAssignment(err)
 		return fmt.Errorf("agent handshake: %w", err)
 	}
 
 	if err := d.sendPromptAndEnter(ctx, pane.ID, prompt); err != nil {
-		d.failPendingAssignment(ctx, projectPath, issue, clone, pane, worker, profile, prNumber, err, restoreReservation)
+		failSpawnedAssignment(err)
 		return fmt.Errorf("send prompt: %w", err)
 	}
 	if err := d.confirmPromptDelivery(ctx, pane.ID, profile); err != nil {
-		d.failPendingAssignment(ctx, projectPath, issue, clone, pane, worker, profile, prNumber, err, restoreReservation)
+		failSpawnedAssignment(err)
 		return fmt.Errorf("send prompt: %w", err)
 	}
 	if err := d.setIssueStatus(ctx, projectPath, issue, IssueStateInProgress); err != nil {
-		d.failPendingAssignment(ctx, projectPath, issue, clone, pane, worker, profile, prNumber, err, restoreReservation)
+		failSpawnedAssignment(err)
 		return fmt.Errorf("set issue status: %w", err)
 	}
 
 	task.Status = TaskStatusActive
 	task.UpdatedAt = d.now()
 	if err := d.state.PutTask(ctx, task); err != nil {
-		d.failPendingAssignment(ctx, projectPath, issue, clone, pane, worker, profile, prNumber, err, restoreReservation)
+		failSpawnedAssignment(err)
 		return fmt.Errorf("store task: %w", err)
 	}
 	d.ensureTaskMonitorForProject(projectPath, issue)
+	paneSpawnPendingCleanup = false
 
 	d.emit(ctx, Event{
 		Time:         now,

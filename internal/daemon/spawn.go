@@ -189,11 +189,108 @@ func workerPaneSpawnName(task Task, stableRef string) string {
 }
 
 func (d *Daemon) spawnWorkerPane(ctx context.Context, task Task, stableRef, clonePath string, profile AgentProfile) (Pane, error) {
+	paneName := workerPaneSpawnName(task, stableRef)
+	if err := d.prepareWorkerPaneSpawn(ctx, d.projectPathForTask(task), paneName); err != nil {
+		return Pane{}, err
+	}
+
 	return d.amux.Spawn(ctx, SpawnRequest{
 		Session: d.session,
 		Window:  d.spawnWindowTarget(ctx, task),
-		Name:    workerPaneSpawnName(task, stableRef),
+		Name:    paneName,
 		CWD:     clonePath,
 		Command: profile.StartCommand,
 	})
+}
+
+func (d *Daemon) prepareWorkerPaneSpawn(ctx context.Context, projectPath, paneName string) error {
+	paneName = strings.TrimSpace(paneName)
+	if paneName == "" {
+		return nil
+	}
+
+	panes, err := d.amux.ListPanes(ctx)
+	if err != nil {
+		return fmt.Errorf("list panes for %q: %w", paneName, err)
+	}
+
+	existing, ok := paneNamed(panes, paneName)
+	if !ok {
+		return nil
+	}
+
+	active, err := d.activeAssignmentForPane(ctx, projectPath, existing, paneName)
+	if err != nil {
+		return err
+	}
+	if active != nil {
+		issue := strings.TrimSpace(active.Task.Issue)
+		if issue == "" {
+			return fmt.Errorf("pane %q already exists for an active task", paneName)
+		}
+		return fmt.Errorf("pane %q already exists for active task %s", paneName, issue)
+	}
+
+	if err := ignorePaneAlreadyGoneError(d.amux.KillPane(context.WithoutCancel(ctx), paneKillRef(existing))); err != nil {
+		return fmt.Errorf("kill orphan pane %q: %w", paneName, err)
+	}
+	return nil
+}
+
+func paneNamed(panes []Pane, paneName string) (Pane, bool) {
+	target := strings.TrimSpace(paneName)
+	if target == "" {
+		return Pane{}, false
+	}
+
+	for _, pane := range panes {
+		if strings.TrimSpace(pane.Name) == target {
+			return pane, true
+		}
+	}
+	return Pane{}, false
+}
+
+func (d *Daemon) activeAssignmentForPane(ctx context.Context, projectPath string, pane Pane, paneName string) (*ActiveAssignment, error) {
+	assignments, err := d.state.ActiveAssignments(ctx, projectPath)
+	if err != nil {
+		return nil, fmt.Errorf("list active assignments for pane %q: %w", paneName, err)
+	}
+
+	paneID := strings.TrimSpace(pane.ID)
+	paneName = strings.TrimSpace(paneName)
+	for _, active := range assignments {
+		if !activeAssignmentUsesPane(active, paneID, paneName) {
+			continue
+		}
+
+		match := active
+		return &match, nil
+	}
+	return nil, nil
+}
+
+func activeAssignmentUsesPane(active ActiveAssignment, paneID, paneName string) bool {
+	for _, candidate := range []string{
+		active.Task.PaneID,
+		active.Task.PaneName,
+		active.Worker.PaneID,
+		active.Worker.PaneName,
+	} {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			continue
+		}
+		if paneID != "" && candidate == paneID {
+			return true
+		}
+		if paneName != "" && candidate == paneName {
+			return true
+		}
+	}
+	return false
+}
+
+func paneKillRef(pane Pane) string {
+	return firstNonEmpty(pane.ID, pane.Name)
 }
