@@ -220,6 +220,9 @@ type Worker struct {
 	RestartCount                 int       `json:"restart_count,omitempty"`
 	LastCapture                  string    `json:"last_capture,omitempty"`
 	LastActivityAt               time.Time `json:"last_activity_at,omitempty"`
+	LastPRNumber                 int       `json:"last_pr_number,omitempty"`
+	LastPushAt                   time.Time `json:"last_push_at,omitempty"`
+	LastPRPollAt                 time.Time `json:"last_pr_poll_at,omitempty"`
 	FirstCrashAt                 time.Time `json:"first_crash_at,omitempty"`
 	CreatedAt                    time.Time `json:"created_at,omitempty"`
 	LastSeenAt                   time.Time `json:"last_seen_at,omitempty"`
