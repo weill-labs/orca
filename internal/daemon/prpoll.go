@@ -50,6 +50,12 @@ func (d *Daemon) enqueue(ctx context.Context, projectPath string, prNumber int) 
 
 func (d *Daemon) checkTaskPRPoll(ctx context.Context, active ActiveAssignment) TaskStateUpdate {
 	update := TaskStateUpdate{Active: active}
+	now := d.now()
+	if syncWorkerPRTracking(now, &update.Active) {
+		update.WorkerChanged = true
+	}
+	update.Active.Worker.LastPRPollAt = now
+	update.WorkerChanged = true
 	profile, err := d.profileForTask(ctx, active.Task)
 	if err != nil {
 		return update
@@ -67,8 +73,10 @@ func (d *Daemon) checkTaskPRPoll(ctx context.Context, active ActiveAssignment) T
 				return update
 			}
 			update.PaneMetadata = mergeMetadata(update.PaneMetadata, metadata)
+			update.Active.Worker.LastPRNumber = prNumber
+			update.Active.Worker.LastPushAt = now
 			update.Active.Task.PRNumber = prNumber
-			update.Active.Task.UpdatedAt = d.now()
+			update.Active.Task.UpdatedAt = now
 			update.TaskChanged = true
 			update.Events = append(update.Events, d.assignmentEvent(update.Active, profile, EventPRDetected, "pull request detected"))
 		}
