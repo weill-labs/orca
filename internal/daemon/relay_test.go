@@ -188,6 +188,34 @@ func TestDaemonRelayConnectsAndReconnectsWithLastEventID(t *testing.T) {
 	}
 }
 
+func TestDaemonRelayHealthEnqueuesPollIntervalUpdates(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	d := deps.newDaemon(t)
+	d.pollIntervalCh = make(chan time.Duration, 1)
+
+	d.setRelayHealthy(true)
+	select {
+	case got := <-d.pollIntervalCh:
+		if got != relayHealthyPollInterval {
+			t.Fatalf("healthy poll interval = %v, want %v", got, relayHealthyPollInterval)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for healthy poll interval update")
+	}
+
+	d.setRelayHealthy(false)
+	select {
+	case got := <-d.pollIntervalCh:
+		if got != d.pollInterval {
+			t.Fatalf("fallback poll interval = %v, want %v", got, d.pollInterval)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for fallback poll interval update")
+	}
+}
+
 type relayTestServer struct {
 	server      *httptest.Server
 	connections chan relayServerConnection

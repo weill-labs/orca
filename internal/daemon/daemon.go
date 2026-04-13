@@ -19,6 +19,7 @@ const (
 	defaultTrustPromptTimeout    = 2 * time.Second
 	defaultPollInterval          = 30 * time.Second
 	defaultMergeGracePeriod      = 10 * time.Minute
+	relayHealthyPollInterval     = 5 * time.Minute
 )
 
 type Daemon struct {
@@ -48,20 +49,30 @@ type Daemon struct {
 	logf                 func(string, ...any)
 	monitorAmuxCircuit   *CircuitBreaker
 	monitorGitHubCircuit *CircuitBreaker
+	relayURL             string
+	relayToken           string
+	hostname             string
+	detectOrigin         func(projectDir string) (string, error)
 
 	started           atomic.Bool
 	lastHeartbeat     atomic.Int64
+	relayHealthy      atomic.Bool
 	stopContext       context.Context
 	stopCancel        context.CancelFunc
 	loopDone          chan struct{}
 	eventStreamDone   chan struct{}
 	watchdogDone      chan struct{}
+	relayDone         chan struct{}
 	mergeQueueInbox   chan ProcessQueue
 	mergeQueueUpdates chan MergeQueueUpdate
 	mergeQueueDone    chan struct{}
+	pollIntervalCh    chan time.Duration
 	monitorRuns       sync.WaitGroup
 	taskMonitorMu     sync.Mutex
 	taskMonitors      map[string]*TaskMonitor
+	relayConnMu       sync.Mutex
+	relayConn         relayConnection
+	relayReconnect    atomic.Bool
 }
 
 type realTicker struct {
@@ -118,6 +129,11 @@ func New(opts Options) (*Daemon, error) {
 	if opts.Session == "" {
 		opts.Session = "orca"
 	}
+	if strings.TrimSpace(opts.Hostname) == "" {
+		if hostname, err := os.Hostname(); err == nil {
+			opts.Hostname = hostname
+		}
+	}
 
 	return &Daemon{
 		project:              opts.Project,
@@ -143,6 +159,10 @@ func New(opts Options) (*Daemon, error) {
 		mergeGracePeriod:     opts.MergeGracePeriod,
 		statusWriter:         opts.DaemonStatusWriter,
 		logf:                 opts.Logf,
+		relayURL:             strings.TrimSpace(opts.RelayURL),
+		relayToken:           strings.TrimSpace(opts.RelayToken),
+		hostname:             strings.TrimSpace(opts.Hostname),
+		detectOrigin:         opts.DetectOrigin,
 		// Monitor circuits are daemon-wide by design so broad amux/GitHub
 		// outages pause all monitor traffic instead of retrying per task.
 		monitorAmuxCircuit:   NewCircuitBreakerWithHooks(opts.Now, defaultCircuitBreakerFailureThreshold, defaultCircuitBreakerCooldown, daemonCircuitHooks(opts.Project, opts.Now, opts.State, opts.Events, "monitor amux")),
@@ -211,6 +231,11 @@ func (d *Daemon) Start(ctx context.Context) error {
 	go actor.run(d.stopContext, d.mergeQueueInbox, d.mergeQueueDone)
 	d.eventStreamDone = make(chan struct{})
 	go d.runExitedEventLoop(d.stopContext, d.eventStreamDone)
+	if d.relayEnabled() {
+		d.pollIntervalCh = make(chan time.Duration, 1)
+		d.relayDone = make(chan struct{})
+		go d.runRelayLoop(d.stopContext, d.relayDone)
+	}
 	d.loopDone = make(chan struct{})
 	go d.runLoop(d.stopContext, d.loopDone)
 	if d.newWatchdogTicker != nil {
@@ -303,6 +328,7 @@ func (d *Daemon) Stop(ctx context.Context) error {
 	if d.stopCancel != nil {
 		d.stopCancel()
 	}
+	d.closeRelayConn()
 	if d.loopDone != nil {
 		<-d.loopDone
 	}
@@ -311,6 +337,9 @@ func (d *Daemon) Stop(ctx context.Context) error {
 	}
 	if d.watchdogDone != nil {
 		<-d.watchdogDone
+	}
+	if d.relayDone != nil {
+		<-d.relayDone
 	}
 	if d.mergeQueueDone != nil {
 		<-d.mergeQueueDone
@@ -325,6 +354,8 @@ func (d *Daemon) Stop(ctx context.Context) error {
 	d.mergeQueueDone = nil
 	d.eventStreamDone = nil
 	d.watchdogDone = nil
+	d.relayDone = nil
+	d.pollIntervalCh = nil
 
 	d.emit(ctx, Event{
 		Time:    d.now(),

@@ -34,6 +34,9 @@ const (
 	taskMonitorCheckCapture taskMonitorCheckKind = iota
 	taskMonitorCheckPRPoll
 	taskMonitorCheckExitedEvent
+	taskMonitorCheckReviewPoll
+	taskMonitorCheckCIPoll
+	taskMonitorCheckMergePoll
 )
 
 type taskMonitorRequest struct {
@@ -87,6 +90,12 @@ func (m *TaskMonitor) handle(ctx context.Context, kind taskMonitorCheckKind, act
 		return m.daemon.checkTaskPRPoll(ctx, active)
 	case taskMonitorCheckExitedEvent:
 		return m.daemon.checkTaskExitedEvent(ctx, active)
+	case taskMonitorCheckReviewPoll:
+		return m.daemon.checkTaskImmediateReviewPoll(ctx, active)
+	case taskMonitorCheckCIPoll:
+		return m.daemon.checkTaskImmediateCIPoll(ctx, active)
+	case taskMonitorCheckMergePoll:
+		return m.daemon.checkTaskImmediateMergePoll(ctx, active)
 	default:
 		return TaskStateUpdate{Active: active}
 	}

@@ -152,6 +152,7 @@ func (d *Daemon) finishAssignmentWithMessage(ctx context.Context, active ActiveA
 			result = errors.Join(result, err)
 		}
 	}
+	d.requestRelayReconnect()
 
 	if message == "" {
 		message = "task finished"

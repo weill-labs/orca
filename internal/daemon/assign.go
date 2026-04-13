@@ -212,6 +212,7 @@ func (d *Daemon) assign(ctx context.Context, projectPath, issue, prompt, agentPr
 		return fmt.Errorf("store worker: %w", err)
 	}
 	d.ensureTaskMonitorForProject(projectPath, issue)
+	d.requestRelayReconnect()
 
 	d.emit(ctx, Event{
 		Time:         now,

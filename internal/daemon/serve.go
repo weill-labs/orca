@@ -74,6 +74,9 @@ func runProcess(ctx context.Context, req ServeRequest, deps serveDeps) error {
 	if commandRunner == nil {
 		commandRunner = execCommandRunner{}
 	}
+	relayURL := strings.TrimSpace(os.Getenv("ORCA_RELAY_URL"))
+	relayToken := strings.TrimSpace(os.Getenv("ORCA_RELAY_TOKEN"))
+	hostname, _ := os.Hostname()
 
 	issueTracker, err := newLinearIssueTrackerFromEnv()
 	if err != nil {
@@ -123,6 +126,10 @@ func runProcess(ctx context.Context, req ServeRequest, deps serveDeps) error {
 		MergeGracePeriod:   defaultMergeGracePeriod,
 		DaemonStatusWriter: statusWriter,
 		Logf:               log.Printf,
+		RelayURL:           relayURL,
+		RelayToken:         relayToken,
+		Hostname:           strings.TrimSpace(hostname),
+		DetectOrigin:       detectOrigin,
 	})
 	if err != nil {
 		return fmt.Errorf("create daemon: %w", err)

@@ -28,10 +28,14 @@ func (d *Daemon) runLoop(ctx context.Context, done chan struct{}) {
 
 	captureTick := d.newTicker(d.captureInterval)
 	defer captureTick.Stop()
-	pollTick := d.newTicker(prPollSchedulerBaseInterval(d.pollInterval))
-	defer pollTick.Stop()
+	pollInterval := d.currentPRPollInterval()
+	pollTick := d.newTicker(prPollSchedulerTickInterval(pollInterval))
+	defer func() {
+		pollTick.Stop()
+	}()
 	captureTickCh := captureTick.C()
 	pollTickCh := pollTick.C()
+	pollIntervalCh := d.pollIntervalCh
 	captureInFlight := false
 	pollInFlight := false
 
@@ -50,6 +54,15 @@ func (d *Daemon) runLoop(ctx context.Context, done chan struct{}) {
 			d.recordHeartbeat(ctx)
 			drainMonitorTicks(captureTickCh)
 			captureInFlight = false
+		case interval := <-pollIntervalCh:
+			if interval <= 0 || interval == pollInterval {
+				continue
+			}
+			pollTick.Stop()
+			drainMonitorTicks(pollTickCh)
+			pollInterval = interval
+			pollTick = d.newTicker(prPollSchedulerTickInterval(pollInterval))
+			pollTickCh = pollTick.C()
 		case <-pollTickCh:
 			if pollInFlight {
 				continue
@@ -104,7 +117,7 @@ func (d *Daemon) runPollTick(ctx context.Context) {
 	assignments, err := d.prPollAssignments(ctx)
 	if err == nil {
 		assignments = d.reconcileTrackedPanes(ctx, assignments)
-		assignments = dueAssignmentsForPRPoll(d.now(), assignments, d.pollInterval)
+		assignments = dueAssignmentsForPRPoll(d.now(), assignments, d.currentPRPollInterval())
 		results := d.dispatchTaskMonitorChecks(ctx, assignments, taskMonitorCheckPRPoll)
 		d.applyTaskMonitorResults(ctx, results)
 	}
@@ -153,8 +166,14 @@ func (d *Daemon) reconcileTrackedPanes(ctx context.Context, assignments []Active
 	return reconciled
 }
 
-func prPollSchedulerBaseInterval(defaultInterval time.Duration) time.Duration {
-	if defaultInterval > 0 && defaultInterval < adaptivePRFastPollInterval {
+func prPollSchedulerTickInterval(defaultInterval time.Duration) time.Duration {
+	if defaultInterval <= 0 {
+		return adaptivePRFastPollInterval
+	}
+	if defaultInterval > adaptivePRSlowPollInterval {
+		return defaultInterval
+	}
+	if defaultInterval < adaptivePRFastPollInterval {
 		return defaultInterval
 	}
 	return adaptivePRFastPollInterval
