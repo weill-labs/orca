@@ -315,6 +315,93 @@ func TestWorkerPaneSpawnName(t *testing.T) {
 	}
 }
 
+func TestSpawnWorkerPaneKillsOrphanPaneWithTargetName(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.amux.listPanes = []Pane{{ID: "orphan-1", Name: "w-LAB-1115"}}
+	d := deps.newDaemon(t)
+
+	pane, err := d.spawnWorkerPane(context.Background(), Task{Project: "/tmp/project", Issue: "LAB-1115"}, "worker-01", deps.pool.clone.Path, deps.config.profiles["codex"])
+	if err != nil {
+		t.Fatalf("spawnWorkerPane() error = %v", err)
+	}
+
+	if got, want := len(deps.amux.killCalls), 1; got != want {
+		t.Fatalf("kill calls = %d, want %d", got, want)
+	}
+	if got, want := deps.amux.killCalls[0], "orphan-1"; got != want {
+		t.Fatalf("kill call = %q, want %q", got, want)
+	}
+	if got, want := len(deps.amux.spawnRequests), 1; got != want {
+		t.Fatalf("spawn requests = %d, want %d", got, want)
+	}
+	if got, want := deps.amux.spawnRequests[0].Name, "w-LAB-1115"; got != want {
+		t.Fatalf("spawn request name = %q, want %q", got, want)
+	}
+
+	panes, err := deps.amux.ListPanes(context.Background())
+	if err != nil {
+		t.Fatalf("ListPanes() error = %v", err)
+	}
+	if got, want := len(panes), 1; got != want {
+		t.Fatalf("len(ListPanes()) = %d, want %d", got, want)
+	}
+	if got, want := panes[0].ID, pane.ID; got != want {
+		t.Fatalf("pane ID = %q, want %q", got, want)
+	}
+	if got, want := panes[0].Name, "w-LAB-1115"; got != want {
+		t.Fatalf("pane name = %q, want %q", got, want)
+	}
+}
+
+func TestSpawnWorkerPaneFailsWhenTargetNameBelongsToActiveTask(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	now := deps.clock.Now()
+	deps.amux.listPanes = []Pane{{ID: "live-pane", Name: "w-LAB-1115"}}
+	deps.state.putTaskForTest(Task{
+		Project:   "/tmp/project",
+		Issue:     "LAB-1115",
+		Status:    TaskStatusActive,
+		WorkerID:  "worker-99",
+		PaneID:    "live-pane",
+		PaneName:  "w-LAB-1115",
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+	if err := deps.state.PutWorker(context.Background(), Worker{
+		Project:      "/tmp/project",
+		WorkerID:     "worker-99",
+		PaneID:       "live-pane",
+		PaneName:     "w-LAB-1115",
+		Issue:        "LAB-1115",
+		AgentProfile: "codex",
+		Health:       WorkerHealthHealthy,
+		CreatedAt:    now,
+		LastSeenAt:   now,
+		UpdatedAt:    now,
+	}); err != nil {
+		t.Fatalf("PutWorker() error = %v", err)
+	}
+	d := deps.newDaemon(t)
+
+	_, err := d.spawnWorkerPane(context.Background(), Task{Project: "/tmp/project", Issue: "LAB-1115"}, "worker-01", deps.pool.clone.Path, deps.config.profiles["codex"])
+	if err == nil {
+		t.Fatal("spawnWorkerPane() succeeded, want active task collision error")
+	}
+	if got, want := err.Error(), `pane "w-LAB-1115" already exists for active task LAB-1115`; !strings.Contains(got, want) {
+		t.Fatalf("spawnWorkerPane() error = %q, want substring %q", got, want)
+	}
+	if got := len(deps.amux.killCalls); got != 0 {
+		t.Fatalf("kill calls = %d, want 0", got)
+	}
+	if got := len(deps.amux.spawnRequests); got != 0 {
+		t.Fatalf("spawn requests = %d, want 0", got)
+	}
+}
+
 type spawnFailingRunner struct {
 	err error
 }

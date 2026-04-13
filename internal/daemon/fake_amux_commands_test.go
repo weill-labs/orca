@@ -98,13 +98,16 @@ func (a *fakeAmux) Spawn(ctx context.Context, req SpawnRequest) (Pane, error) {
 		} else {
 			a.spawnPanes = append([]Pane(nil), a.spawnPanes[1:]...)
 		}
+		a.trackSpawnedPaneLocked(req, pane)
 		return pane, nil
 	}
 	if len(a.spawnResults) > 0 {
 		pane := a.spawnResults[0]
 		a.spawnResults = a.spawnResults[1:]
+		a.trackSpawnedPaneLocked(req, pane)
 		return pane, nil
 	}
+	a.trackSpawnedPaneLocked(req, a.spawnPane)
 	return a.spawnPane, nil
 }
 
@@ -357,7 +360,57 @@ func (a *fakeAmux) KillPane(ctx context.Context, paneID string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.killCalls = append(a.killCalls, paneID)
+	a.removePaneLocked(paneID)
 	return a.killErr
+}
+
+func (a *fakeAmux) trackSpawnedPaneLocked(req SpawnRequest, pane Pane) {
+	tracked := pane
+	if name := strings.TrimSpace(req.Name); name != "" {
+		tracked.Name = name
+	}
+
+	replaced := false
+	for i, existing := range a.listPanes {
+		switch {
+		case strings.TrimSpace(tracked.ID) != "" && strings.TrimSpace(existing.ID) == strings.TrimSpace(tracked.ID):
+			a.listPanes[i] = tracked
+			replaced = true
+		case strings.TrimSpace(tracked.ID) == "" && strings.TrimSpace(existing.Name) == strings.TrimSpace(tracked.Name):
+			a.listPanes[i] = tracked
+			replaced = true
+		}
+		if replaced {
+			break
+		}
+	}
+	if !replaced {
+		a.listPanes = append(a.listPanes, tracked)
+	}
+
+	if paneID := strings.TrimSpace(tracked.ID); paneID != "" {
+		if a.paneExists == nil {
+			a.paneExists = make(map[string]bool)
+		}
+		a.paneExists[paneID] = true
+	}
+}
+
+func (a *fakeAmux) removePaneLocked(paneRef string) {
+	filtered := a.listPanes[:0]
+	for _, pane := range a.listPanes {
+		if paneMatchesReference(pane, paneRef) {
+			if paneID := strings.TrimSpace(pane.ID); paneID != "" {
+				if a.paneExists == nil {
+					a.paneExists = make(map[string]bool)
+				}
+				a.paneExists[paneID] = false
+			}
+			continue
+		}
+		filtered = append(filtered, pane)
+	}
+	a.listPanes = filtered
 }
 
 func (a *fakeAmux) WaitIdle(ctx context.Context, paneID string, timeout time.Duration) error {
