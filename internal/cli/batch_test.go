@@ -122,6 +122,66 @@ func TestAppRunBatchUsesDefaultDelay(t *testing.T) {
 	}
 }
 
+func TestAppRunBatchSetsClientTimeoutBasedOnEntryCountAndDelay(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := newRepoRoot(t)
+	cwdPath := filepath.Join(repoRoot, "internal", "cli")
+	if err := os.MkdirAll(cwdPath, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", cwdPath, err)
+	}
+
+	manifestPath := filepath.Join(repoRoot, "tasks.json")
+	if err := os.WriteFile(manifestPath, []byte(`[
+{"issue":"LAB-690","agent":"codex","prompt":"Implement CLI wiring"},
+{"issue":"LAB-691","agent":"codex","prompt":"Implement batch timeout"},
+{"issue":"LAB-692","agent":"codex","prompt":"Implement timeout tests"},
+{"issue":"LAB-693","agent":"codex","prompt":"Verify timeout guidance"},
+{"issue":"LAB-694","agent":"codex","prompt":"Review batch RPC behavior"}
+]`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", manifestPath, err)
+	}
+
+	d := &fakeDaemon{
+		batchHook: func(ctx context.Context, req daemon.BatchRequest) (daemon.BatchResult, error) {
+			t.Helper()
+
+			deadline, ok := ctx.Deadline()
+			if !ok {
+				t.Fatal("batch context missing deadline")
+			}
+
+			want := batchClientTimeout(len(req.Entries), req.Delay)
+			remaining := time.Until(deadline)
+			if remaining < want-time.Second || remaining > want {
+				t.Fatalf("deadline remaining = %s, want between %s and %s", remaining, want-time.Second, want)
+			}
+
+			return daemon.BatchResult{
+				Project: repoRoot,
+				Results: []daemon.TaskActionResult{
+					{Project: repoRoot, Issue: "LAB-690", Status: "active", Agent: "codex", UpdatedAt: time.Now().UTC()},
+				},
+			}, nil
+		},
+	}
+
+	app := New(Options{
+		Daemon:  d,
+		State:   &fakeState{},
+		Stdout:  &bytes.Buffer{},
+		Stderr:  &bytes.Buffer{},
+		Version: "build-123",
+		Cwd: func() (string, error) {
+			return cwdPath, nil
+		},
+	})
+
+	if err := app.Run(context.Background(), []string{"batch", "--delay", "10s", manifestPath}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+}
+
 func TestAppRunBatchDefaultsCallerPaneFromAMUXPaneEnv(t *testing.T) {
 	repoRoot := newRepoRoot(t)
 	cwdPath := filepath.Join(repoRoot, "internal", "cli")

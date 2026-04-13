@@ -1698,6 +1698,7 @@ type fakeDaemon struct {
 	cancelResult  daemon.TaskActionResult
 	resumeResult  daemon.TaskActionResult
 
+	batchHook  func(context.Context, daemon.BatchRequest) (daemon.BatchResult, error)
 	cancelHook func(context.Context, daemon.CancelRequest) (daemon.TaskActionResult, error)
 	err        error
 }
@@ -1734,11 +1735,14 @@ func (f *fakeDaemon) Assign(_ context.Context, req daemon.AssignRequest) (daemon
 	return f.assignResult, nil
 }
 
-func (f *fakeDaemon) Batch(_ context.Context, req daemon.BatchRequest) (daemon.BatchResult, error) {
+func (f *fakeDaemon) Batch(ctx context.Context, req daemon.BatchRequest) (daemon.BatchResult, error) {
 	if f.err != nil {
 		return daemon.BatchResult{}, f.err
 	}
 	f.batchRequest = &req
+	if f.batchHook != nil {
+		return f.batchHook(ctx, req)
+	}
 	return f.batchResult, nil
 }
 

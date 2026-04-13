@@ -23,6 +23,7 @@ const defaultAgent = "codex"
 const amuxSessionEnvVar = "AMUX_SESSION"
 const amuxPaneEnvVar = "AMUX_PANE"
 const cancelClientTimeout = 10 * time.Second
+const batchClientTimeoutBuffer = 30 * time.Second
 
 const usageText = `orca: agent orchestration daemon
 usage: orca <command>
@@ -494,7 +495,10 @@ func (a *App) runBatch(ctx context.Context, args []string) error {
 	}
 	callerPane = strings.TrimSpace(os.Getenv(amuxPaneEnvVar))
 
-	result, err := a.daemon.Batch(ctx, daemon.BatchRequest{
+	batchCtx, cancel := context.WithTimeout(ctx, batchClientTimeout(len(entries), delay))
+	defer cancel()
+
+	result, err := a.daemon.Batch(batchCtx, daemon.BatchRequest{
 		Project:    projectPath,
 		Entries:    entries,
 		Delay:      delay,
@@ -505,6 +509,14 @@ func (a *App) runBatch(ctx context.Context, args []string) error {
 	}
 
 	return a.writeBatchResult(result)
+}
+
+func batchClientTimeout(entryCount int, delay time.Duration) time.Duration {
+	timeout := batchClientTimeoutBuffer
+	if entryCount <= 0 || delay <= 0 {
+		return timeout
+	}
+	return timeout + time.Duration(entryCount)*delay
 }
 
 func (a *App) runSpawn(ctx context.Context, args []string) error {
