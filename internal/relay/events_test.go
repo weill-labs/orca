@@ -156,9 +156,9 @@ func TestNormalizeWebhookEvent(t *testing.T) {
 					"full_name": "weill-labs/orca",
 				},
 				"check_run": map[string]any{
-					"name":       "ci",
-					"status":     "completed",
-					"conclusion": "failure",
+					"name":         "ci",
+					"status":       "completed",
+					"conclusion":   "failure",
 					"completed_at": "2026-04-13T11:15:00Z",
 					"pull_requests": []map[string]any{
 						{"number": 17},
