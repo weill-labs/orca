@@ -14,11 +14,12 @@ const (
 )
 
 type Hub struct {
-	mu      sync.Mutex
-	now     func() time.Time
-	nextID  uint64
-	replay  ringBuffer
-	clients map[*client]struct{}
+	mu            sync.Mutex
+	now           func() time.Time
+	nextID        uint64
+	replay        ringBuffer
+	sendQueueSize int
+	clients       map[*client]struct{}
 }
 
 func NewHub(size int, now func() time.Time) *Hub {
@@ -30,9 +31,10 @@ func NewHub(size int, now func() time.Time) *Hub {
 	}
 
 	return &Hub{
-		now:     now,
-		replay:  ringBuffer{max: size},
-		clients: make(map[*client]struct{}),
+		now:           now,
+		replay:        ringBuffer{max: size},
+		sendQueueSize: queueSizeForReplay(size),
+		clients:       make(map[*client]struct{}),
 	}
 }
 
@@ -66,7 +68,7 @@ func (h *Hub) Attach(conn *websocket.Conn, lastEventID uint64) {
 	client := &client{
 		conn: conn,
 		hub:  h,
-		send: make(chan Envelope, defaultSendQueueSize),
+		send: make(chan Envelope, h.sendQueueSize),
 	}
 
 	h.mu.Lock()
@@ -150,4 +152,11 @@ func (r *ringBuffer) after(lastEventID uint64) []Envelope {
 	out := make([]Envelope, len(r.events)-start)
 	copy(out, r.events[start:])
 	return out
+}
+
+func queueSizeForReplay(replaySize int) int {
+	if replaySize+24 > defaultSendQueueSize {
+		return replaySize + 24
+	}
+	return defaultSendQueueSize
 }

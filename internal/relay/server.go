@@ -128,7 +128,6 @@ func (s *Server) handleWebsocket(w http.ResponseWriter, r *http.Request) {
 
 	conn, err := s.upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("upgrade websocket: %v", err), http.StatusBadRequest)
 		return
 	}
 
