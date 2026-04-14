@@ -44,6 +44,7 @@ func newTestDeps(t *testing.T) *testDeps {
 				"codex": {
 					Name:              "codex",
 					StartCommand:      "codex --yolo",
+					ReadyPattern:      codexReadyPattern,
 					ResumeSequence:    []string{"codex --yolo resume", "Enter", "."},
 					PostmortemEnabled: true,
 					StuckTimeout:      5 * time.Minute,

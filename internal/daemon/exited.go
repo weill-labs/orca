@@ -102,7 +102,8 @@ func (d *Daemon) planExitedPaneRecovery(update *TaskStateUpdate, profile AgentPr
 			}
 		}
 
-		if err := d.startAgentInPane(ctx, update.Active.Task.PaneID, profile); err != nil {
+		startupSnapshot, err := d.startAgentInPane(ctx, update.Active.Task.PaneID, profile)
+		if err != nil {
 			update.Active.Worker.RestartCount = restartCount
 			update.Active.Worker.FirstCrashAt = firstCrashAt
 			update.Active.Worker.Health = WorkerHealthEscalated
@@ -116,6 +117,7 @@ func (d *Daemon) planExitedPaneRecovery(update *TaskStateUpdate, profile AgentPr
 
 		update.Active.Worker.RestartCount = restartCount
 		update.Active.Worker.FirstCrashAt = firstCrashAt
+		update.Active.Worker.LastCapture = startupSnapshot.Output()
 		update.Active.Worker.Health = WorkerHealthHealthy
 		update.Active.Worker.NudgeCount = 0
 		update.Active.Worker.LastActivityAt = now

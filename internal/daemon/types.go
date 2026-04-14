@@ -166,6 +166,7 @@ type Ticker interface {
 type AgentProfile struct {
 	Name              string
 	StartCommand      string
+	ReadyPattern      string
 	ResumeSequence    []string
 	PostmortemEnabled bool
 	StuckTextPatterns []string

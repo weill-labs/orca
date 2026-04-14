@@ -12,47 +12,48 @@ import (
 )
 
 type fakeAmux struct {
-	mu                    sync.Mutex
-	spawnPane             Pane
-	spawnResults          []Pane
-	spawnPanes            []Pane
-	spawnHook             func(SpawnRequest)
-	eventSequences        []fakeAmuxEventSequence
-	eventsCalls           int
-	spawnErr              error
-	paneExists            map[string]bool
-	paneExistsErr         error
-	listPanes             []Pane
-	listPanesErr          error
-	sendKeysErr           error
-	sendKeysResults       []error
-	sendKeysHook          func(paneID string, keys []string)
-	setMetadataErr        error
-	setMetadataHook       func(paneID string, metadata map[string]string)
-	removeMetadataHook    func(paneID string, keys []string)
-	killErr               error
-	killHook              func(paneID string)
-	waitIdleErr           error
-	waitIdleHook          func(paneID string, timeout, settle time.Duration)
-	waitContentErr        error
-	waitContentResults    []error
-	waitContentHook       func(paneID, substring string, timeout time.Duration)
-	capturePaneErr        error
-	rejectCanceledContext bool
-	spawnRequests         []SpawnRequest
-	metadata              map[string]map[string]string
-	sentKeys              map[string][]string
-	captures              map[string][]string
-	paneCaptures          map[string][]PaneCapture
-	paneExistsCalls       []string
-	metadataCalls         []string
-	captureCalls          map[string]int
-	historyCaptures       map[string][]PaneCapture
-	historyCaptureCalls   map[string]int
-	historyCaptureErrors  map[string][]error
-	killCalls             []string
-	waitIdleCalls         []waitIdleCall
-	waitContentCalls      []waitContentCall
+	mu                           sync.Mutex
+	spawnPane                    Pane
+	spawnResults                 []Pane
+	spawnPanes                   []Pane
+	spawnHook                    func(SpawnRequest)
+	eventSequences               []fakeAmuxEventSequence
+	eventsCalls                  int
+	spawnErr                     error
+	paneExists                   map[string]bool
+	paneExistsErr                error
+	listPanes                    []Pane
+	listPanesErr                 error
+	sendKeysErr                  error
+	sendKeysResults              []error
+	sendKeysHook                 func(paneID string, keys []string)
+	setMetadataErr               error
+	setMetadataHook              func(paneID string, metadata map[string]string)
+	removeMetadataHook           func(paneID string, keys []string)
+	killErr                      error
+	killHook                     func(paneID string)
+	waitIdleErr                  error
+	waitIdleHook                 func(paneID string, timeout, settle time.Duration)
+	waitContentErr               error
+	waitContentResults           []error
+	waitContentHook              func(paneID, substring string, timeout time.Duration)
+	capturePaneErr               error
+	rejectCanceledContext        bool
+	disableAutomaticReadyCapture bool
+	spawnRequests                []SpawnRequest
+	metadata                     map[string]map[string]string
+	sentKeys                     map[string][]string
+	captures                     map[string][]string
+	paneCaptures                 map[string][]PaneCapture
+	paneExistsCalls              []string
+	metadataCalls                []string
+	captureCalls                 map[string]int
+	historyCaptures              map[string][]PaneCapture
+	historyCaptureCalls          map[string]int
+	historyCaptureErrors         map[string][]error
+	killCalls                    []string
+	waitIdleCalls                []waitIdleCall
+	waitContentCalls             []waitContentCall
 }
 
 type waitIdleCall struct {
@@ -287,7 +288,10 @@ func (a *fakeAmux) Capture(ctx context.Context, paneID string) (string, error) {
 	a.captureCalls[paneID]++
 	value, remaining, ok := nextStringCapture(a.captures[paneID])
 	if !ok {
-		return "", nil
+		if a.disableAutomaticReadyCapture {
+			return "", nil
+		}
+		return defaultCodexReadyOutput(), nil
 	}
 	a.captures[paneID] = remaining
 	return value, nil
@@ -315,7 +319,10 @@ func (a *fakeAmux) CapturePane(ctx context.Context, paneID string) (PaneCapture,
 
 	output, remaining, ok := nextStringCapture(a.captures[paneID])
 	if !ok {
-		return PaneCapture{}, nil
+		if a.disableAutomaticReadyCapture {
+			return PaneCapture{}, nil
+		}
+		return defaultCodexReadyPaneCapture(), nil
 	}
 	a.captures[paneID] = remaining
 	return paneCaptureFromOutput(output), nil
@@ -456,15 +463,53 @@ func (a *fakeAmux) WaitContent(ctx context.Context, paneID, substring string, ti
 	if len(a.waitContentResults) > 0 {
 		err := a.waitContentResults[0]
 		a.waitContentResults = a.waitContentResults[1:]
+		if err == nil {
+			a.seedSuccessfulWaitContentLocked(paneID, substring)
+		}
 		return err
 	}
 	if substring == codexWorkingText {
+		return nil
+	}
+	if substring == codexReadyPattern {
+		if a.waitContentErr != nil {
+			return a.waitContentErr
+		}
+		a.seedSuccessfulWaitContentLocked(paneID, substring)
 		return nil
 	}
 	if a.waitContentErr == nil {
 		return amuxapi.ErrWaitContentTimeout
 	}
 	return a.waitContentErr
+}
+
+func (a *fakeAmux) seedSuccessfulWaitContentLocked(paneID, substring string) {
+	if substring != codexReadyPattern {
+		return
+	}
+	if a.disableAutomaticReadyCapture {
+		return
+	}
+	readyCapture := defaultCodexReadyPaneCapture()
+	if sequence := a.paneCaptures[paneID]; len(sequence) > 0 {
+		if containsFold(sequence[0].Output(), codexReadyPattern) {
+			return
+		}
+		a.paneCaptures[paneID] = append([]PaneCapture{readyCapture}, sequence...)
+		return
+	}
+	if sequence := a.captures[paneID]; len(sequence) > 0 {
+		if containsFold(sequence[0], codexReadyPattern) {
+			return
+		}
+		a.captures[paneID] = append([]string{defaultCodexReadyOutput()}, sequence...)
+		return
+	}
+	if a.paneCaptures == nil {
+		a.paneCaptures = make(map[string][]PaneCapture)
+	}
+	a.paneCaptures[paneID] = []PaneCapture{readyCapture}
 }
 
 func (a *fakeAmux) captureSequence(paneID string, sequence []string) {
@@ -659,6 +704,17 @@ func paneCaptureFromOutput(output string) PaneCapture {
 		return PaneCapture{}
 	}
 	return PaneCapture{Content: strings.Split(output, "\n")}
+}
+
+func defaultCodexReadyOutput() string {
+	return "OpenAI Codex\n" + codexReadyPattern
+}
+
+func defaultCodexReadyPaneCapture() PaneCapture {
+	return PaneCapture{
+		Content:        []string{"OpenAI Codex", codexReadyPattern},
+		CurrentCommand: "codex",
+	}
 }
 
 func nextStringCapture(sequence []string) (string, []string, bool) {

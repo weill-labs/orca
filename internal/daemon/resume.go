@@ -117,9 +117,11 @@ func (d *Daemon) resumeExistingPaneForProject(ctx context.Context, projectPath s
 		return err
 	}
 	worker = updatedWorker
-	if err := d.startAgentInPane(ctx, paneID, profile); err != nil {
+	startupSnapshot, err := d.startAgentInPane(ctx, paneID, profile)
+	if err != nil {
 		return err
 	}
+	worker.LastCapture = startupSnapshot.Output()
 
 	metadata, err := d.assignmentPaneMetadata(ctx, projectPath, paneID, profile.Name, task.Branch, task.Issue, resolveTaskTitle(task.Issue, task.Issue), task.PRNumber)
 	if err != nil {
@@ -186,9 +188,11 @@ func (d *Daemon) resumeWithFreshPaneForProject(ctx context.Context, projectPath 
 	if err := d.setPaneMetadata(ctx, pane.ID, metadata); err != nil {
 		return fmt.Errorf("set pane metadata: %w", err)
 	}
-	if err := d.agentHandshake(ctx, pane.ID, profile); err != nil {
+	startupSnapshot, err := d.agentHandshake(ctx, pane.ID, profile)
+	if err != nil {
 		return fmt.Errorf("agent handshake: %w", err)
 	}
+	worker.LastCapture = startupSnapshot.Output()
 
 	promptToSend := prompt
 	if promptToSend == "" {
@@ -281,7 +285,7 @@ func (d *Daemon) storeResumedTaskForProject(ctx context.Context, projectPath str
 	resumedWorker.CIEscalated = false
 	resumedWorker.LastMergeableState = ""
 	resumedWorker.NudgeCount = 0
-	resumedWorker.LastCapture = ""
+	resumedWorker.LastCapture = worker.LastCapture
 	resumedWorker.LastActivityAt = now
 	resumedWorker.LastPRNumber = task.PRNumber
 	if !hasWorker && task.PRNumber > 0 {

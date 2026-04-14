@@ -152,7 +152,7 @@ func TestGlobalDaemonStartUsesTaskProjectForWorkerLookup(t *testing.T) {
 	if !ok {
 		t.Fatal("worker missing after global startup reconciliation")
 	}
-	if got, want := worker.LastCapture, ""; got != want {
+	if got, want := worker.LastCapture, defaultCodexReadyOutput(); got != want {
 		t.Fatalf("worker.LastCapture = %q, want %q without monitor tick", got, want)
 	}
 
@@ -355,6 +355,7 @@ func seedActiveAssignment(t *testing.T, deps *testDeps, issue, paneID string) {
 		ClonePath:      deps.pool.clone.Path,
 		AgentProfile:   "codex",
 		Health:         WorkerHealthHealthy,
+		LastCapture:    defaultCodexReadyOutput(),
 		LastActivityAt: now,
 		UpdatedAt:      now,
 	}); err != nil {

@@ -333,6 +333,7 @@ func seedTaskMonitorAssignment(t *testing.T, deps *testDeps, issue, paneID strin
 		ClonePath:      "/tmp/" + issue,
 		AgentProfile:   "codex",
 		Health:         WorkerHealthHealthy,
+		LastCapture:    defaultCodexReadyOutput(),
 		LastActivityAt: now,
 		UpdatedAt:      now,
 	}

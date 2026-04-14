@@ -89,7 +89,7 @@ func TestResumeRestartsExistingWorkerInPlace(t *testing.T) {
 	if got, want := worker.NudgeCount, 0; got != want {
 		t.Fatalf("worker.NudgeCount = %d, want %d", got, want)
 	}
-	if got, want := worker.LastCapture, ""; got != want {
+	if got, want := worker.LastCapture, defaultCodexReadyOutput(); got != want {
 		t.Fatalf("worker.LastCapture = %q, want %q", got, want)
 	}
 }

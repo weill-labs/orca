@@ -99,7 +99,7 @@ func TestStuckDetectionUsesIdleTimeoutAndRecoversOnOutputChange(t *testing.T) {
 
 	captureTicker.tick(deps.clock.Now())
 	waitFor(t, "initial monitored capture", func() bool {
-		return deps.amux.captureCount("pane-1") == 2
+		return deps.amux.captureCount("pane-1") == 3
 	})
 	if got := deps.amux.countKey("pane-1", "\n"); got != 0 {
 		t.Fatalf("unexpected nudge count after initial activity = %d", got)

@@ -12,15 +12,19 @@ import (
 const (
 	handshakeStepWait             = "wait for startup idle"
 	handshakeStepWaitTrustContent = "wait for trust prompt content"
+	handshakeStepWaitReadyContent = "wait for startup ready content"
 	handshakeStepCapture          = "capture startup output"
 	handshakeStepTrustDetected    = "trust prompt detected"
 	handshakeStepTrustEnter       = "sent Enter to confirm trust prompt"
+	handshakeStepReadyValidated   = "validated startup ready content"
+
+	codexReadyPattern = "›"
 )
 
-func (d *Daemon) agentHandshake(ctx context.Context, paneID string, profile AgentProfile) error {
+func (d *Daemon) agentHandshake(ctx context.Context, paneID string, profile AgentProfile) (PaneCapture, error) {
 	d.emitHandshakeEvent(ctx, paneID, profile, handshakeStepWait)
 	if err := d.amux.WaitIdle(ctx, paneID, defaultAgentHandshakeTimeout); err != nil {
-		return fmt.Errorf("wait for startup idle: %w", err)
+		return PaneCapture{}, fmt.Errorf("wait for startup idle: %w", err)
 	}
 
 	resumed := false
@@ -28,7 +32,7 @@ func (d *Daemon) agentHandshake(ctx context.Context, paneID string, profile Agen
 	for {
 		trustConfirmed, err := d.confirmTrustPromptIfPresent(ctx, paneID, profile)
 		if err != nil {
-			return err
+			return PaneCapture{}, err
 		}
 		if trustConfirmed {
 			continue
@@ -36,25 +40,58 @@ func (d *Daemon) agentHandshake(ctx context.Context, paneID string, profile Agen
 
 		output, err := d.amux.Capture(ctx, paneID)
 		if err != nil {
-			return fmt.Errorf("capture startup output: %w", err)
+			return PaneCapture{}, fmt.Errorf("capture startup output: %w", err)
 		}
 		d.emitHandshakeEvent(ctx, paneID, profile, handshakeStepCapture)
 
 		switch {
 		case !resumed && hasResumePrompt(profile, output):
 			if err := d.resumeAgentInPane(ctx, paneID, profile); err != nil {
-				return fmt.Errorf("resume prior session: %w", err)
+				return PaneCapture{}, fmt.Errorf("resume prior session: %w", err)
 			}
 			resumed = true
 		default:
-			return nil
+			validated, err := d.waitForReadyMarker(ctx, paneID, profile, startupOutputSnapshot(output))
+			if err != nil {
+				return PaneCapture{}, err
+			}
+			return validated, nil
 		}
 
 		d.emitHandshakeEvent(ctx, paneID, profile, handshakeStepWait)
 		if err := d.amux.WaitIdle(ctx, paneID, defaultAgentHandshakeTimeout); err != nil {
-			return fmt.Errorf("wait for post-startup action idle: %w", err)
+			return PaneCapture{}, fmt.Errorf("wait for post-startup action idle: %w", err)
 		}
 	}
+}
+
+func (d *Daemon) waitForReadyMarker(ctx context.Context, paneID string, profile AgentProfile, snapshot PaneCapture) (PaneCapture, error) {
+	pattern, ok := readyPatternText(profile)
+	if !ok {
+		return snapshot, nil
+	}
+
+	validated := snapshot
+	if !hasReadyPattern(profile, snapshot.Output()) {
+		d.emitHandshakeEvent(ctx, paneID, profile, handshakeStepWaitReadyContent)
+		if err := d.amux.WaitContent(ctx, paneID, pattern, defaultAgentHandshakeTimeout); err != nil {
+			return PaneCapture{}, fmt.Errorf("wait for ready pattern %q: %w", pattern, err)
+		}
+
+		var err error
+		validated, err = d.amux.CapturePane(ctx, paneID)
+		if err != nil {
+			return PaneCapture{}, fmt.Errorf("capture ready output: %w", err)
+		}
+		d.emitHandshakeEvent(ctx, paneID, profile, handshakeStepCapture)
+	}
+
+	if !hasReadyPattern(profile, validated.Output()) {
+		return PaneCapture{}, fmt.Errorf("validate ready pattern %q: %s", pattern, describePaneSnapshot(validated))
+	}
+
+	d.emitHandshakeEvent(ctx, paneID, profile, handshakeStepReadyValidated)
+	return validated, nil
 }
 
 func (d *Daemon) confirmTrustPromptIfPresent(ctx context.Context, paneID string, profile AgentProfile) (bool, error) {
@@ -148,6 +185,11 @@ func hasResumePrompt(profile AgentProfile, output string) bool {
 	}
 }
 
+func hasReadyPattern(profile AgentProfile, output string) bool {
+	pattern, ok := readyPatternText(profile)
+	return ok && containsFold(output, pattern)
+}
+
 func normalizedProfileName(profile AgentProfile) string {
 	return strings.ToLower(profile.Name)
 }
@@ -163,4 +205,39 @@ func trustPromptText(profile AgentProfile) (string, bool) {
 	default:
 		return "", false
 	}
+}
+
+func readyPatternText(profile AgentProfile) (string, bool) {
+	if pattern := strings.TrimSpace(profile.ReadyPattern); pattern != "" {
+		return pattern, true
+	}
+
+	switch normalizedProfileName(profile) {
+	case "codex":
+		return codexReadyPattern, true
+	default:
+		return "", false
+	}
+}
+
+func describePaneSnapshot(snapshot PaneCapture) string {
+	parts := make([]string, 0, 2)
+	if command := strings.TrimSpace(snapshot.CurrentCommand); command != "" {
+		parts = append(parts, fmt.Sprintf("current command %q", command))
+	}
+	if output := strings.TrimSpace(snapshot.Output()); output != "" {
+		parts = append(parts, fmt.Sprintf("pane output %q", output))
+	}
+	if len(parts) == 0 {
+		return "pane output empty"
+	}
+	return strings.Join(parts, "; ")
+}
+
+func startupOutputSnapshot(output string) PaneCapture {
+	output = strings.TrimSpace(output)
+	if output == "" {
+		return PaneCapture{}
+	}
+	return PaneCapture{Content: strings.Split(output, "\n")}
 }

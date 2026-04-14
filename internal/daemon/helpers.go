@@ -529,7 +529,7 @@ func (d *Daemon) profileForTask(ctx context.Context, task Task) (AgentProfile, e
 	if profile.Name == "" {
 		profile.Name = task.AgentProfile
 	}
-	return profile, nil
+	return enforceLifecycleProfile(profile), nil
 }
 
 func (d *Daemon) mergeQueueEvent(active *ActiveAssignment, eventType string, prNumber int, message string, at time.Time) Event {
@@ -736,14 +736,15 @@ func (d *Daemon) sendPromptAndCommand(ctx context.Context, paneID, prompt, comma
 	return d.sendKeysToLivePane(ctx, paneID, command)
 }
 
-func (d *Daemon) startAgentInPane(ctx context.Context, paneID string, profile AgentProfile) error {
+func (d *Daemon) startAgentInPane(ctx context.Context, paneID string, profile AgentProfile) (PaneCapture, error) {
 	if err := d.sendKeysToLivePane(ctx, paneID, profile.StartCommand, "Enter"); err != nil {
-		return fmt.Errorf("restart agent in pane %s: %w", paneID, err)
+		return PaneCapture{}, fmt.Errorf("restart agent in pane %s: %w", paneID, err)
 	}
-	if err := d.agentHandshake(ctx, paneID, profile); err != nil {
-		return fmt.Errorf("agent handshake: %w", err)
+	snapshot, err := d.agentHandshake(ctx, paneID, profile)
+	if err != nil {
+		return PaneCapture{}, fmt.Errorf("agent handshake: %w", err)
 	}
-	return nil
+	return snapshot, nil
 }
 
 func (d *Daemon) resumeAgentInPane(ctx context.Context, paneID string, profile AgentProfile) error {

@@ -21,6 +21,9 @@ func enforceLifecycleProfile(profile AgentProfile) AgentProfile {
 		return profile
 	}
 	profile.StartCommand = ensureFlag(profile.StartCommand, "--yolo")
+	if strings.TrimSpace(profile.ReadyPattern) == "" {
+		profile.ReadyPattern = codexReadyPattern
+	}
 	return profile
 }
 

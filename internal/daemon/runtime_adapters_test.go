@@ -48,6 +48,9 @@ func TestBuiltinConfigProviderAgentProfile(t *testing.T) {
 		if got, want := profile.StartCommand, "codex --yolo"; got != want {
 			t.Fatalf("StartCommand = %q, want %q", got, want)
 		}
+		if got, want := profile.ReadyPattern, codexReadyPattern; got != want {
+			t.Fatalf("ReadyPattern = %q, want %q", got, want)
+		}
 		if got, want := profile.ResumeSequence, []string{"codex --yolo resume", "Enter", "."}; !reflect.DeepEqual(got, want) {
 			t.Fatalf("ResumeSequence = %#v, want %#v", got, want)
 		}
