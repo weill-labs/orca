@@ -107,6 +107,7 @@ type StateStore interface {
 	TaskByIssue(ctx context.Context, project, issue string) (Task, error)
 	TasksByPane(ctx context.Context, project, paneID string) ([]Task, error)
 	NonTerminalTasks(ctx context.Context, project string) ([]Task, error)
+	StaleCloneOccupancies(ctx context.Context, project string) ([]CloneOccupancy, error)
 	PutWorker(ctx context.Context, worker Worker) error
 	WorkerByID(ctx context.Context, project, workerID string) (Worker, error)
 	WorkerByPane(ctx context.Context, project, paneID string) (Worker, error)
@@ -181,6 +182,13 @@ type Clone = pool.Clone
 type Pane = amux.Pane
 type PaneCapture = amux.PaneCapture
 type SpawnRequest = amux.SpawnRequest
+
+type CloneOccupancy struct {
+	Project       string
+	Path          string
+	CurrentBranch string
+	AssignedTask  string
+}
 
 type Task struct {
 	Project      string    `json:"project,omitempty"`

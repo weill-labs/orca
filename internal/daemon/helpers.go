@@ -59,6 +59,9 @@ func (d *Daemon) cleanupCloneAndRelease(ctx context.Context, clone Clone, branch
 }
 
 func (d *Daemon) cleanupCloneAndReleaseForProject(ctx context.Context, projectPath string, clone Clone, branch string) error {
+	if clone.Name == "" && clone.Path != "" {
+		clone.Name = filepath.Base(clone.Path)
+	}
 	if clone.CurrentBranch == "" {
 		clone.CurrentBranch = branch
 	}

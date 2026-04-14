@@ -499,6 +499,49 @@ func (s *SQLiteStore) NonTerminalTasks(ctx context.Context, project string) ([]T
 	return tasks, nil
 }
 
+func (s *SQLiteStore) StaleCloneOccupancies(ctx context.Context, project string) ([]CloneOccupancy, error) {
+	query := `
+		SELECT c.project, c.path, c.branch, c.issue, c.updated_at
+		FROM clones c
+		LEFT JOIN tasks t
+			ON t.project = c.project
+			AND t.issue = c.issue
+			AND t.status IN ('starting', 'active')
+		WHERE c.status = 'occupied'
+			AND (c.issue = '' OR t.issue IS NULL)
+	`
+	args := make([]any, 0, 1)
+	if !isGlobalProject(project) {
+		query += ` AND c.project = ?`
+		args = append(args, project)
+	}
+	query += ` ORDER BY c.updated_at DESC, c.project ASC, c.path ASC`
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list stale clone occupancies: %w", err)
+	}
+	defer rows.Close()
+
+	occupancies := make([]CloneOccupancy, 0)
+	for rows.Next() {
+		var occupancy CloneOccupancy
+		var updatedAt string
+		if err := rows.Scan(&occupancy.Project, &occupancy.Path, &occupancy.CurrentBranch, &occupancy.AssignedTask, &updatedAt); err != nil {
+			return nil, fmt.Errorf("scan stale clone occupancy: %w", err)
+		}
+		occupancy.UpdatedAt = parseTime(updatedAt)
+		if occupancy.Project == "" {
+			occupancy.Project = project
+		}
+		occupancies = append(occupancies, occupancy)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate stale clone occupancies: %w", err)
+	}
+	return occupancies, nil
+}
+
 func (s *SQLiteStore) Events(ctx context.Context, project string, afterID int64) (<-chan Event, <-chan error) {
 	eventsCh := make(chan Event)
 	errCh := make(chan error, 1)

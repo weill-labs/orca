@@ -232,6 +232,24 @@ func (a *sqliteStateAdapter) NonTerminalTasks(ctx context.Context, project strin
 	return out, nil
 }
 
+func (a *sqliteStateAdapter) StaleCloneOccupancies(ctx context.Context, project string) ([]CloneOccupancy, error) {
+	occupancies, err := a.store.StaleCloneOccupancies(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]CloneOccupancy, 0, len(occupancies))
+	for _, occupancy := range occupancies {
+		out = append(out, CloneOccupancy{
+			Project:       firstNonEmpty(occupancy.Project, project),
+			Path:          occupancy.Path,
+			CurrentBranch: occupancy.CurrentBranch,
+			AssignedTask:  occupancy.AssignedTask,
+		})
+	}
+	return out, nil
+}
+
 func (a *sqliteStateAdapter) TasksByPane(ctx context.Context, project, paneID string) ([]Task, error) {
 	tasks, err := a.store.TasksByPane(ctx, project, paneID)
 	if err != nil {
