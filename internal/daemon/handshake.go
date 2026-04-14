@@ -21,6 +21,8 @@ const (
 	codexReadyPattern = "›"
 )
 
+var ErrAgentStartupNotReady = errors.New("agent startup not ready")
+
 func (d *Daemon) agentHandshake(ctx context.Context, paneID string, profile AgentProfile) (PaneCapture, error) {
 	d.emitHandshakeEvent(ctx, paneID, profile, handshakeStepWait)
 	if err := d.amux.WaitIdle(ctx, paneID, defaultAgentHandshakeTimeout); err != nil {
@@ -75,7 +77,8 @@ func (d *Daemon) waitForReadyMarker(ctx context.Context, paneID string, profile 
 	if !hasReadyPattern(profile, snapshot.Output()) {
 		d.emitHandshakeEvent(ctx, paneID, profile, handshakeStepWaitReadyContent)
 		if err := d.amux.WaitContent(ctx, paneID, pattern, defaultAgentHandshakeTimeout); err != nil {
-			return PaneCapture{}, fmt.Errorf("wait for ready pattern %q: %w", pattern, err)
+			waitErr := fmt.Errorf("wait for ready pattern %q: %w", pattern, err)
+			return PaneCapture{}, fmt.Errorf("%w: %w", ErrAgentStartupNotReady, waitErr)
 		}
 
 		var err error
@@ -87,7 +90,7 @@ func (d *Daemon) waitForReadyMarker(ctx context.Context, paneID string, profile 
 	}
 
 	if !hasReadyPattern(profile, validated.Output()) {
-		return PaneCapture{}, fmt.Errorf("validate ready pattern %q: %s", pattern, describePaneSnapshot(validated))
+		return PaneCapture{}, fmt.Errorf("%w: validate ready pattern %q: %s", ErrAgentStartupNotReady, pattern, describePaneSnapshot(validated))
 	}
 
 	d.emitHandshakeEvent(ctx, paneID, profile, handshakeStepReadyValidated)

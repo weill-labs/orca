@@ -136,62 +136,15 @@ func (d *Daemon) assign(ctx context.Context, projectPath, issue, prompt, agentPr
 	clone.CurrentBranch = assignmentBranch
 	clone.AssignedTask = issue
 
-	pane, err := d.spawnWorkerPane(ctx, claimedTask, claimedWorker.WorkerID, clone.Path, profile)
-	if err != nil {
-		_ = d.cleanupCloneAndReleaseForProject(ctx, projectPath, clone, issue)
-		restoreWorkerClaim()
-		restoreReservation()
-		err = fmt.Errorf("spawn pane: %w", err)
-		d.emitAssignFailure(ctx, projectPath, issue, claimedWorker.WorkerID, profile.Name, clone, Pane{}, prNumber, err)
-		return err
-	}
-	paneSpawnPendingCleanup := true
-	defer func() {
-		if !paneSpawnPendingCleanup {
-			return
-		}
-		_ = ignorePaneAlreadyGoneError(d.amux.KillPane(context.WithoutCancel(ctx), paneKillRef(pane)))
-	}()
-	var worker Worker
-	rollbackSpawnedPane := func() {
-		paneSpawnPendingCleanup = false
-		_ = d.rollbackAssignmentForProject(ctx, projectPath, clone, pane, issue)
-	}
-	failSpawnedAssignment := func(err error) {
-		paneSpawnPendingCleanup = false
-		d.failPendingAssignment(ctx, projectPath, issue, clone, pane, worker, profile, prNumber, err, restoreReservation)
-	}
-
-	metadata, err := d.assignmentPaneMetadata(ctx, projectPath, pane.ID, profile.Name, assignmentBranch, issue, d.resolveAssignmentTitle(ctx, issue, firstTitle(title)), prNumber)
-	if err != nil {
-		rollbackSpawnedPane()
-		restoreWorkerClaim()
-		restoreReservation()
-		err = fmt.Errorf("build pane metadata: %w", err)
-		d.emitAssignFailure(ctx, projectPath, issue, claimedWorker.WorkerID, profile.Name, clone, pane, prNumber, err)
-		return err
-	}
-
-	if err := d.setPaneMetadata(ctx, pane.ID, metadata); err != nil {
-		rollbackSpawnedPane()
-		restoreWorkerClaim()
-		restoreReservation()
-		err = fmt.Errorf("set pane metadata: %w", err)
-		d.emitAssignFailure(ctx, projectPath, issue, claimedWorker.WorkerID, profile.Name, clone, pane, prNumber, err)
-		return err
-	}
-
 	task := claimedTask
 	task.WorkerID = claimedWorker.WorkerID
-	task.PaneID = pane.ID
 	task.PaneName = workerPaneName(issue, claimedWorker.WorkerID)
 	task.CloneName = clone.Name
 	task.ClonePath = clone.Path
-	task.UpdatedAt = d.now()
-	worker = Worker{
+	task.UpdatedAt = now
+	worker := Worker{
 		Project:                      projectPath,
 		WorkerID:                     claimedWorker.WorkerID,
-		PaneID:                       pane.ID,
 		PaneName:                     workerPaneName(issue, claimedWorker.WorkerID),
 		Issue:                        issue,
 		ClonePath:                    clone.Path,
@@ -218,32 +171,32 @@ func (d *Daemon) assign(ctx context.Context, projectPath, issue, prompt, agentPr
 	if prNumber > 0 {
 		worker.LastPushAt = now
 	}
-	if err := d.state.PutTask(ctx, task); err != nil {
-		failSpawnedAssignment(err)
-		return fmt.Errorf("store pending task: %w", err)
+
+	failUnspawnedAssignment := func(err error) {
+		_ = d.cleanupCloneAndReleaseForProject(ctx, projectPath, clone, issue)
+		restoreWorkerClaim()
+		restoreReservation()
+		d.emitAssignFailure(ctx, projectPath, issue, claimedWorker.WorkerID, profile.Name, clone, Pane{}, prNumber, err)
 	}
-	if err := d.state.PutWorker(ctx, worker); err != nil {
-		failSpawnedAssignment(err)
-		return fmt.Errorf("store pending worker: %w", err)
+	failSpawnedAssignment := func(pane Pane, worker Worker, err error) {
+		d.failPendingAssignment(ctx, projectPath, issue, clone, pane, worker, profile, prNumber, err, restoreReservation)
 	}
 
-	startupSnapshot, err := d.agentHandshake(ctx, pane.ID, profile)
+	startup, err := d.startAssignmentWorker(ctx, projectPath, clone, task, worker, profile, prompt, d.resolveAssignmentTitle(ctx, issue, firstTitle(title)))
 	if err != nil {
-		failSpawnedAssignment(err)
-		return fmt.Errorf("agent handshake: %w", err)
+		if startup.pane.ID == "" && startup.pane.Name == "" {
+			failUnspawnedAssignment(err)
+		} else {
+			failSpawnedAssignment(startup.pane, startup.worker, err)
+		}
+		return err
 	}
-	worker.LastCapture = startupSnapshot.Output()
+	pane := startup.pane
+	task = startup.task
+	worker = startup.worker
 
-	if err := d.sendPromptAndEnter(ctx, pane.ID, prompt); err != nil {
-		failSpawnedAssignment(err)
-		return fmt.Errorf("send prompt: %w", err)
-	}
-	if err := d.confirmPromptDelivery(ctx, pane.ID, profile); err != nil {
-		failSpawnedAssignment(err)
-		return fmt.Errorf("send prompt: %w", err)
-	}
 	if err := d.setIssueStatus(ctx, projectPath, issue, IssueStateInProgress); err != nil {
-		failSpawnedAssignment(err)
+		failSpawnedAssignment(pane, worker, fmt.Errorf("set issue status: %w", err))
 		return fmt.Errorf("set issue status: %w", err)
 	}
 
@@ -251,15 +204,14 @@ func (d *Daemon) assign(ctx context.Context, projectPath, issue, prompt, agentPr
 	task.UpdatedAt = d.now()
 	worker.UpdatedAt = task.UpdatedAt
 	if err := d.state.PutTask(ctx, task); err != nil {
-		failSpawnedAssignment(err)
+		failSpawnedAssignment(pane, worker, err)
 		return fmt.Errorf("store task: %w", err)
 	}
 	if err := d.state.PutWorker(ctx, worker); err != nil {
-		failSpawnedAssignment(err)
+		failSpawnedAssignment(pane, worker, err)
 		return fmt.Errorf("store worker: %w", err)
 	}
 	d.ensureTaskMonitorForProject(projectPath, issue)
-	paneSpawnPendingCleanup = false
 
 	d.emit(ctx, Event{
 		Time:         now,
