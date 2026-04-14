@@ -1053,6 +1053,108 @@ func TestSQLiteStoreWorkerByPaneAndNonTerminalTasks(t *testing.T) {
 	}
 }
 
+func TestSQLiteStoreStaleCloneOccupancies(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		queryProject string
+		want         []CloneOccupancy
+	}{
+		{
+			name:         "project query returns only stale occupancies for that project",
+			queryProject: "/repo-a",
+			want: []CloneOccupancy{
+				{Project: "/repo-a", Path: "/clones/a-missing", CurrentBranch: "LAB-743", AssignedTask: "LAB-743"},
+				{Project: "/repo-a", Path: "/clones/a-cancelled", CurrentBranch: "LAB-742", AssignedTask: "LAB-742"},
+				{Project: "/repo-a", Path: "/clones/a-done", CurrentBranch: "LAB-741", AssignedTask: "LAB-741"},
+			},
+		},
+		{
+			name:         "global query returns stale occupancies across projects",
+			queryProject: "",
+			want: []CloneOccupancy{
+				{Project: "/repo-b", Path: "/clones/b-failed", CurrentBranch: "LAB-745", AssignedTask: "LAB-745"},
+				{Project: "/repo-a", Path: "/clones/a-missing", CurrentBranch: "LAB-743", AssignedTask: "LAB-743"},
+				{Project: "/repo-a", Path: "/clones/a-cancelled", CurrentBranch: "LAB-742", AssignedTask: "LAB-742"},
+				{Project: "/repo-a", Path: "/clones/a-done", CurrentBranch: "LAB-741", AssignedTask: "LAB-741"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			store := newTestStore(t)
+			now := time.Date(2026, 4, 5, 9, 0, 0, 0, time.UTC)
+			store.now = func() time.Time { return now }
+
+			registerClone := func(project, path, issue, status string) {
+				t.Helper()
+
+				if _, err := store.EnsureClone(context.Background(), project, path); err != nil {
+					t.Fatalf("EnsureClone(%q, %q) error = %v", project, path, err)
+				}
+				ok, err := store.TryOccupyClone(context.Background(), project, path, issue, issue)
+				if err != nil {
+					t.Fatalf("TryOccupyClone(%q, %q) error = %v", project, path, err)
+				}
+				if !ok {
+					t.Fatalf("TryOccupyClone(%q, %q) = false, want true", project, path)
+				}
+				if status == "" {
+					now = now.Add(time.Minute)
+					return
+				}
+				if err := store.UpsertTask(context.Background(), project, Task{
+					Issue:     issue,
+					Status:    status,
+					Agent:     "codex",
+					Prompt:    "Track clone occupancy",
+					WorkerID:  "worker-" + issue,
+					ClonePath: path,
+					CreatedAt: now,
+					UpdatedAt: now,
+				}); err != nil {
+					t.Fatalf("UpsertTask(%q, %q) error = %v", project, issue, err)
+				}
+				now = now.Add(time.Minute)
+			}
+
+			registerClone("/repo-a", "/clones/a-active", "LAB-740", "active")
+			registerClone("/repo-a", "/clones/a-done", "LAB-741", "done")
+			registerClone("/repo-a", "/clones/a-cancelled", "LAB-742", "cancelled")
+			registerClone("/repo-a", "/clones/a-missing", "LAB-743", "")
+			registerClone("/repo-a", "/clones/a-starting", "LAB-744", "starting")
+			registerClone("/repo-b", "/clones/b-failed", "LAB-745", "failed")
+
+			got, err := store.StaleCloneOccupancies(context.Background(), tt.queryProject)
+			if err != nil {
+				t.Fatalf("StaleCloneOccupancies() error = %v", err)
+			}
+			if len(got) != len(tt.want) {
+				t.Fatalf("len(StaleCloneOccupancies()) = %d, want %d", len(got), len(tt.want))
+			}
+			for i := range tt.want {
+				if got[i].Project != tt.want[i].Project {
+					t.Fatalf("got[%d].Project = %q, want %q", i, got[i].Project, tt.want[i].Project)
+				}
+				if got[i].Path != tt.want[i].Path {
+					t.Fatalf("got[%d].Path = %q, want %q", i, got[i].Path, tt.want[i].Path)
+				}
+				if got[i].CurrentBranch != tt.want[i].CurrentBranch {
+					t.Fatalf("got[%d].CurrentBranch = %q, want %q", i, got[i].CurrentBranch, tt.want[i].CurrentBranch)
+				}
+				if got[i].AssignedTask != tt.want[i].AssignedTask {
+					t.Fatalf("got[%d].AssignedTask = %q, want %q", i, got[i].AssignedTask, tt.want[i].AssignedTask)
+				}
+			}
+		})
+	}
+}
+
 func TestSQLiteStoreMergeQueueOrderingAndNotFound(t *testing.T) {
 	t.Parallel()
 

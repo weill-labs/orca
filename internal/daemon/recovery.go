@@ -22,6 +22,33 @@ func (d *Daemon) reconcileNonTerminalAssignments(ctx context.Context) {
 	}
 }
 
+func (d *Daemon) releaseStalePoolClones(ctx context.Context) {
+	occupancies, err := d.state.StaleCloneOccupancies(ctx, d.project)
+	if err != nil {
+		if d.logf != nil {
+			d.logf("stale clone occupancy query failed: %v", err)
+		}
+		return
+	}
+
+	for _, occupancy := range occupancies {
+		if ctx.Err() != nil {
+			return
+		}
+
+		clone := Clone{
+			Path:          occupancy.Path,
+			CurrentBranch: occupancy.CurrentBranch,
+			AssignedTask:  occupancy.AssignedTask,
+		}
+		projectPath := firstNonEmpty(occupancy.Project, d.project)
+		branch := firstNonEmpty(occupancy.CurrentBranch, occupancy.AssignedTask)
+		if err := d.cleanupCloneAndReleaseForProject(ctx, projectPath, clone, branch); err != nil && d.logf != nil {
+			d.logf("release stale pool clone %q for %q: %v", occupancy.Path, projectPath, err)
+		}
+	}
+}
+
 func (d *Daemon) reconcileTaskOnStartup(ctx context.Context, task Task) {
 	paneID := strings.TrimSpace(task.PaneID)
 	if paneID == "" {

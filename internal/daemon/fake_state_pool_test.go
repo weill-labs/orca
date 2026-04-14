@@ -14,6 +14,7 @@ type fakeState struct {
 	rejectCanceledContext bool
 	tasks                 map[string]Task
 	workers               map[string]Worker
+	cloneOccupancies      []CloneOccupancy
 	mergeQueue            []MergeQueueEntry
 	updateMergeErr        error
 	deleteMergeErr        error
@@ -253,6 +254,30 @@ func (s *fakeState) NonTerminalTasks(ctx context.Context, project string) ([]Tas
 		}
 	}
 	return tasks, nil
+}
+
+func (s *fakeState) StaleCloneOccupancies(ctx context.Context, project string) ([]CloneOccupancy, error) {
+	if s.rejectCanceledContext && ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	occupancies := make([]CloneOccupancy, 0)
+	for _, occupancy := range s.cloneOccupancies {
+		if project != "" && occupancy.Project != "" && occupancy.Project != project {
+			continue
+		}
+		task, ok := s.tasks[occupancy.AssignedTask]
+		if ok && task.Project != "" && occupancy.Project != "" && task.Project != occupancy.Project {
+			ok = false
+		}
+		if ok && taskBlocksAssignment(task.Status) {
+			continue
+		}
+		occupancies = append(occupancies, occupancy)
+	}
+	return occupancies, nil
 }
 
 func (s *fakeState) TasksByPane(ctx context.Context, project, paneID string) ([]Task, error) {

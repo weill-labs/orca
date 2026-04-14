@@ -131,6 +131,14 @@ type Clone struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+type CloneOccupancy struct {
+	Project       string    `json:"project,omitempty"`
+	Path          string    `json:"path"`
+	CurrentBranch string    `json:"branch,omitempty"`
+	AssignedTask  string    `json:"issue,omitempty"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
 type Event struct {
 	ID        int64           `json:"id"`
 	Project   string          `json:"project"`

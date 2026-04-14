@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -102,6 +103,68 @@ func TestDaemonStartResumesMonitoringLiveAssignments(t *testing.T) {
 	}
 	if got := deps.pool.releasedClones(); len(got) != 0 {
 		t.Fatalf("released clones = %#v, want none", got)
+	}
+}
+
+func TestDaemonStartReleasesStaleOccupiedClones(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	captureTicker := newFakeTicker()
+	pollTicker := newFakeTicker()
+	deps.tickers.enqueue(captureTicker, pollTicker)
+	seedActiveAssignment(t, deps, "LAB-722", "pane-1")
+	deps.amux.captureSequence("pane-1", []string{"updated output"})
+
+	staleClonePath := filepath.Join(t.TempDir(), "clone-stale")
+	deps.state.cloneOccupancies = []CloneOccupancy{
+		{
+			Project:       "/tmp/project",
+			Path:          staleClonePath,
+			CurrentBranch: "LAB-721",
+			AssignedTask:  "LAB-721",
+		},
+		{
+			Project:       "/tmp/project",
+			Path:          deps.pool.clone.Path,
+			CurrentBranch: "LAB-722",
+			AssignedTask:  "LAB-722",
+		},
+	}
+	deps.state.putTaskForTest(Task{
+		Project:      "/tmp/project",
+		Issue:        "LAB-721",
+		Status:       TaskStatusDone,
+		Prompt:       "Wrap up stale task",
+		WorkerID:     "worker-stale",
+		CloneName:    filepath.Base(staleClonePath),
+		ClonePath:    staleClonePath,
+		Branch:       "LAB-721",
+		AgentProfile: "codex",
+		CreatedAt:    deps.clock.Now().Add(-time.Hour),
+		UpdatedAt:    deps.clock.Now().Add(-time.Minute),
+	})
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	waitFor(t, "stale clone release", func() bool {
+		return len(deps.pool.releasedClones()) == 1
+	})
+
+	if got, want := deps.pool.releasedClones(), []Clone{{
+		Name:          filepath.Base(staleClonePath),
+		Path:          staleClonePath,
+		CurrentBranch: "LAB-721",
+		AssignedTask:  "LAB-721",
+	}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("released clones = %#v, want %#v", got, want)
 	}
 }
 

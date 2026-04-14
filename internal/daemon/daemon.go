@@ -200,6 +200,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 	d.normalizeLeadPane(ctx)
 	d.stopContext, d.stopCancel = context.WithCancel(context.Background())
 	d.lastHeartbeat.Store(d.now().UnixMilli())
+	d.releaseStalePoolClones(ctx)
 	d.reconcileNonTerminalAssignments(ctx)
 	d.refreshTaskMonitors(ctx)
 	d.resetMergeQueueTransientStatuses(ctx)
