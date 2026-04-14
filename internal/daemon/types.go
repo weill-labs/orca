@@ -44,6 +44,7 @@ const (
 	EventTaskFailed            = "task.failed"
 	EventTaskCompletionFailed  = "task.completion_failed"
 	EventWorkerHandshake       = "worker.handshake"
+	EventWorkerHandshakeRetry  = "worker.handshake_retry"
 	EventWorkerNudged          = "worker.nudged"
 	EventWorkerNudgedCI        = "worker.nudged_ci"
 	EventWorkerCIEscalated     = "worker.ci_escalated"

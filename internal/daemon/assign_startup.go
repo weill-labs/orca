@@ -1,0 +1,155 @@
+package daemon
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+)
+
+const (
+	assignHandshakeMaxAttempts = 3
+	assignHandshakeRetryDelay  = 2 * time.Second
+)
+
+type assignStartupResult struct {
+	pane   Pane
+	task   Task
+	worker Worker
+}
+
+func (d *Daemon) startAssignmentWorker(ctx context.Context, projectPath string, clone Clone, task Task, worker Worker, profile AgentProfile, prompt, paneTitle string) (assignStartupResult, error) {
+	result := assignStartupResult{task: task, worker: worker}
+	maxAttempts := 1
+	if strings.EqualFold(profile.Name, "codex") {
+		maxAttempts = assignHandshakeMaxAttempts
+	}
+
+	cleanupCtx := context.WithoutCancel(ctx)
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		pane, err := d.spawnWorkerPane(ctx, task, worker.WorkerID, clone.Path, profile)
+		if err != nil {
+			return result, fmt.Errorf("spawn pane: %w", err)
+		}
+
+		attemptTask, attemptWorker := d.assignmentStartupState(projectPath, clone, task, worker, pane)
+		result = assignStartupResult{
+			pane:   pane,
+			task:   attemptTask,
+			worker: attemptWorker,
+		}
+
+		metadata, err := d.assignmentPaneMetadata(ctx, projectPath, pane.ID, profile.Name, attemptTask.Branch, attemptTask.Issue, paneTitle, attemptTask.PRNumber)
+		if err != nil {
+			return result, fmt.Errorf("build pane metadata: %w", err)
+		}
+		if err := d.setPaneMetadata(ctx, pane.ID, metadata); err != nil {
+			return result, fmt.Errorf("set pane metadata: %w", err)
+		}
+		if err := d.state.PutTask(ctx, attemptTask); err != nil {
+			return result, fmt.Errorf("store pending task: %w", err)
+		}
+		if err := d.state.PutWorker(ctx, attemptWorker); err != nil {
+			return result, fmt.Errorf("store pending worker: %w", err)
+		}
+
+		startupSnapshot, err := d.agentHandshake(ctx, pane.ID, profile)
+		if err != nil {
+			if shouldRetryAssignStartupHandshake(profile, err) {
+				d.emitAssignHandshakeRetry(cleanupCtx, result, profile, attempt, maxAttempts, err, d.captureStartupRetryScrollback(cleanupCtx, pane.ID))
+			}
+			if !shouldRetryAssignStartupHandshake(profile, err) {
+				return result, fmt.Errorf("agent handshake: %w", err)
+			}
+			if attempt == maxAttempts {
+				return result, fmt.Errorf("agent handshake failed after %d attempts: %w", maxAttempts, err)
+			}
+			if err := ignorePaneAlreadyGoneError(d.amux.KillPane(cleanupCtx, paneKillRef(pane))); err != nil {
+				return result, fmt.Errorf("kill pane after handshake failure: %w", err)
+			}
+			if err := d.sleep(ctx, assignHandshakeRetryDelay); err != nil {
+				return result, fmt.Errorf("wait before handshake retry: %w", err)
+			}
+			continue
+		}
+
+		attemptWorker.LastCapture = startupSnapshot.Output()
+		result.worker = attemptWorker
+
+		if err := d.sendPromptAndEnter(ctx, pane.ID, prompt); err != nil {
+			return result, fmt.Errorf("send prompt: %w", err)
+		}
+		if err := d.confirmPromptDelivery(ctx, pane.ID, profile); err != nil {
+			return result, fmt.Errorf("send prompt: %w", err)
+		}
+		return result, nil
+	}
+
+	return result, fmt.Errorf("agent handshake failed after %d attempts", maxAttempts)
+}
+
+func (d *Daemon) assignmentStartupState(projectPath string, clone Clone, task Task, worker Worker, pane Pane) (Task, Worker) {
+	now := d.now()
+	startingTask := task
+	startingTask.Project = projectPath
+	startingTask.PaneID = pane.ID
+	startingTask.PaneName = workerPaneName(task.Issue, worker.WorkerID)
+	if startingTask.PaneName == "" {
+		startingTask.PaneName = pane.Name
+	}
+	startingTask.CloneName = clone.Name
+	startingTask.ClonePath = clone.Path
+	startingTask.UpdatedAt = now
+
+	startingWorker := worker
+	startingWorker.Project = projectPath
+	startingWorker.PaneID = pane.ID
+	startingWorker.PaneName = workerPaneName(task.Issue, worker.WorkerID)
+	if startingWorker.PaneName == "" {
+		startingWorker.PaneName = pane.Name
+	}
+	startingWorker.Issue = task.Issue
+	startingWorker.ClonePath = clone.Path
+	if startingWorker.AgentProfile == "" {
+		startingWorker.AgentProfile = task.AgentProfile
+	}
+	startingWorker.LastActivityAt = now
+	startingWorker.LastSeenAt = now
+	startingWorker.UpdatedAt = now
+
+	return startingTask, startingWorker
+}
+
+func shouldRetryAssignStartupHandshake(profile AgentProfile, err error) bool {
+	return strings.EqualFold(profile.Name, "codex") && errors.Is(err, ErrAgentStartupNotReady)
+}
+
+func (d *Daemon) captureStartupRetryScrollback(ctx context.Context, paneID string) []string {
+	if history, err := d.amux.CaptureHistory(ctx, paneID); err == nil && len(history.Content) > 0 {
+		return crashReportScrollback(history.Content)
+	}
+
+	if snapshot, err := d.amux.CapturePane(ctx, paneID); err == nil && len(snapshot.Content) > 0 {
+		return crashReportScrollback(snapshot.Content)
+	}
+
+	return nil
+}
+
+func (d *Daemon) emitAssignHandshakeRetry(ctx context.Context, result assignStartupResult, profile AgentProfile, attempt, maxAttempts int, err error, scrollback []string) {
+	status := fmt.Sprintf("retrying in %s", assignHandshakeRetryDelay)
+	if attempt >= maxAttempts {
+		status = "no retries remaining"
+	}
+
+	event := d.assignmentEvent(ActiveAssignment{
+		Task:   result.task,
+		Worker: result.worker,
+	}, profile, EventWorkerHandshakeRetry, fmt.Sprintf("startup handshake failed on attempt %d/%d; %s: %v", attempt, maxAttempts, status, err))
+	event.Retry = attempt
+	if len(scrollback) > 0 {
+		event.Scrollback = scrollback
+	}
+	d.emit(ctx, event)
+}

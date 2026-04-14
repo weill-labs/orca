@@ -272,18 +272,127 @@ func TestAssignWaitsForCodexReadyPatternBeforeSendingPrompt(t *testing.T) {
 	}
 }
 
-func TestAssignRollsBackWhenCodexReadyPatternNeverAppearsAfterIdle(t *testing.T) {
+func TestAssignRetriesCodexStartupAfterBareBashHandshakeFailure(t *testing.T) {
 	t.Parallel()
 
 	deps := newTestDeps(t)
+	sleep := &sleepRecorder{}
+	deps.sleep = sleep.Sleep
 	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	deps.amux.disableAutomaticReadyCapture = true
+	deps.amux.spawnPanes = []Pane{
+		{ID: "pane-1", Name: "worker-1"},
+		{ID: "pane-2", Name: "worker-2"},
+	}
 	deps.amux.waitContentResults = []error{
 		amuxapi.ErrWaitContentTimeout,
+		nil,
 		amuxapi.ErrWaitContentTimeout,
 	}
 	deps.amux.captureSequence("pane-1", []string{"bash-5.2$"})
 	deps.amux.capturePaneSequence("pane-1", []PaneCapture{{
-		Content:        []string{"bash-5.2$"},
+		Content:        []string{"bash-5.2$", "codex exited: missing API key"},
+		CurrentCommand: "bash",
+	}})
+	deps.amux.captureSequence("pane-2", []string{"OpenAI Codex\n›"})
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-1209", "Retry codex startup during assign", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	waitFor(t, "task registration", func() bool {
+		task, ok := deps.state.task("LAB-1209")
+		return ok && task.Status == TaskStatusActive && task.PaneID == "pane-2"
+	})
+
+	task, ok := deps.state.task("LAB-1209")
+	if !ok {
+		t.Fatal("task missing after retry success")
+	}
+	if got, want := task.PaneID, "pane-2"; got != want {
+		t.Fatalf("task.PaneID = %q, want %q", got, want)
+	}
+	worker, ok := deps.state.worker("worker-01")
+	if !ok {
+		t.Fatal("worker missing after retry success")
+	}
+	if got, want := worker.PaneID, "pane-2"; got != want {
+		t.Fatalf("worker.PaneID = %q, want %q", got, want)
+	}
+	if got, want := worker.LastCapture, defaultCodexReadyOutput(); got != want {
+		t.Fatalf("worker.LastCapture = %q, want %q", got, want)
+	}
+
+	deps.amux.requireSentKeys(t, "pane-1", nil)
+	deps.amux.requireSentKeys(t, "pane-2", []string{wrappedCodexPrompt("Retry codex startup during assign") + "\n"})
+	if got, want := deps.amux.killCalls, []string{"pane-1"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("kill calls = %#v, want %#v", got, want)
+	}
+	if got, want := sleep.snapshot(), []time.Duration{assignHandshakeRetryDelay}; !equalDurations(got, want) {
+		t.Fatalf("sleep calls = %#v, want %#v", got, want)
+	}
+
+	got := deps.events.eventsByType(EventWorkerHandshakeRetry)
+	if len(got) != 1 {
+		t.Fatalf("handshake retry events = %d, want 1", len(got))
+	}
+	if got[0].Retry != 1 {
+		t.Fatalf("retry event Retry = %d, want 1", got[0].Retry)
+	}
+	if !strings.Contains(got[0].Message, "attempt 1/3") || !strings.Contains(got[0].Message, "retrying in 2s") {
+		t.Fatalf("retry event message = %q, want attempt/retry context", got[0].Message)
+	}
+	if got[0].PaneID != "pane-1" {
+		t.Fatalf("retry event PaneID = %q, want %q", got[0].PaneID, "pane-1")
+	}
+	if want := []string{"bash-5.2$", "codex exited: missing API key"}; !reflect.DeepEqual(got[0].Scrollback, want) {
+		t.Fatalf("retry event scrollback = %#v, want %#v", got[0].Scrollback, want)
+	}
+}
+
+func TestAssignRollsBackWhenCodexReadyPatternNeverAppearsAfterIdle(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	sleep := &sleepRecorder{}
+	deps.sleep = sleep.Sleep
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	deps.amux.spawnPanes = []Pane{
+		{ID: "pane-1", Name: "worker-1"},
+		{ID: "pane-2", Name: "worker-2"},
+		{ID: "pane-3", Name: "worker-3"},
+	}
+	deps.amux.disableAutomaticReadyCapture = true
+	deps.amux.waitContentResults = []error{
+		amuxapi.ErrWaitContentTimeout,
+		nil,
+		amuxapi.ErrWaitContentTimeout,
+		nil,
+		amuxapi.ErrWaitContentTimeout,
+		nil,
+	}
+	deps.amux.captureSequence("pane-1", []string{"bash-5.2$"})
+	deps.amux.captureSequence("pane-2", []string{"bash-5.2$"})
+	deps.amux.captureSequence("pane-3", []string{"bash-5.2$"})
+	deps.amux.capturePaneSequence("pane-1", []PaneCapture{{
+		Content:        []string{"bash-5.2$", "codex exited on first attempt"},
+		CurrentCommand: "bash",
+	}})
+	deps.amux.capturePaneSequence("pane-2", []PaneCapture{{
+		Content:        []string{"bash-5.2$", "codex exited on second attempt"},
+		CurrentCommand: "bash",
+	}})
+	deps.amux.capturePaneSequence("pane-3", []PaneCapture{{
+		Content:        []string{"bash-5.2$", "codex exited on third attempt"},
 		CurrentCommand: "bash",
 	}})
 	d := deps.newDaemon(t)
@@ -298,8 +407,8 @@ func TestAssignRollsBackWhenCodexReadyPatternNeverAppearsAfterIdle(t *testing.T)
 
 	if err := d.Assign(ctx, "LAB-1191", "Wait for codex readiness", "codex"); err == nil {
 		t.Fatal("Assign() succeeded, want error")
-	} else if !strings.Contains(err.Error(), `wait for ready pattern "›"`) {
-		t.Fatalf("Assign() error = %v, want ready-pattern timeout", err)
+	} else if !strings.Contains(err.Error(), "agent handshake failed after 3 attempts") {
+		t.Fatalf("Assign() error = %v, want retry exhaustion", err)
 	}
 
 	if _, ok := deps.state.task("LAB-1191"); ok {
@@ -317,16 +426,38 @@ func TestAssignRollsBackWhenCodexReadyPatternNeverAppearsAfterIdle(t *testing.T)
 	if got, want := deps.amux.waitContentCalls, []waitContentCall{
 		{PaneID: "pane-1", Substring: "do you trust", Timeout: defaultTrustPromptTimeout},
 		{PaneID: "pane-1", Substring: codexReadyPattern, Timeout: defaultAgentHandshakeTimeout},
+		{PaneID: "pane-2", Substring: "do you trust", Timeout: defaultTrustPromptTimeout},
+		{PaneID: "pane-2", Substring: codexReadyPattern, Timeout: defaultAgentHandshakeTimeout},
+		{PaneID: "pane-3", Substring: "do you trust", Timeout: defaultTrustPromptTimeout},
+		{PaneID: "pane-3", Substring: codexReadyPattern, Timeout: defaultAgentHandshakeTimeout},
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("waitContent calls = %#v, want %#v", got, want)
 	}
 	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
 		{PaneID: "pane-1", Timeout: defaultAgentHandshakeTimeout},
+		{PaneID: "pane-2", Timeout: defaultAgentHandshakeTimeout},
+		{PaneID: "pane-3", Timeout: defaultAgentHandshakeTimeout},
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("waitIdle calls = %#v, want %#v", got, want)
 	}
-	if got, want := deps.amux.killCalls, []string{"pane-1"}; !reflect.DeepEqual(got, want) {
+	if got, want := sleep.snapshot(), []time.Duration{assignHandshakeRetryDelay, assignHandshakeRetryDelay}; !equalDurations(got, want) {
+		t.Fatalf("sleep calls = %#v, want %#v", got, want)
+	}
+	if got, want := deps.amux.killCalls, []string{"pane-1", "pane-2", "pane-3"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("kill calls = %#v, want %#v", got, want)
+	}
+
+	got := deps.events.eventsByType(EventWorkerHandshakeRetry)
+	if len(got) != 3 {
+		t.Fatalf("handshake retry events = %d, want 3", len(got))
+	}
+	for i, wantRetry := range []int{1, 2, 3} {
+		if got[i].Retry != wantRetry {
+			t.Fatalf("retry event %d Retry = %d, want %d", i, got[i].Retry, wantRetry)
+		}
+	}
+	if !strings.Contains(got[2].Message, "no retries remaining") {
+		t.Fatalf("final retry event message = %q, want no-retries context", got[2].Message)
 	}
 }
 
