@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -303,6 +304,49 @@ func TestRequestRelayReconnectNoopsWithoutLiveConnection(t *testing.T) {
 	}
 }
 
+func TestConsumeRelayConnectionSetsReadDeadline(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	d := deps.newDaemon(t)
+
+	deadlineErr := errors.New("read deadline exceeded")
+	conn := &stubRelayConnection{
+		currentTime: time.Date(2500, 1, 1, 0, 0, 0, 0, time.UTC),
+		readErr:     deadlineErr,
+		readBlock:   make(chan struct{}),
+	}
+
+	type result struct {
+		lastEventID string
+		err         error
+	}
+	resultCh := make(chan result, 1)
+	go func() {
+		lastEventID, err := d.consumeRelayConnection(context.Background(), conn, "evt-1")
+		resultCh <- result{lastEventID: lastEventID, err: err}
+	}()
+
+	select {
+	case got := <-resultCh:
+		if !errors.Is(got.err, deadlineErr) {
+			t.Fatalf("consumeRelayConnection() error = %v, want %v", got.err, deadlineErr)
+		}
+		if got.lastEventID != "evt-1" {
+			t.Fatalf("consumeRelayConnection() lastEventID = %q, want %q", got.lastEventID, "evt-1")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for consumeRelayConnection to return after read deadline")
+	}
+
+	if got, want := conn.setReadDeadlineCalls, 1; got != want {
+		t.Fatalf("SetReadDeadline call count = %d, want %d", got, want)
+	}
+	if got := conn.lastReadDeadline; got.IsZero() {
+		t.Fatal("SetReadDeadline received zero time")
+	}
+}
+
 type relayTestServer struct {
 	server      *httptest.Server
 	connections chan relayServerConnection
@@ -368,10 +412,32 @@ func (s *relayTestServer) nextConnection(t *testing.T) relayServerConnection {
 }
 
 type stubRelayConnection struct {
-	closeCalls int
+	closeCalls           int
+	setReadDeadlineCalls int
+	lastReadDeadline     time.Time
+	currentTime          time.Time
+	readErr              error
+	readBlock            chan struct{}
 }
 
-func (c *stubRelayConnection) ReadJSON(any) error  { return nil }
+func (c *stubRelayConnection) ReadJSON(any) error {
+	if c.readBlock != nil {
+		<-c.readBlock
+	}
+	return c.readErr
+}
+func (c *stubRelayConnection) SetReadDeadline(deadline time.Time) error {
+	c.setReadDeadlineCalls++
+	c.lastReadDeadline = deadline
+	if c.readBlock != nil && !deadline.After(c.currentTime) {
+		select {
+		case <-c.readBlock:
+		default:
+			close(c.readBlock)
+		}
+	}
+	return nil
+}
 func (c *stubRelayConnection) WriteJSON(any) error { return nil }
 func (c *stubRelayConnection) Close() error {
 	c.closeCalls++

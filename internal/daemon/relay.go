@@ -14,10 +14,12 @@ import (
 const (
 	relayInitialBackoff = time.Second
 	relayMaxBackoff     = time.Minute
+	relayReadTimeout    = 90 * time.Second
 )
 
 type relayConnection interface {
 	ReadJSON(v any) error
+	SetReadDeadline(time.Time) error
 	WriteJSON(v any) error
 	Close() error
 }
@@ -131,6 +133,10 @@ func (d *Daemon) consumeRelayConnection(ctx context.Context, conn relayConnectio
 			return lastEventID, ctx.Err()
 		}
 
+		if err := conn.SetReadDeadline(time.Now().Add(relayReadTimeout)); err != nil {
+			return lastEventID, err
+		}
+
 		var msg relayEventMessage
 		if err := conn.ReadJSON(&msg); err != nil {
 			return lastEventID, err
@@ -166,7 +172,7 @@ func relayEventCheckKind(msg relayEventMessage) (taskMonitorCheckKind, bool) {
 	case "pull_request_merge":
 		return taskMonitorCheckMergePoll, true
 	case "pull_request":
-		if msg.Merged || strings.EqualFold(strings.TrimSpace(msg.Action), "merged") {
+		if msg.Merged {
 			return taskMonitorCheckMergePoll, true
 		}
 	}
