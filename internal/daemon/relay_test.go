@@ -216,6 +216,93 @@ func TestDaemonRelayHealthEnqueuesPollIntervalUpdates(t *testing.T) {
 	}
 }
 
+func TestRelayRepoAliases(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		input string
+		want  []string
+	}{
+		{
+			name:  "https remote",
+			input: "https://github.com/weill-labs/orca.git",
+			want:  []string{"https://github.com/weill-labs/orca", "weill-labs/orca", "github.com/weill-labs/orca"},
+		},
+		{
+			name:  "ssh remote",
+			input: "git@github.com:weill-labs/orca.git",
+			want:  []string{"git@github.com:weill-labs/orca", "weill-labs/orca", "github.com/weill-labs/orca"},
+		},
+		{
+			name:  "owner repo",
+			input: "weill-labs/orca",
+			want:  []string{"weill-labs/orca"},
+		},
+		{
+			name:  "github prefix",
+			input: "github.com/weill-labs/orca",
+			want:  []string{"github.com/weill-labs/orca", "weill-labs/orca"},
+		},
+		{
+			name:  "absolute path",
+			input: "/tmp/project",
+			want:  []string{"tmp/project"},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := relayRepoAliases(tt.input); !equalStringSlices(got, tt.want) {
+				t.Fatalf("relayRepoAliases(%q) = %#v, want %#v", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRequestRelayReconnectClosesLiveConnection(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	d := deps.newDaemonWithOptions(t, func(opts *Options) {
+		opts.RelayURL = "wss://relay.example.com/ws"
+	})
+
+	conn := &stubRelayConnection{}
+	d.setRelayConn(conn)
+	d.requestRelayReconnect()
+
+	if !d.relayReconnect.Load() {
+		t.Fatal("relayReconnect = false, want true")
+	}
+	if got, want := conn.closeCalls, 1; got != want {
+		t.Fatalf("closeCalls = %d, want %d", got, want)
+	}
+	d.relayConnMu.Lock()
+	currentConn := d.relayConn
+	d.relayConnMu.Unlock()
+	if currentConn != nil {
+		t.Fatal("relayConn != nil after requestRelayReconnect")
+	}
+}
+
+func TestRequestRelayReconnectNoopsWithoutLiveConnection(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	d := deps.newDaemonWithOptions(t, func(opts *Options) {
+		opts.RelayURL = "wss://relay.example.com/ws"
+	})
+
+	d.requestRelayReconnect()
+	if d.relayReconnect.Load() {
+		t.Fatal("relayReconnect = true, want false when no relay connection is active")
+	}
+}
+
 type relayTestServer struct {
 	server      *httptest.Server
 	connections chan relayServerConnection
@@ -278,4 +365,27 @@ func (s *relayTestServer) nextConnection(t *testing.T) relayServerConnection {
 		t.Fatal("timed out waiting for relay connection")
 		return relayServerConnection{}
 	}
+}
+
+type stubRelayConnection struct {
+	closeCalls int
+}
+
+func (c *stubRelayConnection) ReadJSON(any) error  { return nil }
+func (c *stubRelayConnection) WriteJSON(any) error { return nil }
+func (c *stubRelayConnection) Close() error {
+	c.closeCalls++
+	return nil
+}
+
+func equalStringSlices(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
 }

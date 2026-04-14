@@ -175,11 +175,6 @@ func relayEventCheckKind(msg relayEventMessage) (taskMonitorCheckKind, bool) {
 
 func (d *Daemon) activeAssignmentForRelayEvent(ctx context.Context, repo string, prNumber int) (ActiveAssignment, bool) {
 	repo = strings.TrimSpace(repo)
-	if repo != "" {
-		if active, err := d.state.ActiveAssignmentByPRNumber(ctx, repo, prNumber); err == nil {
-			return active, true
-		}
-	}
 
 	assignments, err := d.state.ActiveAssignments(ctx, d.project)
 	if err != nil {
@@ -363,6 +358,8 @@ func (d *Daemon) requestRelayReconnect() {
 	conn := d.relayConn
 	d.relayConnMu.Unlock()
 	if conn == nil {
+		// A disconnected relay is already heading toward the next dial attempt,
+		// so there is nothing to interrupt here.
 		return
 	}
 
@@ -386,6 +383,8 @@ func (d *Daemon) enqueuePollIntervalUpdate(interval time.Duration) {
 		return
 	}
 
+	// Only the latest interval matters. If the channel is full, replace the
+	// queued value with the most recent one instead of blocking the relay loop.
 	select {
 	case d.pollIntervalCh <- interval:
 		return
