@@ -227,10 +227,12 @@ func (d *Daemon) assign(ctx context.Context, projectPath, issue, prompt, agentPr
 		return fmt.Errorf("store pending worker: %w", err)
 	}
 
-	if err := d.agentHandshake(ctx, pane.ID, profile); err != nil {
+	startupSnapshot, err := d.agentHandshake(ctx, pane.ID, profile)
+	if err != nil {
 		failSpawnedAssignment(err)
 		return fmt.Errorf("agent handshake: %w", err)
 	}
+	worker.LastCapture = startupSnapshot.Output()
 
 	if err := d.sendPromptAndEnter(ctx, pane.ID, prompt); err != nil {
 		failSpawnedAssignment(err)
@@ -247,9 +249,14 @@ func (d *Daemon) assign(ctx context.Context, projectPath, issue, prompt, agentPr
 
 	task.Status = TaskStatusActive
 	task.UpdatedAt = d.now()
+	worker.UpdatedAt = task.UpdatedAt
 	if err := d.state.PutTask(ctx, task); err != nil {
 		failSpawnedAssignment(err)
 		return fmt.Errorf("store task: %w", err)
+	}
+	if err := d.state.PutWorker(ctx, worker); err != nil {
+		failSpawnedAssignment(err)
+		return fmt.Errorf("store worker: %w", err)
 	}
 	d.ensureTaskMonitorForProject(projectPath, issue)
 	paneSpawnPendingCleanup = false

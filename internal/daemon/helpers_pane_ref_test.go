@@ -325,7 +325,7 @@ func TestStartAgentInPaneReturnsErrPaneGone(t *testing.T) {
 	d := deps.newDaemon(t)
 	deps.amux.paneExists = map[string]bool{"pane-1": false}
 
-	err := d.startAgentInPane(context.Background(), "pane-1", deps.config.profiles["codex"])
+	_, err := d.startAgentInPane(context.Background(), "pane-1", deps.config.profiles["codex"])
 	if err == nil || !strings.Contains(err.Error(), "pane gone") {
 		t.Fatalf("startAgentInPane() error = %v, want pane-gone error", err)
 	}

@@ -27,6 +27,7 @@ var builtinProfiles = map[string]AgentProfile{
 	"codex": {
 		Name:              "codex",
 		StartCommand:      "codex --yolo",
+		ReadyPattern:      codexReadyPattern,
 		PostmortemEnabled: true,
 		StuckTimeout:      9 * time.Minute,
 	},
@@ -47,6 +48,9 @@ func applyAgentProfileQuirks(profile AgentProfile) AgentProfile {
 	switch strings.ToLower(profile.Name) {
 	case "codex":
 		profile.StartCommand = normalizeCodexStartCommand(profile.StartCommand)
+		if strings.TrimSpace(profile.ReadyPattern) == "" {
+			profile.ReadyPattern = codexReadyPattern
+		}
 		profile.ResumeSequence = []string{
 			profile.StartCommand + " resume",
 			"Enter",

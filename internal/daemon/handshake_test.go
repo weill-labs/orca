@@ -23,7 +23,7 @@ func TestAssignConfirmsCodexTrustPromptBeforeSendingPrompt(t *testing.T) {
 		nil,
 		amuxapi.ErrWaitContentTimeout,
 	}
-	deps.amux.captureSequence("pane-1", []string{"Codex is ready."})
+	deps.amux.captureSequence("pane-1", []string{"OpenAI Codex\n›"})
 	d := deps.newDaemon(t)
 	ctx := context.Background()
 
@@ -69,7 +69,7 @@ func TestAssignDoesNotBlindlyConfirmWhenTrustPromptNotPresent(t *testing.T) {
 	deps := newTestDeps(t)
 	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
 	deps.amux.waitContentErr = amuxapi.ErrWaitContentTimeout
-	deps.amux.captureSequence("pane-1", []string{"Codex is ready."})
+	deps.amux.captureSequence("pane-1", []string{"OpenAI Codex\n›"})
 	d := deps.newDaemon(t)
 	ctx := context.Background()
 
@@ -114,7 +114,10 @@ func TestAssignResumesCodexBeforeSendingPrompt(t *testing.T) {
 		nil,
 		amuxapi.ErrWaitContentTimeout,
 	}
-	deps.amux.captureSequence("pane-1", []string{"Resume your previous session"})
+	deps.amux.captureSequence("pane-1", []string{
+		"Resume your previous session",
+		"OpenAI Codex\n›",
+	})
 	d := deps.newDaemon(t)
 	ctx := context.Background()
 
@@ -216,6 +219,115 @@ func TestAssignRollsBackOnAgentHandshakeFailure(t *testing.T) {
 	}
 
 	deps.events.requireTypes(t, EventDaemonStarted, EventTaskAssignFailed)
+}
+
+func TestAssignWaitsForCodexReadyPatternBeforeSendingPrompt(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	deps.amux.waitContentResults = []error{
+		amuxapi.ErrWaitContentTimeout,
+		nil,
+	}
+	deps.amux.captureSequence("pane-1", []string{"bash-5.2$"})
+	deps.amux.capturePaneSequence("pane-1", []PaneCapture{
+		{Content: []string{"OpenAI Codex", codexReadyPattern}, CurrentCommand: "codex"},
+	})
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-1191", "Wait for codex readiness", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	waitFor(t, "task registration", func() bool {
+		task, ok := deps.state.task("LAB-1191")
+		return ok && task.Status == TaskStatusActive
+	})
+
+	deps.amux.requireSentKeys(t, "pane-1", []string{wrappedCodexPrompt("Wait for codex readiness") + "\n"})
+	if got, want := deps.amux.waitContentCalls, []waitContentCall{
+		{PaneID: "pane-1", Substring: "do you trust", Timeout: defaultTrustPromptTimeout},
+		{PaneID: "pane-1", Substring: codexReadyPattern, Timeout: defaultAgentHandshakeTimeout},
+		{PaneID: "pane-1", Substring: codexWorkingText, Timeout: defaultAgentHandshakeTimeout},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("waitContent calls = %#v, want %#v", got, want)
+	}
+	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
+		{PaneID: "pane-1", Timeout: defaultAgentHandshakeTimeout},
+		{PaneID: "pane-1", Timeout: defaultAgentHandshakeTimeout, Settle: defaultPromptSettleDuration},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("waitIdle calls = %#v, want %#v", got, want)
+	}
+	if got, want := deps.amux.captureCount("pane-1"), 2; got != want {
+		t.Fatalf("capture count = %d, want %d", got, want)
+	}
+}
+
+func TestAssignRollsBackWhenCodexReadyPatternNeverAppearsAfterIdle(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	deps.amux.waitContentResults = []error{
+		amuxapi.ErrWaitContentTimeout,
+		amuxapi.ErrWaitContentTimeout,
+	}
+	deps.amux.captureSequence("pane-1", []string{"bash-5.2$"})
+	deps.amux.capturePaneSequence("pane-1", []PaneCapture{{
+		Content:        []string{"bash-5.2$"},
+		CurrentCommand: "bash",
+	}})
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-1191", "Wait for codex readiness", "codex"); err == nil {
+		t.Fatal("Assign() succeeded, want error")
+	} else if !strings.Contains(err.Error(), `wait for ready pattern "›"`) {
+		t.Fatalf("Assign() error = %v, want ready-pattern timeout", err)
+	}
+
+	if _, ok := deps.state.task("LAB-1191"); ok {
+		t.Fatal("task stored despite handshake rollback")
+	}
+	worker, ok := deps.state.worker("worker-01")
+	if !ok {
+		t.Fatal("worker missing after handshake rollback")
+	}
+	if got := worker.PaneID; got != "" {
+		t.Fatalf("worker.PaneID = %q, want empty after rollback", got)
+	}
+
+	deps.amux.requireSentKeys(t, "pane-1", nil)
+	if got, want := deps.amux.waitContentCalls, []waitContentCall{
+		{PaneID: "pane-1", Substring: "do you trust", Timeout: defaultTrustPromptTimeout},
+		{PaneID: "pane-1", Substring: codexReadyPattern, Timeout: defaultAgentHandshakeTimeout},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("waitContent calls = %#v, want %#v", got, want)
+	}
+	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
+		{PaneID: "pane-1", Timeout: defaultAgentHandshakeTimeout},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("waitIdle calls = %#v, want %#v", got, want)
+	}
+	if got, want := deps.amux.killCalls, []string{"pane-1"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("kill calls = %#v, want %#v", got, want)
+	}
 }
 
 func TestResumeAgentInPaneReturnsNilWithoutResumeSequence(t *testing.T) {
@@ -473,13 +585,15 @@ func TestHandshakePromptDetectionHelpers(t *testing.T) {
 		output     string
 		wantTrust  bool
 		wantResume bool
+		wantReady  bool
 	}{
 		{
 			name:       "codex detects trust prompt and resume prompt",
 			profile:    AgentProfile{Name: "codex", ResumeSequence: []string{"codex --yolo resume", "Enter", "."}},
-			output:     "Do you trust this folder? Resume your previous session",
+			output:     "Do you trust this folder? Resume your previous session ›",
 			wantTrust:  true,
 			wantResume: true,
+			wantReady:  true,
 		},
 		{
 			name:       "codex without resume sequence ignores resume prompt",
@@ -487,6 +601,7 @@ func TestHandshakePromptDetectionHelpers(t *testing.T) {
 			output:     "Resume your previous session",
 			wantTrust:  false,
 			wantResume: false,
+			wantReady:  false,
 		},
 		{
 			name:       "non codex ignores both prompts",
@@ -494,6 +609,7 @@ func TestHandshakePromptDetectionHelpers(t *testing.T) {
 			output:     "Do you trust this folder? Resume your previous session",
 			wantTrust:  false,
 			wantResume: false,
+			wantReady:  false,
 		},
 	}
 
@@ -508,6 +624,9 @@ func TestHandshakePromptDetectionHelpers(t *testing.T) {
 			if got := hasResumePrompt(tt.profile, tt.output); got != tt.wantResume {
 				t.Fatalf("hasResumePrompt() = %v, want %v", got, tt.wantResume)
 			}
+			if got := hasReadyPattern(tt.profile, tt.output); got != tt.wantReady {
+				t.Fatalf("hasReadyPattern() = %v, want %v", got, tt.wantReady)
+			}
 		})
 	}
 }
@@ -521,7 +640,7 @@ func TestAssignEmitsCodexHandshakeDiagnostics(t *testing.T) {
 		nil,
 		amuxapi.ErrWaitContentTimeout,
 	}
-	deps.amux.captureSequence("pane-1", []string{"Codex is ready."})
+	deps.amux.captureSequence("pane-1", []string{"OpenAI Codex\n›"})
 	d := deps.newDaemon(t)
 	ctx := context.Background()
 
@@ -537,7 +656,7 @@ func TestAssignEmitsCodexHandshakeDiagnostics(t *testing.T) {
 	}
 
 	waitFor(t, "handshake diagnostics", func() bool {
-		return len(deps.events.eventsByType(EventWorkerHandshake)) == 7
+		return len(deps.events.eventsByType(EventWorkerHandshake)) == 8
 	})
 
 	got := deps.events.eventsByType(EventWorkerHandshake)
@@ -549,6 +668,7 @@ func TestAssignEmitsCodexHandshakeDiagnostics(t *testing.T) {
 		handshakeStepWait,
 		handshakeStepWaitTrustContent,
 		handshakeStepCapture,
+		handshakeStepReadyValidated,
 	}
 	for i, event := range got {
 		if event.Message != wantMessages[i] {
@@ -584,8 +704,8 @@ func TestAssignAllowsConcurrentTrustPromptWaitsAcrossPanes(t *testing.T) {
 		{ID: "pane-1", Name: "worker-1"},
 		{ID: "pane-2", Name: "worker-2"},
 	}
-	deps.amux.captureSequence("pane-1", []string{"Codex is ready."})
-	deps.amux.captureSequence("pane-2", []string{"Codex is ready."})
+	deps.amux.captureSequence("pane-1", []string{"OpenAI Codex\n›"})
+	deps.amux.captureSequence("pane-2", []string{"OpenAI Codex\n›"})
 	firstWaitContentEntered := make(chan struct{})
 	releaseFirstWaitContent := make(chan struct{})
 	secondWaitContentEntered := make(chan struct{}, 1)
@@ -669,5 +789,33 @@ func TestAssignAllowsConcurrentTrustPromptWaitsAcrossPanes(t *testing.T) {
 	}
 	if got, want := deps.amux.waitContentCount("pane-2"), 2; got != want {
 		t.Fatalf("pane-2 waitContent count = %d, want %d", got, want)
+	}
+}
+
+func TestAgentHandshakeFailsWhenReadyValidationStillLooksLikeBash(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.amux.disableAutomaticReadyCapture = true
+	deps.amux.waitContentResults = []error{
+		amuxapi.ErrWaitContentTimeout,
+		nil,
+	}
+	deps.amux.captureSequence("pane-1", []string{"bash-5.2$"})
+	deps.amux.capturePaneSequence("pane-1", []PaneCapture{
+		{Content: []string{"bash-5.2$"}, CurrentCommand: "bash"},
+		{Content: []string{"bash-5.2$"}, CurrentCommand: "bash"},
+	})
+	d := deps.newDaemon(t)
+
+	_, err := d.agentHandshake(context.Background(), "pane-1", deps.config.profiles["codex"])
+	if err == nil {
+		t.Fatal("agentHandshake() succeeded, want error")
+	}
+	if !strings.Contains(err.Error(), `validate ready pattern "›"`) {
+		t.Fatalf("agentHandshake() error = %v, want ready-pattern validation failure", err)
+	}
+	if !strings.Contains(err.Error(), `current command "bash"`) {
+		t.Fatalf("agentHandshake() error = %v, want bash current-command context", err)
 	}
 }

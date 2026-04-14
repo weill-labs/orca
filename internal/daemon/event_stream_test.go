@@ -166,7 +166,7 @@ func TestCheckTaskExitedEventPreservesLastCaptureOnCaptureError(t *testing.T) {
 	}
 
 	update.runNudges(context.Background(), d)
-	if got, want := update.Active.Worker.LastCapture, "last useful output"; got != want {
+	if got, want := update.Active.Worker.LastCapture, defaultCodexReadyOutput(); got != want {
 		t.Fatalf("update.Active.Worker.LastCapture after restart = %q, want %q", got, want)
 	}
 	if got, want := update.Active.Worker.Health, WorkerHealthHealthy; got != want {

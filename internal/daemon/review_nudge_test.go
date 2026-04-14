@@ -325,8 +325,8 @@ func TestPRReviewPollingDefersReviewNudgeUntilWorkerAppearsIdle(t *testing.T) {
 				if worker.LastActivityAt.IsZero() {
 					t.Fatal("LastActivityAt should remain set")
 				}
-				if worker.LastCapture != "" {
-					t.Fatalf("LastCapture = %q, want unchanged empty capture", worker.LastCapture)
+				if got, want := worker.LastCapture, defaultCodexReadyOutput(); got != want {
+					t.Fatalf("LastCapture = %q, want unchanged startup capture", got)
 				}
 			},
 		},
