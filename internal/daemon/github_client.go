@@ -26,6 +26,7 @@ var (
 type gitHubClient interface {
 	lookupPRNumber(ctx context.Context, branch string) (int, error)
 	lookupOpenPRNumber(ctx context.Context, branch string) (int, error)
+	lookupOpenOrMergedPRNumber(ctx context.Context, branch string) (int, bool, error)
 	isPRMerged(ctx context.Context, prNumber int) (bool, error)
 	lookupPRReviews(ctx context.Context, prNumber int) (prReviewPayload, bool, error)
 }
@@ -145,6 +146,14 @@ func (c *gitHubCLIClient) lookupOpenPRNumber(ctx context.Context, branch string)
 	return parsePRNumberList(output)
 }
 
+func (c *gitHubCLIClient) lookupOpenOrMergedPRNumber(ctx context.Context, branch string) (int, bool, error) {
+	output, err := c.run(ctx, "pr", "list", "--head", branch, "--state", "all", "--json", "number,state")
+	if err != nil {
+		return 0, false, err
+	}
+	return parseOpenOrMergedPRNumberList(output)
+}
+
 func parsePRNumberList(output []byte) (int, error) {
 	if len(output) == 0 {
 		return 0, nil
@@ -160,6 +169,29 @@ func parsePRNumberList(output []byte) (int, error) {
 		return 0, nil
 	}
 	return prs[0].Number, nil
+}
+
+func parseOpenOrMergedPRNumberList(output []byte) (int, bool, error) {
+	if len(output) == 0 {
+		return 0, false, nil
+	}
+
+	var prs []struct {
+		Number int    `json:"number"`
+		State  string `json:"state"`
+	}
+	if err := json.Unmarshal(output, &prs); err != nil {
+		return 0, false, err
+	}
+	for _, pr := range prs {
+		switch {
+		case strings.EqualFold(pr.State, "merged"):
+			return pr.Number, true, nil
+		case strings.EqualFold(pr.State, "open"):
+			return pr.Number, false, nil
+		}
+	}
+	return 0, false, nil
 }
 
 func (c *gitHubCLIClient) isPRMerged(ctx context.Context, prNumber int) (bool, error) {

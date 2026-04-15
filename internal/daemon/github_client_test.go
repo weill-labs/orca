@@ -211,6 +211,71 @@ func TestGitHubCLIClientLookupOpenPRNumber(t *testing.T) {
 	})
 }
 
+func TestGitHubCLIClientLookupOpenOrMergedPRNumber(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		output     string
+		err        error
+		wantNumber int
+		wantMerged bool
+		wantErr    bool
+	}{
+		{
+			name:       "returns merged pr number",
+			output:     `[{"number":77,"state":"MERGED"}]`,
+			wantNumber: 77,
+			wantMerged: true,
+		},
+		{
+			name:       "returns open pr number",
+			output:     `[{"number":88,"state":"OPEN"}]`,
+			wantNumber: 88,
+		},
+		{
+			name:   "skips closed pr number",
+			output: `[{"number":66,"state":"CLOSED"}]`,
+		},
+		{
+			name:    "returns command error",
+			err:     errors.New("gh failed"),
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			commands := newFakeCommands()
+			client := newGitHubCLIClient(gitHubCLIClientConfig{
+				project:     "/tmp/project",
+				commands:    commands,
+				sleep:       noSleep,
+				maxAttempts: 1,
+			})
+			args := []string{"pr", "list", "--head", "LAB-697", "--state", "all", "--json", "number,state"}
+			commands.queue("gh", args, tt.output, tt.err)
+
+			gotNumber, gotMerged, err := client.lookupOpenOrMergedPRNumber(context.Background(), "LAB-697")
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("lookupOpenOrMergedPRNumber() error = %v, wantErr = %v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				return
+			}
+			if gotNumber != tt.wantNumber {
+				t.Fatalf("lookupOpenOrMergedPRNumber() number = %d, want %d", gotNumber, tt.wantNumber)
+			}
+			if gotMerged != tt.wantMerged {
+				t.Fatalf("lookupOpenOrMergedPRNumber() merged = %v, want %v", gotMerged, tt.wantMerged)
+			}
+		})
+	}
+}
+
 func TestParsePRNumberList(t *testing.T) {
 	t.Parallel()
 
@@ -237,6 +302,44 @@ func TestParsePRNumberList(t *testing.T) {
 			}
 			if got != tc.want {
 				t.Fatalf("parsePRNumberList() = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestParseOpenOrMergedPRNumberList(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		output     []byte
+		wantNumber int
+		wantMerged bool
+		wantErr    bool
+	}{
+		{name: "empty output"},
+		{name: "empty list", output: []byte(`[]`)},
+		{name: "merged entry", output: []byte(`[{"number":19,"state":"MERGED"}]`), wantNumber: 19, wantMerged: true},
+		{name: "open entry", output: []byte(`[{"number":20,"state":"OPEN"}]`), wantNumber: 20},
+		{name: "closed entry", output: []byte(`[{"number":21,"state":"CLOSED"}]`)},
+		{name: "closed entry skipped for later open pr", output: []byte(`[{"number":21,"state":"CLOSED"},{"number":22,"state":"OPEN"}]`), wantNumber: 22},
+		{name: "invalid json", output: []byte(`{`), wantErr: true},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			gotNumber, gotMerged, err := parseOpenOrMergedPRNumberList(tt.output)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("parseOpenOrMergedPRNumberList() error = %v, wantErr = %v", err, tt.wantErr)
+			}
+			if gotNumber != tt.wantNumber {
+				t.Fatalf("parseOpenOrMergedPRNumberList() number = %d, want %d", gotNumber, tt.wantNumber)
+			}
+			if gotMerged != tt.wantMerged {
+				t.Fatalf("parseOpenOrMergedPRNumberList() merged = %v, want %v", gotMerged, tt.wantMerged)
 			}
 		})
 	}
