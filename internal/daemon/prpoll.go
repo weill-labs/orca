@@ -50,6 +50,7 @@ func (d *Daemon) enqueue(ctx context.Context, projectPath string, prNumber int) 
 
 func (d *Daemon) checkTaskPRPoll(ctx context.Context, active ActiveAssignment) TaskStateUpdate {
 	update := TaskStateUpdate{Active: active}
+	update.Active.Task.State = normalizeTaskState(update.Active.Task)
 	now := d.now()
 	if syncWorkerPRTracking(now, &update.Active) {
 		update.WorkerChanged = true
@@ -58,6 +59,17 @@ func (d *Daemon) checkTaskPRPoll(ctx context.Context, active ActiveAssignment) T
 	update.WorkerChanged = true
 	profile, err := d.profileForTask(ctx, active.Task)
 	if err != nil {
+		return update
+	}
+
+	switch update.Active.Task.State {
+	case TaskStateDone:
+		return update
+	case TaskStateMerged:
+		update.CompletionStatus = TaskStatusDone
+		update.CompletionEventType = EventTaskCompleted
+		update.CompletionMerged = true
+		update.CompletionMessage = "task finished"
 		return update
 	}
 
@@ -76,8 +88,9 @@ func (d *Daemon) checkTaskPRPoll(ctx context.Context, active ActiveAssignment) T
 			update.Active.Worker.LastPRNumber = prNumber
 			update.Active.Worker.LastPushAt = now
 			update.Active.Task.PRNumber = prNumber
-			update.Active.Task.UpdatedAt = now
-			update.TaskChanged = true
+			if setTaskState(&update.Active.Task, TaskStatePRDetected, now) {
+				update.TaskChanged = true
+			}
 			update.Events = append(update.Events, d.assignmentEvent(update.Active, profile, EventPRDetected, "pull request detected"))
 		}
 	}
@@ -92,6 +105,9 @@ func (d *Daemon) checkTaskPRPoll(ctx context.Context, active ActiveAssignment) T
 			return update
 		}
 		if merged {
+			if setTaskState(&update.Active.Task, TaskStateMerged, now) {
+				update.TaskChanged = true
+			}
 			update.PRMerged = true
 		}
 		return update
@@ -110,6 +126,9 @@ func (d *Daemon) checkTaskPRPoll(ctx context.Context, active ActiveAssignment) T
 		return d.continuePRFollowUpPolls(ctx, update, profile)
 	}
 
+	if setTaskState(&update.Active.Task, TaskStateMerged, now) {
+		update.TaskChanged = true
+	}
 	update.PRMerged = true
 	return update
 }
@@ -128,6 +147,12 @@ func mergeTaskStateUpdates(base, next TaskStateUpdate) TaskStateUpdate {
 	merged.PaneMetadata = mergeMetadata(merged.PaneMetadata, next.PaneMetadata)
 	merged.Events = append(merged.Events, next.Events...)
 	merged.PRMerged = merged.PRMerged || next.PRMerged
+	if next.CompletionStatus != "" {
+		merged.CompletionStatus = next.CompletionStatus
+		merged.CompletionEventType = next.CompletionEventType
+		merged.CompletionMerged = next.CompletionMerged
+		merged.CompletionMessage = next.CompletionMessage
+	}
 	merged.nudges = append(merged.nudges, next.nudges...)
 	return merged
 }

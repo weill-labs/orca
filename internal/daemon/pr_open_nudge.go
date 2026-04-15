@@ -49,6 +49,9 @@ func (d *Daemon) shouldNudgeIdleWorkerToOpenPR(active ActiveAssignment, output s
 func (d *Daemon) nudgeIdleWorkerToOpenPR(ctx context.Context, update *TaskStateUpdate, profile AgentProfile, now time.Time) {
 	update.queueNudge(func(ctx context.Context, d *Daemon, update *TaskStateUpdate) {
 		if err := d.sendPromptAndEnter(ctx, update.Active.Task.PaneID, openPRNudgePrompt); err != nil {
+			if isPaneGoneError(err) {
+				d.escalateTaskState(update, profile, "worker pane missing during open-pr nudge", now)
+			}
 			return
 		}
 

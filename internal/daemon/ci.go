@@ -30,12 +30,18 @@ func (d *Daemon) handlePRChecksPoll(ctx context.Context, update *TaskStateUpdate
 		if d.resetCIWorkerState(&update.Active.Worker, ciState, now) {
 			update.WorkerChanged = true
 		}
+		if nextState := taskStateForCIState(ciState); nextState != "" && setTaskState(&update.Active.Task, nextState, now) {
+			update.TaskChanged = true
+		}
 		return
 	}
 	if previous != ciStateFail {
 		resetCIFailureNudgeState(&update.Active.Worker)
 		if d.recordCIFailureNudge(ctx, update, profile, now) {
 			update.WorkerChanged = true
+		}
+		if setTaskState(&update.Active.Task, TaskStateCIPending, now) {
+			update.TaskChanged = true
 		}
 		return
 	}
@@ -45,6 +51,9 @@ func (d *Daemon) handlePRChecksPoll(ctx context.Context, update *TaskStateUpdate
 	update.Active.Worker.CIFailurePollCount++
 	update.Active.Worker.LastSeenAt = now
 	update.WorkerChanged = true
+	if setTaskState(&update.Active.Task, TaskStateCIPending, now) {
+		update.TaskChanged = true
+	}
 	if update.Active.Worker.CIFailurePollCount < ciFailureRenudgePollWindow {
 		return
 	}
@@ -105,6 +114,9 @@ func (d *Daemon) nudgeForCIFailure(ctx context.Context, update *TaskStateUpdate,
 	prompt := ciFailurePrompt(update.Active.Task.PRNumber, failedChecks)
 
 	if err := d.sendPromptAndCommand(ctx, update.Active.Task.PaneID, prompt, profile.NudgeCommand); err != nil {
+		if isPaneGoneError(err) {
+			d.escalateTaskState(update, profile, "worker pane missing during ci nudge", d.now())
+		}
 		return false
 	}
 

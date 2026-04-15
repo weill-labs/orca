@@ -69,6 +69,7 @@ func (d *Daemon) assign(ctx context.Context, projectPath, issue, prompt, agentPr
 		Project:      projectPath,
 		Issue:        issue,
 		Status:       TaskStatusStarting,
+		State:        initialTaskState(prNumber),
 		Prompt:       prompt,
 		CallerPane:   strings.TrimSpace(callerPane),
 		Branch:       assignmentBranch,
@@ -201,6 +202,7 @@ func (d *Daemon) assign(ctx context.Context, projectPath, issue, prompt, agentPr
 	}
 
 	task.Status = TaskStatusActive
+	task.State = initialTaskState(task.PRNumber)
 	task.UpdatedAt = d.now()
 	worker.UpdatedAt = task.UpdatedAt
 	if err := d.state.PutTask(ctx, task); err != nil {

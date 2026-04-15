@@ -62,6 +62,9 @@ func (d *Daemon) checkTaskCapture(ctx context.Context, active ActiveAssignment) 
 
 	snapshot, err := d.amuxClient(ctx).CapturePane(ctx, active.Task.PaneID)
 	if err != nil {
+		if isPaneGoneError(err) {
+			d.escalateTaskState(&update, profile, "worker pane missing during capture check", d.now())
+		}
 		return update
 	}
 
@@ -168,6 +171,9 @@ func (d *Daemon) checkTaskReviewPoll(ctx context.Context, active ActiveAssignmen
 	nudgedReviewState.reviewNudgeCount++
 	update.queueNudge(func(ctx context.Context, d *Daemon, update *TaskStateUpdate) {
 		if err := d.sendPromptAndEnter(ctx, update.Active.Task.PaneID, feedback); err != nil {
+			if isPaneGoneError(err) {
+				d.escalateTaskState(update, profile, "worker pane missing during review nudge", now)
+			}
 			return
 		}
 
@@ -193,6 +199,10 @@ func (d *Daemon) workerAppearsIdleForReviewNudge(ctx context.Context, update *Ta
 
 	snapshot, err := d.amuxClient(ctx).CapturePane(ctx, update.Active.Task.PaneID)
 	if err != nil {
+		if isPaneGoneError(err) {
+			d.escalateTaskState(update, profile, "worker pane missing during review poll", now)
+			return false
+		}
 		return true
 	}
 	if snapshot.Exited {
@@ -236,6 +246,7 @@ func (d *Daemon) recordWorkerOutput(update *TaskStateUpdate, profile AgentProfil
 	update.Active.Task.UpdatedAt = now
 	update.WorkerChanged = true
 	update.TaskChanged = true
+	update.Active.Task.State = taskStateForAssignment(update.Active)
 
 	if wasStuck {
 		if wasEscalated {

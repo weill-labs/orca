@@ -144,6 +144,7 @@ func (d *Daemon) finishAssignmentWithMessage(ctx context.Context, active ActiveA
 	result = errors.Join(result, d.cleanupCloneAndReleaseForProject(cleanupCtx, active.Task.Project, clone, active.Task.Branch))
 
 	active.Task.Status = status
+	active.Task.State = TaskStateDone
 	active.Task.UpdatedAt = d.now()
 	result = errors.Join(result, d.state.PutTask(cleanupCtx, active.Task))
 	result = errors.Join(result, d.releaseWorkerClaim(cleanupCtx, active.Worker))

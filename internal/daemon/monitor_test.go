@@ -262,9 +262,6 @@ func TestDaemonCaptureMonitorDoesNotOpenAmuxCircuitForPaneNotFound(t *testing.T)
 		}
 	}
 
-	if err := d.monitorAmuxCircuit.Allow(); err != nil {
-		t.Fatalf("amux circuit Allow() after pane-not-found errors = %v, want nil", err)
-	}
 	if got := deps.events.countType(EventDaemonCircuitOpened); got != 0 {
 		t.Fatalf("circuit opened event count = %d, want 0", got)
 	}

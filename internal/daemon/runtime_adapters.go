@@ -119,6 +119,7 @@ func convertStateTask(project string, task state.Task) Task {
 		Project:      project,
 		Issue:        task.Issue,
 		Status:       task.Status,
+		State:        task.State,
 		Prompt:       task.Prompt,
 		CallerPane:   task.CallerPane,
 		WorkerID:     task.WorkerID,
@@ -136,6 +137,7 @@ func convertStateTask(project string, task state.Task) Task {
 	if task.PRNumber != nil {
 		out.PRNumber = *task.PRNumber
 	}
+	out.State = normalizeTaskState(out)
 	return out
 }
 
@@ -149,6 +151,7 @@ func (a *sqliteStateAdapter) PutTask(ctx context.Context, task Task) error {
 	return a.store.UpsertTask(ctx, task.Project, state.Task{
 		Issue:         task.Issue,
 		Status:        task.Status,
+		State:         task.State,
 		Agent:         task.AgentProfile,
 		Prompt:        task.Prompt,
 		CallerPane:    task.CallerPane,
@@ -184,6 +187,7 @@ func (a *sqliteStateAdapter) ClaimTask(ctx context.Context, task Task) (*Task, e
 	claimed, err := a.store.ClaimTask(ctx, task.Project, state.Task{
 		Issue:         task.Issue,
 		Status:        task.Status,
+		State:         task.State,
 		Agent:         task.AgentProfile,
 		Prompt:        task.Prompt,
 		CallerPane:    task.CallerPane,
@@ -649,6 +653,7 @@ func convertAssignment(project string, assignment state.Assignment) ActiveAssign
 		Project:      project,
 		Issue:        assignment.Task.Issue,
 		Status:       assignment.Task.Status,
+		State:        assignment.Task.State,
 		Prompt:       assignment.Task.Prompt,
 		CallerPane:   assignment.Task.CallerPane,
 		WorkerID:     assignment.Task.WorkerID,
@@ -697,6 +702,8 @@ func convertAssignment(project string, assignment state.Assignment) ActiveAssign
 		LastSeenAt:                   assignment.Worker.LastSeenAt,
 		UpdatedAt:                    assignment.Worker.LastSeenAt,
 	}
+
+	task.State = taskStateForAssignment(ActiveAssignment{Task: task, Worker: worker})
 
 	return ActiveAssignment{
 		Task:   task,

@@ -199,6 +199,7 @@ type Task struct {
 	Project      string    `json:"project,omitempty"`
 	Issue        string    `json:"issue,omitempty"`
 	Status       string    `json:"status,omitempty"`
+	State        string    `json:"state,omitempty"`
 	Prompt       string    `json:"prompt,omitempty"`
 	CallerPane   string    `json:"caller_pane,omitempty"`
 	WorkerID     string    `json:"worker_id,omitempty"`

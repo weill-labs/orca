@@ -25,6 +25,10 @@ type TaskStateUpdate struct {
 	PaneMetadataRemovals []string
 	Events               []Event
 	PRMerged             bool
+	CompletionStatus     string
+	CompletionEventType  string
+	CompletionMerged     bool
+	CompletionMessage    string
 	nudges               []taskMonitorNudge
 }
 
@@ -84,23 +88,73 @@ func (m *TaskMonitor) run() {
 }
 
 func (m *TaskMonitor) handle(ctx context.Context, kind taskMonitorCheckKind, active ActiveAssignment) TaskStateUpdate {
+	active.Task.State = normalizeTaskState(active.Task)
+
 	switch kind {
 	case taskMonitorCheckCapture:
+		if !taskStateRunsCapture(active.Task.State) {
+			return TaskStateUpdate{Active: active}
+		}
 		return m.daemon.checkTaskCapture(ctx, active)
 	case taskMonitorCheckPRPoll:
 		return m.daemon.checkTaskPRPoll(ctx, active)
 	case taskMonitorCheckExitedEvent:
 		return m.daemon.checkTaskExitedEvent(ctx, active)
 	case taskMonitorCheckReviewPoll:
+		if !taskStateRunsReview(active.Task.State) {
+			return TaskStateUpdate{Active: active}
+		}
 		return m.daemon.checkTaskImmediateReviewPoll(ctx, active)
 	case taskMonitorCheckCIPoll:
+		if !taskStateRunsCI(active.Task.State) {
+			return TaskStateUpdate{Active: active}
+		}
 		return m.daemon.checkTaskImmediateCIPoll(ctx, active)
 	case taskMonitorCheckMergePoll:
+		if !taskStateRunsMergePoll(active.Task.State) {
+			return TaskStateUpdate{Active: active}
+		}
 		return m.daemon.checkTaskImmediateMergePoll(ctx, active)
 	case taskMonitorCheckMergeConflictPoll:
 		return m.daemon.checkTaskImmediateMergeConflictPoll(ctx, active)
 	default:
 		return TaskStateUpdate{Active: active}
+	}
+}
+
+func taskStateRunsCapture(state string) bool {
+	switch state {
+	case TaskStateAssigned, TaskStatePRDetected, TaskStateCIPending, TaskStateReviewPending, TaskStateEscalated:
+		return true
+	default:
+		return false
+	}
+}
+
+func taskStateRunsCI(state string) bool {
+	switch state {
+	case TaskStatePRDetected, TaskStateCIPending:
+		return true
+	default:
+		return false
+	}
+}
+
+func taskStateRunsReview(state string) bool {
+	switch state {
+	case TaskStatePRDetected, TaskStateCIPending, TaskStateReviewPending:
+		return true
+	default:
+		return false
+	}
+}
+
+func taskStateRunsMergePoll(state string) bool {
+	switch state {
+	case TaskStatePRDetected, TaskStateCIPending, TaskStateReviewPending:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -351,6 +405,18 @@ func (d *Daemon) applyTaskStateUpdate(ctx context.Context, update TaskStateUpdat
 	}
 
 	if update.PRMerged {
+		if update.WorkerChanged {
+			_ = d.state.PutWorker(ctx, active.Worker)
+		}
+		if update.TaskChanged {
+			_ = d.state.PutTask(ctx, active.Task)
+		}
+		if len(update.PaneMetadataRemovals) > 0 {
+			_ = d.amuxClient(ctx).RemoveMetadata(ctx, active.Task.PaneID, update.PaneMetadataRemovals...)
+		}
+		if len(update.PaneMetadata) > 0 {
+			_ = d.setPaneMetadata(ctx, active.Task.PaneID, update.PaneMetadata)
+		}
 		for _, event := range update.Events {
 			d.emit(ctx, event)
 		}
@@ -366,7 +432,16 @@ func (d *Daemon) applyTaskStateUpdate(ctx context.Context, update TaskStateUpdat
 		}
 		d.emit(ctx, d.assignmentEvent(active, profile, EventPRMerged, message))
 
-		if err := d.finishAssignment(ctx, active, TaskStatusDone, EventTaskCompleted, true); err != nil {
+		status := update.CompletionStatus
+		eventType := update.CompletionEventType
+		merged := update.CompletionMerged
+		completionMessage := update.CompletionMessage
+		if status == "" {
+			status = TaskStatusDone
+			eventType = EventTaskCompleted
+			merged = true
+		}
+		if err := d.finishAssignmentWithMessage(ctx, active, status, eventType, merged, completionMessage); err != nil {
 			d.emit(ctx, d.assignmentEvent(active, profile, EventTaskCompletionFailed, err.Error()))
 		}
 		return
@@ -385,6 +460,17 @@ func (d *Daemon) applyTaskStateUpdate(ctx context.Context, update TaskStateUpdat
 	}
 	for _, event := range update.Events {
 		d.emit(ctx, event)
+	}
+	if update.CompletionStatus == "" {
+		return
+	}
+
+	profile, err := d.profileForTask(ctx, active.Task)
+	if err != nil {
+		profile = AgentProfile{Name: active.Task.AgentProfile}
+	}
+	if err := d.finishAssignmentWithMessage(ctx, active, update.CompletionStatus, update.CompletionEventType, update.CompletionMerged, update.CompletionMessage); err != nil {
+		d.emit(ctx, d.assignmentEvent(active, profile, EventTaskCompletionFailed, err.Error()))
 	}
 }
 
