@@ -6,7 +6,6 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 
 	amuxapi "github.com/weill-labs/orca/internal/amux"
 )
@@ -81,7 +80,7 @@ func TestConfirmPromptDeliveryRetriesAfterWaitIdleTimeout(t *testing.T) {
 		t.Fatalf("waitContent calls = %#v, want %#v", got, want)
 	}
 	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
-		{PaneID: "pane-1", Timeout: 5 * time.Second},
+		{PaneID: "pane-1", Timeout: codexPromptRetryIdleProbeTime},
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("waitIdle calls = %#v, want %#v", got, want)
 	}

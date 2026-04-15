@@ -11,12 +11,13 @@ import (
 )
 
 const (
-	codexWorkingText         = "Working"
-	codexPromptDeliveryRetry = 10
+	codexWorkingText              = "Working"
+	codexPromptDeliveryRetry      = 10
+	codexPromptRetryIdleProbeTime = 5 * time.Second
 )
 
 // Codex can occasionally miss the initial prompt delivery. The full failure path
-// intentionally waits through 11 content checks and 10 idle settles so Orca only
+// intentionally waits through 11 content checks and 10 idle probes so Orca only
 // rolls back after exhausting explicit retries.
 func (d *Daemon) confirmPromptDelivery(ctx context.Context, paneID string, profile AgentProfile) error {
 	if !strings.EqualFold(profile.Name, "codex") {
@@ -34,7 +35,7 @@ func (d *Daemon) confirmPromptDelivery(ctx context.Context, paneID string, profi
 			if err := d.amux.SendKeys(ctx, paneID, "Enter"); err != nil {
 				return fmt.Errorf("retry prompt delivery: %w", err)
 			}
-			if err := d.amux.WaitIdle(ctx, paneID, 5*time.Second); err != nil {
+			if err := d.amux.WaitIdle(ctx, paneID, codexPromptRetryIdleProbeTime); err != nil {
 				if waitErr := d.amux.WaitContent(ctx, paneID, codexWorkingText, defaultAgentHandshakeTimeout); waitErr == nil {
 					return nil
 				} else if !errors.Is(waitErr, amuxapi.ErrWaitContentTimeout) {
