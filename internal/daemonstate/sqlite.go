@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS daemon_status (
 CREATE TABLE IF NOT EXISTS tasks (
 	project TEXT NOT NULL,
 	issue TEXT NOT NULL,
+	host TEXT NOT NULL DEFAULT '',
 	status TEXT NOT NULL,
 	agent TEXT NOT NULL,
 	prompt TEXT NOT NULL DEFAULT '',
@@ -45,6 +46,7 @@ CREATE TABLE IF NOT EXISTS tasks (
 CREATE TABLE IF NOT EXISTS workers (
 	project TEXT NOT NULL,
 	worker_id TEXT NOT NULL,
+	host TEXT NOT NULL DEFAULT '',
 	agent_profile TEXT NOT NULL,
 	current_pane_id TEXT NOT NULL DEFAULT '',
 	state TEXT NOT NULL,
@@ -126,6 +128,7 @@ CREATE TABLE IF NOT EXISTS daemon_status (
 CREATE TABLE IF NOT EXISTS tasks (
 	project TEXT NOT NULL,
 	issue TEXT NOT NULL,
+	host TEXT NOT NULL DEFAULT '',
 	status TEXT NOT NULL,
 	agent TEXT NOT NULL,
 	prompt TEXT NOT NULL DEFAULT '',
@@ -142,6 +145,7 @@ CREATE TABLE IF NOT EXISTS tasks (
 CREATE TABLE IF NOT EXISTS workers (
 	project TEXT NOT NULL,
 	worker_id TEXT NOT NULL,
+	host TEXT NOT NULL DEFAULT '',
 	agent_profile TEXT NOT NULL,
 	current_pane_id TEXT NOT NULL DEFAULT '',
 	state TEXT NOT NULL,
@@ -266,6 +270,9 @@ func (s *SQLiteStore) EnsureSchema(ctx context.Context) error {
 		return err
 	}
 	if err := s.ensureTaskBranchSchema(ctx); err != nil {
+		return err
+	}
+	if err := s.ensureHostSchema(ctx); err != nil {
 		return err
 	}
 	if err := s.ensureWorkerTrackingColumns(ctx); err != nil {
@@ -1911,6 +1918,13 @@ func (s *SQLiteStore) ensureTaskCallerPaneSchema(ctx context.Context) error {
 
 func (s *SQLiteStore) ensureTaskBranchSchema(ctx context.Context) error {
 	return s.addColumnIfMissing(ctx, "tasks", "branch", "TEXT NOT NULL DEFAULT ''")
+}
+
+func (s *SQLiteStore) ensureHostSchema(ctx context.Context) error {
+	if err := s.addColumnIfMissing(ctx, "tasks", "host", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	return s.addColumnIfMissing(ctx, "workers", "host", "TEXT NOT NULL DEFAULT ''")
 }
 
 func (s *SQLiteStore) ensureLegacyWorkerTrackingColumns(ctx context.Context) error {

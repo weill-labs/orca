@@ -24,6 +24,15 @@ import (
 const orcaPoolSubdir = ".orca/pool"
 const daemonListenerFDEnvVar = "ORCA_DAEMON_LISTENER_FD"
 
+var (
+	openSQLiteDaemonStore = func(path string) (daemonStateStore, error) {
+		return state.OpenSQLite(path)
+	}
+	openPostgresDaemonStore = func(dsn string) (daemonStateStore, error) {
+		return state.OpenPostgres(dsn)
+	}
+)
+
 type ServeRequest struct {
 	Session     string
 	LeadPane    string
@@ -52,7 +61,7 @@ func RunProcess(ctx context.Context, req ServeRequest) error {
 }
 
 func runProcess(ctx context.Context, req ServeRequest, deps serveDeps) error {
-	store, err := state.OpenSQLite(req.StateDB)
+	store, err := openDaemonStore(req.StateDB)
 	if err != nil {
 		return err
 	}
@@ -315,7 +324,7 @@ func daemonServeArgs(executable string, req ServeRequest) []string {
 	}
 }
 
-func serveRPC(ctx context.Context, listener net.Listener, req ServeRequest, instance *Daemon, store *state.SQLiteStore, buildCommit string, execProcess func(string, []string, []string) error) error {
+func serveRPC(ctx context.Context, listener net.Listener, req ServeRequest, instance *Daemon, store daemonStateStore, buildCommit string, execProcess func(string, []string, []string) error) error {
 	reloadReserved := false
 	for {
 		conn, err := listener.Accept()
@@ -357,7 +366,7 @@ func serveRPC(ctx context.Context, listener net.Listener, req ServeRequest, inst
 	}
 }
 
-func handleRPCConn(ctx context.Context, conn net.Conn, instance *Daemon, store *state.SQLiteStore, buildCommit string, defaultProject ...string) {
+func handleRPCConn(ctx context.Context, conn net.Conn, instance *Daemon, store daemonStateStore, buildCommit string, defaultProject ...string) {
 	defer conn.Close()
 	request, response, err := readRPCRequest(conn)
 	if err != nil {
@@ -369,7 +378,7 @@ func handleRPCConn(ctx context.Context, conn net.Conn, instance *Daemon, store *
 	_ = json.NewEncoder(conn).Encode(response)
 }
 
-func handleRPCRequest(ctx context.Context, conn net.Conn, request rpcRequest, instance *Daemon, store *state.SQLiteStore, buildCommit string, defaultProject ...string) {
+func handleRPCRequest(ctx context.Context, conn net.Conn, request rpcRequest, instance *Daemon, store daemonStateStore, buildCommit string, defaultProject ...string) {
 	defer conn.Close()
 
 	response := dispatchRPCRequest(ctx, request, instance, store, buildCommit, defaultProject...)
@@ -388,7 +397,7 @@ func readRPCRequest(conn net.Conn) (rpcRequest, rpcResponse, error) {
 	return request, rpcResponse{}, nil
 }
 
-func dispatchRPCRequest(ctx context.Context, request rpcRequest, instance *Daemon, store *state.SQLiteStore, buildCommit string, defaultProject ...string) rpcResponse {
+func dispatchRPCRequest(ctx context.Context, request rpcRequest, instance *Daemon, store daemonStateStore, buildCommit string, defaultProject ...string) rpcResponse {
 	switch request.Method {
 	case "assign":
 		var params assignRPCParams
@@ -518,7 +527,7 @@ func dispatchRPCRequest(ctx context.Context, request rpcRequest, instance *Daemo
 	}
 }
 
-func taskActionResultForIssue(ctx context.Context, store *state.SQLiteStore, projectPath, issue string) (TaskActionResult, error) {
+func taskActionResultForIssue(ctx context.Context, store daemonStateStore, projectPath, issue string) (TaskActionResult, error) {
 	taskStatus, err := store.TaskStatus(ctx, projectPath, issue)
 	if err != nil {
 		return TaskActionResult{}, err
@@ -531,6 +540,13 @@ func taskActionResultForIssue(ctx context.Context, store *state.SQLiteStore, pro
 		Agent:     taskStatus.Task.Agent,
 		UpdatedAt: taskStatus.Task.UpdatedAt,
 	}, nil
+}
+
+func openDaemonStore(stateDBPath string) (daemonStateStore, error) {
+	if dsn := strings.TrimSpace(os.Getenv("ORCA_STATE_DSN")); dsn != "" {
+		return openPostgresDaemonStore(dsn)
+	}
+	return openSQLiteDaemonStore(stateDBPath)
 }
 
 func resolveRPCProject(id json.RawMessage, rawProject string, defaultProject ...string) (string, rpcResponse) {
