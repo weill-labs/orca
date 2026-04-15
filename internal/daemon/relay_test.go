@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -118,6 +119,107 @@ func TestDaemonRelayEventPullRequestMergedTriggersImmediateMergeDetection(t *tes
 	}
 	if got, want := deps.events.countType(EventPRMerged), 1; got != want {
 		t.Fatalf("merged event count = %d, want %d", got, want)
+	}
+}
+
+func TestDaemonRelayEventPullRequestMergeRefreshesSiblingPRConflicts(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	seedTaskMonitorAssignment(t, deps, "LAB-1166", "pane-1", 41)
+	seedTaskMonitorAssignment(t, deps, "LAB-1255", "pane-2", 42)
+
+	deps.commands.queue("gh", []string{"pr", "view", "41", "--json", "mergedAt"}, `{"mergedAt":"2026-04-13T12:00:00Z"}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergeable"}, `{"mergeable":"UNKNOWN"}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergeable"}, `{"mergeable":"UNKNOWN"}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergeable"}, `{"mergeable":"CONFLICTING"}`, nil)
+
+	var (
+		sleepMu sync.Mutex
+		sleeps  []time.Duration
+	)
+
+	d := deps.newDaemonWithOptions(t, func(opts *Options) {
+		opts.Sleep = func(ctx context.Context, delay time.Duration) error {
+			sleepMu.Lock()
+			sleeps = append(sleeps, delay)
+			sleepMu.Unlock()
+			return nil
+		}
+		opts.DetectOrigin = func(projectDir string) (string, error) {
+			return "https://github.com/weill-labs/orca.git", nil
+		}
+	})
+
+	d.handleRelayEvent(context.Background(), relayEventMessage{
+		ID:         "evt-merge-1",
+		Type:       "pull_request",
+		Action:     "closed",
+		Repo:       "weill-labs/orca",
+		PRNumber:   41,
+		Merged:     true,
+		BaseBranch: "main",
+	})
+
+	waitFor(t, "relay merge conflict refresh", func() bool {
+		task, ok := deps.state.task("LAB-1166")
+		if !ok || task.Status != TaskStatusDone {
+			return false
+		}
+		worker, ok := deps.state.worker("pane-2")
+		return ok && worker.LastMergeableState == "CONFLICTING" && deps.events.countType(EventWorkerNudgedConflict) == 1
+	})
+
+	if got, want := deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "mergeable"}), 3; got != want {
+		t.Fatalf("mergeable refresh call count = %d, want %d", got, want)
+	}
+	if got, want := deps.commands.countCalls("gh", []string{"pr", "view", "41", "--json", "mergeable"}), 0; got != want {
+		t.Fatalf("merged PR mergeable refresh calls = %d, want %d", got, want)
+	}
+
+	sleepMu.Lock()
+	gotSleeps := append([]time.Duration(nil), sleeps...)
+	sleepMu.Unlock()
+	if want := []time.Duration{5 * time.Second, 10 * time.Second, 10 * time.Second}; !reflect.DeepEqual(gotSleeps, want) {
+		t.Fatalf("sleep delays = %#v, want %#v", gotSleeps, want)
+	}
+}
+
+func TestDaemonRelayEventPullRequestMergeSkipsSiblingConflictRefreshOnBaseBranchMismatch(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	seedTaskMonitorAssignment(t, deps, "LAB-1166", "pane-1", 41)
+	seedTaskMonitorAssignment(t, deps, "LAB-1255", "pane-2", 42)
+
+	deps.commands.queue("gh", []string{"pr", "view", "41", "--json", "mergedAt"}, `{"mergedAt":"2026-04-13T12:00:00Z"}`, nil)
+
+	d := deps.newDaemonWithOptions(t, func(opts *Options) {
+		opts.DetectOrigin = func(projectDir string) (string, error) {
+			return "https://github.com/weill-labs/orca.git", nil
+		}
+	})
+
+	d.handleRelayEvent(context.Background(), relayEventMessage{
+		ID:         "evt-merge-2",
+		Type:       "pull_request",
+		Action:     "closed",
+		Repo:       "weill-labs/orca",
+		PRNumber:   41,
+		Merged:     true,
+		BaseBranch: "release/2026-04",
+	})
+
+	waitFor(t, "relay merge detection without sibling refresh", func() bool {
+		task, ok := deps.state.task("LAB-1166")
+		return ok && task.Status == TaskStatusDone
+	})
+
+	if got, want := deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "mergeable"}), 0; got != want {
+		t.Fatalf("mergeable refresh call count = %d, want %d", got, want)
+	}
+	if got, want := deps.events.countType(EventWorkerNudgedConflict), 0; got != want {
+		t.Fatalf("conflict nudge event count = %d, want %d", got, want)
 	}
 }
 

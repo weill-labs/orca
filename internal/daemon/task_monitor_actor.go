@@ -37,6 +37,7 @@ const (
 	taskMonitorCheckReviewPoll
 	taskMonitorCheckCIPoll
 	taskMonitorCheckMergePoll
+	taskMonitorCheckMergeConflictPoll
 )
 
 type taskMonitorRequest struct {
@@ -96,6 +97,8 @@ func (m *TaskMonitor) handle(ctx context.Context, kind taskMonitorCheckKind, act
 		return m.daemon.checkTaskImmediateCIPoll(ctx, active)
 	case taskMonitorCheckMergePoll:
 		return m.daemon.checkTaskImmediateMergePoll(ctx, active)
+	case taskMonitorCheckMergeConflictPoll:
+		return m.daemon.checkTaskImmediateMergeConflictPoll(ctx, active)
 	default:
 		return TaskStateUpdate{Active: active}
 	}
@@ -261,9 +264,27 @@ func (d *Daemon) isCurrentTaskMonitor(key string, monitor *TaskMonitor) bool {
 
 func (d *Daemon) dispatchTaskMonitorChecks(ctx context.Context, assignments []ActiveAssignment, kind taskMonitorCheckKind) []taskMonitorResult {
 	monitors := d.syncTaskMonitors(assignments)
+	responses := d.dispatchTaskMonitorResponses(ctx, assignments, kind, func(active ActiveAssignment) *TaskMonitor {
+		return monitors[taskMonitorKey(active.Task.Project, active.Task.Issue)]
+	})
+	results := d.collectTaskMonitorResults(ctx, responses)
+	d.executeTaskMonitorNudges(ctx, results)
+	return results
+}
+
+func (d *Daemon) dispatchSelectedTaskMonitorChecks(ctx context.Context, assignments []ActiveAssignment, kind taskMonitorCheckKind) {
+	responses := d.dispatchTaskMonitorResponses(ctx, assignments, kind, func(active ActiveAssignment) *TaskMonitor {
+		return d.ensureTaskMonitorForProject(active.Task.Project, active.Task.Issue)
+	})
+	results := d.collectTaskMonitorResults(ctx, responses)
+	d.executeTaskMonitorNudges(ctx, results)
+	d.applyTaskMonitorResults(ctx, results)
+}
+
+func (d *Daemon) dispatchTaskMonitorResponses(ctx context.Context, assignments []ActiveAssignment, kind taskMonitorCheckKind, monitorFor func(ActiveAssignment) *TaskMonitor) []<-chan taskMonitorResult {
 	responses := make([]<-chan taskMonitorResult, 0, len(assignments))
 	for _, active := range assignments {
-		monitor := monitors[taskMonitorKey(active.Task.Project, active.Task.Issue)]
+		monitor := monitorFor(active)
 		if monitor == nil {
 			continue
 		}
@@ -273,7 +294,10 @@ func (d *Daemon) dispatchTaskMonitorChecks(ctx context.Context, assignments []Ac
 		}
 		responses = append(responses, response)
 	}
+	return responses
+}
 
+func (d *Daemon) collectTaskMonitorResults(ctx context.Context, responses []<-chan taskMonitorResult) []taskMonitorResult {
 	results := make([]taskMonitorResult, 0, len(responses))
 	for _, response := range responses {
 		select {
@@ -283,7 +307,6 @@ func (d *Daemon) dispatchTaskMonitorChecks(ctx context.Context, assignments []Ac
 			results = append(results, result)
 		}
 	}
-	d.executeTaskMonitorNudges(ctx, results)
 	return results
 }
 
