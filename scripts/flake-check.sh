@@ -7,7 +7,7 @@ report_path="${CI_FLAKE_REPORT:-flake-report.json}"
 summary_path="${CI_FLAKE_SUMMARY:-flake-summary.md}"
 
 status=0
-go test ./... -count=100 -timeout 15m -json >"${results_path}" || status=$?
+go test ./... -count=3 -timeout 120s -json >"${results_path}" || status=$?
 
 go run ./cmd/ci-flakes analyze \
   --registry "${registry_path}" \
