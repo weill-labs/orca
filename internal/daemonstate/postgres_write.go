@@ -100,8 +100,8 @@ func (s *PostgresStore) UpsertWorker(ctx context.Context, project string, worker
 	}
 
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO workers(project, worker_id, agent_profile, current_pane_id, state, issue, clone_path, last_review_count, last_inline_review_comment_count, last_issue_comment_count, review_nudge_count, last_ci_state, ci_nudge_count, ci_failure_poll_count, ci_escalated, last_mergeable_state, nudge_count, last_capture, last_activity_at, last_pr_number, last_push_at, last_pr_poll_at, restart_count, first_crash_at, created_at, last_seen_at)
-		VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
+		INSERT INTO workers(project, worker_id, agent_profile, current_pane_id, state, issue, clone_path, last_review_count, last_inline_review_comment_count, last_issue_comment_count, last_issue_comment_watermark, review_nudge_count, last_ci_state, ci_nudge_count, ci_failure_poll_count, ci_escalated, last_mergeable_state, nudge_count, last_capture, last_activity_at, last_pr_number, last_push_at, last_pr_poll_at, restart_count, first_crash_at, created_at, last_seen_at)
+		VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)
 		ON CONFLICT(project, worker_id) DO UPDATE SET
 			agent_profile = excluded.agent_profile,
 			current_pane_id = excluded.current_pane_id,
@@ -111,6 +111,7 @@ func (s *PostgresStore) UpsertWorker(ctx context.Context, project string, worker
 			last_review_count = excluded.last_review_count,
 			last_inline_review_comment_count = excluded.last_inline_review_comment_count,
 			last_issue_comment_count = excluded.last_issue_comment_count,
+			last_issue_comment_watermark = excluded.last_issue_comment_watermark,
 			review_nudge_count = excluded.review_nudge_count,
 			last_ci_state = excluded.last_ci_state,
 			ci_nudge_count = excluded.ci_nudge_count,
@@ -126,7 +127,7 @@ func (s *PostgresStore) UpsertWorker(ctx context.Context, project string, worker
 			restart_count = excluded.restart_count,
 			first_crash_at = excluded.first_crash_at,
 			last_seen_at = excluded.last_seen_at
-	`, project, worker.WorkerID, worker.Agent, worker.CurrentPaneID, worker.State, worker.Issue, worker.ClonePath, worker.LastReviewCount, worker.LastInlineReviewCommentCount, worker.LastIssueCommentCount, worker.ReviewNudgeCount, worker.LastCIState, worker.CINudgeCount, worker.CIFailurePollCount, worker.CIEscalated, worker.LastMergeableState, worker.NudgeCount, worker.LastCapture, optionalTimeArg(worker.LastActivityAt), worker.LastPRNumber, optionalTimeArg(worker.LastPushAt), optionalTimeArg(worker.LastPRPollAt), worker.RestartCount, optionalTimeArg(worker.FirstCrashAt), normalizeTime(worker.CreatedAt), normalizeTime(worker.LastSeenAt))
+	`, project, worker.WorkerID, worker.Agent, worker.CurrentPaneID, worker.State, worker.Issue, worker.ClonePath, worker.LastReviewCount, worker.LastInlineReviewCommentCount, worker.LastIssueCommentCount, worker.LastIssueCommentWatermark, worker.ReviewNudgeCount, worker.LastCIState, worker.CINudgeCount, worker.CIFailurePollCount, worker.CIEscalated, worker.LastMergeableState, worker.NudgeCount, worker.LastCapture, optionalTimeArg(worker.LastActivityAt), worker.LastPRNumber, optionalTimeArg(worker.LastPushAt), optionalTimeArg(worker.LastPRPollAt), worker.RestartCount, optionalTimeArg(worker.FirstCrashAt), normalizeTime(worker.CreatedAt), normalizeTime(worker.LastSeenAt))
 	if err != nil {
 		return fmt.Errorf("upsert worker: %w", err)
 	}
@@ -155,7 +156,7 @@ func (s *PostgresStore) ClaimWorker(ctx context.Context, project string, worker 
 	}
 
 	row := tx.QueryRow(ctx, `
-		SELECT worker_id, current_pane_id, agent_profile, state, issue, clone_path, last_review_count, last_inline_review_comment_count, last_issue_comment_count, review_nudge_count, last_ci_state, ci_nudge_count, ci_failure_poll_count, ci_escalated, last_mergeable_state, nudge_count, last_capture, last_activity_at, last_pr_number, last_push_at, last_pr_poll_at, restart_count, first_crash_at, created_at, last_seen_at
+		SELECT worker_id, current_pane_id, agent_profile, state, issue, clone_path, last_review_count, last_inline_review_comment_count, last_issue_comment_count, last_issue_comment_watermark, review_nudge_count, last_ci_state, ci_nudge_count, ci_failure_poll_count, ci_escalated, last_mergeable_state, nudge_count, last_capture, last_activity_at, last_pr_number, last_push_at, last_pr_poll_at, restart_count, first_crash_at, created_at, last_seen_at
 		FROM workers
 		WHERE project = $1 AND agent_profile = $2 AND issue = ''
 		ORDER BY created_at ASC, worker_id ASC
@@ -182,8 +183,8 @@ func (s *PostgresStore) ClaimWorker(ctx context.Context, project string, worker 
 			return Worker{}, err
 		}
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO workers(project, worker_id, agent_profile, current_pane_id, state, issue, clone_path, last_review_count, last_inline_review_comment_count, last_issue_comment_count, review_nudge_count, last_ci_state, ci_nudge_count, ci_failure_poll_count, ci_escalated, last_mergeable_state, nudge_count, last_capture, last_activity_at, last_pr_number, last_push_at, last_pr_poll_at, restart_count, first_crash_at, created_at, last_seen_at)
-			VALUES($1, $2, $3, '', $4, $5, '', 0, 0, 0, 0, '', 0, 0, FALSE, '', 0, '', NULL, 0, NULL, NULL, 0, NULL, $6, $7)
+			INSERT INTO workers(project, worker_id, agent_profile, current_pane_id, state, issue, clone_path, last_review_count, last_inline_review_comment_count, last_issue_comment_count, last_issue_comment_watermark, review_nudge_count, last_ci_state, ci_nudge_count, ci_failure_poll_count, ci_escalated, last_mergeable_state, nudge_count, last_capture, last_activity_at, last_pr_number, last_push_at, last_pr_poll_at, restart_count, first_crash_at, created_at, last_seen_at)
+			VALUES($1, $2, $3, '', $4, $5, '', 0, 0, 0, '', 0, '', 0, 0, FALSE, '', 0, '', NULL, 0, NULL, NULL, 0, NULL, $6, $7)
 		`, project, worker.WorkerID, worker.Agent, worker.State, worker.Issue, normalizeTime(worker.CreatedAt), normalizeTime(worker.LastSeenAt)); err != nil {
 			return Worker{}, fmt.Errorf("insert claimed worker: %w", err)
 		}

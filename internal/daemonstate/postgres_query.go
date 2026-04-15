@@ -102,7 +102,7 @@ func (s *PostgresStore) ListWorkers(ctx context.Context, project string) ([]Work
 	}
 
 	rows, err := s.pool.Query(ctx, `
-		SELECT worker_id, current_pane_id, agent_profile, state, issue, clone_path, last_review_count, last_inline_review_comment_count, last_issue_comment_count, review_nudge_count, last_ci_state, ci_nudge_count, ci_failure_poll_count, ci_escalated, last_mergeable_state, nudge_count, last_capture, last_activity_at, last_pr_number, last_push_at, last_pr_poll_at, restart_count, first_crash_at, created_at, last_seen_at
+		SELECT worker_id, current_pane_id, agent_profile, state, issue, clone_path, last_review_count, last_inline_review_comment_count, last_issue_comment_count, last_issue_comment_watermark, review_nudge_count, last_ci_state, ci_nudge_count, ci_failure_poll_count, ci_escalated, last_mergeable_state, nudge_count, last_capture, last_activity_at, last_pr_number, last_push_at, last_pr_poll_at, restart_count, first_crash_at, created_at, last_seen_at
 		FROM workers
 		WHERE project = $1
 		ORDER BY last_seen_at DESC, worker_id ASC
@@ -129,7 +129,7 @@ func (s *PostgresStore) ListWorkers(ctx context.Context, project string) ([]Work
 
 func (s *PostgresStore) WorkerByID(ctx context.Context, project, workerID string) (Worker, error) {
 	row := s.pool.QueryRow(ctx, `
-		SELECT worker_id, current_pane_id, agent_profile, state, issue, clone_path, last_review_count, last_inline_review_comment_count, last_issue_comment_count, review_nudge_count, last_ci_state, ci_nudge_count, ci_failure_poll_count, ci_escalated, last_mergeable_state, nudge_count, last_capture, last_activity_at, last_pr_number, last_push_at, last_pr_poll_at, restart_count, first_crash_at, created_at, last_seen_at
+		SELECT worker_id, current_pane_id, agent_profile, state, issue, clone_path, last_review_count, last_inline_review_comment_count, last_issue_comment_count, last_issue_comment_watermark, review_nudge_count, last_ci_state, ci_nudge_count, ci_failure_poll_count, ci_escalated, last_mergeable_state, nudge_count, last_capture, last_activity_at, last_pr_number, last_push_at, last_pr_poll_at, restart_count, first_crash_at, created_at, last_seen_at
 		FROM workers
 		WHERE project = $1 AND worker_id = $2
 	`, project, workerID)
@@ -147,7 +147,7 @@ func (s *PostgresStore) WorkerByID(ctx context.Context, project, workerID string
 
 func (s *PostgresStore) WorkerByPane(ctx context.Context, project, paneID string) (Worker, error) {
 	query := `
-		SELECT project, worker_id, current_pane_id, agent_profile, state, issue, clone_path, last_review_count, last_inline_review_comment_count, last_issue_comment_count, review_nudge_count, last_ci_state, ci_nudge_count, ci_failure_poll_count, ci_escalated, last_mergeable_state, nudge_count, last_capture, last_activity_at, last_pr_number, last_push_at, last_pr_poll_at, restart_count, first_crash_at, created_at, last_seen_at
+		SELECT project, worker_id, current_pane_id, agent_profile, state, issue, clone_path, last_review_count, last_inline_review_comment_count, last_issue_comment_count, last_issue_comment_watermark, review_nudge_count, last_ci_state, ci_nudge_count, ci_failure_poll_count, ci_escalated, last_mergeable_state, nudge_count, last_capture, last_activity_at, last_pr_number, last_push_at, last_pr_poll_at, restart_count, first_crash_at, created_at, last_seen_at
 		FROM workers
 		WHERE current_pane_id = $1
 	`
@@ -325,7 +325,7 @@ func (s *PostgresStore) ActiveAssignments(ctx context.Context, project string) (
 	rows, err := s.pool.Query(ctx, `
 		SELECT
 			t.issue, t.status, t.state, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.created_at, t.updated_at,
-			w.worker_id, w.current_pane_id, w.agent_profile, w.state, w.issue, w.clone_path, w.last_review_count, w.last_inline_review_comment_count, w.last_issue_comment_count, w.review_nudge_count, w.last_ci_state, w.ci_nudge_count, w.ci_failure_poll_count, w.ci_escalated, w.last_mergeable_state, w.nudge_count, w.last_capture, w.last_activity_at, w.last_pr_number, w.last_push_at, w.last_pr_poll_at, w.restart_count, w.first_crash_at, w.created_at, w.last_seen_at
+			w.worker_id, w.current_pane_id, w.agent_profile, w.state, w.issue, w.clone_path, w.last_review_count, w.last_inline_review_comment_count, w.last_issue_comment_count, w.last_issue_comment_watermark, w.review_nudge_count, w.last_ci_state, w.ci_nudge_count, w.ci_failure_poll_count, w.ci_escalated, w.last_mergeable_state, w.nudge_count, w.last_capture, w.last_activity_at, w.last_pr_number, w.last_push_at, w.last_pr_poll_at, w.restart_count, w.first_crash_at, w.created_at, w.last_seen_at
 		FROM tasks t
 		INNER JOIN workers w
 			ON w.project = t.project
@@ -359,7 +359,7 @@ func (s *PostgresStore) ActiveAssignmentByIssue(ctx context.Context, project, is
 		SELECT
 			t.project,
 			t.issue, t.status, t.state, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.created_at, t.updated_at,
-			w.worker_id, w.current_pane_id, w.agent_profile, w.state, w.issue, w.clone_path, w.last_review_count, w.last_inline_review_comment_count, w.last_issue_comment_count, w.review_nudge_count, w.last_ci_state, w.ci_nudge_count, w.ci_failure_poll_count, w.ci_escalated, w.last_mergeable_state, w.nudge_count, w.last_capture, w.last_activity_at, w.last_pr_number, w.last_push_at, w.last_pr_poll_at, w.restart_count, w.first_crash_at, w.created_at, w.last_seen_at
+			w.worker_id, w.current_pane_id, w.agent_profile, w.state, w.issue, w.clone_path, w.last_review_count, w.last_inline_review_comment_count, w.last_issue_comment_count, w.last_issue_comment_watermark, w.review_nudge_count, w.last_ci_state, w.ci_nudge_count, w.ci_failure_poll_count, w.ci_escalated, w.last_mergeable_state, w.nudge_count, w.last_capture, w.last_activity_at, w.last_pr_number, w.last_push_at, w.last_pr_poll_at, w.restart_count, w.first_crash_at, w.created_at, w.last_seen_at
 		FROM tasks t
 		INNER JOIN workers w
 			ON w.project = t.project
@@ -388,7 +388,7 @@ func (s *PostgresStore) ActiveAssignmentByBranch(ctx context.Context, project, b
 		SELECT
 			t.project,
 			t.issue, t.status, t.state, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.created_at, t.updated_at,
-			w.worker_id, w.current_pane_id, w.agent_profile, w.state, w.issue, w.clone_path, w.last_review_count, w.last_inline_review_comment_count, w.last_issue_comment_count, w.review_nudge_count, w.last_ci_state, w.ci_nudge_count, w.ci_failure_poll_count, w.ci_escalated, w.last_mergeable_state, w.nudge_count, w.last_capture, w.last_activity_at, w.last_pr_number, w.last_push_at, w.last_pr_poll_at, w.restart_count, w.first_crash_at, w.created_at, w.last_seen_at
+			w.worker_id, w.current_pane_id, w.agent_profile, w.state, w.issue, w.clone_path, w.last_review_count, w.last_inline_review_comment_count, w.last_issue_comment_count, w.last_issue_comment_watermark, w.review_nudge_count, w.last_ci_state, w.ci_nudge_count, w.ci_failure_poll_count, w.ci_escalated, w.last_mergeable_state, w.nudge_count, w.last_capture, w.last_activity_at, w.last_pr_number, w.last_push_at, w.last_pr_poll_at, w.restart_count, w.first_crash_at, w.created_at, w.last_seen_at
 		FROM tasks t
 		INNER JOIN workers w
 			ON w.project = t.project
@@ -418,7 +418,7 @@ func (s *PostgresStore) ActiveAssignmentByPRNumber(ctx context.Context, project 
 		SELECT
 			t.project,
 			t.issue, t.status, t.state, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.created_at, t.updated_at,
-			w.worker_id, w.current_pane_id, w.agent_profile, w.state, w.issue, w.clone_path, w.last_review_count, w.last_inline_review_comment_count, w.last_issue_comment_count, w.review_nudge_count, w.last_ci_state, w.ci_nudge_count, w.ci_failure_poll_count, w.ci_escalated, w.last_mergeable_state, w.nudge_count, w.last_capture, w.last_activity_at, w.last_pr_number, w.last_push_at, w.last_pr_poll_at, w.restart_count, w.first_crash_at, w.created_at, w.last_seen_at
+			w.worker_id, w.current_pane_id, w.agent_profile, w.state, w.issue, w.clone_path, w.last_review_count, w.last_inline_review_comment_count, w.last_issue_comment_count, w.last_issue_comment_watermark, w.review_nudge_count, w.last_ci_state, w.ci_nudge_count, w.ci_failure_poll_count, w.ci_escalated, w.last_mergeable_state, w.nudge_count, w.last_capture, w.last_activity_at, w.last_pr_number, w.last_push_at, w.last_pr_poll_at, w.restart_count, w.first_crash_at, w.created_at, w.last_seen_at
 		FROM tasks t
 		INNER JOIN workers w
 			ON w.project = t.project
@@ -748,7 +748,7 @@ func (s *PostgresStore) AllNonTerminalTasks(ctx context.Context) ([]Task, error)
 
 func (s *PostgresStore) allWorkers(ctx context.Context) ([]Worker, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT project, worker_id, current_pane_id, agent_profile, state, issue, clone_path, last_review_count, last_inline_review_comment_count, last_issue_comment_count, review_nudge_count, last_ci_state, ci_nudge_count, ci_failure_poll_count, ci_escalated, last_mergeable_state, nudge_count, last_capture, last_activity_at, last_pr_number, last_push_at, last_pr_poll_at, restart_count, first_crash_at, created_at, last_seen_at
+		SELECT project, worker_id, current_pane_id, agent_profile, state, issue, clone_path, last_review_count, last_inline_review_comment_count, last_issue_comment_count, last_issue_comment_watermark, review_nudge_count, last_ci_state, ci_nudge_count, ci_failure_poll_count, ci_escalated, last_mergeable_state, nudge_count, last_capture, last_activity_at, last_pr_number, last_push_at, last_pr_poll_at, restart_count, first_crash_at, created_at, last_seen_at
 		FROM workers
 		ORDER BY last_seen_at DESC, project ASC, worker_id ASC
 	`)
@@ -802,7 +802,7 @@ func (s *PostgresStore) AllActiveAssignments(ctx context.Context) ([]Assignment,
 		SELECT
 			t.project,
 			t.issue, t.status, t.state, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.created_at, t.updated_at,
-			w.worker_id, w.current_pane_id, w.agent_profile, w.state, w.issue, w.clone_path, w.last_review_count, w.last_inline_review_comment_count, w.last_issue_comment_count, w.review_nudge_count, w.last_ci_state, w.ci_nudge_count, w.ci_failure_poll_count, w.ci_escalated, w.last_mergeable_state, w.nudge_count, w.last_capture, w.last_activity_at, w.last_pr_number, w.last_push_at, w.last_pr_poll_at, w.restart_count, w.first_crash_at, w.created_at, w.last_seen_at
+			w.worker_id, w.current_pane_id, w.agent_profile, w.state, w.issue, w.clone_path, w.last_review_count, w.last_inline_review_comment_count, w.last_issue_comment_count, w.last_issue_comment_watermark, w.review_nudge_count, w.last_ci_state, w.ci_nudge_count, w.ci_failure_poll_count, w.ci_escalated, w.last_mergeable_state, w.nudge_count, w.last_capture, w.last_activity_at, w.last_pr_number, w.last_push_at, w.last_pr_poll_at, w.restart_count, w.first_crash_at, w.created_at, w.last_seen_at
 		FROM tasks t
 		INNER JOIN workers w
 			ON w.project = t.project

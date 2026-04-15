@@ -19,6 +19,7 @@ type reviewWorkerState struct {
 	reviewCount        int
 	inlineCommentCount int
 	commentCount       int
+	commentWatermark   string
 	reviewNudgeCount   int
 }
 
@@ -39,6 +40,7 @@ type prReview struct {
 }
 
 type prComment struct {
+	ID     string `json:"id"`
 	Body   string `json:"body"`
 	Author struct {
 		Login string `json:"login"`
@@ -126,10 +128,12 @@ func (d *Daemon) checkTaskReviewPoll(ctx context.Context, active ActiveAssignmen
 	previousReviewCount := update.Active.Worker.LastReviewCount
 	previousInlineCommentCount := update.Active.Worker.LastInlineReviewCommentCount
 	previousCommentCount := update.Active.Worker.LastIssueCommentCount
+	previousCommentWatermark := update.Active.Worker.LastIssueCommentWatermark
 	nextReviewState := reviewWorkerState{
 		reviewCount:        reviewCount,
 		inlineCommentCount: inlineCommentCount,
 		commentCount:       commentCount,
+		commentWatermark:   issueCommentWatermark(payload.Comments),
 		reviewNudgeCount:   update.Active.Worker.ReviewNudgeCount,
 	}
 	if payload.ReviewDecision != "CHANGES_REQUESTED" && nextReviewState.reviewNudgeCount != 0 {
@@ -140,7 +144,10 @@ func (d *Daemon) checkTaskReviewPoll(ctx context.Context, active ActiveAssignmen
 		update.WorkerChanged = true
 		return traceAndReturn(&nextReviewState, 0, reviewPollIdleNotChecked, "persist_review_watermark_reset", true)
 	}
-	if previousReviewCount == reviewCount && previousInlineCommentCount == inlineCommentCount && previousCommentCount == commentCount {
+	if previousReviewCount == reviewCount &&
+		previousInlineCommentCount == inlineCommentCount &&
+		previousCommentCount == commentCount &&
+		previousCommentWatermark == nextReviewState.commentWatermark {
 		action := "no_new_review_feedback"
 		persisted := false
 		if nextReviewState.reviewNudgeCount != update.Active.Worker.ReviewNudgeCount {
@@ -158,7 +165,7 @@ func (d *Daemon) checkTaskReviewPoll(ctx context.Context, active ActiveAssignmen
 	}
 
 	newReviews := reviewItems(payload.Reviews[previousReviewCount:], payload.ReviewComments[previousInlineCommentCount:])
-	newComments := payload.Comments[previousCommentCount:]
+	newComments := changedIssueComments(payload.Comments, previousCommentWatermark)
 	blocking := blockingReviewFeedback(payload.ReviewDecision, newReviews, newComments)
 	if len(blocking) == 0 {
 		d.persistReviewWorkerState(&update.Active.Worker, nextReviewState, now)
@@ -203,6 +210,7 @@ func (d *Daemon) persistReviewWorkerState(worker *Worker, state reviewWorkerStat
 	worker.LastReviewCount = state.reviewCount
 	worker.LastInlineReviewCommentCount = state.inlineCommentCount
 	worker.LastIssueCommentCount = state.commentCount
+	worker.LastIssueCommentWatermark = state.commentWatermark
 	worker.ReviewNudgeCount = state.reviewNudgeCount
 	worker.LastSeenAt = now
 }

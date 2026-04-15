@@ -227,6 +227,7 @@ type Worker struct {
 	LastReviewCount              int       `json:"last_review_count,omitempty"`
 	LastInlineReviewCommentCount int       `json:"last_inline_review_comment_count,omitempty"`
 	LastIssueCommentCount        int       `json:"last_issue_comment_count,omitempty"`
+	LastIssueCommentWatermark    string    `json:"last_issue_comment_watermark,omitempty"`
 	ReviewNudgeCount             int       `json:"review_nudge_count,omitempty"`
 	LastCIState                  string    `json:"last_ci_state,omitempty"`
 	CINudgeCount                 int       `json:"ci_nudge_count,omitempty"`
