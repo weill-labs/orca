@@ -8,11 +8,11 @@ import (
 const relayDefaultBaseBranch = "main"
 
 func relayEventTriggersMergeConflictRefresh(msg relayEventMessage) bool {
-	if msg.Type != "pull_request" || !msg.Merged {
+	if msg.eventType() != "pull_request" || !msg.merged() {
 		return false
 	}
 
-	action := strings.TrimSpace(msg.Action)
+	action := msg.action()
 	return action == "" || strings.EqualFold(action, "closed")
 }
 
@@ -62,7 +62,13 @@ func (msg relayEventMessage) baseBranch() string {
 	if branch := strings.TrimSpace(msg.BaseBranch); branch != "" {
 		return branch
 	}
-	return strings.TrimSpace(msg.BaseRef)
+	if branch := strings.TrimSpace(msg.BaseRef); branch != "" {
+		return branch
+	}
+	return firstNonEmpty(
+		relayPayloadSummaryString(msg.PayloadSummary, "base_branch"),
+		relayPayloadSummaryString(msg.PayloadSummary, "base_ref"),
+	)
 }
 
 func (d *Daemon) projectBaseBranch(ctx context.Context, projectPath string) string {

@@ -37,14 +37,18 @@ type relayMonitoredProject struct {
 }
 
 type relayEventMessage struct {
-	ID         string `json:"id,omitempty"`
-	Type       string `json:"type"`
-	Repo       string `json:"repo,omitempty"`
-	PRNumber   int    `json:"pr_number,omitempty"`
-	Action     string `json:"action,omitempty"`
-	Merged     bool   `json:"merged,omitempty"`
-	BaseBranch string `json:"base_branch,omitempty"`
-	BaseRef    string `json:"base_ref,omitempty"`
+	ID             string         `json:"id,omitempty"`
+	Type           string         `json:"type,omitempty"`
+	EventType      string         `json:"event_type,omitempty"`
+	Repo           string         `json:"repo,omitempty"`
+	PRNumber       int            `json:"pr_number,omitempty"`
+	Action         string         `json:"action,omitempty"`
+	Merged         bool           `json:"merged,omitempty"`
+	BaseBranch     string         `json:"base_branch,omitempty"`
+	BaseRef        string         `json:"base_ref,omitempty"`
+	HeadBranch     string         `json:"head_branch,omitempty"`
+	HeadRef        string         `json:"head_ref,omitempty"`
+	PayloadSummary map[string]any `json:"payload_summary,omitempty"`
 }
 
 func (d *Daemon) relayEnabled() bool {
@@ -156,12 +160,16 @@ func (d *Daemon) handleRelayEvent(ctx context.Context, msg relayEventMessage) {
 		go d.handleRelayMergeConflictRefresh(d.withMonitorCircuits(ctx), msg)
 	}
 
+	ctx = d.withMonitorCircuits(ctx)
+	if d.handleRelayPullRequestLifecycleEvent(ctx, msg) {
+		return
+	}
+
 	kind, ok := relayEventCheckKind(msg)
 	if !ok || msg.PRNumber <= 0 {
 		return
 	}
 
-	ctx = d.withMonitorCircuits(ctx)
 	active, ok := d.activeAssignmentForRelayEvent(ctx, msg.Repo, msg.PRNumber)
 	if !ok {
 		return
@@ -170,7 +178,7 @@ func (d *Daemon) handleRelayEvent(ctx context.Context, msg relayEventMessage) {
 }
 
 func relayEventCheckKind(msg relayEventMessage) (taskMonitorCheckKind, bool) {
-	switch msg.Type {
+	switch msg.eventType() {
 	case "pull_request_review", "issue_comment":
 		return taskMonitorCheckReviewPoll, true
 	case "check_suite", "check_run":
@@ -178,7 +186,7 @@ func relayEventCheckKind(msg relayEventMessage) (taskMonitorCheckKind, bool) {
 	case "pull_request_merge":
 		return taskMonitorCheckMergePoll, true
 	case "pull_request":
-		if msg.Merged {
+		if msg.merged() {
 			return taskMonitorCheckMergePoll, true
 		}
 	}
@@ -187,21 +195,201 @@ func relayEventCheckKind(msg relayEventMessage) (taskMonitorCheckKind, bool) {
 
 func (d *Daemon) activeAssignmentForRelayEvent(ctx context.Context, repo string, prNumber int) (ActiveAssignment, bool) {
 	repo = strings.TrimSpace(repo)
+	if prNumber <= 0 {
+		return ActiveAssignment{}, false
+	}
 
+	active, err := d.state.ActiveAssignmentByPRNumber(ctx, d.project, prNumber)
+	if err == nil && d.relayAssignmentMatchesRepo(active, repo) {
+		return active, true
+	}
+	return d.activeAssignmentForRelayEventFallback(ctx, repo, func(active ActiveAssignment) bool {
+		return active.Task.PRNumber == prNumber
+	})
+}
+
+func (d *Daemon) activeAssignmentForBranch(ctx context.Context, repo, branch string) (ActiveAssignment, bool) {
+	repo = strings.TrimSpace(repo)
+	branch = strings.TrimSpace(branch)
+	if branch == "" {
+		return ActiveAssignment{}, false
+	}
+
+	active, err := d.state.ActiveAssignmentByBranch(ctx, d.project, branch)
+	if err == nil && d.relayAssignmentMatchesRepo(active, repo) {
+		return active, true
+	}
+	return d.activeAssignmentForRelayEventFallback(ctx, repo, func(active ActiveAssignment) bool {
+		return strings.EqualFold(strings.TrimSpace(active.Task.Branch), branch)
+	})
+}
+
+func (d *Daemon) activeAssignmentForRelayEventFallback(ctx context.Context, repo string, match func(ActiveAssignment) bool) (ActiveAssignment, bool) {
 	assignments, err := d.state.ActiveAssignments(ctx, d.project)
 	if err != nil {
 		return ActiveAssignment{}, false
 	}
 
 	for _, active := range assignments {
-		if active.Task.PRNumber != prNumber {
+		if !match(active) || !d.relayAssignmentMatchesRepo(active, repo) {
 			continue
 		}
-		if repo == "" || d.relayProjectMatches(active.Task.Project, repo) {
-			return active, true
-		}
+		return active, true
 	}
 	return ActiveAssignment{}, false
+}
+
+func (d *Daemon) relayAssignmentMatchesRepo(active ActiveAssignment, repo string) bool {
+	repo = strings.TrimSpace(repo)
+	return repo == "" || d.relayProjectMatches(active.Task.Project, repo)
+}
+
+func (d *Daemon) handleRelayPullRequestLifecycleEvent(ctx context.Context, msg relayEventMessage) bool {
+	if msg.eventType() != "pull_request" {
+		return false
+	}
+
+	switch action := msg.action(); {
+	case strings.EqualFold(action, "opened"):
+		active, ok := d.activeAssignmentForBranch(ctx, msg.Repo, msg.headBranch())
+		if !ok {
+			return false
+		}
+		active = d.bindRelayPRToAssignment(ctx, active, msg.PRNumber, true)
+		d.dispatchTaskMonitorCheck(ctx, active, taskMonitorCheckPRPoll)
+		return true
+	case strings.EqualFold(action, "synchronize"):
+		active, ok := d.activeAssignmentForRelayEvent(ctx, msg.Repo, msg.PRNumber)
+		if !ok {
+			active, ok = d.activeAssignmentForBranch(ctx, msg.Repo, msg.headBranch())
+			if !ok {
+				return false
+			}
+		}
+		active = d.bindRelayPRToAssignment(ctx, active, msg.PRNumber, false)
+		d.dispatchTaskMonitorCheck(ctx, active, taskMonitorCheckPRPoll)
+		return true
+	case strings.EqualFold(action, "closed") && msg.merged():
+		active, ok := d.activeAssignmentForRelayEvent(ctx, msg.Repo, msg.PRNumber)
+		if !ok {
+			active, ok = d.activeAssignmentForBranch(ctx, msg.Repo, msg.headBranch())
+			if !ok {
+				return false
+			}
+		}
+		active = d.bindRelayPRToAssignment(ctx, active, msg.PRNumber, false)
+		d.dispatchTaskMonitorCheck(ctx, active, taskMonitorCheckMergePoll)
+		return true
+	default:
+		return false
+	}
+}
+
+func (d *Daemon) bindRelayPRToAssignment(ctx context.Context, active ActiveAssignment, prNumber int, emitDetected bool) ActiveAssignment {
+	if prNumber <= 0 {
+		return active
+	}
+
+	profile, err := d.profileForTask(ctx, active.Task)
+	if err != nil {
+		profile = AgentProfile{Name: active.Task.AgentProfile}
+	}
+
+	now := d.now()
+	update := TaskStateUpdate{Active: active}
+	prChanged := update.Active.Task.PRNumber != prNumber
+
+	if prChanged {
+		metadata, err := d.prPaneMetadata(ctx, update.Active, prNumber)
+		if err == nil {
+			update.PaneMetadata = mergeMetadata(update.PaneMetadata, metadata)
+		}
+		update.Active.Task.PRNumber = prNumber
+		update.Active.Task.UpdatedAt = now
+		update.TaskChanged = true
+	}
+	if update.Active.Worker.LastPRNumber != prNumber {
+		update.Active.Worker.LastPRNumber = prNumber
+		update.WorkerChanged = true
+	}
+	if update.Active.Worker.LastPushAt.IsZero() || !update.Active.Worker.LastPushAt.Equal(now) {
+		update.Active.Worker.LastPushAt = now
+		update.WorkerChanged = true
+	}
+	if update.WorkerChanged {
+		update.Active.Worker.LastSeenAt = now
+	}
+	if prChanged && emitDetected {
+		update.Events = append(update.Events, d.assignmentEvent(update.Active, profile, EventPRDetected, "pull request detected"))
+	}
+
+	if update.TaskChanged || update.WorkerChanged || len(update.PaneMetadata) > 0 || len(update.Events) > 0 {
+		d.applyTaskStateUpdate(ctx, update)
+		return update.Active
+	}
+	return active
+}
+
+func (msg relayEventMessage) eventType() string {
+	return firstNonEmpty(strings.TrimSpace(msg.EventType), strings.TrimSpace(msg.Type))
+}
+
+func (msg relayEventMessage) action() string {
+	return firstNonEmpty(strings.TrimSpace(msg.Action), relayPayloadSummaryString(msg.PayloadSummary, "action"))
+}
+
+func (msg relayEventMessage) merged() bool {
+	if msg.Merged {
+		return true
+	}
+	value, ok := relayPayloadSummaryBool(msg.PayloadSummary, "merged")
+	return ok && value
+}
+
+func (msg relayEventMessage) headBranch() string {
+	return firstNonEmpty(
+		strings.TrimSpace(msg.HeadBranch),
+		strings.TrimSpace(msg.HeadRef),
+		relayPayloadSummaryString(msg.PayloadSummary, "head_branch"),
+		relayPayloadSummaryString(msg.PayloadSummary, "head_ref"),
+	)
+}
+
+func relayPayloadSummaryString(summary map[string]any, key string) string {
+	if len(summary) == 0 {
+		return ""
+	}
+	value, ok := summary[key]
+	if !ok {
+		return ""
+	}
+	text, ok := value.(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(text)
+}
+
+func relayPayloadSummaryBool(summary map[string]any, key string) (bool, bool) {
+	if len(summary) == 0 {
+		return false, false
+	}
+	value, ok := summary[key]
+	if !ok {
+		return false, false
+	}
+	switch typed := value.(type) {
+	case bool:
+		return typed, true
+	case string:
+		switch strings.TrimSpace(strings.ToLower(typed)) {
+		case "true":
+			return true, true
+		case "false":
+			return false, true
+		}
+	}
+	return false, false
 }
 
 func (d *Daemon) relayProjectMatches(projectPath, repo string) bool {

@@ -89,7 +89,133 @@ func TestDaemonRelayEventCheckRunTriggersImmediateCIPoll(t *testing.T) {
 	}
 }
 
-func TestDaemonRelayEventPullRequestMergedTriggersImmediateMergeDetection(t *testing.T) {
+func TestDaemonRelayEventPullRequestOpenedSetsPRNumber(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	now := deps.clock.Now()
+	deps.state.putTaskForTest(Task{
+		Project:      "/tmp/project",
+		Issue:        "LAB-1258",
+		Status:       TaskStatusActive,
+		Prompt:       "Handle relay opened event",
+		PaneID:       "pane-1",
+		PaneName:     "pane-1",
+		CloneName:    "clone-LAB-1258",
+		ClonePath:    "/tmp/LAB-1258",
+		Branch:       "feature/relay-opened",
+		AgentProfile: "codex",
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	})
+	if err := deps.state.PutWorker(context.Background(), Worker{
+		Project:        "/tmp/project",
+		PaneID:         "pane-1",
+		PaneName:       "pane-1",
+		Issue:          "LAB-1258",
+		ClonePath:      "/tmp/LAB-1258",
+		AgentProfile:   "codex",
+		Health:         WorkerHealthHealthy,
+		LastCapture:    defaultCodexReadyOutput(),
+		LastActivityAt: now,
+		UpdatedAt:      now,
+	}); err != nil {
+		t.Fatalf("PutWorker() error = %v", err)
+	}
+
+	d := deps.newDaemonWithOptions(t, func(opts *Options) {
+		opts.DetectOrigin = func(projectDir string) (string, error) {
+			return "https://github.com/weill-labs/orca.git", nil
+		}
+	})
+
+	d.handleRelayEvent(context.Background(), relayEventMessage{
+		ID:        "evt-open-1",
+		EventType: "pull_request",
+		Repo:      "weill-labs/orca",
+		PRNumber:  42,
+		PayloadSummary: map[string]any{
+			"action":   "opened",
+			"head_ref": "feature/relay-opened",
+		},
+	})
+
+	task, ok := deps.state.task("LAB-1258")
+	if !ok {
+		t.Fatal("task not found after relay opened event")
+	}
+	if got, want := task.PRNumber, 42; got != want {
+		t.Fatalf("task.PRNumber = %d, want %d", got, want)
+	}
+	worker, ok := deps.state.worker("pane-1")
+	if !ok {
+		t.Fatal("worker not found after relay opened event")
+	}
+	if got, want := worker.LastPRNumber, 42; got != want {
+		t.Fatalf("worker.LastPRNumber = %d, want %d", got, want)
+	}
+	if got, want := worker.LastPushAt, now; !got.Equal(want) {
+		t.Fatalf("worker.LastPushAt = %v, want %v", got, want)
+	}
+	if got, want := worker.LastPRPollAt, now; !got.Equal(want) {
+		t.Fatalf("worker.LastPRPollAt = %v, want %v", got, want)
+	}
+	if got, want := deps.events.countType(EventPRDetected), 1; got != want {
+		t.Fatalf("detected event count = %d, want %d", got, want)
+	}
+}
+
+func TestDaemonRelayEventPullRequestSynchronizeResetsFastPollWindow(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	seedTaskMonitorAssignment(t, deps, "LAB-1166", "pane-1", 42)
+	worker, ok := deps.state.worker("pane-1")
+	if !ok {
+		t.Fatal("worker not found")
+	}
+	worker.LastPushAt = deps.clock.Now().Add(-40 * time.Minute)
+	if err := deps.state.PutWorker(context.Background(), worker); err != nil {
+		t.Fatalf("PutWorker() error = %v", err)
+	}
+	deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[{"bucket":"pending"}]`, nil)
+
+	d := deps.newDaemonWithOptions(t, func(opts *Options) {
+		opts.DetectOrigin = func(projectDir string) (string, error) {
+			return "https://github.com/weill-labs/orca.git", nil
+		}
+	})
+
+	d.handleRelayEvent(context.Background(), relayEventMessage{
+		ID:        "evt-sync-1",
+		EventType: "pull_request",
+		Repo:      "weill-labs/orca",
+		PRNumber:  42,
+		PayloadSummary: map[string]any{
+			"action":   "synchronize",
+			"head_ref": "LAB-1166",
+		},
+	})
+
+	worker, ok = deps.state.worker("pane-1")
+	if !ok {
+		t.Fatal("worker not found after relay synchronize event")
+	}
+	if got, want := worker.LastPushAt, deps.clock.Now(); !got.Equal(want) {
+		t.Fatalf("worker.LastPushAt = %v, want %v", got, want)
+	}
+	if got, want := worker.LastPRPollAt, deps.clock.Now(); !got.Equal(want) {
+		t.Fatalf("worker.LastPRPollAt = %v, want %v", got, want)
+	}
+	if got, want := worker.LastCIState, ciStatePending; got != want {
+		t.Fatalf("worker.LastCIState = %q, want %q", got, want)
+	}
+	if got, want := deps.events.countType(EventPRDetected), 0; got != want {
+		t.Fatalf("detected event count = %d, want %d", got, want)
+	}
+}
+
+func TestDaemonRelayEventPullRequestClosedMergedCompletesTask(t *testing.T) {
 	t.Parallel()
 
 	deps := newTestDeps(t)
@@ -103,11 +229,14 @@ func TestDaemonRelayEventPullRequestMergedTriggersImmediateMergeDetection(t *tes
 	})
 
 	d.handleRelayEvent(context.Background(), relayEventMessage{
-		ID:       "evt-3",
-		Type:     "pull_request",
-		Repo:     "weill-labs/orca",
-		PRNumber: 42,
-		Merged:   true,
+		ID:        "evt-3",
+		EventType: "pull_request",
+		Repo:      "weill-labs/orca",
+		PRNumber:  42,
+		PayloadSummary: map[string]any{
+			"action": "closed",
+			"merged": true,
+		},
 	})
 
 	task, ok := deps.state.task("LAB-1166")
@@ -271,10 +400,10 @@ func TestDaemonRelayConnectsAndReconnectsWithLastEventID(t *testing.T) {
 	}
 
 	if err := first.conn.WriteJSON(relayEventMessage{
-		ID:       "evt-9",
-		Type:     "check_run",
-		Repo:     "weill-labs/orca",
-		PRNumber: 42,
+		ID:        "evt-9",
+		EventType: "check_run",
+		Repo:      "weill-labs/orca",
+		PRNumber:  42,
 	}); err != nil {
 		t.Fatalf("WriteJSON(first event) error = %v", err)
 	}
@@ -409,6 +538,18 @@ func TestRelayEventCheckKind(t *testing.T) {
 		{
 			name: "merged pull request triggers merge poll",
 			msg:  relayEventMessage{Type: "pull_request", Merged: true},
+			want: taskMonitorCheckMergePoll,
+			ok:   true,
+		},
+		{
+			name: "sonar closed merged pull request triggers merge poll",
+			msg: relayEventMessage{
+				EventType: "pull_request",
+				PayloadSummary: map[string]any{
+					"action": "closed",
+					"merged": true,
+				},
+			},
 			want: taskMonitorCheckMergePoll,
 			ok:   true,
 		},

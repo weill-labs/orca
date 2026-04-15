@@ -117,6 +117,7 @@ func TestSQLiteStateAdapterRoundTrip(t *testing.T) {
 		CallerPane:   "pane-13",
 		PaneID:       "pane-1",
 		ClonePath:    "/clone",
+		Branch:       "feature/relay-opened",
 		AgentProfile: "codex",
 		PRNumber:     17,
 		UpdatedAt:    now,
@@ -136,6 +137,9 @@ func TestSQLiteStateAdapterRoundTrip(t *testing.T) {
 	}
 	if got, want := task.CallerPane, "pane-13"; got != want {
 		t.Fatalf("task.CallerPane = %q, want %q", got, want)
+	}
+	if got, want := task.Branch, "feature/relay-opened"; got != want {
+		t.Fatalf("task.Branch = %q, want %q", got, want)
 	}
 	if _, err := adapter.TaskByIssue(context.Background(), "/repo", "missing"); !errors.Is(err, ErrTaskNotFound) {
 		t.Fatalf("TaskByIssue() missing error = %v, want ErrTaskNotFound", err)
@@ -167,6 +171,13 @@ func TestSQLiteStateAdapterRoundTrip(t *testing.T) {
 	}
 	if got, want := worker.LastPRPollAt, now; !got.Equal(want) {
 		t.Fatalf("worker.LastPRPollAt = %v, want %v", got, want)
+	}
+	active, err := adapter.ActiveAssignmentByBranch(context.Background(), "/repo", "feature/relay-opened")
+	if err != nil {
+		t.Fatalf("ActiveAssignmentByBranch() error = %v", err)
+	}
+	if got, want := active.Task.Issue, "LAB-718"; got != want {
+		t.Fatalf("active.Task.Issue = %q, want %q", got, want)
 	}
 	if err := adapter.DeleteWorker(context.Background(), "/repo", "pane-1"); err != nil {
 		t.Fatalf("DeleteWorker() error = %v", err)
