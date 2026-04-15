@@ -46,7 +46,7 @@ commands:
   version  Print version`
 
 // Keep these summaries aligned with the per-command FlagSet definitions below.
-var commandUsage = map[string]string{
+var helpRegistry = map[string]string{
 	"start": `usage: orca start [--session SESSION] [--project PATH] [--global] [--json]
 
 Start the orca daemon.`,
@@ -71,6 +71,9 @@ Flags:
 	"batch": `usage: orca batch MANIFEST [--project PATH] [--delay DURATION]
 
 Assign multiple issues from a manifest.`,
+	"spawn": `usage: orca spawn [--project PATH] [--session SESSION] [--lead-pane PANE] [--title TITLE] [--json]
+
+Open a clone in a new amux pane.`,
 	"enqueue": `usage: orca enqueue PR_NUMBER [--project PATH] [--json]
 
 Queue a PR for serialized landing.`,
@@ -89,6 +92,9 @@ List clone pool status.`,
 	"events": `usage: orca events [--project PATH]
 
 Stream orchestration events as NDJSON.`,
+	"help": `usage: orca help [COMMAND]
+
+Show help for a command.`,
 	"version": `usage: orca version
 
 Print version.`,
@@ -135,24 +141,22 @@ func HelpText(args []string) (string, bool) {
 		return "", false
 	}
 
+	if len(args) == 2 && args[1] == "help" {
+		return lookupHelpUsage(args[0])
+	}
+
 	if args[0] == "help" {
 		if len(args) == 1 {
 			return usageText, true
 		}
-		if usage, ok := commandUsage[args[1]]; ok {
-			return usage, true
+		if isHelpFlag(args[1]) {
+			return lookupHelpUsage("help")
 		}
-		return "", false
+		return lookupHelpUsage(args[1])
 	}
 
-	if isHelpToken(args[0]) {
+	if isHelpFlag(args[0]) {
 		return usageText, true
-	}
-
-	if len(args) >= 2 && isHelpToken(args[1]) {
-		if usage, ok := commandUsage[args[0]]; ok {
-			return usage, true
-		}
 	}
 
 	return "", false
@@ -194,7 +198,7 @@ func (a *App) Run(ctx context.Context, args []string) error {
 
 	switch args[0] {
 	case "help":
-		return fmt.Errorf("unknown help topic %q", args[1])
+		return a.runHelp(ctx, args[1:])
 	case "start":
 		return a.runStart(ctx, args[1:])
 	case "stop":
@@ -222,14 +226,17 @@ func (a *App) Run(ctx context.Context, args []string) error {
 	case "events":
 		return a.runEvents(ctx, args[1:])
 	case "version":
-		_, err := fmt.Fprintf(a.stdout, "orca %s\n", a.version)
-		return err
+		return a.runVersion(ctx, args[1:])
 	default:
 		return fmt.Errorf("unknown command %q\n%s", args[0], usageText)
 	}
 }
 
 func (a *App) runStart(ctx context.Context, args []string) error {
+	if handled, err := a.writeCommandHelp("start", args); handled {
+		return err
+	}
+
 	fs := newFlagSet("start")
 	var session string
 	var projectPath string
@@ -284,6 +291,10 @@ func (a *App) runStart(ctx context.Context, args []string) error {
 }
 
 func (a *App) runStop(ctx context.Context, args []string) error {
+	if handled, err := a.writeCommandHelp("stop", args); handled {
+		return err
+	}
+
 	fs := newFlagSet("stop")
 	var projectPath string
 	var force bool
@@ -330,6 +341,10 @@ func (a *App) runStop(ctx context.Context, args []string) error {
 }
 
 func (a *App) runReload(ctx context.Context, args []string) error {
+	if handled, err := a.writeCommandHelp("reload", args); handled {
+		return err
+	}
+
 	fs := newFlagSet("reload")
 	var projectPath string
 	var global bool
@@ -371,6 +386,10 @@ func (a *App) runReload(ctx context.Context, args []string) error {
 }
 
 func (a *App) runStatus(ctx context.Context, args []string) error {
+	if handled, err := a.writeCommandHelp("status", args); handled {
+		return err
+	}
+
 	fs := newFlagSet("status")
 	var projectPath string
 	var global bool
@@ -421,6 +440,10 @@ func (a *App) runStatus(ctx context.Context, args []string) error {
 }
 
 func (a *App) runAssign(ctx context.Context, args []string) error {
+	if handled, err := a.writeCommandHelp("assign", args); handled {
+		return err
+	}
+
 	fs := newFlagSet("assign")
 	var prompt string
 	var agent string
@@ -466,6 +489,10 @@ func (a *App) runAssign(ctx context.Context, args []string) error {
 }
 
 func (a *App) runBatch(ctx context.Context, args []string) error {
+	if handled, err := a.writeCommandHelp("batch", args); handled {
+		return err
+	}
+
 	fs := newFlagSet("batch")
 	var projectPath string
 	var delay time.Duration
@@ -520,6 +547,10 @@ func batchClientTimeout(entryCount int, delay time.Duration) time.Duration {
 }
 
 func (a *App) runSpawn(ctx context.Context, args []string) error {
+	if handled, err := a.writeCommandHelp("spawn", args); handled {
+		return err
+	}
+
 	fs := newFlagSet("spawn")
 	var projectPath string
 	var session string
@@ -567,6 +598,10 @@ func (a *App) runSpawn(ctx context.Context, args []string) error {
 }
 
 func (a *App) runEnqueue(ctx context.Context, args []string) error {
+	if handled, err := a.writeCommandHelp("enqueue", args); handled {
+		return err
+	}
+
 	fs := newFlagSet("enqueue")
 	var projectPath string
 	var jsonOutput bool
@@ -642,6 +677,10 @@ func pluralize(word string, count int) string {
 }
 
 func (a *App) runCancel(ctx context.Context, args []string) error {
+	if handled, err := a.writeCommandHelp("cancel", args); handled {
+		return err
+	}
+
 	fs := newFlagSet("cancel")
 	var projectPath string
 	var force bool
@@ -702,6 +741,10 @@ func isCancelTimeoutError(err error) bool {
 }
 
 func (a *App) runResume(ctx context.Context, args []string) error {
+	if handled, err := a.writeCommandHelp("resume", args); handled {
+		return err
+	}
+
 	fs := newFlagSet("resume")
 	var projectPath string
 	var prompt string
@@ -738,6 +781,10 @@ func (a *App) runResume(ctx context.Context, args []string) error {
 }
 
 func (a *App) runWorkers(ctx context.Context, args []string) error {
+	if handled, err := a.writeCommandHelp("workers", args); handled {
+		return err
+	}
+
 	fs := newFlagSet("workers")
 	var projectPath string
 	var jsonOutput bool
@@ -767,6 +814,10 @@ func (a *App) runWorkers(ctx context.Context, args []string) error {
 }
 
 func (a *App) runPool(ctx context.Context, args []string) error {
+	if handled, err := a.writeCommandHelp("pool", args); handled {
+		return err
+	}
+
 	fs := newFlagSet("pool")
 	var projectPath string
 	var jsonOutput bool
@@ -796,6 +847,10 @@ func (a *App) runPool(ctx context.Context, args []string) error {
 }
 
 func (a *App) runEvents(ctx context.Context, args []string) error {
+	if handled, err := a.writeCommandHelp("events", args); handled {
+		return err
+	}
+
 	fs := newFlagSet("events")
 	var projectPath string
 	fs.StringVar(&projectPath, "project", "", "project path")
@@ -838,6 +893,27 @@ func (a *App) runEvents(ctx context.Context, args []string) error {
 	}
 
 	return nil
+}
+
+func (a *App) runHelp(_ context.Context, args []string) error {
+	if handled, err := a.writeCommandHelp("help", args); handled {
+		return err
+	}
+	if len(args) == 0 {
+		_, err := fmt.Fprintln(a.stdout, usageText)
+		return err
+	}
+
+	return writeCommandUsage(a.stdout, args[0])
+}
+
+func (a *App) runVersion(_ context.Context, args []string) error {
+	if handled, err := a.writeCommandHelp("version", args); handled {
+		return err
+	}
+
+	_, err := fmt.Fprintf(a.stdout, "orca %s\n", a.version)
+	return err
 }
 
 func (a *App) resolveProject(projectPath string) (string, error) {
@@ -915,9 +991,45 @@ func stripLeadingPositional(args []string) (string, []string) {
 	return args[0], args[1:]
 }
 
-func isHelpToken(arg string) bool {
-	// Support `orca help <cmd>` and the shorthand `orca <cmd> help`.
-	return arg == "--help" || arg == "-h" || arg == "help"
+func (a *App) writeCommandHelp(command string, args []string) (bool, error) {
+	if !wantsCommandHelp(args) {
+		return false, nil
+	}
+
+	return true, writeCommandUsage(a.stdout, command)
+}
+
+func wantsCommandHelp(args []string) bool {
+	if len(args) == 1 && args[0] == "help" {
+		return true
+	}
+
+	for _, arg := range args {
+		if isHelpFlag(arg) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func lookupHelpUsage(command string) (string, bool) {
+	usage, ok := helpRegistry[command]
+	return usage, ok
+}
+
+func writeCommandUsage(w io.Writer, command string) error {
+	usage, ok := lookupHelpUsage(command)
+	if !ok {
+		return fmt.Errorf("unknown help topic %q", command)
+	}
+
+	_, err := fmt.Fprintln(w, usage)
+	return err
+}
+
+func isHelpFlag(arg string) bool {
+	return arg == "--help" || arg == "-h"
 }
 
 func writeJSON(w io.Writer, value any) error {
