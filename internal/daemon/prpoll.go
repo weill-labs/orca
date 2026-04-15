@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 )
 
 func (d *Daemon) Enqueue(ctx context.Context, prNumber int) (MergeQueueActionResult, error) {
@@ -105,10 +106,7 @@ func (d *Daemon) checkTaskPRPoll(ctx context.Context, active ActiveAssignment) T
 			return update
 		}
 		if merged {
-			if setTaskState(&update.Active.Task, TaskStateMerged, now) {
-				update.TaskChanged = true
-			}
-			update.PRMerged = true
+			markTaskPRMerged(&update, now)
 		}
 		return update
 	}
@@ -126,10 +124,7 @@ func (d *Daemon) checkTaskPRPoll(ctx context.Context, active ActiveAssignment) T
 		return d.continuePRFollowUpPolls(ctx, update, profile)
 	}
 
-	if setTaskState(&update.Active.Task, TaskStateMerged, now) {
-		update.TaskChanged = true
-	}
-	update.PRMerged = true
+	markTaskPRMerged(&update, now)
 	return update
 }
 
@@ -166,6 +161,16 @@ func mergeActiveAssignment(base, next TaskStateUpdate) ActiveAssignment {
 		merged.Worker = base.Active.Worker
 	}
 	return merged
+}
+
+func markTaskPRMerged(update *TaskStateUpdate, now time.Time) {
+	if update == nil {
+		return
+	}
+	if setTaskState(&update.Active.Task, TaskStateMerged, now) {
+		update.TaskChanged = true
+	}
+	update.PRMerged = true
 }
 
 func (d *Daemon) lookupPRNumber(ctx context.Context, projectPath, branch string) (int, error) {
