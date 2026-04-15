@@ -52,6 +52,34 @@ func TestParseMetricsSince(t *testing.T) {
 	}
 }
 
+func TestFormatLatencyDuration(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		duration time.Duration
+		want     string
+	}{
+		{name: "zero rounds to zero seconds", duration: 0, want: "0s"},
+		{name: "seconds only", duration: 30 * time.Second, want: "30s"},
+		{name: "minutes and seconds", duration: 90 * time.Second, want: "1m30s"},
+		{name: "hours only", duration: 2 * time.Hour, want: "2h"},
+		{name: "hours and seconds without empty minutes", duration: time.Hour + 30*time.Second, want: "1h30s"},
+		{name: "hours minutes and seconds", duration: 2*time.Hour + 15*time.Minute + 4*time.Second, want: "2h15m4s"},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got, want := formatLatencyDuration(tt.duration), tt.want; got != want {
+				t.Fatalf("formatLatencyDuration(%s) = %q, want %q", tt.duration, got, want)
+			}
+		})
+	}
+}
+
 func TestQueryLatencyMetricsAndWriteOutput(t *testing.T) {
 	t.Parallel()
 

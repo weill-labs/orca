@@ -343,10 +343,22 @@ func formatLatencyDuration(duration time.Duration) string {
 		return "0s"
 	}
 
-	formatted := duration.String()
-	formatted = strings.TrimSuffix(formatted, "0s")
-	if strings.HasSuffix(formatted, "h0m") {
-		formatted = strings.TrimSuffix(formatted, "0m")
+	hours := duration / time.Hour
+	duration -= hours * time.Hour
+	minutes := duration / time.Minute
+	duration -= minutes * time.Minute
+	seconds := duration / time.Second
+
+	var builder strings.Builder
+	if hours > 0 {
+		fmt.Fprintf(&builder, "%dh", hours)
 	}
-	return formatted
+	if minutes > 0 {
+		fmt.Fprintf(&builder, "%dm", minutes)
+	}
+	if seconds > 0 || builder.Len() == 0 {
+		fmt.Fprintf(&builder, "%ds", seconds)
+	}
+
+	return builder.String()
 }
