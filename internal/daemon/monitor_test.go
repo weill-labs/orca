@@ -98,6 +98,32 @@ func TestAdaptivePRPollInterval(t *testing.T) {
 	}
 }
 
+func TestPRPollSchedulerTickInterval(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		input time.Duration
+		want  time.Duration
+	}{
+		{name: "non-positive falls back to fast interval", input: 0, want: adaptivePRFastPollInterval},
+		{name: "larger than slow interval is preserved", input: 5 * time.Minute, want: 5 * time.Minute},
+		{name: "smaller than fast interval is preserved", input: time.Second, want: time.Second},
+		{name: "default thirty second interval schedules fast ticks", input: adaptivePRSlowPollInterval, want: adaptivePRFastPollInterval},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := prPollSchedulerTickInterval(tt.input); got != tt.want {
+				t.Fatalf("prPollSchedulerTickInterval(%v) = %v, want %v", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestShouldPollAssignmentForAdaptivePRIntervals(t *testing.T) {
 	t.Parallel()
 

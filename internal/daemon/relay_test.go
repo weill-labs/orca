@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -264,6 +265,218 @@ func TestRelayRepoAliases(t *testing.T) {
 	}
 }
 
+func TestRelayEventCheckKind(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		msg  relayEventMessage
+		want taskMonitorCheckKind
+		ok   bool
+	}{
+		{
+			name: "pull request review triggers review poll",
+			msg:  relayEventMessage{Type: "pull_request_review"},
+			want: taskMonitorCheckReviewPoll,
+			ok:   true,
+		},
+		{
+			name: "issue comment triggers review poll",
+			msg:  relayEventMessage{Type: "issue_comment"},
+			want: taskMonitorCheckReviewPoll,
+			ok:   true,
+		},
+		{
+			name: "check suite triggers ci poll",
+			msg:  relayEventMessage{Type: "check_suite"},
+			want: taskMonitorCheckCIPoll,
+			ok:   true,
+		},
+		{
+			name: "check run triggers ci poll",
+			msg:  relayEventMessage{Type: "check_run"},
+			want: taskMonitorCheckCIPoll,
+			ok:   true,
+		},
+		{
+			name: "pull request merge event triggers merge poll",
+			msg:  relayEventMessage{Type: "pull_request_merge"},
+			want: taskMonitorCheckMergePoll,
+			ok:   true,
+		},
+		{
+			name: "merged pull request triggers merge poll",
+			msg:  relayEventMessage{Type: "pull_request", Merged: true},
+			want: taskMonitorCheckMergePoll,
+			ok:   true,
+		},
+		{
+			name: "unmerged pull request is ignored",
+			msg:  relayEventMessage{Type: "pull_request"},
+		},
+		{
+			name: "unknown event is ignored",
+			msg:  relayEventMessage{Type: "push"},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, ok := relayEventCheckKind(tt.msg)
+			if ok != tt.ok {
+				t.Fatalf("relayEventCheckKind(%+v) ok = %t, want %t", tt.msg, ok, tt.ok)
+			}
+			if got != tt.want {
+				t.Fatalf("relayEventCheckKind(%+v) = %v, want %v", tt.msg, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCanonicalRelayRepo(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "https remote",
+			input: "https://github.com/weill-labs/orca.git",
+			want:  "weill-labs/orca",
+		},
+		{
+			name:  "ssh remote",
+			input: "git@github.com:weill-labs/orca.git",
+			want:  "weill-labs/orca",
+		},
+		{
+			name:  "absolute path falls back to first alias",
+			input: "/tmp/project",
+			want:  "tmp/project",
+		},
+		{
+			name:  "empty input returns empty",
+			input: "   ",
+			want:  "",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := canonicalRelayRepo(tt.input); got != tt.want {
+				t.Fatalf("canonicalRelayRepo(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDaemonBuildRelayIdentifyMessage(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	d := deps.newDaemonWithOptions(t, func(opts *Options) {
+		opts.Project = "/tmp/project-a"
+		opts.Hostname = "relay-host"
+		opts.DetectOrigin = func(projectDir string) (string, error) {
+			if projectDir == "/tmp/project-a" {
+				return "https://github.com/weill-labs/project-a.git", nil
+			}
+			return "", errors.New("unknown project")
+		}
+	})
+
+	now := deps.clock.Now()
+	for _, task := range []Task{
+		{Issue: "LAB-1", Project: "", Status: TaskStatusActive, CreatedAt: now, UpdatedAt: now},
+		{Issue: "LAB-2", Project: "/tmp/project-a", Status: TaskStatusStarting, CreatedAt: now, UpdatedAt: now},
+		{Issue: "LAB-3", Project: "/tmp/project-a", Status: TaskStatusDone, CreatedAt: now, UpdatedAt: now},
+	} {
+		if err := deps.state.PutTask(context.Background(), task); err != nil {
+			t.Fatalf("PutTask(%s) error = %v", task.Issue, err)
+		}
+	}
+
+	got := d.buildRelayIdentifyMessage(context.Background(), "  evt-9  ")
+	want := relayIdentifyMessage{
+		Type:        "identify",
+		Hostname:    "relay-host",
+		LastEventID: "evt-9",
+		Projects: []relayMonitoredProject{
+			{Path: "/tmp/project-a", Repo: "weill-labs/project-a"},
+		},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("buildRelayIdentifyMessage() = %#v, want %#v", got, want)
+	}
+}
+
+func TestRelayProjectMatches(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		projectPath  string
+		repo         string
+		detectOrigin func(string) (string, error)
+		want         bool
+	}{
+		{
+			name:        "project path alias matches directly",
+			projectPath: "/tmp/project",
+			repo:        "tmp/project",
+			want:        true,
+		},
+		{
+			name:        "origin alias matches relay repo",
+			projectPath: "/tmp/project",
+			repo:        "weill-labs/orca",
+			detectOrigin: func(string) (string, error) {
+				return "https://github.com/weill-labs/orca.git", nil
+			},
+			want: true,
+		},
+		{
+			name:        "missing detect origin cannot match remote repo",
+			projectPath: "/tmp/project",
+			repo:        "weill-labs/orca",
+			want:        false,
+		},
+		{
+			name:        "detect origin error does not match",
+			projectPath: "/tmp/project",
+			repo:        "weill-labs/orca",
+			detectOrigin: func(string) (string, error) {
+				return "", errors.New("origin missing")
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			deps := newTestDeps(t)
+			d := deps.newDaemonWithOptions(t, func(opts *Options) {
+				opts.DetectOrigin = tt.detectOrigin
+			})
+
+			if got := d.relayProjectMatches(tt.projectPath, tt.repo); got != tt.want {
+				t.Fatalf("relayProjectMatches(%q, %q) = %t, want %t", tt.projectPath, tt.repo, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestRequestRelayReconnectClosesLiveConnection(t *testing.T) {
 	t.Parallel()
 
@@ -344,6 +557,26 @@ func TestConsumeRelayConnectionSetsReadDeadline(t *testing.T) {
 	}
 	if got := conn.lastReadDeadline; got.IsZero() {
 		t.Fatal("SetReadDeadline received zero time")
+	}
+}
+
+func TestEnqueuePollIntervalUpdateReplacesQueuedValue(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	d := deps.newDaemon(t)
+	d.pollIntervalCh = make(chan time.Duration, 1)
+
+	d.enqueuePollIntervalUpdate(30 * time.Second)
+	d.enqueuePollIntervalUpdate(5 * time.Minute)
+
+	select {
+	case got := <-d.pollIntervalCh:
+		if got != 5*time.Minute {
+			t.Fatalf("queued poll interval = %v, want %v", got, 5*time.Minute)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for queued poll interval")
 	}
 }
 
