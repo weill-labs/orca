@@ -39,7 +39,7 @@ type runDependencies struct {
 var defaultRunDependencies = runDependencies{
 	resolvePaths: daemon.ResolvePaths,
 	openStateStore: func(path string) (stateStore, error) {
-		return state.OpenSQLite(path)
+		return state.Open(path)
 	},
 	newController: func(options daemon.ControllerOptions) (daemon.Controller, error) {
 		return daemon.NewLocalController(options)

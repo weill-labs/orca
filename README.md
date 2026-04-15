@@ -84,6 +84,19 @@ orca stop
 
 All commands accept `--project` to target another checkout explicitly. If you omit it, Orca resolves the current working directory to the canonical git repo root. `orca start` uses `AMUX_SESSION` by default when it is set; otherwise it falls back to the repo basename. `orca start` requires `<repo>/.orca/config.toml` and fails clearly when it is missing.
 
+## State backend
+
+Orca uses SQLite by default at `~/.config/orca/state.db`, which keeps single-machine setup zero-config.
+
+For multi-machine coordination, set `ORCA_STATE_DSN` to a Postgres DSN before starting Orca:
+
+```bash
+export ORCA_STATE_DSN='postgres://USER:PASSWORD@HOST:5432/DBNAME?sslmode=disable'
+orca start --project ~/sync/github/myproject/myproject
+```
+
+When `ORCA_STATE_DSN` is set, Orca stores tasks, workers, clones, events, merge queue entries, and daemon status in Postgres instead of SQLite. The local config directory is still used for the daemon socket and PID files.
+
 ## Design principles
 
 - **amux knows nothing about orca.** Orca consumes amux's CLI — other tools could replace orca without amux changes.

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"time"
+
+	legacy "github.com/weill-labs/orca/internal/state"
 )
 
 var ErrNotFound = errors.New("state: not found")
@@ -30,6 +32,34 @@ type Store interface {
 	Reader
 	Writer
 	Close() error
+}
+
+type Backend interface {
+	Store
+	WorkerByID(ctx context.Context, project, workerID string) (Worker, error)
+	WorkerByPane(ctx context.Context, project, paneID string) (Worker, error)
+	NonTerminalTasks(ctx context.Context, project string) ([]Task, error)
+	StaleCloneOccupancies(ctx context.Context, project string) ([]CloneOccupancy, error)
+	UpsertWorker(ctx context.Context, project string, worker Worker) error
+	ClaimWorker(ctx context.Context, project string, worker Worker) (Worker, error)
+	DeleteWorker(ctx context.Context, project, workerID string) error
+	DeleteTask(ctx context.Context, project, issue string) error
+	ClaimTask(ctx context.Context, project string, task Task) (*Task, error)
+	ActiveAssignments(ctx context.Context, project string) ([]Assignment, error)
+	ActiveAssignmentByIssue(ctx context.Context, project, issue string) (Assignment, error)
+	ActiveAssignmentByPRNumber(ctx context.Context, project string, prNumber int) (Assignment, error)
+	EnqueueMergeEntry(ctx context.Context, entry MergeQueueEntry) (int, error)
+	MergeEntry(ctx context.Context, project string, prNumber int) (*MergeQueueEntry, error)
+	MergeEntries(ctx context.Context, project string) ([]MergeQueueEntry, error)
+	UpdateMergeEntry(ctx context.Context, entry MergeQueueEntry) error
+	DeleteMergeEntry(ctx context.Context, project string, prNumber int) error
+	EnsureClone(ctx context.Context, project, path string) (legacy.CloneRecord, error)
+	TryOccupyClone(ctx context.Context, project, path, branch, task string) (bool, error)
+	MarkCloneFree(ctx context.Context, project, path string) error
+	TasksByPane(ctx context.Context, project, paneID string) ([]Task, error)
+	AllNonTerminalTasks(ctx context.Context) ([]Task, error)
+	AllActiveAssignments(ctx context.Context) ([]Assignment, error)
+	AllMergeEntries(ctx context.Context) ([]MergeQueueEntry, error)
 }
 
 type DaemonStatus struct {

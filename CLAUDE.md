@@ -10,8 +10,8 @@ Linear project: https://linear.app/weill-labs/project/orca-0582da3ac28f — file
 
 ## Architecture
 
-- **Daemon**: long-lived background process per project, SQLite state at `~/.config/orca/state.db`
-- **Stateless binary**: the daemon holds zero state in memory. All state lives in SQLite. The daemon is a pure poll loop that reads active tasks from the DB, runs monitoring checks, and writes results back. This means `orca stop && orca start` is seamless — the new daemon picks up exactly where the old one left off. Never store per-task state in Go structs, maps, or goroutines.
+- **Daemon**: long-lived background process per project, SQLite state by default at `~/.config/orca/state.db`, optional Postgres state when `ORCA_STATE_DSN` is set
+- **Stateless binary**: the daemon holds zero state in memory. All state lives in the configured store (SQLite by default, Postgres when `ORCA_STATE_DSN` is set). The daemon is a pure poll loop that reads active tasks from the DB, runs monitoring checks, and writes results back. This means `orca stop && orca start` is seamless — the new daemon picks up exactly where the old one left off. Never store per-task state in Go structs, maps, or goroutines.
 - **Clone pool**: auto-created under `.orca/pool/` on demand — independent git clones (not worktrees)
 - **Agent profiles**: built-in defaults for claude, codex — no config file needed
 - **amux consumer**: orca calls amux CLI commands and subscribes to amux events — amux knows nothing about orca
