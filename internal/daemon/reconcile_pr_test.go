@@ -4,6 +4,7 @@ import (
 	"context"
 	"reflect"
 	"testing"
+	"time"
 )
 
 func TestReconcileMissingPRNumbersBackfillsOpenPRNumber(t *testing.T) {
@@ -101,6 +102,34 @@ func TestReconcileMissingPRNumbersSkipsTrackedTasks(t *testing.T) {
 		t.Fatalf("pr.detected event count = %d, want 0", got)
 	}
 	deps.amux.requireSentKeys(t, "pane-1", nil)
+}
+
+func TestShouldRunMissingPRNumberReconciliation(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 15, 7, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name    string
+		lastRun time.Time
+		now     time.Time
+		want    bool
+	}{
+		{name: "zero now skips", want: false},
+		{name: "first run is immediate", now: now, want: true},
+		{name: "before interval waits", lastRun: now, now: now.Add(4*time.Minute + 59*time.Second), want: false},
+		{name: "at interval runs", lastRun: now, now: now.Add(5 * time.Minute), want: true},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := shouldRunMissingPRNumberReconciliation(tt.lastRun, tt.now); got != tt.want {
+				t.Fatalf("shouldRunMissingPRNumberReconciliation(%v, %v) = %t, want %t", tt.lastRun, tt.now, got, tt.want)
+			}
+		})
+	}
 }
 
 func seedReconcileAssignment(t *testing.T, deps *testDeps, issue, paneID, workerID string, prNumber int) {

@@ -234,6 +234,10 @@ func TestGitHubCLIClientLookupOpenOrMergedPRNumber(t *testing.T) {
 			wantNumber: 88,
 		},
 		{
+			name:   "skips closed pr number",
+			output: `[{"number":66,"state":"CLOSED"}]`,
+		},
+		{
 			name:    "returns command error",
 			err:     errors.New("gh failed"),
 			wantErr: true,
@@ -317,6 +321,8 @@ func TestParseOpenOrMergedPRNumberList(t *testing.T) {
 		{name: "empty list", output: []byte(`[]`)},
 		{name: "merged entry", output: []byte(`[{"number":19,"state":"MERGED"}]`), wantNumber: 19, wantMerged: true},
 		{name: "open entry", output: []byte(`[{"number":20,"state":"OPEN"}]`), wantNumber: 20},
+		{name: "closed entry", output: []byte(`[{"number":21,"state":"CLOSED"}]`)},
+		{name: "closed entry skipped for later open pr", output: []byte(`[{"number":21,"state":"CLOSED"},{"number":22,"state":"OPEN"}]`), wantNumber: 22},
 		{name: "invalid json", output: []byte(`{`), wantErr: true},
 	}
 

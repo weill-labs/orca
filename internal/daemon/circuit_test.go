@@ -546,6 +546,23 @@ func TestCircuitGitHubClientWrapsLookupMethods(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "lookup open or merged pr number",
+			call: func(t *testing.T, client gitHubClient) {
+				t.Helper()
+
+				gotNumber, gotMerged, err := client.lookupOpenOrMergedPRNumber(context.Background(), "LAB-924")
+				if err != nil {
+					t.Fatalf("lookupOpenOrMergedPRNumber() error = %v", err)
+				}
+				if gotNumber != 44 {
+					t.Fatalf("lookupOpenOrMergedPRNumber() number = %d, want 44", gotNumber)
+				}
+				if !gotMerged {
+					t.Fatal("lookupOpenOrMergedPRNumber() merged = false, want true")
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -556,6 +573,8 @@ func TestCircuitGitHubClientWrapsLookupMethods(t *testing.T) {
 			client := newCircuitGitHubClient(&circuitGitHubClientStub{
 				prNumber:     42,
 				openPRNumber: 43,
+				allPRNumber:  44,
+				mergedPR:     true,
 				merged:       true,
 			}, NewCircuitBreaker(time.Now, 3, time.Minute))
 			tt.call(t, client)

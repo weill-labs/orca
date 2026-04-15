@@ -183,10 +183,15 @@ func parseOpenOrMergedPRNumberList(output []byte) (int, bool, error) {
 	if err := json.Unmarshal(output, &prs); err != nil {
 		return 0, false, err
 	}
-	if len(prs) == 0 {
-		return 0, false, nil
+	for _, pr := range prs {
+		switch {
+		case strings.EqualFold(pr.State, "merged"):
+			return pr.Number, true, nil
+		case strings.EqualFold(pr.State, "open"):
+			return pr.Number, false, nil
+		}
 	}
-	return prs[0].Number, strings.EqualFold(prs[0].State, "merged"), nil
+	return 0, false, nil
 }
 
 func (c *gitHubCLIClient) isPRMerged(ctx context.Context, prNumber int) (bool, error) {
