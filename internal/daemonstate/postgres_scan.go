@@ -13,6 +13,7 @@ func scanPostgresTask(scanner rowScanner, includeProject bool) (Task, error) {
 	fields := []any{
 		&task.Issue,
 		&task.Status,
+		&task.State,
 		&task.Agent,
 		&task.Prompt,
 		&task.CallerPane,
@@ -40,6 +41,9 @@ func scanPostgresTask(scanner rowScanner, includeProject bool) (Task, error) {
 	}
 	if currentPaneID.Valid {
 		task.CurrentPaneID = currentPaneID.String
+	}
+	if task.State == "" {
+		task.State = defaultPersistedTaskState(task.Status, task.PRNumber)
 	}
 	return task, nil
 }
@@ -115,6 +119,7 @@ func scanPostgresAssignment(scanner rowScanner, includeProject bool) (Assignment
 	fields := []any{
 		&task.Issue,
 		&task.Status,
+		&task.State,
 		&task.Agent,
 		&task.Prompt,
 		&task.CallerPane,
@@ -164,6 +169,9 @@ func scanPostgresAssignment(scanner rowScanner, includeProject bool) (Assignment
 	if prNumber.Valid {
 		value := int(prNumber.Int64)
 		task.PRNumber = &value
+	}
+	if task.State == "" {
+		task.State = defaultPersistedTaskState(task.Status, task.PRNumber)
 	}
 
 	worker.Project = task.Project
