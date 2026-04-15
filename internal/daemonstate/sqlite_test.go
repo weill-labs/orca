@@ -225,6 +225,61 @@ func TestSQLiteStoreBackfillsEscalatedTaskStateFromWorkerHealth(t *testing.T) {
 	}
 }
 
+func TestSQLiteStoreQueryContext(t *testing.T) {
+	t.Parallel()
+
+	store, err := OpenSQLite(filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatalf("OpenSQLite() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	})
+
+	event, err := store.AppendEvent(context.Background(), Event{
+		Project:   "/repo",
+		Kind:      "task.assigned",
+		Issue:     "LAB-1282",
+		Message:   "assigned",
+		CreatedAt: time.Date(2026, 4, 15, 12, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("AppendEvent() error = %v", err)
+	}
+
+	rows, err := store.QueryContext(context.Background(), `SELECT id, kind FROM events WHERE project = ?`, "/repo")
+	if err != nil {
+		t.Fatalf("QueryContext() error = %v", err)
+	}
+	defer rows.Close()
+
+	if !rows.Next() {
+		t.Fatal("rows.Next() = false, want true")
+	}
+
+	var (
+		id   int64
+		kind string
+	)
+	if err := rows.Scan(&id, &kind); err != nil {
+		t.Fatalf("rows.Scan() error = %v", err)
+	}
+	if got, want := id, event.ID; got != want {
+		t.Fatalf("queried id = %d, want %d", got, want)
+	}
+	if got, want := kind, event.Kind; got != want {
+		t.Fatalf("queried kind = %q, want %q", got, want)
+	}
+	if rows.Next() {
+		t.Fatal("rows.Next() = true, want false")
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows.Err() error = %v", err)
+	}
+}
+
 func TestSQLiteStoreNotFoundAndHelpers(t *testing.T) {
 	t.Parallel()
 

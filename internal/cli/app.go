@@ -33,6 +33,7 @@ commands:
   stop     Stop the orca daemon
   reload   Hot-reload the orca daemon
   status   Show daemon and task status
+  metrics  Show latency metrics from orchestration events
   assign   Assign an issue to a worker
   batch    Assign multiple issues from a manifest
   spawn    Open a clone in a new amux pane
@@ -59,6 +60,14 @@ Hot-reload the orca daemon.`,
 	"status": `usage: orca status [ISSUE] [--project PATH] [--global] [--json]
 
 Show daemon and task status.`,
+	"metrics": `usage: orca metrics [--project PATH] [--since DURATION] [--json]
+
+Show latency metrics from orchestration events.
+
+Flags:
+  --project Project path
+  --since   Lookback window (default: 7d)
+  --json    Emit JSON output`,
 	"assign": `usage: orca assign ISSUE --prompt TEXT [--agent NAME] [--project PATH] [--json]
 
 Assign an issue to a worker.
@@ -207,6 +216,8 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.runReload(ctx, args[1:])
 	case "status":
 		return a.runStatus(ctx, args[1:])
+	case "metrics":
+		return a.runMetrics(ctx, args[1:])
 	case "assign":
 		return a.runAssign(ctx, args[1:])
 	case "batch":

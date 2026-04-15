@@ -895,6 +895,7 @@ func allSubcommandHelpCases() []subcommandHelpCase {
 		{command: "stop", wantUsage: "usage: orca stop"},
 		{command: "reload", wantUsage: "usage: orca reload"},
 		{command: "status", wantUsage: "usage: orca status"},
+		{command: "metrics", wantUsage: "usage: orca metrics"},
 		{command: "assign", wantUsage: "usage: orca assign ISSUE"},
 		{command: "batch", wantUsage: "usage: orca batch MANIFEST"},
 		{command: "spawn", wantUsage: "usage: orca spawn"},
@@ -1135,6 +1136,17 @@ func TestAppRunOutputModes(t *testing.T) {
 			daemon:  &fakeDaemon{},
 			state:   &fakeState{},
 			wantErr: "events does not accept positional arguments",
+			assert: func(t *testing.T, stdout string, _ *fakeDaemon, _ *fakeState) {
+				t.Helper()
+				_ = stdout
+			},
+		},
+		{
+			name:    "metrics extra arg",
+			args:    []string{"metrics", "extra"},
+			daemon:  &fakeDaemon{},
+			state:   &fakeState{},
+			wantErr: "metrics does not accept positional arguments",
 			assert: func(t *testing.T, stdout string, _ *fakeDaemon, _ *fakeState) {
 				t.Helper()
 				_ = stdout
@@ -1961,6 +1973,9 @@ func TestUsageTextIncludesResumeCommand(t *testing.T) {
 	}
 	if !strings.Contains(UsageText(), "batch") {
 		t.Fatalf("UsageText() = %q, want batch command", UsageText())
+	}
+	if !strings.Contains(UsageText(), "metrics") {
+		t.Fatalf("UsageText() = %q, want metrics command", UsageText())
 	}
 	if !strings.Contains(UsageText(), "help") {
 		t.Fatalf("UsageText() = %q, want help command", UsageText())
