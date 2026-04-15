@@ -91,58 +91,15 @@ func TestPostgresStoreSchemaIncludesHostColumns(t *testing.T) {
 func TestPostgresStoreMaterializedViews(t *testing.T) {
 	t.Parallel()
 
-	h := newPostgresContractHarness(t)
-	store, ok := h.store.(*PostgresStore)
-	if !ok {
-		t.Fatalf("store type = %T, want *PostgresStore", h.store)
-	}
-
+	store := mustPostgresStore(t)
 	ctx := context.Background()
-	if _, err := store.pool.Exec(ctx, `
-		INSERT INTO tasks(project, issue, status, state, agent, worker_id, clone_path, branch, pr_number, created_at, updated_at)
-		VALUES
-			('/repo-alpha', 'LAB-1001', 'done', 'done', 'codex', 'worker-a1', '/tmp/alpha-1', 'lab-1001', 101, '2026-04-10T08:00:00Z', '2026-04-10T14:00:00Z'),
-			('/repo-alpha', 'LAB-1002', 'done', 'done', 'claude', 'worker-a2', '/tmp/alpha-2', 'lab-1002', 102, '2026-04-10T09:00:00Z', '2026-04-10T19:00:00Z'),
-			('/repo-alpha', 'LAB-1003', 'done', 'done', 'codex', 'worker-a1', '/tmp/alpha-1', 'lab-1003', 103, '2026-04-11T08:00:00Z', '2026-04-11T20:00:00Z'),
-			('/repo-beta', 'LAB-2001', 'done', 'done', 'claude', 'worker-b1', '/tmp/beta-1', 'lab-2001', 201, '2026-04-11T10:00:00Z', '2026-04-11T19:00:00Z'),
-			('/repo-beta', 'LAB-2002', 'done', 'done', 'claude', 'worker-b1', '/tmp/beta-1', 'lab-2002', 202, '2026-04-11T11:00:00Z', '2026-04-11T17:00:00Z'),
-			('/repo-gamma', 'LAB-3001', 'done', 'done', 'codex', 'worker-g1', '/tmp/gamma-1', 'lab-3001', 301, '2026-04-11T07:00:00Z', '2026-04-11T13:00:00Z')
-	`); err != nil {
-		t.Fatalf("insert tasks error = %v", err)
-	}
-
-	if _, err := store.pool.Exec(ctx, `
-		INSERT INTO events(project, kind, issue, worker_id, message, created_at)
-		VALUES
-			('/repo-alpha', 'pr.merged', 'LAB-1001', 'worker-a1', 'merged 1001', '2026-04-10T14:05:00Z'),
-			('/repo-alpha', 'pr.merged', 'LAB-1002', 'worker-a2', 'merged 1002', '2026-04-10T19:05:00Z'),
-			('/repo-alpha', 'worker.escalated', 'LAB-1001', 'worker-a1', 'escalated', '2026-04-10T12:00:00Z'),
-			('/repo-alpha', 'worker.nudged', 'LAB-1001', 'worker-a1', 'nudge', '2026-04-10T09:30:00Z'),
-			('/repo-alpha', 'worker.nudged_ci', 'LAB-1001', 'worker-a1', 'ci nudge', '2026-04-10T11:00:00Z'),
-			('/repo-alpha', 'worker.nudged_review', 'LAB-1003', 'worker-a1', 'review nudge', '2026-04-11T18:00:00Z'),
-			('/repo-alpha', 'worker.crash_report', 'LAB-1003', 'worker-a1', 'crash', '2026-04-11T12:30:00Z'),
-			('/repo-alpha', 'pr.merged', 'LAB-1999', 'worker-a9', 'merged orphan', '2026-04-12T08:00:00Z'),
-			('/repo-alpha', 'worker.nudged_conflict', 'LAB-1999', 'worker-a9', 'conflict nudge', '2026-04-12T08:30:00Z'),
-			('/repo-beta', 'worker.escalated', 'LAB-2001', 'worker-b1', 'escalated', '2026-04-11T15:00:00Z'),
-			('/repo-beta', 'worker.nudged', 'LAB-2001', 'worker-b1', 'nudge', '2026-04-11T16:00:00Z')
-	`); err != nil {
-		t.Fatalf("insert events error = %v", err)
-	}
+	seedProductivityMetricsFixture(t, store)
 
 	if err := store.EnsureSchema(ctx); err != nil {
 		t.Fatalf("EnsureSchema() second pass error = %v", err)
 	}
 
-	for _, view := range []string{
-		"daily_throughput",
-		"daily_cycle_time",
-		"daily_quality",
-		"daily_workers",
-	} {
-		if _, err := store.pool.Exec(ctx, fmt.Sprintf(`REFRESH MATERIALIZED VIEW CONCURRENTLY %s`, view)); err != nil {
-			t.Fatalf("REFRESH MATERIALIZED VIEW CONCURRENTLY %s error = %v", view, err)
-		}
-	}
+	refreshMaterializedViewsConcurrently(t, store)
 
 	type throughputRow struct {
 		Day             string
@@ -381,6 +338,68 @@ func nullFloatEqual(got, want sql.NullFloat64) bool {
 
 func floatEqual(got, want float64) bool {
 	return math.Abs(got-want) < 1e-9
+}
+
+func mustPostgresStore(t *testing.T) *PostgresStore {
+	t.Helper()
+
+	h := newPostgresContractHarness(t)
+	store, ok := h.store.(*PostgresStore)
+	if !ok {
+		t.Fatalf("store type = %T, want *PostgresStore", h.store)
+	}
+	return store
+}
+
+func seedProductivityMetricsFixture(t *testing.T, store *PostgresStore) {
+	t.Helper()
+
+	ctx := context.Background()
+	if _, err := store.pool.Exec(ctx, `
+		INSERT INTO tasks(project, issue, status, state, agent, worker_id, clone_path, branch, pr_number, created_at, updated_at)
+		VALUES
+			('/repo-alpha', 'LAB-1001', 'done', 'done', 'codex', 'worker-a1', '/tmp/alpha-1', 'lab-1001', 101, '2026-04-10T08:00:00Z', '2026-04-10T14:00:00Z'),
+			('/repo-alpha', 'LAB-1002', 'done', 'done', 'claude', 'worker-a2', '/tmp/alpha-2', 'lab-1002', 102, '2026-04-10T09:00:00Z', '2026-04-10T19:00:00Z'),
+			('/repo-alpha', 'LAB-1003', 'done', 'done', 'codex', 'worker-a1', '/tmp/alpha-1', 'lab-1003', 103, '2026-04-11T08:00:00Z', '2026-04-11T20:00:00Z'),
+			('/repo-beta', 'LAB-2001', 'done', 'done', 'claude', 'worker-b1', '/tmp/beta-1', 'lab-2001', 201, '2026-04-11T10:00:00Z', '2026-04-11T19:00:00Z'),
+			('/repo-beta', 'LAB-2002', 'done', 'done', 'claude', 'worker-b1', '/tmp/beta-1', 'lab-2002', 202, '2026-04-11T11:00:00Z', '2026-04-11T17:00:00Z'),
+			('/repo-gamma', 'LAB-3001', 'done', 'done', 'codex', 'worker-g1', '/tmp/gamma-1', 'lab-3001', 301, '2026-04-11T07:00:00Z', '2026-04-11T13:00:00Z')
+	`); err != nil {
+		t.Fatalf("insert tasks error = %v", err)
+	}
+
+	if _, err := store.pool.Exec(ctx, `
+		INSERT INTO events(project, kind, issue, worker_id, message, created_at)
+		VALUES
+			('/repo-alpha', 'pr.merged', 'LAB-1001', 'worker-a1', 'merged 1001', '2026-04-10T14:05:00Z'),
+			('/repo-alpha', 'pr.merged', 'LAB-1002', 'worker-a2', 'merged 1002', '2026-04-10T19:05:00Z'),
+			('/repo-alpha', 'worker.escalated', 'LAB-1001', 'worker-a1', 'escalated', '2026-04-10T12:00:00Z'),
+			('/repo-alpha', 'worker.nudged', 'LAB-1001', 'worker-a1', 'nudge', '2026-04-10T09:30:00Z'),
+			('/repo-alpha', 'worker.nudged_ci', 'LAB-1001', 'worker-a1', 'ci nudge', '2026-04-10T11:00:00Z'),
+			('/repo-alpha', 'worker.nudged_review', 'LAB-1003', 'worker-a1', 'review nudge', '2026-04-11T18:00:00Z'),
+			('/repo-alpha', 'worker.crash_report', 'LAB-1003', 'worker-a1', 'crash', '2026-04-11T12:30:00Z'),
+			('/repo-alpha', 'pr.merged', 'LAB-1999', 'worker-a9', 'merged orphan', '2026-04-12T08:00:00Z'),
+			('/repo-alpha', 'worker.nudged_conflict', 'LAB-1999', 'worker-a9', 'conflict nudge', '2026-04-12T08:30:00Z'),
+			('/repo-beta', 'worker.escalated', 'LAB-2001', 'worker-b1', 'escalated', '2026-04-11T15:00:00Z'),
+			('/repo-beta', 'worker.nudged', 'LAB-2001', 'worker-b1', 'nudge', '2026-04-11T16:00:00Z')
+	`); err != nil {
+		t.Fatalf("insert events error = %v", err)
+	}
+}
+
+func refreshMaterializedViewsConcurrently(t *testing.T, store *PostgresStore) {
+	t.Helper()
+
+	for _, view := range []string{
+		"daily_throughput",
+		"daily_cycle_time",
+		"daily_quality",
+		"daily_workers",
+	} {
+		if _, err := store.pool.Exec(context.Background(), fmt.Sprintf(`REFRESH MATERIALIZED VIEW CONCURRENTLY %s`, view)); err != nil {
+			t.Fatalf("REFRESH MATERIALIZED VIEW CONCURRENTLY %s error = %v", view, err)
+		}
+	}
 }
 
 func newPostgresContractHarness(t *testing.T) storeContractHarness {
