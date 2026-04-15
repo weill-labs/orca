@@ -259,7 +259,7 @@ func (a *App) runStart(ctx context.Context, args []string) error {
 	resolvedProject := ""
 	if !global {
 		var err error
-		resolvedProject, err = a.resolveProject(projectPath)
+		resolvedProject, err = a.resolveStartProject(projectPath)
 		if err != nil {
 			return err
 		}
