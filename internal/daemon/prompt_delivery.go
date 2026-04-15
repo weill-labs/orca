@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	amuxapi "github.com/weill-labs/orca/internal/amux"
 )
@@ -33,13 +34,13 @@ func (d *Daemon) confirmPromptDelivery(ctx context.Context, paneID string, profi
 			if err := d.amux.SendKeys(ctx, paneID, "Enter"); err != nil {
 				return fmt.Errorf("retry prompt delivery: %w", err)
 			}
-			if err := d.amux.WaitIdle(ctx, paneID, defaultAgentHandshakeTimeout); err != nil {
+			if err := d.amux.WaitIdle(ctx, paneID, 5*time.Second); err != nil {
 				if waitErr := d.amux.WaitContent(ctx, paneID, codexWorkingText, defaultAgentHandshakeTimeout); waitErr == nil {
 					return nil
 				} else if !errors.Is(waitErr, amuxapi.ErrWaitContentTimeout) {
 					return fmt.Errorf("wait for %q after retry idle failure: %w", codexWorkingText, waitErr)
 				}
-				return fmt.Errorf("wait for prompt retry idle: %w", err)
+				continue
 			}
 			continue
 		}
