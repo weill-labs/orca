@@ -37,12 +37,14 @@ type relayMonitoredProject struct {
 }
 
 type relayEventMessage struct {
-	ID       string `json:"id,omitempty"`
-	Type     string `json:"type"`
-	Repo     string `json:"repo,omitempty"`
-	PRNumber int    `json:"pr_number,omitempty"`
-	Action   string `json:"action,omitempty"`
-	Merged   bool   `json:"merged,omitempty"`
+	ID         string `json:"id,omitempty"`
+	Type       string `json:"type"`
+	Repo       string `json:"repo,omitempty"`
+	PRNumber   int    `json:"pr_number,omitempty"`
+	Action     string `json:"action,omitempty"`
+	Merged     bool   `json:"merged,omitempty"`
+	BaseBranch string `json:"base_branch,omitempty"`
+	BaseRef    string `json:"base_ref,omitempty"`
 }
 
 func (d *Daemon) relayEnabled() bool {
@@ -150,6 +152,10 @@ func (d *Daemon) consumeRelayConnection(ctx context.Context, conn relayConnectio
 }
 
 func (d *Daemon) handleRelayEvent(ctx context.Context, msg relayEventMessage) {
+	if relayEventTriggersMergeConflictRefresh(msg) {
+		go d.handleRelayMergeConflictRefresh(d.withMonitorCircuits(ctx), msg)
+	}
+
 	kind, ok := relayEventCheckKind(msg)
 	if !ok || msg.PRNumber <= 0 {
 		return
