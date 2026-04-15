@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"strings"
 	"sync"
 	"time"
 
@@ -241,85 +242,85 @@ func newCircuitAmuxClient(base AmuxClient, breaker *CircuitBreaker) AmuxClient {
 }
 
 func (c *circuitAmuxClient) Spawn(ctx context.Context, req SpawnRequest) (Pane, error) {
-	return withCircuit(c.breaker, func() (Pane, error) {
+	return withAmuxCircuit(c.breaker, func() (Pane, error) {
 		return c.base.Spawn(ctx, req)
 	})
 }
 
 func (c *circuitAmuxClient) PaneExists(ctx context.Context, paneID string) (bool, error) {
-	return withCircuit(c.breaker, func() (bool, error) {
+	return withAmuxCircuit(c.breaker, func() (bool, error) {
 		return c.base.PaneExists(ctx, paneID)
 	})
 }
 
 func (c *circuitAmuxClient) ListPanes(ctx context.Context) ([]Pane, error) {
-	return withCircuit(c.breaker, func() ([]Pane, error) {
+	return withAmuxCircuit(c.breaker, func() ([]Pane, error) {
 		return c.base.ListPanes(ctx)
 	})
 }
 
 func (c *circuitAmuxClient) Metadata(ctx context.Context, paneID string) (map[string]string, error) {
-	return withCircuit(c.breaker, func() (map[string]string, error) {
+	return withAmuxCircuit(c.breaker, func() (map[string]string, error) {
 		return c.base.Metadata(ctx, paneID)
 	})
 }
 
 func (c *circuitAmuxClient) SetMetadata(ctx context.Context, paneID string, metadata map[string]string) error {
-	return withCircuitErr(c.breaker, func() error {
+	return withAmuxCircuitErr(c.breaker, func() error {
 		return c.base.SetMetadata(ctx, paneID, metadata)
 	})
 }
 
 func (c *circuitAmuxClient) RemoveMetadata(ctx context.Context, paneID string, keys ...string) error {
-	return withCircuitErr(c.breaker, func() error {
+	return withAmuxCircuitErr(c.breaker, func() error {
 		return c.base.RemoveMetadata(ctx, paneID, keys...)
 	})
 }
 
 func (c *circuitAmuxClient) SendKeys(ctx context.Context, paneID string, keys ...string) error {
-	return withCircuitErr(c.breaker, func() error {
+	return withAmuxCircuitErr(c.breaker, func() error {
 		return c.base.SendKeys(ctx, paneID, keys...)
 	})
 }
 
 func (c *circuitAmuxClient) Capture(ctx context.Context, paneID string) (string, error) {
-	return withCircuit(c.breaker, func() (string, error) {
+	return withAmuxCircuit(c.breaker, func() (string, error) {
 		return c.base.Capture(ctx, paneID)
 	})
 }
 
 func (c *circuitAmuxClient) CapturePane(ctx context.Context, paneID string) (PaneCapture, error) {
-	return withCircuit(c.breaker, func() (PaneCapture, error) {
+	return withAmuxCircuit(c.breaker, func() (PaneCapture, error) {
 		return c.base.CapturePane(ctx, paneID)
 	})
 }
 
 func (c *circuitAmuxClient) CaptureHistory(ctx context.Context, paneID string) (PaneCapture, error) {
-	return withCircuit(c.breaker, func() (PaneCapture, error) {
+	return withAmuxCircuit(c.breaker, func() (PaneCapture, error) {
 		return c.base.CaptureHistory(ctx, paneID)
 	})
 }
 
 func (c *circuitAmuxClient) KillPane(ctx context.Context, paneID string) error {
-	return withCircuitErr(c.breaker, func() error {
+	return withAmuxCircuitErr(c.breaker, func() error {
 		return c.base.KillPane(ctx, paneID)
 	})
 }
 
 func (c *circuitAmuxClient) WaitIdle(ctx context.Context, paneID string, timeout time.Duration) error {
-	return withCircuitErr(c.breaker, func() error {
+	return withAmuxCircuitErr(c.breaker, func() error {
 		return c.base.WaitIdle(ctx, paneID, timeout)
 	})
 }
 
 func (c *circuitAmuxClient) WaitIdleSettle(ctx context.Context, paneID string, timeout, settle time.Duration) error {
-	return withCircuitErr(c.breaker, func() error {
+	return withAmuxCircuitErr(c.breaker, func() error {
 		return c.base.WaitIdleSettle(ctx, paneID, timeout, settle)
 	})
 }
 
 func (c *circuitAmuxClient) WaitContent(ctx context.Context, paneID, substring string, timeout time.Duration) error {
-	return withCircuitErr(c.breaker, func() error {
+	return withAmuxCircuitErr(c.breaker, func() error {
 		return c.base.WaitContent(ctx, paneID, substring, timeout)
 	})
 }
@@ -358,7 +359,9 @@ func (c *circuitAmuxClient) Events(ctx context.Context, req amux.EventsRequest) 
 					continue
 				}
 				if err != nil {
-					c.breaker.RecordFailure(err)
+					if shouldRecordAmuxCircuitFailure(err) {
+						c.breaker.RecordFailure(err)
+					}
 					outErr <- err
 					return
 				}
@@ -428,7 +431,19 @@ func (c *circuitGitHubClient) lookupPRReviews(ctx context.Context, prNumber int)
 	})
 }
 
+func withAmuxCircuit[T any](breaker *CircuitBreaker, call func() (T, error)) (T, error) {
+	return withCircuitPredicate(breaker, shouldRecordAmuxCircuitFailure, call)
+}
+
+func withAmuxCircuitErr(breaker *CircuitBreaker, call func() error) error {
+	return withCircuitErrPredicate(breaker, shouldRecordAmuxCircuitFailure, call)
+}
+
 func withCircuit[T any](breaker *CircuitBreaker, call func() (T, error)) (T, error) {
+	return withCircuitPredicate(breaker, shouldRecordCircuitFailure, call)
+}
+
+func withCircuitPredicate[T any](breaker *CircuitBreaker, shouldRecord func(error) bool, call func() (T, error)) (T, error) {
 	var zero T
 	if err := breaker.Allow(); err != nil {
 		return zero, err
@@ -436,7 +451,7 @@ func withCircuit[T any](breaker *CircuitBreaker, call func() (T, error)) (T, err
 
 	value, err := call()
 	if err != nil {
-		if shouldRecordCircuitFailure(err) {
+		if shouldRecord(err) {
 			breaker.RecordFailure(err)
 		}
 		return zero, err
@@ -447,6 +462,10 @@ func withCircuit[T any](breaker *CircuitBreaker, call func() (T, error)) (T, err
 }
 
 func withCircuit3[T1 any, T2 any](breaker *CircuitBreaker, call func() (T1, T2, error)) (T1, T2, error) {
+	return withCircuit3Predicate(breaker, shouldRecordCircuitFailure, call)
+}
+
+func withCircuit3Predicate[T1 any, T2 any](breaker *CircuitBreaker, shouldRecord func(error) bool, call func() (T1, T2, error)) (T1, T2, error) {
 	var zero1 T1
 	var zero2 T2
 	if err := breaker.Allow(); err != nil {
@@ -455,7 +474,7 @@ func withCircuit3[T1 any, T2 any](breaker *CircuitBreaker, call func() (T1, T2, 
 
 	value1, value2, err := call()
 	if err != nil {
-		if shouldRecordCircuitFailure(err) {
+		if shouldRecord(err) {
 			breaker.RecordFailure(err)
 		}
 		return zero1, zero2, err
@@ -466,12 +485,16 @@ func withCircuit3[T1 any, T2 any](breaker *CircuitBreaker, call func() (T1, T2, 
 }
 
 func withCircuitErr(breaker *CircuitBreaker, call func() error) error {
+	return withCircuitErrPredicate(breaker, shouldRecordCircuitFailure, call)
+}
+
+func withCircuitErrPredicate(breaker *CircuitBreaker, shouldRecord func(error) bool, call func() error) error {
 	if err := breaker.Allow(); err != nil {
 		return err
 	}
 
 	if err := call(); err != nil {
-		if shouldRecordCircuitFailure(err) {
+		if shouldRecord(err) {
 			breaker.RecordFailure(err)
 		}
 		return err
@@ -483,4 +506,48 @@ func withCircuitErr(breaker *CircuitBreaker, call func() error) error {
 
 func shouldRecordCircuitFailure(err error) bool {
 	return !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
+}
+
+func shouldRecordAmuxCircuitFailure(err error) bool {
+	if !shouldRecordCircuitFailure(err) {
+		return false
+	}
+
+	message := strings.ToLower(strings.TrimSpace(err.Error()))
+	if amuxPaneNotFoundError(message) {
+		return false
+	}
+	return amuxInfrastructureError(message)
+}
+
+func amuxPaneNotFoundError(message string) bool {
+	switch {
+	case strings.Contains(message, `pane "`):
+		return strings.Contains(message, `" not found`)
+	case strings.Contains(message, "pane not found"):
+		return true
+	default:
+		return false
+	}
+}
+
+func amuxInfrastructureError(message string) bool {
+	switch {
+	case strings.Contains(message, "connection refused"):
+		return true
+	case strings.Contains(message, "socket not found"):
+		return true
+	case strings.Contains(message, "dial unix"):
+		return true
+	case strings.Contains(message, "i/o timeout"):
+		return true
+	case strings.Contains(message, "connect: no such file or directory"):
+		return true
+	case strings.Contains(message, "timed out") && (strings.Contains(message, "connect") || strings.Contains(message, "dial")):
+		return true
+	case strings.Contains(message, "deadline exceeded") && (strings.Contains(message, "connect") || strings.Contains(message, "dial")):
+		return true
+	default:
+		return false
+	}
 }

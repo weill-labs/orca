@@ -255,6 +255,34 @@ func TestDaemonCaptureMonitorOpensAmuxCircuitAfterThreeFailures(t *testing.T) {
 	}
 }
 
+func TestDaemonCaptureMonitorDoesNotOpenAmuxCircuitForPaneNotFound(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	seedTaskMonitorAssignment(t, deps, "LAB-1253", "w-LAB-1033", 0)
+	deps.amux.capturePaneErr = errors.New(`amux -s main capture --format json w-LAB-1033: exit status 1: amux capture: pane "w-LAB-1033" not found`)
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+	t.Cleanup(func() {
+		d.stopAllTaskMonitors(true)
+	})
+
+	for i := 0; i < 3; i++ {
+		d.runCaptureTick(ctx)
+		if got, want := deps.amux.captureCount("w-LAB-1033"), i+1; got != want {
+			t.Fatalf("capture count after pane-not-found attempt %d = %d, want %d", i+1, got, want)
+		}
+	}
+
+	if err := d.monitorAmuxCircuit.Allow(); err != nil {
+		t.Fatalf("amux circuit Allow() after pane-not-found errors = %v, want nil", err)
+	}
+	if got := deps.events.countType(EventDaemonCircuitOpened); got != 0 {
+		t.Fatalf("circuit opened event count = %d, want 0", got)
+	}
+}
+
 func TestDaemonPollMonitorOpensGitHubCircuitAfterThreeFailures(t *testing.T) {
 	t.Parallel()
 

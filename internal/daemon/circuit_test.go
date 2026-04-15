@@ -414,6 +414,65 @@ func TestCircuitAmuxClientWrapsBaseMethods(t *testing.T) {
 	}
 }
 
+func TestCircuitAmuxClientDoesNotTripBreakerOnPaneNotFound(t *testing.T) {
+	t.Parallel()
+
+	breaker := NewCircuitBreaker(time.Now, 1, time.Minute)
+	base := &fakeAmux{
+		capturePaneErr: errors.New(`amux -s main capture --format json w-LAB-1033: exit status 1: amux capture: pane "w-LAB-1033" not found`),
+	}
+	client := newCircuitAmuxClient(base, breaker)
+
+	if _, err := client.CapturePane(context.Background(), "w-LAB-1033"); err == nil {
+		t.Fatal("CapturePane() error = nil, want pane not found")
+	}
+	if err := breaker.Allow(); err != nil {
+		t.Fatalf("Allow() after pane-not-found error = %v, want nil", err)
+	}
+}
+
+func TestCircuitAmuxClientTripsBreakerOnConnectionRefusedWhenThresholdIsOne(t *testing.T) {
+	t.Parallel()
+
+	breaker := NewCircuitBreaker(time.Now, 1, time.Minute)
+	base := &fakeAmux{
+		capturePaneErr: errors.New("amux -s main capture --format json pane-1: exit status 1: connection refused"),
+	}
+	client := newCircuitAmuxClient(base, breaker)
+
+	if _, err := client.CapturePane(context.Background(), "pane-1"); err == nil {
+		t.Fatal("CapturePane() error = nil, want connection refused")
+	}
+	if err := breaker.Allow(); !errors.Is(err, ErrCircuitBreakerOpen) {
+		t.Fatalf("Allow() after connection-refused error = %v, want %v", err, ErrCircuitBreakerOpen)
+	}
+}
+
+func TestCircuitAmuxClientOpensAfterThreeConnectionRefusedFailures(t *testing.T) {
+	t.Parallel()
+
+	breaker := NewCircuitBreaker(time.Now, 3, time.Minute)
+	base := &fakeAmux{
+		capturePaneErr: errors.New("amux -s main capture --format json pane-1: exit status 1: connection refused"),
+	}
+	client := newCircuitAmuxClient(base, breaker)
+
+	for i := 0; i < 3; i++ {
+		if _, err := client.CapturePane(context.Background(), "pane-1"); err == nil {
+			t.Fatalf("CapturePane() error on attempt %d = nil, want connection refused", i+1)
+		}
+		if i < 2 {
+			if err := breaker.Allow(); err != nil {
+				t.Fatalf("Allow() after %d failure(s) = %v, want nil", i+1, err)
+			}
+		}
+	}
+
+	if err := breaker.Allow(); !errors.Is(err, ErrCircuitBreakerOpen) {
+		t.Fatalf("Allow() after three connection-refused errors = %v, want %v", err, ErrCircuitBreakerOpen)
+	}
+}
+
 func TestCircuitCommandRunnerBypassesNonGitHubCommandsWhenCircuitIsOpen(t *testing.T) {
 	t.Parallel()
 
