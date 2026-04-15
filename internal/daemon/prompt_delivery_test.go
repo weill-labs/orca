@@ -3,8 +3,10 @@ package daemon
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	amuxapi "github.com/weill-labs/orca/internal/amux"
 )
@@ -56,20 +58,32 @@ func TestConfirmPromptDeliveryReturnsSendKeysErrorOnRetry(t *testing.T) {
 	deps.amux.requireSentKeys(t, "pane-1", nil)
 }
 
-func TestConfirmPromptDeliveryReturnsWaitIdleErrorOnRetry(t *testing.T) {
+func TestConfirmPromptDeliveryRetriesAfterWaitIdleTimeout(t *testing.T) {
 	t.Parallel()
 
 	deps := newTestDeps(t)
 	deps.amux.waitContentResults = []error{
 		amuxapi.ErrWaitContentTimeout,
 		amuxapi.ErrWaitContentTimeout,
+		nil,
 	}
-	deps.amux.waitIdleErr = errors.New("idle failed")
+	deps.amux.waitIdleErr = errors.New("wait idle timed out")
 	d := deps.newDaemon(t)
 
-	err := d.confirmPromptDelivery(context.Background(), "pane-1", AgentProfile{Name: "codex"})
-	if err == nil || !strings.Contains(err.Error(), "wait for prompt retry idle: idle failed") {
-		t.Fatalf("confirmPromptDelivery() error = %v, want wrapped wait-idle failure", err)
+	if err := d.confirmPromptDelivery(context.Background(), "pane-1", AgentProfile{Name: "codex"}); err != nil {
+		t.Fatalf("confirmPromptDelivery() error = %v", err)
+	}
+	if got, want := deps.amux.waitContentCalls, []waitContentCall{
+		{PaneID: "pane-1", Substring: codexWorkingText, Timeout: defaultAgentHandshakeTimeout},
+		{PaneID: "pane-1", Substring: codexWorkingText, Timeout: defaultAgentHandshakeTimeout},
+		{PaneID: "pane-1", Substring: codexWorkingText, Timeout: defaultAgentHandshakeTimeout},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("waitContent calls = %#v, want %#v", got, want)
+	}
+	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
+		{PaneID: "pane-1", Timeout: 5 * time.Second},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("waitIdle calls = %#v, want %#v", got, want)
 	}
 	deps.amux.requireSentKeys(t, "pane-1", []string{"Enter"})
 }
