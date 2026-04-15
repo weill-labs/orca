@@ -884,13 +884,13 @@ func TestHelpTextOmitsDeprecatedLeadPaneFromStartUsage(t *testing.T) {
 	}
 }
 
-func TestAppRunHelpTopicsForAllSubcommands(t *testing.T) {
-	t.Parallel()
+type subcommandHelpCase struct {
+	command   string
+	wantUsage string
+}
 
-	tests := []struct {
-		command   string
-		wantUsage string
-	}{
+func allSubcommandHelpCases() []subcommandHelpCase {
+	return []subcommandHelpCase{
 		{command: "start", wantUsage: "usage: orca start"},
 		{command: "stop", wantUsage: "usage: orca stop"},
 		{command: "reload", wantUsage: "usage: orca reload"},
@@ -907,8 +907,12 @@ func TestAppRunHelpTopicsForAllSubcommands(t *testing.T) {
 		{command: "help", wantUsage: "usage: orca help [COMMAND]"},
 		{command: "version", wantUsage: "usage: orca version"},
 	}
+}
 
-	for _, tt := range tests {
+func TestAppRunHelpTopicsForAllSubcommands(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range allSubcommandHelpCases() {
 		tt := tt
 		t.Run(tt.command, func(t *testing.T) {
 			t.Parallel()
@@ -942,28 +946,7 @@ func TestAppRunHelpTopicsForAllSubcommands(t *testing.T) {
 func TestAppRunHelpFlagsForAllSubcommands(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		command   string
-		wantUsage string
-	}{
-		{command: "start", wantUsage: "usage: orca start"},
-		{command: "stop", wantUsage: "usage: orca stop"},
-		{command: "reload", wantUsage: "usage: orca reload"},
-		{command: "status", wantUsage: "usage: orca status"},
-		{command: "assign", wantUsage: "usage: orca assign ISSUE"},
-		{command: "batch", wantUsage: "usage: orca batch MANIFEST"},
-		{command: "spawn", wantUsage: "usage: orca spawn"},
-		{command: "enqueue", wantUsage: "usage: orca enqueue PR_NUMBER"},
-		{command: "cancel", wantUsage: "usage: orca cancel ISSUE"},
-		{command: "resume", wantUsage: "usage: orca resume ISSUE"},
-		{command: "workers", wantUsage: "usage: orca workers"},
-		{command: "pool", wantUsage: "usage: orca pool"},
-		{command: "events", wantUsage: "usage: orca events"},
-		{command: "help", wantUsage: "usage: orca help [COMMAND]"},
-		{command: "version", wantUsage: "usage: orca version"},
-	}
-
-	for _, tt := range tests {
+	for _, tt := range allSubcommandHelpCases() {
 		tt := tt
 		t.Run(tt.command, func(t *testing.T) {
 			t.Parallel()
