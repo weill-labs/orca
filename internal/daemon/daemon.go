@@ -47,7 +47,6 @@ type Daemon struct {
 	mergeGracePeriod     time.Duration
 	statusWriter         daemonStatusWriter
 	logf                 func(string, ...any)
-	monitorAmuxCircuit   *CircuitBreaker
 	monitorGitHubCircuit *CircuitBreaker
 	relayURL             string
 	relayToken           string
@@ -163,10 +162,6 @@ func New(opts Options) (*Daemon, error) {
 		relayToken:           strings.TrimSpace(opts.RelayToken),
 		hostname:             strings.TrimSpace(opts.Hostname),
 		detectOrigin:         opts.DetectOrigin,
-		// Monitor circuits are daemon-wide by design so broad amux/GitHub
-		// transport outages pause all monitor traffic instead of retrying per
-		// task. Per-pane failures stay local to the caller.
-		monitorAmuxCircuit:   NewCircuitBreakerWithHooks(opts.Now, defaultCircuitBreakerFailureThreshold, defaultCircuitBreakerCooldown, daemonCircuitHooks(opts.Project, opts.Now, opts.State, opts.Events, "monitor amux")),
 		monitorGitHubCircuit: NewCircuitBreakerWithHooks(opts.Now, defaultCircuitBreakerFailureThreshold, defaultCircuitBreakerCooldown, daemonCircuitHooks(opts.Project, opts.Now, opts.State, opts.Events, "monitor github")),
 	}, nil
 }

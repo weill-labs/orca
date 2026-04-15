@@ -47,6 +47,9 @@ func (d *Daemon) applyPRMergeableState(update *TaskStateUpdate, profile AgentPro
 
 	update.queueNudge(func(ctx context.Context, d *Daemon, update *TaskStateUpdate) {
 		if err := d.sendPromptAndEnter(ctx, update.Active.Task.PaneID, conflictNudgePrompt); err != nil {
+			if isPaneGoneError(err) {
+				d.escalateTaskState(update, profile, "worker pane missing during conflict nudge", now)
+			}
 			return
 		}
 

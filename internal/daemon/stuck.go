@@ -12,6 +12,9 @@ func (d *Daemon) nudgeOrEscalate(ctx context.Context, update *TaskStateUpdate, p
 	if update.Active.Worker.NudgeCount < profile.MaxNudgeRetries {
 		update.queueNudge(func(ctx context.Context, d *Daemon, update *TaskStateUpdate) {
 			if err := d.amuxClient(ctx).SendKeys(ctx, update.Active.Task.PaneID, profile.NudgeCommand); err != nil {
+				if isPaneGoneError(err) {
+					d.escalateTaskState(update, profile, "worker pane missing during stuck nudge", now)
+				}
 				return
 			}
 
@@ -31,16 +34,10 @@ func (d *Daemon) nudgeOrEscalate(ctx context.Context, update *TaskStateUpdate, p
 		return
 	}
 
-	update.Active.Worker.Health = WorkerHealthEscalated
-	update.Active.Worker.LastSeenAt = now
-	update.WorkerChanged = true
+	d.escalateTaskState(update, profile, reason, now)
 	if update.Active.Task.PaneID != "" {
 		update.PaneMetadata = mergeMetadata(update.PaneMetadata, map[string]string{"status": "escalated"})
 	}
-
-	event := d.assignmentEvent(update.Active, profile, EventWorkerEscalated, reason)
-	event.Retry = update.Active.Worker.NudgeCount
-	update.Events = append(update.Events, event)
 }
 
 func (d *Daemon) matchesStuckPattern(profile AgentProfile, output string) bool {

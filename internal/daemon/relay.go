@@ -678,6 +678,8 @@ func (d *Daemon) checkTaskImmediateMergePoll(ctx context.Context, active ActiveA
 		d.appendGitHubRateLimitEvent(&update, profile, err)
 		return update
 	}
-	update.PRMerged = merged
+	if merged {
+		markTaskPRMerged(&update, d.now())
+	}
 	return update
 }

@@ -86,12 +86,7 @@ func exitedPaneRestartPlan(worker Worker, now time.Time) (delay time.Duration, r
 func (d *Daemon) planExitedPaneRecovery(update *TaskStateUpdate, profile AgentProfile, snapshot PaneCapture, now time.Time) {
 	delay, restartCount, firstCrashAt, escalate := exitedPaneRestartPlan(update.Active.Worker, now)
 	if escalate {
-		update.Active.Worker.Health = WorkerHealthEscalated
-		update.Active.Worker.LastSeenAt = now
-		update.Active.Task.UpdatedAt = now
-		update.WorkerChanged = true
-		update.TaskChanged = true
-		update.Events = append(update.Events, d.assignmentEvent(update.Active, profile, EventWorkerEscalated, exitedPaneMessage(snapshot)))
+		d.escalateTaskState(update, profile, exitedPaneMessage(snapshot), now)
 		return
 	}
 
@@ -106,12 +101,7 @@ func (d *Daemon) planExitedPaneRecovery(update *TaskStateUpdate, profile AgentPr
 		if err != nil {
 			update.Active.Worker.RestartCount = restartCount
 			update.Active.Worker.FirstCrashAt = firstCrashAt
-			update.Active.Worker.Health = WorkerHealthEscalated
-			update.Active.Worker.LastSeenAt = now
-			update.Active.Task.UpdatedAt = now
-			update.WorkerChanged = true
-			update.TaskChanged = true
-			update.Events = append(update.Events, d.assignmentEvent(update.Active, profile, EventWorkerEscalated, fmt.Sprintf("%s auto restart failed: %v", exitedPaneMessage(snapshot), err)))
+			d.escalateTaskState(update, profile, fmt.Sprintf("%s auto restart failed: %v", exitedPaneMessage(snapshot), err), now)
 			return
 		}
 
@@ -123,6 +113,7 @@ func (d *Daemon) planExitedPaneRecovery(update *TaskStateUpdate, profile AgentPr
 		update.Active.Worker.LastActivityAt = now
 		update.Active.Worker.LastSeenAt = now
 		update.Active.Task.UpdatedAt = now
+		update.Active.Task.State = taskStateForAssignment(update.Active)
 		update.WorkerChanged = true
 		update.TaskChanged = true
 	})
@@ -144,6 +135,10 @@ func (d *Daemon) checkTaskExitedEvent(ctx context.Context, active ActiveAssignme
 
 	snapshot, err := d.amux.CapturePane(ctx, active.Task.PaneID)
 	if err != nil {
+		if isPaneGoneError(err) {
+			d.escalateTaskState(&update, profile, "worker pane missing during exited-pane check", d.now())
+			return update
+		}
 		snapshot = PaneCapture{}
 	}
 	snapshot.Exited = true

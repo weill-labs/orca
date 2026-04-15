@@ -198,7 +198,6 @@ type commandRunnerContextKey struct{}
 type gitHubClientFactoryContextKey struct{}
 
 func (d *Daemon) withMonitorCircuits(ctx context.Context) context.Context {
-	ctx = context.WithValue(ctx, amuxClientContextKey{}, newCircuitAmuxClient(d.amux, d.monitorAmuxCircuit))
 	ctx = context.WithValue(ctx, commandRunnerContextKey{}, newCircuitCommandRunner(d.commands, d.monitorGitHubCircuit))
 	ctx = context.WithValue(ctx, gitHubClientFactoryContextKey{}, func(projectPath string) gitHubClient {
 		return newCircuitGitHubClient(d.githubForProject(projectPath), d.monitorGitHubCircuit)
@@ -511,7 +510,9 @@ func withCircuitErrPredicate(breaker *CircuitBreaker, shouldRecord func(error) b
 }
 
 func shouldRecordCircuitFailure(err error) bool {
-	return !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
+	return !errors.Is(err, context.Canceled) &&
+		!errors.Is(err, context.DeadlineExceeded) &&
+		!isPaneGoneError(err)
 }
 
 func shouldRecordAmuxCircuitFailure(err error) bool {

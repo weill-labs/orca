@@ -64,6 +64,7 @@ type Task struct {
 	Project       string    `json:"project,omitempty"`
 	Issue         string    `json:"issue"`
 	Status        string    `json:"status"`
+	State         string    `json:"state,omitempty"`
 	Agent         string    `json:"agent"`
 	Prompt        string    `json:"prompt,omitempty"`
 	CallerPane    string    `json:"caller_pane,omitempty"`

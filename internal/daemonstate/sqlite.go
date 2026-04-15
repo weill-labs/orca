@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS tasks (
 	issue TEXT NOT NULL,
 	host TEXT NOT NULL DEFAULT '',
 	status TEXT NOT NULL,
+	state TEXT NOT NULL DEFAULT '',
 	agent TEXT NOT NULL,
 	prompt TEXT NOT NULL DEFAULT '',
 	caller_pane TEXT NOT NULL DEFAULT '',
@@ -130,6 +131,7 @@ CREATE TABLE IF NOT EXISTS tasks (
 	issue TEXT NOT NULL,
 	host TEXT NOT NULL DEFAULT '',
 	status TEXT NOT NULL,
+	state TEXT NOT NULL DEFAULT '',
 	agent TEXT NOT NULL,
 	prompt TEXT NOT NULL DEFAULT '',
 	caller_pane TEXT NOT NULL DEFAULT '',
@@ -273,6 +275,9 @@ func (s *SQLiteStore) EnsureSchema(ctx context.Context) error {
 		return err
 	}
 	if err := s.ensureHostSchema(ctx); err != nil {
+		return err
+	}
+	if err := s.ensureTaskMonitorStateSchema(ctx); err != nil {
 		return err
 	}
 	if err := s.ensureWorkerTrackingColumns(ctx); err != nil {
@@ -484,7 +489,7 @@ func (s *SQLiteStore) NonTerminalTasks(ctx context.Context, project string) ([]T
 	}
 
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT t.issue, t.status, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.created_at, t.updated_at
+		SELECT t.issue, t.status, t.state, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.created_at, t.updated_at
 		FROM tasks t
 		LEFT JOIN workers w
 			ON w.project = t.project
@@ -649,6 +654,9 @@ func (s *SQLiteStore) UpsertTask(ctx context.Context, project string, task Task)
 	if task.UpdatedAt.IsZero() {
 		task.UpdatedAt = task.CreatedAt
 	}
+	if strings.TrimSpace(task.State) == "" {
+		task.State = defaultPersistedTaskState(task.Status, task.PRNumber)
+	}
 
 	var prNumber any
 	if task.PRNumber != nil {
@@ -656,10 +664,11 @@ func (s *SQLiteStore) UpsertTask(ctx context.Context, project string, task Task)
 	}
 
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO tasks(project, issue, status, agent, prompt, caller_pane, worker_id, clone_path, branch, pr_number, created_at, updated_at)
-		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO tasks(project, issue, status, state, agent, prompt, caller_pane, worker_id, clone_path, branch, pr_number, created_at, updated_at)
+		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(project, issue) DO UPDATE SET
 			status = excluded.status,
+			state = excluded.state,
 			agent = excluded.agent,
 			prompt = excluded.prompt,
 			caller_pane = excluded.caller_pane,
@@ -668,7 +677,7 @@ func (s *SQLiteStore) UpsertTask(ctx context.Context, project string, task Task)
 			branch = excluded.branch,
 			pr_number = excluded.pr_number,
 			updated_at = excluded.updated_at
-	`, project, task.Issue, task.Status, task.Agent, task.Prompt, task.CallerPane, task.WorkerID, task.ClonePath, task.Branch, prNumber, formatTime(task.CreatedAt), formatTime(task.UpdatedAt))
+	`, project, task.Issue, task.Status, task.State, task.Agent, task.Prompt, task.CallerPane, task.WorkerID, task.ClonePath, task.Branch, prNumber, formatTime(task.CreatedAt), formatTime(task.UpdatedAt))
 	if err != nil {
 		return fmt.Errorf("upsert task: %w", err)
 	}
@@ -827,6 +836,9 @@ func (s *SQLiteStore) ClaimTask(ctx context.Context, project string, task Task) 
 	if task.UpdatedAt.IsZero() {
 		task.UpdatedAt = task.CreatedAt
 	}
+	if strings.TrimSpace(task.State) == "" {
+		task.State = defaultPersistedTaskState(task.Status, task.PRNumber)
+	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -837,7 +849,7 @@ func (s *SQLiteStore) ClaimTask(ctx context.Context, project string, task Task) 
 	}()
 
 	row := tx.QueryRowContext(ctx, `
-		SELECT t.issue, t.status, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.created_at, t.updated_at
+		SELECT t.issue, t.status, t.state, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.created_at, t.updated_at
 		FROM tasks t
 		LEFT JOIN workers w
 			ON w.project = t.project
@@ -849,9 +861,9 @@ func (s *SQLiteStore) ClaimTask(ctx context.Context, project string, task Task) 
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		_, err = tx.ExecContext(ctx, `
-			INSERT INTO tasks(project, issue, status, agent, prompt, caller_pane, worker_id, clone_path, branch, pr_number, created_at, updated_at)
-			VALUES(?, ?, ?, ?, ?, ?, '', '', ?, NULL, ?, ?)
-		`, project, task.Issue, task.Status, task.Agent, task.Prompt, task.CallerPane, task.Branch, formatTime(task.CreatedAt), formatTime(task.UpdatedAt))
+			INSERT INTO tasks(project, issue, status, state, agent, prompt, caller_pane, worker_id, clone_path, branch, pr_number, created_at, updated_at)
+			VALUES(?, ?, ?, ?, ?, ?, ?, '', '', ?, NULL, ?, ?)
+		`, project, task.Issue, task.Status, task.State, task.Agent, task.Prompt, task.CallerPane, task.Branch, formatTime(task.CreatedAt), formatTime(task.UpdatedAt))
 		if err != nil {
 			return nil, fmt.Errorf("insert claimed task: %w", err)
 		}
@@ -869,9 +881,9 @@ func (s *SQLiteStore) ClaimTask(ctx context.Context, project string, task Task) 
 
 	_, err = tx.ExecContext(ctx, `
 		UPDATE tasks
-		SET status = ?, agent = ?, prompt = ?, caller_pane = ?, worker_id = '', clone_path = '', branch = ?, pr_number = NULL, updated_at = ?
+		SET status = ?, state = ?, agent = ?, prompt = ?, caller_pane = ?, worker_id = '', clone_path = '', branch = ?, pr_number = NULL, updated_at = ?
 		WHERE project = ? AND issue = ?
-	`, task.Status, task.Agent, task.Prompt, task.CallerPane, task.Branch, formatTime(task.UpdatedAt), project, task.Issue)
+	`, task.Status, task.State, task.Agent, task.Prompt, task.CallerPane, task.Branch, formatTime(task.UpdatedAt), project, task.Issue)
 	if err != nil {
 		return nil, fmt.Errorf("update claimed task: %w", err)
 	}
@@ -889,7 +901,7 @@ func (s *SQLiteStore) ActiveAssignments(ctx context.Context, project string) ([]
 
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT
-			t.issue, t.status, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.created_at, t.updated_at,
+			t.issue, t.status, t.state, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.created_at, t.updated_at,
 			w.worker_id, w.current_pane_id, w.agent_profile, w.state, w.issue, w.clone_path, w.last_review_count, w.last_inline_review_comment_count, w.last_issue_comment_count, w.review_nudge_count, w.last_ci_state, w.ci_nudge_count, w.ci_failure_poll_count, w.ci_escalated, w.last_mergeable_state, w.nudge_count, w.last_capture, w.last_activity_at, w.last_pr_number, w.last_push_at, w.last_pr_poll_at, w.restart_count, w.first_crash_at, w.created_at, w.last_seen_at
 		FROM tasks t
 		INNER JOIN workers w
@@ -923,7 +935,7 @@ func (s *SQLiteStore) ActiveAssignmentByIssue(ctx context.Context, project, issu
 	query := `
 		SELECT
 			t.project,
-			t.issue, t.status, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.created_at, t.updated_at,
+			t.issue, t.status, t.state, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.created_at, t.updated_at,
 			w.worker_id, w.current_pane_id, w.agent_profile, w.state, w.issue, w.clone_path, w.last_review_count, w.last_inline_review_comment_count, w.last_issue_comment_count, w.review_nudge_count, w.last_ci_state, w.ci_nudge_count, w.ci_failure_poll_count, w.ci_escalated, w.last_mergeable_state, w.nudge_count, w.last_capture, w.last_activity_at, w.last_pr_number, w.last_push_at, w.last_pr_poll_at, w.restart_count, w.first_crash_at, w.created_at, w.last_seen_at
 		FROM tasks t
 		INNER JOIN workers w
@@ -952,7 +964,7 @@ func (s *SQLiteStore) ActiveAssignmentByBranch(ctx context.Context, project, bra
 	query := `
 		SELECT
 			t.project,
-			t.issue, t.status, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.created_at, t.updated_at,
+			t.issue, t.status, t.state, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.created_at, t.updated_at,
 			w.worker_id, w.current_pane_id, w.agent_profile, w.state, w.issue, w.clone_path, w.last_review_count, w.last_inline_review_comment_count, w.last_issue_comment_count, w.review_nudge_count, w.last_ci_state, w.ci_nudge_count, w.ci_failure_poll_count, w.ci_escalated, w.last_mergeable_state, w.nudge_count, w.last_capture, w.last_activity_at, w.last_pr_number, w.last_push_at, w.last_pr_poll_at, w.restart_count, w.first_crash_at, w.created_at, w.last_seen_at
 		FROM tasks t
 		INNER JOIN workers w
@@ -982,7 +994,7 @@ func (s *SQLiteStore) ActiveAssignmentByPRNumber(ctx context.Context, project st
 	query := `
 		SELECT
 			t.project,
-			t.issue, t.status, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.created_at, t.updated_at,
+			t.issue, t.status, t.state, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.created_at, t.updated_at,
 			w.worker_id, w.current_pane_id, w.agent_profile, w.state, w.issue, w.clone_path, w.last_review_count, w.last_inline_review_comment_count, w.last_issue_comment_count, w.review_nudge_count, w.last_ci_state, w.ci_nudge_count, w.ci_failure_poll_count, w.ci_escalated, w.last_mergeable_state, w.nudge_count, w.last_capture, w.last_activity_at, w.last_pr_number, w.last_push_at, w.last_pr_poll_at, w.restart_count, w.first_crash_at, w.created_at, w.last_seen_at
 		FROM tasks t
 		INNER JOIN workers w
@@ -1204,9 +1216,9 @@ func (s *SQLiteStore) UpdateTaskStatus(ctx context.Context, project, issue, stat
 
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE tasks
-		SET status = ?, updated_at = ?
+		SET status = ?, state = CASE WHEN ? IN ('done', 'cancelled', 'failed') THEN 'done' ELSE state END, updated_at = ?
 		WHERE project = ? AND issue = ?
-	`, status, formatTime(updatedAt), project, issue)
+	`, status, status, formatTime(updatedAt), project, issue)
 	if err != nil {
 		return Task{}, fmt.Errorf("update task status: %w", err)
 	}
@@ -1231,7 +1243,7 @@ func (s *SQLiteStore) TasksByPane(ctx context.Context, project, paneID string) (
 		query += `		t.project,`
 	}
 	query += `
-			t.issue, t.status, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.created_at, t.updated_at
+			t.issue, t.status, t.state, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.created_at, t.updated_at
 		FROM tasks t
 		INNER JOIN workers w
 			ON w.project = t.project
@@ -1274,7 +1286,7 @@ func (s *SQLiteStore) AllNonTerminalTasks(ctx context.Context) ([]Task, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT
 			t.project,
-			t.issue, t.status, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.created_at, t.updated_at
+			t.issue, t.status, t.state, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.created_at, t.updated_at
 		FROM tasks t
 		LEFT JOIN workers w
 			ON w.project = t.project
@@ -1357,7 +1369,7 @@ func (s *SQLiteStore) AllActiveAssignments(ctx context.Context) ([]Assignment, e
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT
 			t.project,
-			t.issue, t.status, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.created_at, t.updated_at,
+			t.issue, t.status, t.state, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.created_at, t.updated_at,
 			w.worker_id, w.current_pane_id, w.agent_profile, w.state, w.issue, w.clone_path, w.last_review_count, w.last_inline_review_comment_count, w.last_issue_comment_count, w.review_nudge_count, w.last_ci_state, w.ci_nudge_count, w.ci_failure_poll_count, w.ci_escalated, w.last_mergeable_state, w.nudge_count, w.last_capture, w.last_activity_at, w.last_pr_number, w.last_push_at, w.last_pr_poll_at, w.restart_count, w.first_crash_at, w.created_at, w.last_seen_at
 		FROM tasks t
 		INNER JOIN workers w
@@ -1468,7 +1480,7 @@ func (s *SQLiteStore) lookupTask(ctx context.Context, project, issue string) (Ta
 		query += `		t.project,`
 	}
 	query += `
-			t.issue, t.status, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.created_at, t.updated_at
+			t.issue, t.status, t.state, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.created_at, t.updated_at
 		FROM tasks t
 		LEFT JOIN workers w
 			ON w.project = t.project
@@ -1502,7 +1514,7 @@ func (s *SQLiteStore) listTasks(ctx context.Context, project string) ([]Task, er
 	}
 
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT t.issue, t.status, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.created_at, t.updated_at
+		SELECT t.issue, t.status, t.state, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.created_at, t.updated_at
 		FROM tasks t
 		LEFT JOIN workers w
 			ON w.project = t.project
@@ -1536,7 +1548,7 @@ func (s *SQLiteStore) allTasks(ctx context.Context) ([]Task, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT
 			t.project,
-			t.issue, t.status, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.created_at, t.updated_at
+			t.issue, t.status, t.state, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.created_at, t.updated_at
 		FROM tasks t
 		LEFT JOIN workers w
 			ON w.project = t.project
@@ -1641,6 +1653,7 @@ func scanTask(scanner rowScanner, includeProject bool) (Task, error) {
 	fields := []any{
 		&task.Issue,
 		&task.Status,
+		&task.State,
 		&task.Agent,
 		&task.Prompt,
 		&callerPane,
@@ -1668,6 +1681,9 @@ func scanTask(scanner rowScanner, includeProject bool) (Task, error) {
 	if currentPaneID.Valid {
 		task.CurrentPaneID = currentPaneID.String
 	}
+	if strings.TrimSpace(task.State) == "" {
+		task.State = defaultPersistedTaskState(task.Status, task.PRNumber)
+	}
 	task.CreatedAt = parseTime(createdAt)
 	task.UpdatedAt = parseTime(updatedAt)
 	return task, nil
@@ -1693,6 +1709,7 @@ func scanAssignment(scanner rowScanner, includeProject bool) (Assignment, error)
 	fields := []any{
 		&task.Issue,
 		&task.Status,
+		&task.State,
 		&task.Agent,
 		&task.Prompt,
 		&callerPane,
@@ -1742,6 +1759,9 @@ func scanAssignment(scanner rowScanner, includeProject bool) (Assignment, error)
 	}
 	task.CallerPane = callerPane
 	task.Branch = branch
+	if strings.TrimSpace(task.State) == "" {
+		task.State = defaultPersistedTaskState(task.Status, task.PRNumber)
+	}
 	task.CreatedAt = parseTime(taskCreatedAt)
 	task.UpdatedAt = parseTime(taskUpdatedAt)
 	worker.Project = task.Project
@@ -1925,6 +1945,41 @@ func (s *SQLiteStore) ensureHostSchema(ctx context.Context) error {
 		return err
 	}
 	return s.addColumnIfMissing(ctx, "workers", "host", "TEXT NOT NULL DEFAULT ''")
+}
+
+func (s *SQLiteStore) ensureTaskMonitorStateSchema(ctx context.Context) error {
+	if err := s.addColumnIfMissing(ctx, "tasks", "state", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+
+	if _, err := s.db.ExecContext(ctx, `
+		UPDATE tasks
+		SET state = CASE
+			WHEN status IN ('done', 'cancelled', 'failed') THEN 'done'
+			WHEN pr_number IS NOT NULL AND pr_number > 0 THEN 'pr_detected'
+			ELSE 'assigned'
+		END
+		WHERE TRIM(COALESCE(state, '')) = ''
+	`); err != nil {
+		return fmt.Errorf("backfill task state column: %w", err)
+	}
+
+	if _, err := s.db.ExecContext(ctx, `
+		UPDATE tasks
+		SET state = 'escalated'
+		WHERE status NOT IN ('done', 'cancelled', 'failed')
+			AND EXISTS (
+				SELECT 1
+				FROM workers w
+				WHERE w.project = tasks.project
+					AND w.worker_id = tasks.worker_id
+					AND w.state = 'escalated'
+			)
+	`); err != nil {
+		return fmt.Errorf("backfill escalated task states: %w", err)
+	}
+
+	return nil
 }
 
 func (s *SQLiteStore) ensureLegacyWorkerTrackingColumns(ctx context.Context) error {
@@ -2287,6 +2342,17 @@ func (s *SQLiteStore) addColumnIfMissing(ctx context.Context, table, column, def
 
 func formatTime(timestamp time.Time) string {
 	return timestamp.UTC().Format(time.RFC3339Nano)
+}
+
+func defaultPersistedTaskState(status string, prNumber *int) string {
+	switch status {
+	case "done", "cancelled", "failed":
+		return "done"
+	}
+	if prNumber != nil && *prNumber > 0 {
+		return "pr_detected"
+	}
+	return "assigned"
 }
 
 func boolToInt(value bool) int {

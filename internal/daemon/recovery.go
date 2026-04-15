@@ -150,6 +150,7 @@ func (d *Daemon) escalateAssignmentError(ctx context.Context, active ActiveAssig
 	now := d.now()
 	active.Worker.Health = WorkerHealthEscalated
 	active.Worker.LastSeenAt = now
+	active.Task.State = TaskStateEscalated
 	active.Task.UpdatedAt = now
 
 	_ = d.state.PutWorker(ctx, active.Worker)
@@ -200,6 +201,7 @@ func (d *Daemon) failAssignment(ctx context.Context, active ActiveAssignment, ev
 
 	task := active.Task
 	task.Status = TaskStatusFailed
+	task.State = TaskStateDone
 	task.UpdatedAt = now
 
 	clone := Clone{

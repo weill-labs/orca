@@ -144,6 +144,87 @@ func TestSQLiteStoreMigratesPaneKeyedWorkersToStableWorkerIDs(t *testing.T) {
 	}
 }
 
+func TestSQLiteStoreBackfillsEscalatedTaskStateFromWorkerHealth(t *testing.T) {
+	t.Parallel()
+
+	project := "/repo"
+	dbPath := filepath.Join(t.TempDir(), "state.db")
+
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("sql.Open() error = %v", err)
+	}
+
+	now := formatTime(time.Date(2026, 4, 12, 9, 0, 0, 0, time.UTC))
+	statements := []string{
+		`CREATE TABLE tasks (
+			project TEXT NOT NULL,
+			issue TEXT NOT NULL,
+			status TEXT NOT NULL,
+			agent TEXT NOT NULL,
+			prompt TEXT NOT NULL DEFAULT '',
+			worker_id TEXT NOT NULL DEFAULT '',
+			clone_path TEXT NOT NULL DEFAULT '',
+			pr_number INTEGER,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			PRIMARY KEY (project, issue)
+		)`,
+		`CREATE TABLE workers (
+			project TEXT NOT NULL,
+			worker_id TEXT NOT NULL,
+			agent_profile TEXT NOT NULL,
+			current_pane_id TEXT NOT NULL DEFAULT '',
+			state TEXT NOT NULL,
+			issue TEXT NOT NULL DEFAULT '',
+			clone_path TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			last_seen_at TEXT NOT NULL,
+			PRIMARY KEY (project, worker_id)
+		)`,
+	}
+	for _, statement := range statements {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatalf("db.Exec(%q) error = %v", statement, err)
+		}
+	}
+
+	if _, err := db.Exec(`
+		INSERT INTO tasks(project, issue, status, agent, prompt, worker_id, clone_path, pr_number, created_at, updated_at)
+		VALUES(?, 'LAB-895', 'active', 'codex', 'Recover missing pane', 'worker-01', '/tmp/clone-01', 42, ?, ?)
+	`, project, now, now); err != nil {
+		t.Fatalf("insert task error = %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO workers(project, worker_id, agent_profile, current_pane_id, state, issue, clone_path, created_at, last_seen_at)
+		VALUES(?, 'worker-01', 'codex', 'pane-1', 'escalated', 'LAB-895', '/tmp/clone-01', ?, ?)
+	`, project, now, now); err != nil {
+		t.Fatalf("insert worker error = %v", err)
+	}
+
+	if err := db.Close(); err != nil {
+		t.Fatalf("db.Close() error = %v", err)
+	}
+
+	store, err := OpenSQLite(dbPath)
+	if err != nil {
+		t.Fatalf("OpenSQLite() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	})
+
+	taskStatus, err := store.TaskStatus(context.Background(), project, "LAB-895")
+	if err != nil {
+		t.Fatalf("TaskStatus() error = %v", err)
+	}
+	if got, want := taskStatus.Task.State, "escalated"; got != want {
+		t.Fatalf("taskStatus.Task.State = %q, want %q", got, want)
+	}
+}
+
 func TestSQLiteStoreNotFoundAndHelpers(t *testing.T) {
 	t.Parallel()
 
