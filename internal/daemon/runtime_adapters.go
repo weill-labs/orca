@@ -73,22 +73,22 @@ func normalizeCodexStartCommand(command string) string {
 }
 
 type sqliteStateAdapter struct {
-	store *state.SQLiteStore
+	store daemonStateStore
 }
 
 type sqliteDaemonStatusWriter struct {
-	store     *state.SQLiteStore
+	store     daemonStateStore
 	project   string
 	session   string
 	pid       int
 	startedAt time.Time
 }
 
-func newSQLiteStateAdapter(store *state.SQLiteStore) *sqliteStateAdapter {
+func newSQLiteStateAdapter(store daemonStateStore) *sqliteStateAdapter {
 	return &sqliteStateAdapter{store: store}
 }
 
-func newSQLiteDaemonStatusWriter(store *state.SQLiteStore, project, session string, pid int, startedAt time.Time) *sqliteDaemonStatusWriter {
+func newSQLiteDaemonStatusWriter(store daemonStateStore, project, session string, pid int, startedAt time.Time) *sqliteDaemonStatusWriter {
 	return &sqliteDaemonStatusWriter{
 		store:     store,
 		project:   project,
