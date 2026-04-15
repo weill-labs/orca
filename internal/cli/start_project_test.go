@@ -13,6 +13,7 @@ func TestPoolCloneParentProject(t *testing.T) {
 	repoRoot := newRepoRoot(t)
 	poolClone := filepath.Join(repoRoot, ".orca", "pool", "clone-06")
 	nestedPath := filepath.Join(poolClone, "internal", "cli")
+	nonOrcaPoolClone := filepath.Join(t.TempDir(), "other", "pool", "clone-06")
 	if err := os.MkdirAll(filepath.Join(poolClone, ".git"), 0o755); err != nil {
 		t.Fatalf("MkdirAll(%q): %v", filepath.Join(poolClone, ".git"), err)
 	}
@@ -41,6 +42,12 @@ func TestPoolCloneParentProject(t *testing.T) {
 		{
 			name:        "path outside pool clone",
 			projectPath: filepath.Join(repoRoot, "internal", "cli"),
+			wantProject: "",
+			wantOK:      false,
+		},
+		{
+			name:        "pool parent without .orca grandparent",
+			projectPath: nonOrcaPoolClone,
 			wantProject: "",
 			wantOK:      false,
 		},
@@ -102,5 +109,24 @@ func TestAppResolveStartProjectReturnsPoolParentResolutionError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "resolve pool clone parent project") {
 		t.Fatalf("resolveStartProject() error = %v, want pool parent resolution error", err)
+	}
+}
+
+func TestAppResolveStartProjectPropagatesResolveProjectError(t *testing.T) {
+	t.Parallel()
+
+	cwdPath := t.TempDir()
+	app := &App{
+		cwd: func() (string, error) {
+			return cwdPath, nil
+		},
+	}
+
+	_, err := app.resolveStartProject("")
+	if err == nil {
+		t.Fatal("resolveStartProject() error = nil, want resolveProject error")
+	}
+	if !strings.Contains(err.Error(), "not inside a git repository") {
+		t.Fatalf("resolveStartProject() error = %v, want git repository error", err)
 	}
 }
