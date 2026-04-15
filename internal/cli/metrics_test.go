@@ -3,7 +3,9 @@ package cli
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -252,6 +254,61 @@ func TestAppRunMetricsResolvesProjectFlag(t *testing.T) {
 	}
 }
 
+func TestAppRunMetricsErrors(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := newRepoRoot(t)
+	cwdPath := filepath.Join(repoRoot, "internal", "cli")
+	if err := os.MkdirAll(cwdPath, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", cwdPath, err)
+	}
+
+	tests := []struct {
+		name    string
+		state   state.Reader
+		args    []string
+		wantErr string
+	}{
+		{
+			name:    "rejects positional args",
+			state:   &fakeState{},
+			args:    []string{"metrics", "extra"},
+			wantErr: "metrics does not accept positional arguments",
+		},
+		{
+			name:    "rejects non sql state store",
+			state:   &fakeState{},
+			args:    []string{"metrics"},
+			wantErr: "metrics requires a SQL-backed state store",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			app := New(Options{
+				Daemon:  &fakeDaemon{},
+				State:   tt.state,
+				Stdout:  &stdout,
+				Stderr:  &stderr,
+				Version: "build-123",
+				Cwd: func() (string, error) {
+					return cwdPath, nil
+				},
+			})
+
+			err := app.Run(context.Background(), tt.args)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("Run(%v) error = %v, want substring %q", tt.args, err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestIssueLatencyTimelineRecord(t *testing.T) {
 	t.Parallel()
 
@@ -337,6 +394,40 @@ func TestIssueLatencyTimelineRecord(t *testing.T) {
 	}
 }
 
+func TestQueryLatencyMetricsErrors(t *testing.T) {
+	t.Parallel()
+
+	queryErr := errors.New("query failed")
+	_, err := queryLatencyMetrics(
+		context.Background(),
+		metricsQueryerFunc(func(context.Context, string, ...any) (*sql.Rows, error) {
+			return nil, queryErr
+		}),
+		"/repo",
+		"7d",
+		time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, 4, 15, 0, 0, 0, 0, time.UTC),
+	)
+	if err == nil || !strings.Contains(err.Error(), "query latency metrics: query failed") {
+		t.Fatalf("queryLatencyMetrics() error = %v, want wrapped query failure", err)
+	}
+}
+
+func TestWriteLatencyMetricsWriterErrors(t *testing.T) {
+	t.Parallel()
+
+	report := latencyMetricsReport{
+		Project: "/repo",
+		Window:  "7d",
+		Since:   time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC),
+		Metrics: []latencyMetric{{Name: "assign->pr", Count: 1, Min: "1h"}},
+	}
+
+	if err := writeLatencyMetrics(errWriter{}, report); err == nil || !strings.Contains(err.Error(), "write failed") {
+		t.Fatalf("writeLatencyMetrics() error = %v, want write failure", err)
+	}
+}
+
 func newMetricsStore(t *testing.T) *state.SQLiteStore {
 	t.Helper()
 
@@ -358,4 +449,10 @@ func appendMetricsEvent(t *testing.T, store *state.SQLiteStore, event state.Even
 	if _, err := store.AppendEvent(context.Background(), event); err != nil {
 		t.Fatalf("AppendEvent(%s %s) error = %v", event.Issue, event.Kind, err)
 	}
+}
+
+type metricsQueryerFunc func(context.Context, string, ...any) (*sql.Rows, error)
+
+func (fn metricsQueryerFunc) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	return fn(ctx, query, args...)
 }
