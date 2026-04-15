@@ -70,6 +70,7 @@ type Task struct {
 	WorkerID      string    `json:"worker_id,omitempty"`
 	CurrentPaneID string    `json:"current_pane_id,omitempty"`
 	ClonePath     string    `json:"clone_path,omitempty"`
+	Branch        string    `json:"branch,omitempty"`
 	PRNumber      *int      `json:"pr_number,omitempty"`
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`

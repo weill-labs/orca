@@ -358,6 +358,29 @@ func (s *fakeState) ActiveAssignmentByIssue(ctx context.Context, project, issue 
 	return ActiveAssignment{Task: task, Worker: worker}, nil
 }
 
+func (s *fakeState) ActiveAssignmentByBranch(ctx context.Context, project, branch string) (ActiveAssignment, error) {
+	if s.rejectCanceledContext && ctx.Err() != nil {
+		return ActiveAssignment{}, ctx.Err()
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for _, task := range s.tasks {
+		if task.Project != "" && task.Project != project {
+			continue
+		}
+		if task.Status != TaskStatusActive || task.Branch != branch {
+			continue
+		}
+		worker, ok := s.workers[taskWorkerID(task)]
+		if !ok {
+			break
+		}
+		return ActiveAssignment{Task: task, Worker: worker}, nil
+	}
+	return ActiveAssignment{}, ErrTaskNotFound
+}
+
 func (s *fakeState) ActiveAssignmentByPRNumber(ctx context.Context, project string, prNumber int) (ActiveAssignment, error) {
 	if s.rejectCanceledContext && ctx.Err() != nil {
 		return ActiveAssignment{}, ctx.Err()

@@ -125,7 +125,7 @@ func convertStateTask(project string, task state.Task) Task {
 		PaneID:       task.CurrentPaneID,
 		PaneName:     workerPaneName(task.Issue, task.WorkerID),
 		ClonePath:    task.ClonePath,
-		Branch:       task.Issue,
+		Branch:       firstNonEmpty(task.Branch, task.Issue),
 		AgentProfile: task.Agent,
 		CreatedAt:    task.CreatedAt,
 		UpdatedAt:    task.UpdatedAt,
@@ -155,6 +155,7 @@ func (a *sqliteStateAdapter) PutTask(ctx context.Context, task Task) error {
 		WorkerID:      task.WorkerID,
 		CurrentPaneID: task.PaneID,
 		ClonePath:     task.ClonePath,
+		Branch:        task.Branch,
 		PRNumber:      prNumber,
 		CreatedAt:     task.CreatedAt,
 		UpdatedAt:     task.UpdatedAt,
@@ -189,6 +190,7 @@ func (a *sqliteStateAdapter) ClaimTask(ctx context.Context, task Task) (*Task, e
 		WorkerID:      task.WorkerID,
 		CurrentPaneID: task.PaneID,
 		ClonePath:     task.ClonePath,
+		Branch:        task.Branch,
 		PRNumber:      prNumber,
 		CreatedAt:     task.CreatedAt,
 		UpdatedAt:     task.UpdatedAt,
@@ -527,6 +529,17 @@ func (a *sqliteStateAdapter) ActiveAssignmentByIssue(ctx context.Context, projec
 	return convertAssignment(project, assignment), nil
 }
 
+func (a *sqliteStateAdapter) ActiveAssignmentByBranch(ctx context.Context, project, branch string) (ActiveAssignment, error) {
+	assignment, err := a.store.ActiveAssignmentByBranch(ctx, project, branch)
+	if errors.Is(err, state.ErrNotFound) {
+		return ActiveAssignment{}, ErrTaskNotFound
+	}
+	if err != nil {
+		return ActiveAssignment{}, err
+	}
+	return convertAssignment(project, assignment), nil
+}
+
 func (a *sqliteStateAdapter) ActiveAssignmentByPRNumber(ctx context.Context, project string, prNumber int) (ActiveAssignment, error) {
 	assignment, err := a.store.ActiveAssignmentByPRNumber(ctx, project, prNumber)
 	if errors.Is(err, state.ErrNotFound) {
@@ -642,7 +655,7 @@ func convertAssignment(project string, assignment state.Assignment) ActiveAssign
 		PaneID:       assignment.Worker.CurrentPaneID,
 		PaneName:     workerPaneName(assignment.Task.Issue, assignment.Worker.WorkerID),
 		ClonePath:    assignment.Task.ClonePath,
-		Branch:       assignment.Task.Issue,
+		Branch:       firstNonEmpty(assignment.Task.Branch, assignment.Task.Issue),
 		AgentProfile: assignment.Task.Agent,
 		CreatedAt:    assignment.Task.CreatedAt,
 		UpdatedAt:    assignment.Task.UpdatedAt,

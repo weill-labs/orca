@@ -119,6 +119,7 @@ type StateStore interface {
 	ListWorkers(ctx context.Context, project string) ([]Worker, error)
 	ActiveAssignments(ctx context.Context, project string) ([]ActiveAssignment, error)
 	ActiveAssignmentByIssue(ctx context.Context, project, issue string) (ActiveAssignment, error)
+	ActiveAssignmentByBranch(ctx context.Context, project, branch string) (ActiveAssignment, error)
 	ActiveAssignmentByPRNumber(ctx context.Context, project string, prNumber int) (ActiveAssignment, error)
 	EnqueueMerge(ctx context.Context, entry MergeQueueEntry) (int, error)
 	MergeEntry(ctx context.Context, project string, prNumber int) (*MergeQueueEntry, error)
