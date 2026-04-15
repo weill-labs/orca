@@ -467,7 +467,7 @@ func TestWorkerAppearsIdleForReviewNudgeHandlesCaptureEdges(t *testing.T) {
 				Worker: tt.worker,
 			}}
 
-			got := d.workerAppearsIdleForReviewNudge(context.Background(), update, AgentProfile{Name: "codex"}, now)
+			got, _ := d.workerAppearsIdleForReviewNudge(context.Background(), update, AgentProfile{Name: "codex"}, now)
 			if got != tt.wantIdle {
 				t.Fatalf("workerAppearsIdleForReviewNudge() = %t, want %t", got, tt.wantIdle)
 			}

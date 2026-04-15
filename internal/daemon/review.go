@@ -98,14 +98,24 @@ func (d *Daemon) checkExitedPaneCapture(active ActiveAssignment, profile AgentPr
 
 func (d *Daemon) checkTaskReviewPoll(ctx context.Context, active ActiveAssignment, profile AgentProfile) TaskStateUpdate {
 	update := TaskStateUpdate{Active: active}
+	previousReviewState := reviewWorkerState{
+		reviewCount:        active.Worker.LastReviewCount,
+		inlineCommentCount: active.Worker.LastInlineReviewCommentCount,
+		commentCount:       active.Worker.LastIssueCommentCount,
+		reviewNudgeCount:   active.Worker.ReviewNudgeCount,
+	}
+	traceAndReturn := func(current *reviewWorkerState, blockingCount int, idleResult, action string, persisted bool) TaskStateUpdate {
+		d.traceReviewPollDecision(&update, profile, previousReviewState, current, blockingCount, idleResult, action, persisted)
+		return update
+	}
 
 	payload, ok, err := d.lookupPRReviews(ctx, active.Task.Project, active.Task.PRNumber)
 	if err != nil {
 		d.appendGitHubRateLimitEvent(&update, profile, err)
-		return update
+		return traceAndReturn(nil, 0, reviewPollIdleNotChecked, "lookup_reviews_error", false)
 	}
 	if !ok {
-		return update
+		return traceAndReturn(nil, 0, reviewPollIdleNotChecked, "reviews_unavailable", false)
 	}
 	now := d.now()
 	items := reviewItems(payload.Reviews, payload.ReviewComments)
@@ -128,19 +138,23 @@ func (d *Daemon) checkTaskReviewPoll(ctx context.Context, active ActiveAssignmen
 	if previousReviewCount > reviewCount || previousInlineCommentCount > inlineCommentCount || previousCommentCount > commentCount {
 		d.persistReviewWorkerState(&update.Active.Worker, nextReviewState, now)
 		update.WorkerChanged = true
-		return update
+		return traceAndReturn(&nextReviewState, 0, reviewPollIdleNotChecked, "persist_review_watermark_reset", true)
 	}
 	if previousReviewCount == reviewCount && previousInlineCommentCount == inlineCommentCount && previousCommentCount == commentCount {
+		action := "no_new_review_feedback"
+		persisted := false
 		if nextReviewState.reviewNudgeCount != update.Active.Worker.ReviewNudgeCount {
 			d.persistReviewWorkerState(&update.Active.Worker, nextReviewState, now)
 			update.WorkerChanged = true
+			action = "persist_review_nudge_reset"
+			persisted = true
 		}
-		return update
+		return traceAndReturn(&nextReviewState, 0, reviewPollIdleNotChecked, action, persisted)
 	}
 	if payload.ReviewDecision == "APPROVED" || latestReviewContainsLGTM(payload.Reviews) {
 		d.persistReviewWorkerState(&update.Active.Worker, nextReviewState, now)
 		update.WorkerChanged = true
-		return update
+		return traceAndReturn(&nextReviewState, 0, reviewPollIdleNotChecked, "persist_approved_review_feedback", true)
 	}
 
 	newReviews := reviewItems(payload.Reviews[previousReviewCount:], payload.ReviewComments[previousInlineCommentCount:])
@@ -149,7 +163,7 @@ func (d *Daemon) checkTaskReviewPoll(ctx context.Context, active ActiveAssignmen
 	if len(blocking) == 0 {
 		d.persistReviewWorkerState(&update.Active.Worker, nextReviewState, now)
 		update.WorkerChanged = true
-		return update
+		return traceAndReturn(&nextReviewState, 0, reviewPollIdleNotChecked, "persist_non_blocking_feedback", true)
 	}
 	if nextReviewState.reviewNudgeCount >= maxReviewNudges {
 		d.persistReviewWorkerState(&update.Active.Worker, nextReviewState, now)
@@ -159,13 +173,14 @@ func (d *Daemon) checkTaskReviewPoll(ctx context.Context, active ActiveAssignmen
 		event := d.assignmentEvent(update.Active, profile, EventWorkerReviewEscalated, fmt.Sprintf("review nudges exhausted after %d attempts; lead intervention required", nextReviewState.reviewNudgeCount))
 		event.Retry = nextReviewState.reviewNudgeCount
 		update.Events = append(update.Events, event)
-		return update
+		return traceAndReturn(&nextReviewState, len(blocking), reviewPollIdleNotChecked, "escalate_review_feedback", true)
 	}
 
 	feedback := formatBlockingReviewFeedback(update.Active.Task.PRNumber, blocking)
 	// A fresh capture can update LastCapture/LastActivityAt before we decide whether to defer.
-	if !d.workerAppearsIdleForReviewNudge(ctx, &update, profile, now) {
-		return update
+	idle, idleResult := d.workerAppearsIdleForReviewNudge(ctx, &update, profile, now)
+	if !idle {
+		return traceAndReturn(&nextReviewState, len(blocking), idleResult, "defer_review_nudge", false)
 	}
 	nudgedReviewState := nextReviewState
 	nudgedReviewState.reviewNudgeCount++
@@ -181,7 +196,7 @@ func (d *Daemon) checkTaskReviewPoll(ctx context.Context, active ActiveAssignmen
 		update.WorkerChanged = true
 		update.Events = append(update.Events, d.assignmentEvent(update.Active, profile, EventWorkerNudgedReview, fmt.Sprintf("sent %d new blocking review(s) to worker", len(blocking))))
 	})
-	return update
+	return traceAndReturn(&nextReviewState, len(blocking), idleResult, "queue_review_nudge", false)
 }
 
 func (d *Daemon) persistReviewWorkerState(worker *Worker, state reviewWorkerState, now time.Time) {
@@ -192,26 +207,82 @@ func (d *Daemon) persistReviewWorkerState(worker *Worker, state reviewWorkerStat
 	worker.LastSeenAt = now
 }
 
-func (d *Daemon) workerAppearsIdleForReviewNudge(ctx context.Context, update *TaskStateUpdate, profile AgentProfile, now time.Time) bool {
+const (
+	reviewPollIdleNotChecked   = "not_checked"
+	reviewPollIdle             = "idle"
+	reviewPollIdleRecentOutput = "recent_output"
+	reviewPollIdleFreshOutput  = "fresh_output"
+	reviewPollIdlePaneMissing  = "pane_missing"
+	reviewPollIdleCaptureError = "capture_error"
+	reviewPollIdlePaneExited   = "pane_exited"
+)
+
+func (d *Daemon) workerAppearsIdleForReviewNudge(ctx context.Context, update *TaskStateUpdate, profile AgentProfile, now time.Time) (bool, string) {
 	if d.workerHadRecentOutput(update.Active.Worker, now) {
-		return false
+		return false, reviewPollIdleRecentOutput
 	}
 
 	snapshot, err := d.amuxClient(ctx).CapturePane(ctx, update.Active.Task.PaneID)
 	if err != nil {
 		if isPaneGoneError(err) {
 			d.escalateTaskState(update, profile, "worker pane missing during review poll", now)
-			return false
+			return false, reviewPollIdlePaneMissing
 		}
-		return true
+		return true, reviewPollIdleCaptureError
 	}
 	if snapshot.Exited {
-		return false
+		return false, reviewPollIdlePaneExited
 	}
 	if d.recordWorkerOutput(update, profile, snapshot.Output(), now) {
-		return false
+		return false, reviewPollIdleFreshOutput
 	}
-	return true
+	return true, reviewPollIdle
+}
+
+func (d *Daemon) traceReviewPollDecision(update *TaskStateUpdate, profile AgentProfile, previous reviewWorkerState, current *reviewWorkerState, blockingCount int, idleResult, action string, persisted bool) {
+	if update == nil {
+		return
+	}
+
+	message := fmt.Sprintf(
+		"review poll trace: issue=%s pr_number=%d prev=%s curr=%s blocking_count=%d idle_result=%s action=%s persisted=%t",
+		strings.TrimSpace(update.Active.Task.Issue),
+		update.Active.Task.PRNumber,
+		formatReviewPollWatermarks(previous),
+		formatOptionalReviewPollWatermarks(current),
+		blockingCount,
+		formatReviewPollIdleResult(idleResult),
+		strings.TrimSpace(action),
+		persisted,
+	)
+	if d.logf != nil {
+		d.logf("%s", message)
+	}
+	update.Events = append(update.Events, d.assignmentEvent(update.Active, profile, EventReviewPollTrace, message))
+}
+
+func formatReviewPollWatermarks(state reviewWorkerState) string {
+	return fmt.Sprintf(
+		"reviews:%d/inline:%d/comments:%d",
+		state.reviewCount,
+		state.inlineCommentCount,
+		state.commentCount,
+	)
+}
+
+func formatOptionalReviewPollWatermarks(state *reviewWorkerState) string {
+	if state == nil {
+		return "unavailable"
+	}
+	return formatReviewPollWatermarks(*state)
+}
+
+func formatReviewPollIdleResult(result string) string {
+	result = strings.TrimSpace(result)
+	if result == "" {
+		return reviewPollIdleNotChecked
+	}
+	return result
 }
 
 func (d *Daemon) workerHadRecentOutput(worker Worker, now time.Time) bool {
