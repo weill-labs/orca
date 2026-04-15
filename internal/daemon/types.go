@@ -92,6 +92,10 @@ type Options struct {
 	NewWatchdogTicker    func(time.Duration) Ticker
 	DaemonStatusWriter   daemonStatusWriter
 	Logf                 func(string, ...any)
+	RelayURL             string
+	RelayToken           string
+	Hostname             string
+	DetectOrigin         func(projectDir string) (string, error)
 }
 
 type ConfigProvider interface {
