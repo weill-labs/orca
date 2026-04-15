@@ -119,7 +119,7 @@ func TestPRReviewPollingSkipsNudgesForApprovalOrLGTM(t *testing.T) {
 				if !ok {
 					t.Fatal("missing review approved event")
 				}
-				if got, want := event.Message, "review approved"; got != want {
+				if got, want := event.Message, "pull request approved"; got != want {
 					t.Fatalf("review approved event message = %q, want %q", got, want)
 				}
 
@@ -127,7 +127,7 @@ func TestPRReviewPollingSkipsNudgesForApprovalOrLGTM(t *testing.T) {
 				if !ok {
 					t.Fatal("missing review approved event in state store")
 				}
-				if got, want := event.Message, "review approved"; got != want {
+				if got, want := event.Message, "pull request approved"; got != want {
 					t.Fatalf("state review approved event message = %q, want %q", got, want)
 				}
 			}
