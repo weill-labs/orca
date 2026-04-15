@@ -875,12 +875,122 @@ func TestAppRunAssignDefaultsCallerPaneFromAMUXPaneEnv(t *testing.T) {
 func TestHelpTextOmitsDeprecatedLeadPaneFromStartUsage(t *testing.T) {
 	t.Parallel()
 
-	usage, ok := HelpText([]string{"start", "--help"})
+	usage, ok := HelpText([]string{"help", "start"})
 	if !ok {
-		t.Fatal("HelpText(start --help) = not handled, want handled")
+		t.Fatal("HelpText(help start) = not handled, want handled")
 	}
 	if strings.Contains(usage, "--lead-pane") {
 		t.Fatalf("start help unexpectedly mentions deprecated --lead-pane: %q", usage)
+	}
+}
+
+func TestAppRunHelpTopicsForAllSubcommands(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		command   string
+		wantUsage string
+	}{
+		{command: "start", wantUsage: "usage: orca start"},
+		{command: "stop", wantUsage: "usage: orca stop"},
+		{command: "reload", wantUsage: "usage: orca reload"},
+		{command: "status", wantUsage: "usage: orca status"},
+		{command: "assign", wantUsage: "usage: orca assign ISSUE"},
+		{command: "batch", wantUsage: "usage: orca batch MANIFEST"},
+		{command: "spawn", wantUsage: "usage: orca spawn"},
+		{command: "enqueue", wantUsage: "usage: orca enqueue PR_NUMBER"},
+		{command: "cancel", wantUsage: "usage: orca cancel ISSUE"},
+		{command: "resume", wantUsage: "usage: orca resume ISSUE"},
+		{command: "workers", wantUsage: "usage: orca workers"},
+		{command: "pool", wantUsage: "usage: orca pool"},
+		{command: "events", wantUsage: "usage: orca events"},
+		{command: "help", wantUsage: "usage: orca help [COMMAND]"},
+		{command: "version", wantUsage: "usage: orca version"},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.command, func(t *testing.T) {
+			t.Parallel()
+
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			app := New(Options{
+				Daemon:  &fakeDaemon{},
+				State:   &fakeState{},
+				Stdout:  &stdout,
+				Stderr:  &stderr,
+				Version: "build-123",
+				Cwd: func() (string, error) {
+					return newRepoRoot(t), nil
+				},
+			})
+
+			if err := app.Run(context.Background(), []string{"help", tt.command}); err != nil {
+				t.Fatalf("Run(help %s) error = %v", tt.command, err)
+			}
+			if !strings.Contains(stdout.String(), tt.wantUsage) {
+				t.Fatalf("stdout = %q, want substring %q", stdout.String(), tt.wantUsage)
+			}
+			if stderr.Len() != 0 {
+				t.Fatalf("stderr = %q, want empty", stderr.String())
+			}
+		})
+	}
+}
+
+func TestAppRunHelpFlagsForAllSubcommands(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		command   string
+		wantUsage string
+	}{
+		{command: "start", wantUsage: "usage: orca start"},
+		{command: "stop", wantUsage: "usage: orca stop"},
+		{command: "reload", wantUsage: "usage: orca reload"},
+		{command: "status", wantUsage: "usage: orca status"},
+		{command: "assign", wantUsage: "usage: orca assign ISSUE"},
+		{command: "batch", wantUsage: "usage: orca batch MANIFEST"},
+		{command: "spawn", wantUsage: "usage: orca spawn"},
+		{command: "enqueue", wantUsage: "usage: orca enqueue PR_NUMBER"},
+		{command: "cancel", wantUsage: "usage: orca cancel ISSUE"},
+		{command: "resume", wantUsage: "usage: orca resume ISSUE"},
+		{command: "workers", wantUsage: "usage: orca workers"},
+		{command: "pool", wantUsage: "usage: orca pool"},
+		{command: "events", wantUsage: "usage: orca events"},
+		{command: "help", wantUsage: "usage: orca help [COMMAND]"},
+		{command: "version", wantUsage: "usage: orca version"},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.command, func(t *testing.T) {
+			t.Parallel()
+
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			app := New(Options{
+				Daemon:  &fakeDaemon{},
+				State:   &fakeState{},
+				Stdout:  &stdout,
+				Stderr:  &stderr,
+				Version: "build-123",
+				Cwd: func() (string, error) {
+					return newRepoRoot(t), nil
+				},
+			})
+
+			if err := app.Run(context.Background(), []string{tt.command, "--help"}); err != nil {
+				t.Fatalf("Run(%s --help) error = %v", tt.command, err)
+			}
+			if !strings.Contains(stdout.String(), tt.wantUsage) {
+				t.Fatalf("stdout = %q, want substring %q", stdout.String(), tt.wantUsage)
+			}
+			if stderr.Len() != 0 {
+				t.Fatalf("stderr = %q, want empty", stderr.String())
+			}
+		})
 	}
 }
 
