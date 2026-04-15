@@ -681,6 +681,5 @@ func (d *Daemon) checkTaskImmediateMergePoll(ctx context.Context, active ActiveA
 	if merged {
 		markTaskPRMerged(&update, d.now())
 	}
-	update.PRMerged = merged
 	return update
 }

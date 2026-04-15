@@ -115,6 +115,7 @@ func TestDaemonCaptureTickEscalatesMissingPaneForThatTaskOnly(t *testing.T) {
 	})
 
 	d.runCaptureTick(context.Background())
+	d.runCaptureTick(context.Background())
 
 	taskOne, ok := deps.state.task("LAB-1254")
 	if !ok {
@@ -150,6 +151,29 @@ func TestDaemonCaptureTickEscalatesMissingPaneForThatTaskOnly(t *testing.T) {
 
 	if got, want := deps.events.countType(EventWorkerEscalated), 1; got != want {
 		t.Fatalf("worker escalation event count = %d, want %d", got, want)
+	}
+}
+
+func TestTaskStateForAssignmentPreservesMergedState(t *testing.T) {
+	t.Parallel()
+
+	active := ActiveAssignment{
+		Task: Task{
+			Issue:    "LAB-1258",
+			State:    TaskStateMerged,
+			Status:   TaskStatusActive,
+			PRNumber: 42,
+		},
+		Worker: Worker{
+			WorkerID:     "worker-01",
+			Health:       WorkerHealthHealthy,
+			LastCIState:  ciStatePass,
+			LastPRNumber: 42,
+		},
+	}
+
+	if got, want := taskStateForAssignment(active), TaskStateMerged; got != want {
+		t.Fatalf("taskStateForAssignment(...) = %q, want %q", got, want)
 	}
 }
 

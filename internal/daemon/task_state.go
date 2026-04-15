@@ -42,6 +42,9 @@ func taskStateForAssignment(active ActiveAssignment) string {
 	if active.Task.Status == TaskStatusDone || active.Task.Status == TaskStatusCancelled || active.Task.Status == TaskStatusFailed {
 		return TaskStateDone
 	}
+	if active.Task.State == TaskStateMerged {
+		return TaskStateMerged
+	}
 	if active.Task.PRNumber == 0 {
 		return TaskStateAssigned
 	}
@@ -103,16 +106,21 @@ func (d *Daemon) escalateTaskState(update *TaskStateUpdate, profile AgentProfile
 		return
 	}
 
+	workerChanged := false
 	if update.Active.Worker.Health != WorkerHealthEscalated {
 		update.Active.Worker.Health = WorkerHealthEscalated
 		update.Active.Worker.LastSeenAt = now
 		update.WorkerChanged = true
+		workerChanged = true
 	}
-	if setTaskState(&update.Active.Task, TaskStateEscalated, now) {
+	taskChanged := setTaskState(&update.Active.Task, TaskStateEscalated, now)
+	if taskChanged {
 		update.TaskChanged = true
 	}
 
-	event := d.assignmentEvent(update.Active, profile, EventWorkerEscalated, reason)
-	event.Retry = update.Active.Worker.NudgeCount
-	update.Events = append(update.Events, event)
+	if workerChanged || taskChanged {
+		event := d.assignmentEvent(update.Active, profile, EventWorkerEscalated, reason)
+		event.Retry = update.Active.Worker.NudgeCount
+		update.Events = append(update.Events, event)
+	}
 }
