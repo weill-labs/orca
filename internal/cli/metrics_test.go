@@ -62,12 +62,12 @@ func TestQueryLatencyMetricsAndWriteOutput(t *testing.T) {
 
 	appendMetricsEvent(t, store, state.Event{Project: projectPath, Kind: daemon.EventTaskAssigned, Issue: "LAB-1282-A", Message: "assigned", CreatedAt: time.Date(2026, 4, 9, 10, 0, 0, 0, time.UTC)})
 	appendMetricsEvent(t, store, state.Event{Project: projectPath, Kind: daemon.EventPRDetected, Issue: "LAB-1282-A", Message: "pr detected", CreatedAt: time.Date(2026, 4, 9, 13, 30, 0, 0, time.UTC)})
-	appendMetricsEvent(t, store, state.Event{Project: projectPath, Kind: reviewApprovedEventKind, Issue: "LAB-1282-A", Message: "approved", CreatedAt: time.Date(2026, 4, 9, 14, 30, 0, 0, time.UTC)})
+	appendMetricsEvent(t, store, state.Event{Project: projectPath, Kind: daemon.EventReviewApproved, Issue: "LAB-1282-A", Message: "approved", CreatedAt: time.Date(2026, 4, 9, 14, 30, 0, 0, time.UTC)})
 	appendMetricsEvent(t, store, state.Event{Project: projectPath, Kind: daemon.EventPRMerged, Issue: "LAB-1282-A", Message: "merged", CreatedAt: time.Date(2026, 4, 9, 16, 0, 0, 0, time.UTC)})
 
 	appendMetricsEvent(t, store, state.Event{Project: projectPath, Kind: daemon.EventTaskAssigned, Issue: "LAB-1282-B", Message: "assigned", CreatedAt: time.Date(2026, 4, 10, 10, 0, 0, 0, time.UTC)})
 	appendMetricsEvent(t, store, state.Event{Project: projectPath, Kind: daemon.EventPRDetected, Issue: "LAB-1282-B", Message: "pr detected", CreatedAt: time.Date(2026, 4, 10, 12, 0, 0, 0, time.UTC)})
-	appendMetricsEvent(t, store, state.Event{Project: projectPath, Kind: reviewApprovedEventKind, Issue: "LAB-1282-B", Message: "approved", CreatedAt: time.Date(2026, 4, 10, 15, 0, 0, 0, time.UTC)})
+	appendMetricsEvent(t, store, state.Event{Project: projectPath, Kind: daemon.EventReviewApproved, Issue: "LAB-1282-B", Message: "approved", CreatedAt: time.Date(2026, 4, 10, 15, 0, 0, 0, time.UTC)})
 	appendMetricsEvent(t, store, state.Event{Project: projectPath, Kind: daemon.EventPRMerged, Issue: "LAB-1282-B", Message: "merged", CreatedAt: time.Date(2026, 4, 11, 10, 0, 0, 0, time.UTC)})
 
 	appendMetricsEvent(t, store, state.Event{Project: projectPath, Kind: daemon.EventTaskAssigned, Issue: "LAB-1282-C", Message: "assigned", CreatedAt: time.Date(2026, 4, 12, 9, 0, 0, 0, time.UTC)})
@@ -221,6 +221,91 @@ func TestAppRunMetricsResolvesProjectFlag(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "\"project\":\""+targetRepo+"\"") {
 		t.Fatalf("stdout = %q, want project %q", stdout.String(), targetRepo)
+	}
+}
+
+func TestIssueLatencyTimelineRecord(t *testing.T) {
+	t.Parallel()
+
+	base := time.Date(2026, 4, 15, 12, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name   string
+		events []struct {
+			kind      string
+			createdAt time.Time
+		}
+		want issueLatencyTimeline
+	}{
+		{
+			name: "keeps first assignment and first valid downstream events",
+			events: []struct {
+				kind      string
+				createdAt time.Time
+			}{
+				{kind: daemon.EventTaskAssigned, createdAt: base},
+				{kind: daemon.EventTaskAssigned, createdAt: base.Add(time.Minute)},
+				{kind: daemon.EventPRDetected, createdAt: base.Add(2 * time.Hour)},
+				{kind: daemon.EventPRDetected, createdAt: base.Add(3 * time.Hour)},
+				{kind: daemon.EventReviewApproved, createdAt: base.Add(4 * time.Hour)},
+				{kind: daemon.EventPRMerged, createdAt: base.Add(5 * time.Hour)},
+			},
+			want: issueLatencyTimeline{
+				assignedAt:       base,
+				prDetectedAt:     base.Add(2 * time.Hour),
+				reviewApprovedAt: base.Add(4 * time.Hour),
+				prMergedAt:       base.Add(5 * time.Hour),
+			},
+		},
+		{
+			name: "replaces out of order pr detection once assignment is known",
+			events: []struct {
+				kind      string
+				createdAt time.Time
+			}{
+				{kind: daemon.EventPRDetected, createdAt: base.Add(-time.Hour)},
+				{kind: daemon.EventTaskAssigned, createdAt: base},
+				{kind: daemon.EventPRDetected, createdAt: base.Add(2 * time.Hour)},
+			},
+			want: issueLatencyTimeline{
+				assignedAt:   base,
+				prDetectedAt: base.Add(2 * time.Hour),
+			},
+		},
+		{
+			name: "ignores approval and merge before pr detection",
+			events: []struct {
+				kind      string
+				createdAt time.Time
+			}{
+				{kind: daemon.EventTaskAssigned, createdAt: base},
+				{kind: daemon.EventReviewApproved, createdAt: base.Add(time.Hour)},
+				{kind: daemon.EventPRMerged, createdAt: base.Add(2 * time.Hour)},
+				{kind: daemon.EventPRDetected, createdAt: base.Add(3 * time.Hour)},
+				{kind: daemon.EventReviewApproved, createdAt: base.Add(4 * time.Hour)},
+			},
+			want: issueLatencyTimeline{
+				assignedAt:       base,
+				prDetectedAt:     base.Add(3 * time.Hour),
+				reviewApprovedAt: base.Add(4 * time.Hour),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var timeline issueLatencyTimeline
+			for _, event := range tt.events {
+				timeline.record(event.kind, event.createdAt)
+			}
+
+			if got, want := timeline, tt.want; got != want {
+				t.Fatalf("timeline = %#v, want %#v", got, want)
+			}
+		})
 	}
 }
 

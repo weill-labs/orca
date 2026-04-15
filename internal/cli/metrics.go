@@ -17,12 +17,11 @@ import (
 
 const (
 	defaultMetricsSinceValue = "7d"
-	reviewApprovedEventKind  = "review.approved"
 )
 
 var latencyMetricDefinitions = []latencyMetricDefinition{
 	{name: "assign->pr", startKind: daemon.EventTaskAssigned, endKind: daemon.EventPRDetected},
-	{name: "pr->approved", startKind: daemon.EventPRDetected, endKind: reviewApprovedEventKind},
+	{name: "pr->approved", startKind: daemon.EventPRDetected, endKind: daemon.EventReviewApproved},
 	{name: "pr->merged", startKind: daemon.EventPRDetected, endKind: daemon.EventPRMerged},
 	{name: "assign->merged", startKind: daemon.EventTaskAssigned, endKind: daemon.EventPRMerged},
 }
@@ -116,7 +115,7 @@ WHERE project = ?
   AND kind IN (?, ?, ?, ?)
   AND created_at >= ?
 ORDER BY issue ASC, created_at ASC, id ASC
-`, projectPath, daemon.EventTaskAssigned, daemon.EventPRDetected, reviewApprovedEventKind, daemon.EventPRMerged, since.UTC().Format(time.RFC3339Nano))
+`, projectPath, daemon.EventTaskAssigned, daemon.EventPRDetected, daemon.EventReviewApproved, daemon.EventPRMerged, since.UTC().Format(time.RFC3339Nano))
 	if err != nil {
 		return latencyMetricsReport{}, fmt.Errorf("query latency metrics: %w", err)
 	}
@@ -179,7 +178,7 @@ func (timeline *issueLatencyTimeline) record(kind string, createdAt time.Time) {
 		if !timeline.assignedAt.IsZero() && timeline.prDetectedAt.Before(timeline.assignedAt) && !createdAt.Before(timeline.assignedAt) {
 			timeline.prDetectedAt = createdAt
 		}
-	case reviewApprovedEventKind:
+	case daemon.EventReviewApproved:
 		if timeline.prDetectedAt.IsZero() || createdAt.Before(timeline.prDetectedAt) {
 			return
 		}
@@ -215,7 +214,7 @@ func (timeline issueLatencyTimeline) eventTime(kind string) time.Time {
 		return timeline.assignedAt
 	case daemon.EventPRDetected:
 		return timeline.prDetectedAt
-	case reviewApprovedEventKind:
+	case daemon.EventReviewApproved:
 		return timeline.reviewApprovedAt
 	case daemon.EventPRMerged:
 		return timeline.prMergedAt

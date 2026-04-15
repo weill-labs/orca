@@ -260,6 +260,69 @@ func TestPRReviewPollingAdvancesCountWithoutNudgingForNonBlockingReviews(t *test
 	}
 }
 
+func TestPRReviewPollingEmitsApprovedEventOncePerApprovalTransition(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	captureTicker := newFakeTicker()
+	prTicker := newFakeTicker()
+	deps.tickers.enqueue(captureTicker, prTicker)
+	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--state", "open", "--json", "number"}, `[]`, nil)
+	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
+	queuePRReviewPayload(deps, 42, marshalReviewPayload(t, "APPROVED", []prReview{
+		testReview("alice", "APPROVED", "Looks good."),
+	}, nil))
+	queuePRReviewPayload(deps, 42, marshalReviewPayload(t, "APPROVED", []prReview{
+		testReview("alice", "APPROVED", "Looks good."),
+	}, nil))
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-689", "Implement daemon core", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	tickAndWaitForHeartbeat(t, d, deps, prTicker, adaptivePRFastPollInterval, "approval review poll cycle completion")
+	waitFor(t, "approval event emitted", func() bool {
+		worker, ok := deps.state.worker("pane-1")
+		return ok &&
+			worker.LastReviewCount == 1 &&
+			deps.events.countType(EventReviewApproved) == 1 &&
+			stateEventCountByType(deps.state, EventReviewApproved) == 1
+	})
+
+	event, ok := deps.events.lastEventOfType(EventReviewApproved)
+	if !ok {
+		t.Fatal("missing approved review event")
+	}
+	if got, want := event.Message, "pull request approved"; got != want {
+		t.Fatalf("approved event message = %q, want %q", got, want)
+	}
+
+	tickAndWaitForHeartbeat(t, d, deps, prTicker, adaptivePRFastPollInterval, "repeat approval review poll cycle completion")
+	waitFor(t, "repeat approval poll processed", func() bool {
+		return deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}) == 2
+	})
+
+	if got, want := deps.events.countType(EventReviewApproved), 1; got != want {
+		t.Fatalf("approved review event count = %d, want %d", got, want)
+	}
+	if got, want := stateEventCountByType(deps.state, EventReviewApproved), 1; got != want {
+		t.Fatalf("approved review state event count = %d, want %d", got, want)
+	}
+	if got, want := deps.events.countType(EventWorkerNudgedReview), 0; got != want {
+		t.Fatalf("review nudge event count = %d, want %d", got, want)
+	}
+	deps.amux.requireSentKeys(t, "pane-1", []string{wrappedCodexPrompt("Implement daemon core") + "\n"})
+}
+
 func TestPRReviewPollingIgnoresEmptyReviewPayload(t *testing.T) {
 	t.Parallel()
 

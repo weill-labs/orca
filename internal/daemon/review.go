@@ -161,6 +161,7 @@ func (d *Daemon) checkTaskReviewPoll(ctx context.Context, active ActiveAssignmen
 	if payload.ReviewDecision == "APPROVED" || latestReviewContainsLGTM(payload.Reviews) {
 		d.persistReviewWorkerState(&update.Active.Worker, nextReviewState, now)
 		update.WorkerChanged = true
+		update.Events = append(update.Events, d.assignmentEvent(update.Active, profile, EventReviewApproved, "pull request approved"))
 		return traceAndReturn(&nextReviewState, 0, reviewPollIdleNotChecked, "persist_approved_review_feedback", true)
 	}
 
