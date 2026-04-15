@@ -100,6 +100,7 @@ func testStoreLifecycleAndQueries(t *testing.T, h storeContractHarness) {
 	if err := h.store.UpsertTask(context.Background(), project, Task{
 		Issue:     "LAB-718",
 		Status:    "active",
+		State:     "assigned",
 		Agent:     "codex",
 		Prompt:    "Implement socket IPC",
 		WorkerID:  "worker-01",
@@ -164,6 +165,9 @@ func testStoreLifecycleAndQueries(t *testing.T, h storeContractHarness) {
 	}
 	if got, want := taskStatus.Task.Issue, "LAB-718"; got != want {
 		t.Fatalf("taskStatus.Task.Issue = %q, want %q", got, want)
+	}
+	if got, want := taskStatus.Task.State, "assigned"; got != want {
+		t.Fatalf("taskStatus.Task.State = %q, want %q", got, want)
 	}
 	if taskStatus.Task.PRNumber == nil || *taskStatus.Task.PRNumber != 17 {
 		t.Fatalf("taskStatus.Task.PRNumber = %#v, want 17", taskStatus.Task.PRNumber)
@@ -613,9 +617,9 @@ func testStoreWorkerByPaneAndNonTerminalTasks(t *testing.T, h storeContractHarne
 	prNumber := 42
 
 	for _, task := range []Task{
-		{Issue: "LAB-740", Status: "starting", Agent: "codex", Prompt: "Recover startup", WorkerID: "worker-01", ClonePath: "/clones/clone-01", CreatedAt: now, UpdatedAt: now},
-		{Issue: "LAB-741", Status: "active", Agent: "codex", Prompt: "Keep running", WorkerID: "worker-02", ClonePath: "/clones/clone-02", PRNumber: &prNumber, CreatedAt: now, UpdatedAt: now.Add(time.Minute)},
-		{Issue: "LAB-742", Status: "done", Agent: "codex", Prompt: "Finished", WorkerID: "worker-03", ClonePath: "/clones/clone-03", CreatedAt: now, UpdatedAt: now.Add(2 * time.Minute)},
+		{Issue: "LAB-740", Status: "starting", State: "assigned", Agent: "codex", Prompt: "Recover startup", WorkerID: "worker-01", ClonePath: "/clones/clone-01", CreatedAt: now, UpdatedAt: now},
+		{Issue: "LAB-741", Status: "active", State: "review_pending", Agent: "codex", Prompt: "Keep running", WorkerID: "worker-02", ClonePath: "/clones/clone-02", PRNumber: &prNumber, CreatedAt: now, UpdatedAt: now.Add(time.Minute)},
+		{Issue: "LAB-742", Status: "done", State: "done", Agent: "codex", Prompt: "Finished", WorkerID: "worker-03", ClonePath: "/clones/clone-03", CreatedAt: now, UpdatedAt: now.Add(2 * time.Minute)},
 	} {
 		if err := h.store.UpsertTask(context.Background(), project, task); err != nil {
 			t.Fatalf("UpsertTask(%s) error = %v", task.Issue, err)
@@ -642,11 +646,17 @@ func testStoreWorkerByPaneAndNonTerminalTasks(t *testing.T, h storeContractHarne
 	if got, want := tasks[0].Issue, "LAB-741"; got != want {
 		t.Fatalf("tasks[0].Issue = %q, want %q", got, want)
 	}
+	if got, want := tasks[0].State, "review_pending"; got != want {
+		t.Fatalf("tasks[0].State = %q, want %q", got, want)
+	}
 	if tasks[0].PRNumber == nil || *tasks[0].PRNumber != 42 {
 		t.Fatalf("tasks[0].PRNumber = %#v, want 42", tasks[0].PRNumber)
 	}
 	if got, want := tasks[1].Issue, "LAB-740"; got != want {
 		t.Fatalf("tasks[1].Issue = %q, want %q", got, want)
+	}
+	if got, want := tasks[1].State, "assigned"; got != want {
+		t.Fatalf("tasks[1].State = %q, want %q", got, want)
 	}
 
 	paneTasks, err := h.store.TasksByPane(context.Background(), project, "pane-2")
@@ -658,6 +668,9 @@ func testStoreWorkerByPaneAndNonTerminalTasks(t *testing.T, h storeContractHarne
 	}
 	if got, want := paneTasks[0].Issue, "LAB-741"; got != want {
 		t.Fatalf("paneTasks[0].Issue = %q, want %q", got, want)
+	}
+	if got, want := paneTasks[0].State, "review_pending"; got != want {
+		t.Fatalf("paneTasks[0].State = %q, want %q", got, want)
 	}
 	if paneTasks[0].PRNumber == nil || *paneTasks[0].PRNumber != 42 {
 		t.Fatalf("paneTasks[0].PRNumber = %#v, want 42", paneTasks[0].PRNumber)

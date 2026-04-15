@@ -314,6 +314,7 @@ func seedTaskMonitorAssignment(t *testing.T, deps *testDeps, issue, paneID strin
 		Project:      "/tmp/project",
 		Issue:        issue,
 		Status:       TaskStatusActive,
+		State:        initialTaskState(prNumber),
 		Prompt:       "Monitor active task",
 		PaneID:       paneID,
 		PaneName:     paneID,

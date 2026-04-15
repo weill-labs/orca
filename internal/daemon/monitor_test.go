@@ -205,7 +205,7 @@ func TestShouldPollAssignmentImmediatelyWhenPRNumberChanges(t *testing.T) {
 	}
 }
 
-func TestDaemonCaptureMonitorOpensAmuxCircuitAfterThreeFailures(t *testing.T) {
+func TestDaemonCaptureMonitorKeepsPollingAfterAmuxFailures(t *testing.T) {
 	t.Parallel()
 
 	deps := newTestDeps(t)
@@ -224,34 +224,21 @@ func TestDaemonCaptureMonitorOpensAmuxCircuitAfterThreeFailures(t *testing.T) {
 			t.Fatalf("capture count after failure %d = %d, want %d", i+1, got, want)
 		}
 	}
-	if err := d.monitorAmuxCircuit.Allow(); !errors.Is(err, ErrCircuitBreakerOpen) {
-		t.Fatalf("amux circuit Allow() error = %v, want %v", err, ErrCircuitBreakerOpen)
-	}
-	if got, want := deps.events.countType(EventDaemonCircuitOpened), 1; got != want {
-		t.Fatalf("circuit opened event count = %d, want %d", got, want)
-	}
-	if got, want := deps.events.lastMessage(EventDaemonCircuitOpened), "monitor amux circuit opened after 3 consecutive failures: amux capture pane-1: exit status 1: connection refused"; got != want {
-		t.Fatalf("opened event message = %q, want %q", got, want)
-	}
 
 	d.runCaptureTick(ctx)
-	if got, want := deps.amux.captureCount("pane-1"), 3; got != want {
-		t.Fatalf("capture count with open circuit = %d, want %d", got, want)
+	if got, want := deps.amux.captureCount("pane-1"), 4; got != want {
+		t.Fatalf("capture count after fourth failure = %d, want %d", got, want)
+	}
+	if got, want := deps.events.countType(EventDaemonCircuitOpened), 0; got != want {
+		t.Fatalf("amux circuit events = %d, want %d", got, want)
 	}
 
-	deps.clock.Advance(60 * time.Second)
 	deps.amux.capturePaneErr = nil
 	deps.amux.capturePaneSequence("pane-1", []PaneCapture{paneCaptureFromOutput("worker output")})
 
 	d.runCaptureTick(ctx)
-	if got, want := deps.amux.captureCount("pane-1"), 4; got != want {
-		t.Fatalf("capture count after cooldown = %d, want %d", got, want)
-	}
-	if got, want := deps.events.countType(EventDaemonCircuitClosed), 1; got != want {
-		t.Fatalf("circuit closed event count = %d, want %d", got, want)
-	}
-	if got, want := deps.events.lastMessage(EventDaemonCircuitClosed), "monitor amux circuit closed after cooldown"; got != want {
-		t.Fatalf("closed event message = %q, want %q", got, want)
+	if got, want := deps.amux.captureCount("pane-1"), 5; got != want {
+		t.Fatalf("capture count after recovery = %d, want %d", got, want)
 	}
 }
 
