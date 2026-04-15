@@ -151,6 +151,10 @@ func (d *Daemon) lookupOpenPRNumber(ctx context.Context, projectPath, branch str
 	return d.gitHubClientForContext(ctx, projectPath).lookupOpenPRNumber(ctx, branch)
 }
 
+func (d *Daemon) lookupOpenOrMergedPRNumber(ctx context.Context, projectPath, branch string) (int, bool, error) {
+	return d.gitHubClientForContext(ctx, projectPath).lookupOpenOrMergedPRNumber(ctx, branch)
+}
+
 func (d *Daemon) isPRMerged(ctx context.Context, projectPath string, prNumber int) (bool, error) {
 	return d.gitHubClientForContext(ctx, projectPath).isPRMerged(ctx, prNumber)
 }

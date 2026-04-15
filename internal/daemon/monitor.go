@@ -38,6 +38,7 @@ func (d *Daemon) runLoop(ctx context.Context, done chan struct{}) {
 	pollIntervalCh := d.pollIntervalCh
 	captureInFlight := false
 	pollInFlight := false
+	var lastMissingPRNumberReconcile time.Time
 
 	for {
 		select {
@@ -69,6 +70,11 @@ func (d *Daemon) runLoop(ctx context.Context, done chan struct{}) {
 			}
 			pollInFlight = true
 			d.runPollTick(ctx)
+			now := d.now()
+			if shouldRunMissingPRNumberReconciliation(lastMissingPRNumberReconcile, now) {
+				d.reconcileMissingPRNumbers(ctx)
+				lastMissingPRNumberReconcile = now
+			}
 			d.recordHeartbeat(ctx)
 			drainMonitorTicks(pollTickCh)
 			pollInFlight = false
