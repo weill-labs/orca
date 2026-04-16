@@ -18,18 +18,19 @@ type TaskMonitor struct {
 }
 
 type TaskStateUpdate struct {
-	Active               ActiveAssignment
-	TaskChanged          bool
-	WorkerChanged        bool
-	PaneMetadata         map[string]string
-	PaneMetadataRemovals []string
-	Events               []Event
-	PRMerged             bool
-	CompletionStatus     string
-	CompletionEventType  string
-	CompletionMerged     bool
-	CompletionMessage    string
-	nudges               []taskMonitorNudge
+	Active                 ActiveAssignment
+	TaskChanged            bool
+	WorkerChanged          bool
+	PaneMetadata           map[string]string
+	PaneMetadataRemovals   []string
+	Events                 []Event
+	PRMerged               bool
+	CompletionStatus       string
+	CompletionEventType    string
+	CompletionMerged       bool
+	CompletionWrapUpPrompt string
+	CompletionMessage      string
+	nudges                 []taskMonitorNudge
 }
 
 type taskMonitorCheckKind int
@@ -476,7 +477,7 @@ func (d *Daemon) applyTaskStateUpdate(ctx context.Context, update TaskStateUpdat
 	if err != nil {
 		profile = AgentProfile{Name: active.Task.AgentProfile}
 	}
-	if err := d.finishAssignmentWithMessage(ctx, active, update.CompletionStatus, update.CompletionEventType, update.CompletionMerged, update.CompletionMessage); err != nil {
+	if err := d.finishAssignmentWithMessageAndPrompt(ctx, active, update.CompletionStatus, update.CompletionEventType, update.CompletionMerged, update.CompletionWrapUpPrompt, update.CompletionMessage); err != nil {
 		d.emit(ctx, d.assignmentEvent(active, profile, EventTaskCompletionFailed, err.Error()))
 	}
 	if refreshPRPollSchedule {

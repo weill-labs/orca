@@ -7,8 +7,6 @@ import (
 	"time"
 )
 
-const prClosedWithoutMergeMessage = "pr closed without merge"
-
 func (d *Daemon) Enqueue(ctx context.Context, prNumber int) (MergeQueueActionResult, error) {
 	return d.enqueue(ctx, d.project, prNumber)
 }
@@ -155,6 +153,7 @@ func mergeTaskStateUpdates(base, next TaskStateUpdate) TaskStateUpdate {
 		merged.CompletionStatus = next.CompletionStatus
 		merged.CompletionEventType = next.CompletionEventType
 		merged.CompletionMerged = next.CompletionMerged
+		merged.CompletionWrapUpPrompt = next.CompletionWrapUpPrompt
 		merged.CompletionMessage = next.CompletionMessage
 	}
 	merged.nudges = append(merged.nudges, next.nudges...)
@@ -201,11 +200,14 @@ func (d *Daemon) applyPRTerminalState(update *TaskStateUpdate, profile AgentProf
 
 	switch {
 	case state.closedWithoutMerge:
-		update.Events = append(update.Events, d.assignmentEvent(update.Active, profile, EventPRClosedWithoutMerge, "pull request closed without merge"))
-		update.CompletionStatus = TaskStatusCancelled
-		update.CompletionEventType = EventTaskCancelled
-		update.CompletionMerged = false
-		update.CompletionMessage = prClosedWithoutMergeMessage
+		if setTaskState(&update.Active.Task, TaskStateDone, now) {
+			update.TaskChanged = true
+		}
+		update.Events = append(update.Events, d.assignmentEvent(update.Active, profile, EventPRClosed, "pull request closed without merging"))
+		update.CompletionStatus = TaskStatusFailed
+		update.CompletionEventType = EventTaskFailed
+		update.CompletionWrapUpPrompt = closedWrapUpPrompt
+		update.CompletionMessage = "pull request closed without merging"
 		return true
 	case state.merged:
 		markTaskPRMerged(update, now)
