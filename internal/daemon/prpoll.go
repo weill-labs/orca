@@ -7,6 +7,8 @@ import (
 	"time"
 )
 
+const prClosedWithoutMergeMessage = "pr closed without merge"
+
 func (d *Daemon) Enqueue(ctx context.Context, prNumber int) (MergeQueueActionResult, error) {
 	return d.enqueue(ctx, d.project, prNumber)
 }
@@ -111,32 +113,31 @@ func (d *Daemon) checkTaskPRPoll(ctx context.Context, active ActiveAssignment) T
 		return update
 	}
 	if entry, err := d.state.MergeEntry(ctx, update.Active.Task.Project, update.Active.Task.PRNumber); err == nil && entry != nil {
-		merged, err := d.isPRMerged(ctx, update.Active.Task.Project, update.Active.Task.PRNumber)
+		terminalState, err := d.lookupPRTerminalState(ctx, update.Active.Task.Project, update.Active.Task.PRNumber)
 		if err != nil {
 			d.appendGitHubRateLimitEvent(&update, profile, err)
 			return update
 		}
-		if merged {
-			markTaskPRMerged(&update, now)
+		if d.applyPRTerminalState(&update, profile, terminalState, now) {
+			return update
 		}
 		return update
 	}
 
-	d.handlePRChecksPoll(ctx, &update, profile)
-
-	merged, err := d.isPRMerged(ctx, update.Active.Task.Project, update.Active.Task.PRNumber)
+	terminalState, err := d.lookupPRTerminalState(ctx, update.Active.Task.Project, update.Active.Task.PRNumber)
 	if err != nil {
 		if d.appendGitHubRateLimitEvent(&update, profile, err) {
 			return update
 		}
+		d.handlePRChecksPoll(ctx, &update, profile)
 		return d.continuePRFollowUpPolls(ctx, update, profile)
 	}
-	if !merged {
-		return d.continuePRFollowUpPolls(ctx, update, profile)
+	if d.applyPRTerminalState(&update, profile, terminalState, now) {
+		return update
 	}
 
-	markTaskPRMerged(&update, now)
-	return update
+	d.handlePRChecksPoll(ctx, &update, profile)
+	return d.continuePRFollowUpPolls(ctx, update, profile)
 }
 
 func (d *Daemon) continuePRFollowUpPolls(ctx context.Context, update TaskStateUpdate, profile AgentProfile) TaskStateUpdate {
@@ -184,6 +185,27 @@ func markTaskPRMerged(update *TaskStateUpdate, now time.Time) {
 	update.PRMerged = true
 }
 
+func (d *Daemon) applyPRTerminalState(update *TaskStateUpdate, profile AgentProfile, state prTerminalState, now time.Time) bool {
+	if update == nil {
+		return false
+	}
+
+	switch {
+	case state.closedWithoutMerge:
+		update.Events = append(update.Events, d.assignmentEvent(update.Active, profile, EventPRClosedWithoutMerge, "pull request closed without merge"))
+		update.CompletionStatus = TaskStatusCancelled
+		update.CompletionEventType = EventTaskCancelled
+		update.CompletionMerged = false
+		update.CompletionMessage = prClosedWithoutMergeMessage
+		return true
+	case state.merged:
+		markTaskPRMerged(update, now)
+		return true
+	default:
+		return false
+	}
+}
+
 func (d *Daemon) lookupPRNumber(ctx context.Context, projectPath, branch string) (int, error) {
 	return d.gitHubClientForContext(ctx, projectPath).lookupPRNumber(ctx, branch)
 }
@@ -198,6 +220,10 @@ func (d *Daemon) lookupOpenPRNumber(ctx context.Context, projectPath, branch str
 
 func (d *Daemon) lookupOpenOrMergedPRNumber(ctx context.Context, projectPath, branch string) (int, bool, error) {
 	return d.gitHubClientForContext(ctx, projectPath).lookupOpenOrMergedPRNumber(ctx, branch)
+}
+
+func (d *Daemon) lookupPRTerminalState(ctx context.Context, projectPath string, prNumber int) (prTerminalState, error) {
+	return d.gitHubClientForContext(ctx, projectPath).lookupPRTerminalState(ctx, prNumber)
 }
 
 func (d *Daemon) isPRMerged(ctx context.Context, projectPath string, prNumber int) (bool, error) {

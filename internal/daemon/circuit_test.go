@@ -614,6 +614,7 @@ type circuitGitHubClientStub struct {
 	allPRNumber  int
 	mergedPR     bool
 	merged       bool
+	terminal     prTerminalState
 }
 
 func (c circuitGitHubClientStub) lookupPRNumber(context.Context, string) (int, error) {
@@ -634,6 +635,10 @@ func (c circuitGitHubClientStub) lookupOpenPRNumber(context.Context, string) (in
 
 func (c circuitGitHubClientStub) lookupOpenOrMergedPRNumber(context.Context, string) (int, bool, error) {
 	return c.allPRNumber, c.mergedPR, c.err
+}
+
+func (c circuitGitHubClientStub) lookupPRTerminalState(context.Context, int) (prTerminalState, error) {
+	return c.terminal, c.err
 }
 
 func (c circuitGitHubClientStub) isPRMerged(context.Context, int) (bool, error) {

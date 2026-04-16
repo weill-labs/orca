@@ -17,6 +17,7 @@ const (
 	defaultGitHubAPIMaxBackoff     = 8 * time.Second
 	defaultGitHubAPIMaxAttempts    = 3
 	issueIDPRSearchJSONFields      = "number,state,headRefName,title"
+	prTerminalStateJSONFields      = "mergedAt,state,closedAt"
 )
 
 var (
@@ -30,8 +31,14 @@ type gitHubClient interface {
 	findPRByIssueID(ctx context.Context, issueID string) (int, string, error)
 	lookupOpenPRNumber(ctx context.Context, branch string) (int, error)
 	lookupOpenOrMergedPRNumber(ctx context.Context, branch string) (int, bool, error)
+	lookupPRTerminalState(ctx context.Context, prNumber int) (prTerminalState, error)
 	isPRMerged(ctx context.Context, prNumber int) (bool, error)
 	lookupPRReviews(ctx context.Context, prNumber int) (prReviewPayload, bool, error)
+}
+
+type prTerminalState struct {
+	merged             bool
+	closedWithoutMerge bool
 }
 
 type gitHubCLIClientConfig struct {
@@ -343,6 +350,37 @@ func (c *gitHubCLIClient) isPRMerged(ctx context.Context, prNumber int) (bool, e
 		return false, err
 	}
 	return payload.MergedAt != nil && *payload.MergedAt != "", nil
+}
+
+func (c *gitHubCLIClient) lookupPRTerminalState(ctx context.Context, prNumber int) (prTerminalState, error) {
+	output, err := c.run(ctx, "pr", "view", fmt.Sprintf("%d", prNumber), "--json", prTerminalStateJSONFields)
+	if err != nil {
+		return prTerminalState{}, err
+	}
+	return parsePRTerminalState(output)
+}
+
+func parsePRTerminalState(output []byte) (prTerminalState, error) {
+	if len(output) == 0 {
+		return prTerminalState{}, nil
+	}
+
+	var payload struct {
+		MergedAt *string `json:"mergedAt"`
+		State    string  `json:"state"`
+		ClosedAt *string `json:"closedAt"`
+	}
+	if err := json.Unmarshal(output, &payload); err != nil {
+		return prTerminalState{}, err
+	}
+
+	merged := payload.MergedAt != nil && strings.TrimSpace(*payload.MergedAt) != ""
+	closed := strings.EqualFold(payload.State, "closed") || (payload.ClosedAt != nil && strings.TrimSpace(*payload.ClosedAt) != "")
+
+	return prTerminalState{
+		merged:             merged,
+		closedWithoutMerge: closed && !merged,
+	}, nil
 }
 
 func (c *gitHubCLIClient) lookupPRReviews(ctx context.Context, prNumber int) (prReviewPayload, bool, error) {

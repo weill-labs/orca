@@ -436,6 +436,12 @@ func (c *circuitGitHubClient) lookupOpenOrMergedPRNumber(ctx context.Context, br
 	})
 }
 
+func (c *circuitGitHubClient) lookupPRTerminalState(ctx context.Context, prNumber int) (prTerminalState, error) {
+	return withCircuit(c.breaker, func() (prTerminalState, error) {
+		return c.base.lookupPRTerminalState(ctx, prNumber)
+	})
+}
+
 func (c *circuitGitHubClient) isPRMerged(ctx context.Context, prNumber int) (bool, error) {
 	return withCircuit(c.breaker, func() (bool, error) {
 		return c.base.isPRMerged(ctx, prNumber)

@@ -35,7 +35,7 @@ func TestPRMergeCleanupSkipsEntityNotFoundDoneUpdate(t *testing.T) {
 	}
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "fix-resume-sequence", "--state", "open", "--json", "number"}, `[]`, nil)
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "fix-resume-sequence", "--json", "number"}, `[{"number":42}]`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":"2026-04-02T12:00:00Z"}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"mergedAt":"2026-04-02T12:00:00Z"}`, nil)
 
 	d := deps.newDaemon(t)
 	ctx := context.Background()
