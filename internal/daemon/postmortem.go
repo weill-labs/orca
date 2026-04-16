@@ -101,9 +101,11 @@ func (d *Daemon) finishAssignmentWithMessage(ctx context.Context, active ActiveA
 
 	if merged {
 		if err := d.amux.SendKeys(cleanupCtx, active.Task.PaneID, mergedWrapUpPrompt, "Enter"); err != nil {
+			d.emitMergeNotifyFailed(cleanupCtx, active, err)
 			result = errors.Join(result, err)
 		}
 		if err := d.amux.WaitIdle(cleanupCtx, active.Task.PaneID, d.mergeGracePeriod); err != nil {
+			d.emitMergeNotifyFailed(cleanupCtx, active, err)
 			result = errors.Join(result, err)
 		}
 	}
@@ -185,6 +187,24 @@ func (d *Daemon) finishAssignmentWithMessage(ctx context.Context, active ActiveA
 		Message:      message,
 	})
 	return result
+}
+
+func (d *Daemon) emitMergeNotifyFailed(ctx context.Context, active ActiveAssignment, err error) {
+	if err == nil {
+		return
+	}
+
+	profile, profileErr := d.profileForTask(ctx, active.Task)
+	if profileErr != nil {
+		profile = AgentProfile{Name: active.Task.AgentProfile}
+	}
+
+	event := d.assignmentEvent(active, profile, EventWorkerMergeNotifyFailed, err.Error())
+	event.WorkerID = active.Worker.WorkerID
+	if event.WorkerID == "" {
+		event.WorkerID = active.Task.WorkerID
+	}
+	d.emit(ctx, event)
 }
 
 func paneAlreadyGone(err error) bool {
