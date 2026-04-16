@@ -33,6 +33,7 @@ commands:
   stop     Stop the orca daemon
   reload   Hot-reload the orca daemon
   status   Show daemon and task status
+  migrate-state  Copy state from SQLite to Postgres
   metrics  Show latency metrics from orchestration events
   assign   Assign an issue to a worker
   batch    Assign multiple issues from a manifest
@@ -60,6 +61,15 @@ Hot-reload the orca daemon.`,
 	"status": `usage: orca status [ISSUE] [--project PATH] [--global] [--json]
 
 Show daemon and task status.`,
+	"migrate-state": `usage: orca migrate-state --from sqlite:///path/to/state.db --to postgres://... [--dry-run] [--truncate]
+
+Copy SQLite state into Postgres.
+
+Flags:
+  --from     Source state store URI
+  --to       Destination state store URI
+  --dry-run  Report what would be migrated without writing
+  --truncate Wipe destination tables before copying`,
 	"metrics": `usage: orca metrics [--project PATH] [--since DURATION] [--json]
 
 Show latency metrics from orchestration events.
@@ -216,6 +226,8 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.runReload(ctx, args[1:])
 	case "status":
 		return a.runStatus(ctx, args[1:])
+	case "migrate-state":
+		return a.runMigrateState(ctx, args[1:])
 	case "metrics":
 		return a.runMetrics(ctx, args[1:])
 	case "assign":
