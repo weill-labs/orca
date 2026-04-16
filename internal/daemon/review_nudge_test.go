@@ -17,6 +17,7 @@ func TestPRReviewPollingSkipsNudgesForApprovalOrLGTM(t *testing.T) {
 		payload               string
 		wantReviewCount       int
 		wantIssueCommentCount int
+		wantApprovedEvents    int
 	}
 
 	tests := []testCase{
@@ -30,6 +31,7 @@ func TestPRReviewPollingSkipsNudgesForApprovalOrLGTM(t *testing.T) {
 				},
 			),
 			wantIssueCommentCount: 1,
+			wantApprovedEvents:    1,
 		},
 		{
 			name: "github-actions lgtm skips issue comments with blocking headings",
@@ -63,7 +65,8 @@ func TestPRReviewPollingSkipsNudgesForApprovalOrLGTM(t *testing.T) {
 				},
 				nil,
 			),
-			wantReviewCount: 2,
+			wantReviewCount:    2,
+			wantApprovedEvents: 1,
 		},
 	}
 
@@ -104,6 +107,29 @@ func TestPRReviewPollingSkipsNudgesForApprovalOrLGTM(t *testing.T) {
 
 			if got := deps.events.countType(EventWorkerNudgedReview); got != 0 {
 				t.Fatalf("review nudge event count = %d, want 0", got)
+			}
+			if got, want := deps.events.countType(EventReviewApproved), tt.wantApprovedEvents; got != want {
+				t.Fatalf("review approved event count = %d, want %d", got, want)
+			}
+			if got, want := stateEventCountByType(deps.state, EventReviewApproved), tt.wantApprovedEvents; got != want {
+				t.Fatalf("state review approved event count = %d, want %d", got, want)
+			}
+			if tt.wantApprovedEvents > 0 {
+				event, ok := deps.events.lastEventOfType(EventReviewApproved)
+				if !ok {
+					t.Fatal("missing review approved event")
+				}
+				if got, want := event.Message, "pull request approved"; got != want {
+					t.Fatalf("review approved event message = %q, want %q", got, want)
+				}
+
+				event, ok = lastStateEventOfType(deps.state, EventReviewApproved)
+				if !ok {
+					t.Fatal("missing review approved event in state store")
+				}
+				if got, want := event.Message, "pull request approved"; got != want {
+					t.Fatalf("state review approved event message = %q, want %q", got, want)
+				}
 			}
 			deps.amux.requireSentKeys(t, "pane-1", []string{wrappedCodexPrompt("Implement daemon core") + "\n"})
 		})

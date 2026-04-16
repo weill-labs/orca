@@ -21,6 +21,7 @@ type reviewWorkerState struct {
 	commentCount       int
 	commentWatermark   string
 	reviewNudgeCount   int
+	reviewApproved     bool
 }
 
 type prReviewPayload struct {
@@ -129,12 +130,15 @@ func (d *Daemon) checkTaskReviewPoll(ctx context.Context, active ActiveAssignmen
 	previousInlineCommentCount := update.Active.Worker.LastInlineReviewCommentCount
 	previousCommentCount := update.Active.Worker.LastIssueCommentCount
 	previousCommentWatermark := update.Active.Worker.LastIssueCommentWatermark
+	previousReviewApproved := update.Active.Worker.ReviewApproved
+	reviewApproved := payload.ReviewDecision == "APPROVED" || latestReviewContainsLGTM(payload.Reviews)
 	nextReviewState := reviewWorkerState{
 		reviewCount:        reviewCount,
 		inlineCommentCount: inlineCommentCount,
 		commentCount:       commentCount,
 		commentWatermark:   issueCommentWatermark(payload.Comments),
 		reviewNudgeCount:   update.Active.Worker.ReviewNudgeCount,
+		reviewApproved:     reviewApproved,
 	}
 	if payload.ReviewDecision != "CHANGES_REQUESTED" && nextReviewState.reviewNudgeCount != 0 {
 		nextReviewState.reviewNudgeCount = 0
@@ -147,7 +151,8 @@ func (d *Daemon) checkTaskReviewPoll(ctx context.Context, active ActiveAssignmen
 	if previousReviewCount == reviewCount &&
 		previousInlineCommentCount == inlineCommentCount &&
 		previousCommentCount == commentCount &&
-		previousCommentWatermark == nextReviewState.commentWatermark {
+		previousCommentWatermark == nextReviewState.commentWatermark &&
+		previousReviewApproved == nextReviewState.reviewApproved {
 		action := "no_new_review_feedback"
 		persisted := false
 		if nextReviewState.reviewNudgeCount != update.Active.Worker.ReviewNudgeCount {
@@ -158,10 +163,16 @@ func (d *Daemon) checkTaskReviewPoll(ctx context.Context, active ActiveAssignmen
 		}
 		return traceAndReturn(&nextReviewState, 0, reviewPollIdleNotChecked, action, persisted)
 	}
-	if payload.ReviewDecision == "APPROVED" || latestReviewContainsLGTM(payload.Reviews) {
+	if !reviewApproved && previousReviewApproved {
+		update.Active.Worker.ReviewApproved = false
+		update.WorkerChanged = true
+	}
+	if reviewApproved {
 		d.persistReviewWorkerState(&update.Active.Worker, nextReviewState, now)
 		update.WorkerChanged = true
-		update.Events = append(update.Events, d.assignmentEvent(update.Active, profile, EventReviewApproved, "pull request approved"))
+		if !previousReviewApproved {
+			update.Events = append(update.Events, d.assignmentEvent(update.Active, profile, EventReviewApproved, "pull request approved"))
+		}
 		return traceAndReturn(&nextReviewState, 0, reviewPollIdleNotChecked, "persist_approved_review_feedback", true)
 	}
 
@@ -213,6 +224,7 @@ func (d *Daemon) persistReviewWorkerState(worker *Worker, state reviewWorkerStat
 	worker.LastIssueCommentCount = state.commentCount
 	worker.LastIssueCommentWatermark = state.commentWatermark
 	worker.ReviewNudgeCount = state.reviewNudgeCount
+	worker.ReviewApproved = state.reviewApproved
 	worker.LastSeenAt = now
 }
 
