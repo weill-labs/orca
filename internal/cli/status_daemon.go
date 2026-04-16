@@ -113,12 +113,16 @@ func backendMismatchWarningForPID(pid int, readProcessEnviron func(int) ([]strin
 	}
 
 	daemonBackend := stateBackendFromEnv(env)
-	shellBackend := stateBackendFromEnv(os.Environ())
+	shellBackend := currentStateBackend()
 	if daemonBackend == shellBackend {
 		return ""
 	}
 
 	return fmt.Sprintf("Warning: daemon is running on %s but this shell reads %s. Consider sourcing ~/.env.", daemonBackend, shellBackend)
+}
+
+func currentStateBackend() string {
+	return stateBackendFromEnv(os.Environ())
 }
 
 func stateBackendFromEnv(env []string) string {
