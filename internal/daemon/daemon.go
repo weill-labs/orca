@@ -144,7 +144,7 @@ func New(opts Options) (*Daemon, error) {
 		amux:                 opts.Amux,
 		issueTracker:         opts.IssueTracker,
 		commands:             opts.Commands,
-		github:               newDefaultGitHubClient(opts.Project, opts.Commands),
+		github:               newDefaultGitHubClient(opts.Project, opts.Commands, opts.Logf),
 		githubClients:        make(map[string]gitHubClient),
 		events:               opts.Events,
 		now:                  opts.Now,

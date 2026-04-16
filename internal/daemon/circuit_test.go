@@ -620,6 +620,10 @@ func (c circuitGitHubClientStub) lookupPRNumber(context.Context, string) (int, e
 	return c.prNumber, c.err
 }
 
+func (c circuitGitHubClientStub) findPRByIssueID(context.Context, string) (int, string, error) {
+	return c.prNumber, "", c.err
+}
+
 func (c circuitGitHubClientStub) lookupOpenPRNumber(context.Context, string) (int, error) {
 	return c.openPRNumber, c.err
 }

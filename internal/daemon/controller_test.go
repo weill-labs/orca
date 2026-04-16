@@ -970,6 +970,10 @@ func (f *fakeStore) UpdateTaskStatus(_ context.Context, _, _, _ string, _ time.T
 	return state.Task{}, nil
 }
 
+func (f *fakeStore) UpdateTaskBranch(_ context.Context, _, _, _ string, _ time.Time) (state.Task, error) {
+	return state.Task{}, nil
+}
+
 func (f *fakeStore) AppendEvent(_ context.Context, event state.Event) (state.Event, error) {
 	return event, nil
 }

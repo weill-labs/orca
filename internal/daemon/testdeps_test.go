@@ -106,6 +106,7 @@ func (d *testDeps) newDaemonWithOptions(t *testing.T, mutate func(*Options)) *Da
 		now:         d.clock.Now,
 		sleep:       noSleep,
 		maxAttempts: 1,
+		logf:        opts.Logf,
 	})
 	return daemon
 }

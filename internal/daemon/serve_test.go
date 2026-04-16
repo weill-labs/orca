@@ -248,6 +248,9 @@ func (fakeDaemonStateStore) UpsertTask(context.Context, string, state.Task) erro
 func (fakeDaemonStateStore) UpdateTaskStatus(context.Context, string, string, string, time.Time) (state.Task, error) {
 	return state.Task{}, nil
 }
+func (fakeDaemonStateStore) UpdateTaskBranch(context.Context, string, string, string, time.Time) (state.Task, error) {
+	return state.Task{}, nil
+}
 func (fakeDaemonStateStore) AppendEvent(context.Context, state.Event) (state.Event, error) {
 	return state.Event{}, nil
 }

@@ -25,6 +25,7 @@ var (
 
 type gitHubClient interface {
 	lookupPRNumber(ctx context.Context, branch string) (int, error)
+	findPRByIssueID(ctx context.Context, issueID string) (int, string, error)
 	lookupOpenPRNumber(ctx context.Context, branch string) (int, error)
 	lookupOpenOrMergedPRNumber(ctx context.Context, branch string) (int, bool, error)
 	isPRMerged(ctx context.Context, prNumber int) (bool, error)
@@ -40,6 +41,7 @@ type gitHubCLIClientConfig struct {
 	initialBackoff time.Duration
 	maxBackoff     time.Duration
 	maxAttempts    int
+	logf           func(string, ...any)
 }
 
 type gitHubCLIClient struct {
@@ -51,6 +53,7 @@ type gitHubCLIClient struct {
 	initialBackoff time.Duration
 	maxBackoff     time.Duration
 	maxAttempts    int
+	logf           func(string, ...any)
 
 	mu          sync.Mutex
 	nextAllowed time.Time
@@ -76,10 +79,11 @@ func newGitHubCLIClient(cfg gitHubCLIClientConfig) *gitHubCLIClient {
 		initialBackoff: cfg.initialBackoff,
 		maxBackoff:     cfg.maxBackoff,
 		maxAttempts:    cfg.maxAttempts,
+		logf:           cfg.logf,
 	}
 }
 
-func newDefaultGitHubClient(project string, commands CommandRunner) gitHubClient {
+func newDefaultGitHubClient(project string, commands CommandRunner, logf func(string, ...any)) gitHubClient {
 	return newGitHubCLIClient(gitHubCLIClientConfig{
 		project:        project,
 		commands:       commands,
@@ -89,6 +93,7 @@ func newDefaultGitHubClient(project string, commands CommandRunner) gitHubClient
 		initialBackoff: defaultGitHubAPIInitialBackoff,
 		maxBackoff:     defaultGitHubAPIMaxBackoff,
 		maxAttempts:    defaultGitHubAPIMaxAttempts,
+		logf:           logf,
 	})
 }
 
@@ -115,7 +120,7 @@ func (d *Daemon) githubForProject(projectPath string) gitHubClient {
 func (d *Daemon) newGitHubClient(projectPath string) gitHubClient {
 	base, ok := d.github.(*gitHubCLIClient)
 	if !ok {
-		return newDefaultGitHubClient(projectPath, d.commands)
+		return newDefaultGitHubClient(projectPath, d.commands, d.logf)
 	}
 
 	return newGitHubCLIClient(gitHubCLIClientConfig{
@@ -127,6 +132,7 @@ func (d *Daemon) newGitHubClient(projectPath string) gitHubClient {
 		initialBackoff: base.initialBackoff,
 		maxBackoff:     base.maxBackoff,
 		maxAttempts:    base.maxAttempts,
+		logf:           d.logf,
 	})
 }
 
@@ -136,6 +142,30 @@ func (c *gitHubCLIClient) lookupPRNumber(ctx context.Context, branch string) (in
 		return 0, err
 	}
 	return parsePRNumberList(output)
+}
+
+func (c *gitHubCLIClient) findPRByIssueID(ctx context.Context, issueID string) (int, string, error) {
+	issueID = strings.TrimSpace(issueID)
+	if issueID == "" {
+		return 0, "", nil
+	}
+
+	output, err := c.run(ctx, "pr", "list", "--search", issueID+" in:title", "--state", "all", "--json", "number,state,headRefName", "--limit", "5")
+	if err != nil {
+		return 0, "", err
+	}
+
+	number, branch, multiple, err := parseIssueIDPRSearchResults(output)
+	if err != nil {
+		return 0, "", err
+	}
+	if multiple {
+		if c.logf != nil {
+			c.logf("github issue-id PR search for %s returned multiple pull requests; leaving task unbound", issueID)
+		}
+		return 0, "", nil
+	}
+	return number, branch, nil
 }
 
 func (c *gitHubCLIClient) lookupOpenPRNumber(ctx context.Context, branch string) (int, error) {
@@ -192,6 +222,29 @@ func parseOpenOrMergedPRNumberList(output []byte) (int, bool, error) {
 		}
 	}
 	return 0, false, nil
+}
+
+func parseIssueIDPRSearchResults(output []byte) (int, string, bool, error) {
+	if len(output) == 0 {
+		return 0, "", false, nil
+	}
+
+	var prs []struct {
+		Number      int    `json:"number"`
+		State       string `json:"state"`
+		HeadRefName string `json:"headRefName"`
+	}
+	if err := json.Unmarshal(output, &prs); err != nil {
+		return 0, "", false, err
+	}
+	switch len(prs) {
+	case 0:
+		return 0, "", false, nil
+	case 1:
+		return prs[0].Number, prs[0].HeadRefName, false, nil
+	default:
+		return 0, "", true, nil
+	}
 }
 
 func (c *gitHubCLIClient) isPRMerged(ctx context.Context, prNumber int) (bool, error) {

@@ -80,6 +80,22 @@ func (d *Daemon) checkTaskPRPoll(ctx context.Context, active ActiveAssignment) T
 			d.appendGitHubRateLimitEvent(&update, profile, err)
 			return update
 		}
+		if prNumber == 0 {
+			discoveredBranch := ""
+			prNumber, discoveredBranch, err = d.findPRByIssueID(ctx, update.Active.Task.Project, update.Active.Task.Issue)
+			if err != nil {
+				d.appendGitHubRateLimitEvent(&update, profile, err)
+				return update
+			}
+			if prNumber > 0 && strings.TrimSpace(discoveredBranch) != "" && discoveredBranch != update.Active.Task.Branch {
+				update.Active.Task.Branch = discoveredBranch
+				update.Active.Task.UpdatedAt = now
+				update.TaskChanged = true
+				update.PaneMetadata = mergeMetadata(update.PaneMetadata, map[string]string{
+					"branch": discoveredBranch,
+				})
+			}
+		}
 		if prNumber > 0 {
 			metadata, err := d.prPaneMetadata(ctx, update.Active, prNumber)
 			if err != nil {
@@ -175,6 +191,10 @@ func markTaskPRMerged(update *TaskStateUpdate, now time.Time) {
 
 func (d *Daemon) lookupPRNumber(ctx context.Context, projectPath, branch string) (int, error) {
 	return d.gitHubClientForContext(ctx, projectPath).lookupPRNumber(ctx, branch)
+}
+
+func (d *Daemon) findPRByIssueID(ctx context.Context, projectPath, issueID string) (int, string, error) {
+	return d.gitHubClientForContext(ctx, projectPath).findPRByIssueID(ctx, issueID)
 }
 
 func (d *Daemon) lookupOpenPRNumber(ctx context.Context, projectPath, branch string) (int, error) {
