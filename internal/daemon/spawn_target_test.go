@@ -11,21 +11,18 @@ func TestSpawnPaneTarget(t *testing.T) {
 
 	tests := []struct {
 		name      string
-		leadPane  string
 		task      Task
 		listPanes []Pane
 		listErr   error
 		want      string
 	}{
 		{
-			name:     "falls back to daemon lead pane when caller pane is empty",
-			leadPane: "fallback-lead-pane",
-			want:     "fallback-lead-pane",
+			name: "returns empty string when caller pane is empty",
+			want: "",
 		},
 		{
-			name:     "keeps caller pane when it is not a lead pane",
-			leadPane: "fallback-lead-pane",
-			task:     Task{CallerPane: "worker-07"},
+			name: "keeps caller pane when it is not a lead pane",
+			task: Task{CallerPane: "worker-07"},
 			listPanes: []Pane{
 				{ID: "155", Name: "worker-07", Window: "orca"},
 				{ID: "2", Name: "pane-2", Window: "orca", Lead: true},
@@ -33,9 +30,8 @@ func TestSpawnPaneTarget(t *testing.T) {
 			want: "worker-07",
 		},
 		{
-			name:     "uses a non-lead pane in the caller window when caller is lead",
-			leadPane: "fallback-lead-pane",
-			task:     Task{CallerPane: "pane-2"},
+			name: "uses a non-lead pane in the caller window when caller is lead",
+			task: Task{CallerPane: "pane-2"},
 			listPanes: []Pane{
 				{ID: "2", Name: "pane-2", Window: "orca", Lead: true},
 				{ID: "155", Name: "worker-07", Window: "orca"},
@@ -44,16 +40,14 @@ func TestSpawnPaneTarget(t *testing.T) {
 			want: "worker-07",
 		},
 		{
-			name:     "keeps caller pane when amux list fails",
-			leadPane: "fallback-lead-pane",
-			task:     Task{CallerPane: "pane-2"},
-			listErr:  errors.New("amux unavailable"),
-			want:     "pane-2",
+			name:    "keeps caller pane when amux list fails",
+			task:    Task{CallerPane: "pane-2"},
+			listErr: errors.New("amux unavailable"),
+			want:    "pane-2",
 		},
 		{
-			name:     "keeps caller pane when no non-lead pane shares the window",
-			leadPane: "fallback-lead-pane",
-			task:     Task{CallerPane: "pane-2"},
+			name: "keeps caller pane when no non-lead pane shares the window",
+			task: Task{CallerPane: "pane-2"},
 			listPanes: []Pane{
 				{ID: "2", Name: "pane-2", Window: "orca", Lead: true},
 				{ID: "13", Name: "pane-13", Window: "alphaos", Lead: true},
@@ -72,7 +66,6 @@ func TestSpawnPaneTarget(t *testing.T) {
 			deps.amux.listPanesErr = tt.listErr
 
 			d := deps.newDaemon(t)
-			d.leadPane = tt.leadPane
 
 			if got := d.spawnPaneTarget(context.Background(), tt.task); got != tt.want {
 				t.Fatalf("spawnPaneTarget() = %q, want %q", got, tt.want)

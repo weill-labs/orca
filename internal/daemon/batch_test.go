@@ -120,7 +120,6 @@ func TestBatchUsesCallerPaneForEachAssignment(t *testing.T) {
 		{ID: "13", Name: "pane-13", Window: "alphaos"},
 	}
 	d := deps.newDaemon(t)
-	d.leadPane = "fallback-lead-pane"
 	ctx := context.Background()
 
 	if err := d.Start(ctx); err != nil {

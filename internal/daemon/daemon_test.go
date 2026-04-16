@@ -307,40 +307,6 @@ func TestAssignStoresStablePaneNameReference(t *testing.T) {
 	deps.amux.requireSentKeys(t, "w-LAB-854", []string{wrappedCodexPrompt("Fix pane references") + "\n"})
 }
 
-func TestDaemonStartNormalizesLeadPaneToStableName(t *testing.T) {
-	t.Parallel()
-
-	deps := newTestDeps(t)
-	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
-	deps.amux.listPanes = []Pane{{ID: "7", Name: "lead-pane-stable", Window: "orca"}}
-	d := deps.newDaemon(t)
-	d.leadPane = "7"
-	ctx := context.Background()
-
-	if err := d.Start(ctx); err != nil {
-		t.Fatalf("Start() error = %v", err)
-	}
-	t.Cleanup(func() {
-		_ = d.Stop(context.Background())
-	})
-
-	if got, want := d.leadPane, "lead-pane-stable"; got != want {
-		t.Fatalf("leadPane = %q, want %q", got, want)
-	}
-
-	if err := d.Assign(ctx, "LAB-855", "Verify lead pane normalization", "codex"); err != nil {
-		t.Fatalf("Assign() error = %v", err)
-	}
-
-	waitFor(t, "spawn request", func() bool {
-		return len(deps.amux.spawnRequests) == 1
-	})
-
-	if got, want := deps.amux.spawnRequests[0].Window, "orca"; got != want {
-		t.Fatalf("spawn.Window = %q, want %q", got, want)
-	}
-}
-
 func TestAssignWithCallerPaneUsesCallerPaneForWorkerSpawn(t *testing.T) {
 	t.Parallel()
 
@@ -350,7 +316,6 @@ func TestAssignWithCallerPaneUsesCallerPaneForWorkerSpawn(t *testing.T) {
 		{ID: "13", Name: "pane-13", Window: "alphaos"},
 	}
 	d := deps.newDaemon(t)
-	d.leadPane = "fallback-lead-pane"
 	ctx := context.Background()
 
 	if err := d.Start(ctx); err != nil {
@@ -392,7 +357,6 @@ func TestAssignWithCallerLeadPaneUsesNonLeadPaneInSameWindowForWorkerSpawn(t *te
 		{ID: "13", Name: "pane-13", Window: "alphaos", Lead: true},
 	}
 	d := deps.newDaemon(t)
-	d.leadPane = "fallback-lead-pane"
 	ctx := context.Background()
 
 	if err := d.Start(ctx); err != nil {
@@ -420,60 +384,6 @@ func TestAssignWithCallerLeadPaneUsesNonLeadPaneInSameWindowForWorkerSpawn(t *te
 	}
 	if got, want := task.CallerPane, "pane-2"; got != want {
 		t.Fatalf("task.CallerPane = %q, want %q", got, want)
-	}
-}
-
-func TestNormalizeLeadPaneFallbacks(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name      string
-		leadPane  string
-		listPanes []Pane
-		listErr   error
-		want      string
-	}{
-		{
-			name: "leaves empty lead pane unchanged",
-			want: "",
-		},
-		{
-			name:     "keeps numeric lead pane when list fails",
-			leadPane: "7",
-			listErr:  errors.New("amux unavailable"),
-			want:     "7",
-		},
-		{
-			name:      "keeps numeric lead pane when no stable name matches",
-			leadPane:  "7",
-			listPanes: []Pane{{ID: "8", Name: "w-LAB-999"}},
-			want:      "7",
-		},
-		{
-			name:      "ignores panes without names",
-			leadPane:  "7",
-			listPanes: []Pane{{ID: "7"}},
-			want:      "7",
-		},
-	}
-
-	for _, tt := range tests {
-		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			deps := newTestDeps(t)
-			deps.amux.listPanes = append([]Pane(nil), tt.listPanes...)
-			deps.amux.listPanesErr = tt.listErr
-
-			d := deps.newDaemon(t)
-			d.leadPane = tt.leadPane
-			d.normalizeLeadPane(context.Background())
-
-			if got := d.leadPane; got != tt.want {
-				t.Fatalf("leadPane = %q, want %q", got, tt.want)
-			}
-		})
 	}
 }
 

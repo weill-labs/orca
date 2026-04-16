@@ -100,10 +100,7 @@ func (c *LocalController) spawnRuntime(projectPath, session string) (*pool.Manag
 }
 
 func (d *Daemon) taskPaneTarget(task Task) string {
-	if callerPane := strings.TrimSpace(task.CallerPane); callerPane != "" {
-		return callerPane
-	}
-	return strings.TrimSpace(d.leadPane)
+	return strings.TrimSpace(task.CallerPane)
 }
 
 func (d *Daemon) spawnPaneTarget(ctx context.Context, task Task) string {

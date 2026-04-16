@@ -872,7 +872,7 @@ func TestAppRunAssignDefaultsCallerPaneFromAMUXPaneEnv(t *testing.T) {
 	}
 }
 
-func TestHelpTextOmitsDeprecatedLeadPaneFromStartUsage(t *testing.T) {
+func TestHelpTextOmitsLeadPaneFromStartUsage(t *testing.T) {
 	t.Parallel()
 
 	usage, ok := HelpText([]string{"help", "start"})
@@ -880,7 +880,7 @@ func TestHelpTextOmitsDeprecatedLeadPaneFromStartUsage(t *testing.T) {
 		t.Fatal("HelpText(help start) = not handled, want handled")
 	}
 	if strings.Contains(usage, "--lead-pane") {
-		t.Fatalf("start help unexpectedly mentions deprecated --lead-pane: %q", usage)
+		t.Fatalf("start help unexpectedly mentions --lead-pane: %q", usage)
 	}
 }
 

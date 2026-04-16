@@ -140,12 +140,10 @@ func runDaemonProcessWithServe(args []string, buildCommit string, serve func(con
 	fs.SetOutput(io.Discard)
 
 	var session string
-	var leadPane string
 	var stateDB string
 	var pidFile string
 
 	fs.StringVar(&session, "session", "", "daemon session")
-	fs.StringVar(&leadPane, "lead-pane", "", "lead pane to split from")
 	fs.StringVar(&stateDB, "state-db", "", "state db path")
 	fs.StringVar(&pidFile, "pid-file", "", "pid file path")
 
@@ -165,7 +163,6 @@ func runDaemonProcessWithServe(args []string, buildCommit string, serve func(con
 
 	return serve(ctx, daemon.ServeRequest{
 		Session:     session,
-		LeadPane:    leadPane,
 		StateDB:     stateDB,
 		PIDFile:     pidFile,
 		BuildCommit: buildCommit,

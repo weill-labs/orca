@@ -280,7 +280,6 @@ func TestPRReviewPollingNotifiesCallerPaneWhenReviewNudgesAreExhausted(t *testin
 	}, nil))
 
 	d := deps.newDaemon(t)
-	d.leadPane = "fallback-lead-pane"
 	ctx := context.Background()
 	if err := d.Start(ctx); err != nil {
 		t.Fatalf("Start() error = %v", err)
