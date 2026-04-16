@@ -402,9 +402,10 @@ func (c *LocalController) Assign(ctx context.Context, req AssignRequest) (TaskAc
 	defer cancel()
 
 	var result TaskActionResult
+	issue := normalizeIssueIdentifier(req.Issue)
 	err = callRPC(callCtx, c.paths.socketFile(), "assign", assignRPCParams{
 		Project:    projectPath,
-		Issue:      strings.TrimSpace(req.Issue),
+		Issue:      issue,
 		Prompt:     req.Prompt,
 		Agent:      strings.TrimSpace(req.Agent),
 		CallerPane: strings.TrimSpace(req.CallerPane),

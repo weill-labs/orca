@@ -405,11 +405,12 @@ func dispatchRPCRequest(ctx context.Context, request rpcRequest, instance *Daemo
 		if !ok {
 			return failure
 		}
-		if err := instance.assign(ctx, projectPath, params.Issue, params.Prompt, params.Agent, params.CallerPane, params.Title); err != nil {
+		issue := normalizeIssueIdentifier(params.Issue)
+		if err := instance.assign(ctx, projectPath, issue, params.Prompt, params.Agent, params.CallerPane, params.Title); err != nil {
 			return rpcFailure(request.ID, -32000, err)
 		}
 
-		result, err := taskActionResultForIssue(ctx, store, projectPath, params.Issue)
+		result, err := taskActionResultForIssue(ctx, store, projectPath, issue)
 		if err != nil {
 			return rpcFailure(request.ID, -32000, err)
 		}
