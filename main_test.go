@@ -236,6 +236,70 @@ func TestRunDaemonProcessRejectsLegacyProjectFlag(t *testing.T) {
 	}
 }
 
+func TestOpenDefaultStateStoreUsesSQLiteByDefault(t *testing.T) {
+	t.Setenv("ORCA_STATE_DSN", "")
+
+	originalSQLite := openSQLiteStateStore
+	originalPostgres := openPostgresStateStore
+	t.Cleanup(func() {
+		openSQLiteStateStore = originalSQLite
+		openPostgresStateStore = originalPostgres
+	})
+
+	var gotPath string
+	openSQLiteStateStore = func(path string) (stateStore, error) {
+		gotPath = path
+		return &stubStateStore{}, nil
+	}
+	openPostgresStateStore = func(string) (stateStore, error) {
+		t.Fatal("openPostgresStateStore should not be called when ORCA_STATE_DSN is unset")
+		return nil, nil
+	}
+
+	store, err := openDefaultStateStore("/tmp/orca.db")
+	if err != nil {
+		t.Fatalf("openDefaultStateStore() error = %v", err)
+	}
+	if got, want := gotPath, "/tmp/orca.db"; got != want {
+		t.Fatalf("sqlite path = %q, want %q", got, want)
+	}
+	if store == nil {
+		t.Fatal("openDefaultStateStore() returned nil store")
+	}
+}
+
+func TestOpenDefaultStateStoreUsesPostgresWhenConfigured(t *testing.T) {
+	t.Setenv("ORCA_STATE_DSN", "postgres://orca:orca@localhost:5432/orca?sslmode=disable")
+
+	originalSQLite := openSQLiteStateStore
+	originalPostgres := openPostgresStateStore
+	t.Cleanup(func() {
+		openSQLiteStateStore = originalSQLite
+		openPostgresStateStore = originalPostgres
+	})
+
+	var gotDSN string
+	openSQLiteStateStore = func(string) (stateStore, error) {
+		t.Fatal("openSQLiteStateStore should not be called when ORCA_STATE_DSN is set")
+		return nil, nil
+	}
+	openPostgresStateStore = func(dsn string) (stateStore, error) {
+		gotDSN = dsn
+		return &stubStateStore{}, nil
+	}
+
+	store, err := openDefaultStateStore("/tmp/orca.db")
+	if err != nil {
+		t.Fatalf("openDefaultStateStore() error = %v", err)
+	}
+	if got, want := gotDSN, "postgres://orca:orca@localhost:5432/orca?sslmode=disable"; got != want {
+		t.Fatalf("postgres dsn = %q, want %q", got, want)
+	}
+	if store == nil {
+		t.Fatal("openDefaultStateStore() returned nil store")
+	}
+}
+
 func TestRunWithDepsCoversProcessSetupBranches(t *testing.T) {
 	t.Parallel()
 
