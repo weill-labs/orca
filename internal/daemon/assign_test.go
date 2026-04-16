@@ -371,6 +371,72 @@ func TestAssignRetriesCodexPromptUntilWorkingAppears(t *testing.T) {
 	}
 }
 
+func TestAssignRetriesCodexPromptDeliveryAfterPaneReturnsToShell(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	sleep := &sleepRecorder{}
+	deps.sleep = sleep.Sleep
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	deps.amux.spawnPanes = []Pane{
+		{ID: "pane-1", Name: "worker-1"},
+		{ID: "pane-2", Name: "worker-2"},
+	}
+	deps.amux.waitContentResults = []error{
+		amuxapi.ErrWaitContentTimeout,
+		amuxapi.ErrWaitContentTimeout,
+		amuxapi.ErrWaitContentTimeout,
+	}
+	deps.amux.captureSequence("pane-1", []string{"OpenAI Codex\n›"})
+	deps.amux.captureSequence("pane-2", []string{"OpenAI Codex\n›"})
+	deps.amux.capturePaneSequence("pane-1", []PaneCapture{{
+		Content:        []string{"bash-5.2$", "codex exited after startup"},
+		CurrentCommand: "bash",
+	}})
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-1330", "Retry prompt delivery on a fresh pane", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	waitFor(t, "task registration", func() bool {
+		task, ok := deps.state.task("LAB-1330")
+		return ok && task.Status == TaskStatusActive && task.PaneID == "pane-2"
+	})
+
+	task, ok := deps.state.task("LAB-1330")
+	if !ok {
+		t.Fatal("task missing after prompt-delivery retry")
+	}
+	if got, want := task.PaneID, "pane-2"; got != want {
+		t.Fatalf("task.PaneID = %q, want %q", got, want)
+	}
+	worker, ok := deps.state.worker("worker-01")
+	if !ok {
+		t.Fatal("worker missing after prompt-delivery retry")
+	}
+	if got, want := worker.PaneID, "pane-2"; got != want {
+		t.Fatalf("worker.PaneID = %q, want %q", got, want)
+	}
+
+	deps.amux.requireSentKeys(t, "pane-1", []string{wrappedCodexPrompt("Retry prompt delivery on a fresh pane") + "\n"})
+	deps.amux.requireSentKeys(t, "pane-2", []string{wrappedCodexPrompt("Retry prompt delivery on a fresh pane") + "\n"})
+	if got, want := deps.amux.killCalls, []string{"pane-1"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("kill calls = %#v, want %#v", got, want)
+	}
+	if got, want := sleep.snapshot(), []time.Duration{2 * time.Second}; !equalDurations(got, want) {
+		t.Fatalf("sleep calls = %#v, want %#v", got, want)
+	}
+}
+
 func TestAssignRollsBackWhenCodexPromptNeverShowsWorking(t *testing.T) {
 	t.Parallel()
 
