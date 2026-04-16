@@ -1968,7 +1968,7 @@ func (s *SQLiteStore) ensureTaskMonitorStateSchema(ctx context.Context) error {
 		return err
 	}
 
-	if _, err := s.db.ExecContext(ctx, `
+	if err := s.execWithRetry(ctx, `
 		UPDATE tasks
 		SET state = CASE
 			WHEN status IN ('done', 'cancelled', 'failed') THEN 'done'
@@ -1980,7 +1980,7 @@ func (s *SQLiteStore) ensureTaskMonitorStateSchema(ctx context.Context) error {
 		return fmt.Errorf("backfill task state column: %w", err)
 	}
 
-	if _, err := s.db.ExecContext(ctx, `
+	if err := s.execWithRetry(ctx, `
 		UPDATE tasks
 		SET state = 'escalated'
 		WHERE status NOT IN ('done', 'cancelled', 'failed')
@@ -2216,18 +2216,10 @@ func (s *SQLiteStore) backfillEventWorkerIDs(ctx context.Context) error {
 		return fmt.Errorf("iterate worker ids for event backfill: %w", err)
 	}
 
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin event worker backfill tx: %w", err)
-	}
-	defer func() {
-		_ = tx.Rollback()
-	}()
-	if err := backfillEventWorkerIDsTx(ctx, tx, workerIDsByPane); err != nil {
-		return err
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit event worker backfill tx: %w", err)
+	if err := s.withTxRetry(ctx, func(tx *sql.Tx) error {
+		return backfillEventWorkerIDsTx(ctx, tx, workerIDsByPane)
+	}); err != nil {
+		return fmt.Errorf("backfill event worker ids: %w", err)
 	}
 	return nil
 }
@@ -2395,17 +2387,20 @@ func parseTime(value string) time.Time {
 	return parsed
 }
 
-func (s *SQLiteStore) execWithRetry(ctx context.Context, query string, args ...any) error {
-	const maxAttempts = 20
+const (
+	sqliteBusyRetryMaxAttempts = 20
+	sqliteBusyRetryDelay       = 50 * time.Millisecond
+)
 
+func (s *SQLiteStore) execWithRetry(ctx context.Context, query string, args ...any) error {
 	var lastErr error
-	for attempt := 0; attempt < maxAttempts; attempt++ {
+	for attempt := 0; attempt < sqliteBusyRetryMaxAttempts; attempt++ {
 		if _, err := s.db.ExecContext(ctx, query, args...); err != nil {
 			lastErr = err
 			if !isBusyError(err) {
 				return err
 			}
-			if err := amux.Wait(ctx, 50*time.Millisecond); err != nil {
+			if err := waitForBusyRetry(ctx); err != nil {
 				return err
 			}
 			continue
@@ -2414,6 +2409,58 @@ func (s *SQLiteStore) execWithRetry(ctx context.Context, query string, args ...a
 	}
 
 	return lastErr
+}
+
+func (s *SQLiteStore) withTxRetry(ctx context.Context, fn func(*sql.Tx) error) error {
+	var lastErr error
+	for attempt := 0; attempt < sqliteBusyRetryMaxAttempts; attempt++ {
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			lastErr = err
+			if !isBusyError(err) {
+				return err
+			}
+			if err := waitForBusyRetry(ctx); err != nil {
+				return err
+			}
+			continue
+		}
+
+		committed := false
+		err = func() error {
+			defer func() {
+				if !committed {
+					_ = tx.Rollback()
+				}
+			}()
+
+			if err := fn(tx); err != nil {
+				return err
+			}
+			if err := tx.Commit(); err != nil {
+				return err
+			}
+			committed = true
+			return nil
+		}()
+		if err == nil {
+			return nil
+		}
+
+		lastErr = err
+		if !isBusyError(err) {
+			return err
+		}
+		if err := waitForBusyRetry(ctx); err != nil {
+			return err
+		}
+	}
+
+	return lastErr
+}
+
+func waitForBusyRetry(ctx context.Context) error {
+	return amux.Wait(ctx, sqliteBusyRetryDelay)
 }
 
 func isBusyError(err error) bool {
