@@ -403,6 +403,7 @@ func (d *Daemon) applyTaskStateUpdate(ctx context.Context, update TaskStateUpdat
 	if active.Task.Issue == "" {
 		return
 	}
+	refreshPRPollSchedule := update.TaskChanged || update.PRMerged || update.CompletionStatus != ""
 
 	if update.PRMerged {
 		if update.WorkerChanged {
@@ -444,6 +445,9 @@ func (d *Daemon) applyTaskStateUpdate(ctx context.Context, update TaskStateUpdat
 		if err := d.finishAssignmentWithMessage(ctx, active, status, eventType, merged, completionMessage); err != nil {
 			d.emit(ctx, d.assignmentEvent(active, profile, EventTaskCompletionFailed, err.Error()))
 		}
+		if refreshPRPollSchedule {
+			d.refreshPRPollSchedule()
+		}
 		return
 	}
 	if update.WorkerChanged {
@@ -462,6 +466,9 @@ func (d *Daemon) applyTaskStateUpdate(ctx context.Context, update TaskStateUpdat
 		d.emit(ctx, event)
 	}
 	if update.CompletionStatus == "" {
+		if refreshPRPollSchedule {
+			d.refreshPRPollSchedule()
+		}
 		return
 	}
 
@@ -471,6 +478,9 @@ func (d *Daemon) applyTaskStateUpdate(ctx context.Context, update TaskStateUpdat
 	}
 	if err := d.finishAssignmentWithMessage(ctx, active, update.CompletionStatus, update.CompletionEventType, update.CompletionMerged, update.CompletionMessage); err != nil {
 		d.emit(ctx, d.assignmentEvent(active, profile, EventTaskCompletionFailed, err.Error()))
+	}
+	if refreshPRPollSchedule {
+		d.refreshPRPollSchedule()
 	}
 }
 

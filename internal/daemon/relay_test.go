@@ -449,6 +449,30 @@ func TestDaemonRelayHealthEnqueuesPollIntervalUpdates(t *testing.T) {
 	}
 }
 
+func TestCurrentPRPollIntervalCapsRelayHealthyPollingForTrackedPRs(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	seedTaskMonitorAssignment(t, deps, "LAB-1318", "pane-1", 42)
+	worker, ok := deps.state.worker("pane-1")
+	if !ok {
+		t.Fatal("worker not found")
+	}
+	worker.LastActivityAt = deps.clock.Now().Add(-45 * time.Minute)
+	if err := deps.state.PutWorker(context.Background(), worker); err != nil {
+		t.Fatalf("PutWorker() error = %v", err)
+	}
+
+	d := deps.newDaemonWithOptions(t, func(opts *Options) {
+		opts.PollInterval = 10 * time.Minute
+	})
+	d.relayHealthy.Store(true)
+
+	if got, want := d.currentPRPollInterval(), openPRPollIntervalCap; got != want {
+		t.Fatalf("currentPRPollInterval() = %v, want %v", got, want)
+	}
+}
+
 func TestRelayRepoAliases(t *testing.T) {
 	t.Parallel()
 

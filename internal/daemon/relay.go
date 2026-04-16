@@ -575,6 +575,10 @@ func (d *Daemon) setRelayHealthy(healthy bool) {
 	if d.relayHealthy.Swap(healthy) == healthy {
 		return
 	}
+	d.refreshPRPollSchedule()
+}
+
+func (d *Daemon) refreshPRPollSchedule() {
 	d.enqueuePollIntervalUpdate(d.currentPRPollInterval())
 }
 
@@ -603,10 +607,36 @@ func (d *Daemon) enqueuePollIntervalUpdate(interval time.Duration) {
 }
 
 func (d *Daemon) currentPRPollInterval() time.Duration {
+	interval := d.pollInterval
 	if d.relayHealthy.Load() {
-		return relayHealthyPollInterval
+		interval = relayHealthyPollInterval
 	}
-	return d.pollInterval
+	if interval <= openPRPollIntervalCap || !d.hasTrackedPRTask() {
+		return interval
+	}
+	return openPRPollIntervalCap
+}
+
+func (d *Daemon) hasTrackedPRTask() bool {
+	if d.state == nil {
+		return false
+	}
+
+	ctx := d.stopContext
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	tasks, err := d.state.NonTerminalTasks(ctx, d.project)
+	if err != nil {
+		return false
+	}
+	for _, task := range tasks {
+		if task.PRNumber > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func (d *Daemon) setRelayConn(conn relayConnection) {
@@ -669,6 +699,12 @@ func (d *Daemon) checkTaskImmediateMergePoll(ctx context.Context, active ActiveA
 	if active.Task.PRNumber == 0 {
 		return update
 	}
+	now := d.now()
+	if syncWorkerPRTracking(now, &update.Active) {
+		update.WorkerChanged = true
+	}
+	update.Active.Worker.LastPRPollAt = now
+	update.WorkerChanged = true
 	profile, err := d.profileForTask(ctx, active.Task)
 	if err != nil {
 		return update
@@ -679,7 +715,7 @@ func (d *Daemon) checkTaskImmediateMergePoll(ctx context.Context, active ActiveA
 		return update
 	}
 	if merged {
-		markTaskPRMerged(&update, d.now())
+		markTaskPRMerged(&update, now)
 	}
 	return update
 }

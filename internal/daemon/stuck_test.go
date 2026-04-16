@@ -120,6 +120,74 @@ func TestStuckDetectionUsesIdleTimeoutAndRecoversOnOutputChange(t *testing.T) {
 	deps.events.requireTypes(t, EventDaemonStarted, EventTaskAssigned, EventWorkerNudged, EventWorkerRecovered)
 }
 
+func TestIdleTimeoutMergeCheckWrapsUpMergedPRBeforeEscalating(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	captureTicker := newFakeTicker()
+	prTicker := newFakeTicker()
+	deps.tickers.enqueue(captureTicker, prTicker)
+	deps.config.profiles["codex"] = AgentProfile{
+		Name:              "codex",
+		StartCommand:      "codex --yolo",
+		ResumeSequence:    []string{"codex --yolo resume", "Enter", "."},
+		PostmortemEnabled: false,
+		StuckTimeout:      5 * time.Minute,
+		NudgeCommand:      "Enter",
+		MaxNudgeRetries:   0,
+	}
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":"2026-04-02T12:00:00Z"}`, nil)
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-1318", "Cap adaptive PR polling", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	task, ok := deps.state.task("LAB-1318")
+	if !ok {
+		t.Fatal("task missing after assignment")
+	}
+	task.PRNumber = 42
+	task.State = TaskStatePRDetected
+	task.UpdatedAt = deps.clock.Now()
+	deps.state.putTaskForTest(task)
+
+	worker, ok := deps.state.worker("pane-1")
+	if !ok {
+		t.Fatal("worker missing after assignment")
+	}
+	worker.LastPRNumber = 42
+	worker.LastPushAt = deps.clock.Now().Add(-40 * time.Minute)
+	worker.LastActivityAt = deps.clock.Now().Add(-6 * time.Minute)
+	if err := deps.state.PutWorker(ctx, worker); err != nil {
+		t.Fatalf("PutWorker() error = %v", err)
+	}
+
+	captureTicker.tick(deps.clock.Now())
+	waitFor(t, "task completion after merged idle timeout check", func() bool {
+		task, ok := deps.state.task("LAB-1318")
+		return ok && task.Status == TaskStatusDone
+	})
+
+	if got := deps.events.countType(EventWorkerEscalated); got != 0 {
+		t.Fatalf("worker escalated events = %d, want 0", got)
+	}
+	if got := deps.events.countType(EventPRMerged); got != 1 {
+		t.Fatalf("PR merged events = %d, want 1", got)
+	}
+	if got := deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "mergedAt"}); got != 1 {
+		t.Fatalf("merged-at lookup calls = %d, want 1", got)
+	}
+}
+
 func TestStuckDetectionEscalatesWithoutCleanupOrKill(t *testing.T) {
 	t.Parallel()
 

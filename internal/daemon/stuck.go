@@ -34,10 +34,24 @@ func (d *Daemon) nudgeOrEscalate(ctx context.Context, update *TaskStateUpdate, p
 		return
 	}
 
+	if reason == "idle timeout exceeded" && d.wrapUpMergedPRBeforeIdleEscalation(ctx, update) {
+		return
+	}
+
 	d.escalateTaskState(update, profile, reason, now)
 	if update.Active.Task.PaneID != "" {
 		update.PaneMetadata = mergeMetadata(update.PaneMetadata, map[string]string{"status": "escalated"})
 	}
+}
+
+func (d *Daemon) wrapUpMergedPRBeforeIdleEscalation(ctx context.Context, update *TaskStateUpdate) bool {
+	if update == nil || update.Active.Task.PRNumber == 0 {
+		return false
+	}
+
+	mergeUpdate := d.checkTaskImmediateMergePoll(ctx, update.Active)
+	*update = mergeTaskStateUpdates(*update, mergeUpdate)
+	return update.PRMerged
 }
 
 func (d *Daemon) matchesStuckPattern(profile AgentProfile, output string) bool {
