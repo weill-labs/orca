@@ -16,6 +16,7 @@ const (
 	defaultGitHubAPIInitialBackoff = 1 * time.Second
 	defaultGitHubAPIMaxBackoff     = 8 * time.Second
 	defaultGitHubAPIMaxAttempts    = 3
+	issueIDPRSearchJSONFields      = "number,state,headRefName"
 )
 
 var (
@@ -150,7 +151,7 @@ func (c *gitHubCLIClient) findPRByIssueID(ctx context.Context, issueID string) (
 		return 0, "", nil
 	}
 
-	output, err := c.run(ctx, "pr", "list", "--search", issueID+" in:title", "--state", "all", "--json", "number,state,headRefName", "--limit", "5")
+	output, err := c.run(ctx, issueIDPRSearchArgs(issueID)...)
 	if err != nil {
 		return 0, "", err
 	}
@@ -166,6 +167,17 @@ func (c *gitHubCLIClient) findPRByIssueID(ctx context.Context, issueID string) (
 		return 0, "", nil
 	}
 	return number, branch, nil
+}
+
+func issueIDPRSearchArgs(issueID string) []string {
+	return []string{
+		"pr",
+		"list",
+		"--search", issueID + " in:title",
+		"--state", "all",
+		"--json", issueIDPRSearchJSONFields,
+		"--limit", "5",
+	}
 }
 
 func (c *gitHubCLIClient) lookupOpenPRNumber(ctx context.Context, branch string) (int, error) {

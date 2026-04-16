@@ -87,13 +87,8 @@ func (d *Daemon) checkTaskPRPoll(ctx context.Context, active ActiveAssignment) T
 				d.appendGitHubRateLimitEvent(&update, profile, err)
 				return update
 			}
-			if prNumber > 0 && strings.TrimSpace(discoveredBranch) != "" && discoveredBranch != update.Active.Task.Branch {
-				update.Active.Task.Branch = discoveredBranch
-				update.Active.Task.UpdatedAt = now
-				update.TaskChanged = true
-				update.PaneMetadata = mergeMetadata(update.PaneMetadata, map[string]string{
-					"branch": discoveredBranch,
-				})
+			if prNumber > 0 {
+				d.recordDiscoveredBranch(&update, discoveredBranch, now)
 			}
 		}
 		if prNumber > 0 {
@@ -207,4 +202,22 @@ func (d *Daemon) lookupOpenOrMergedPRNumber(ctx context.Context, projectPath, br
 
 func (d *Daemon) isPRMerged(ctx context.Context, projectPath string, prNumber int) (bool, error) {
 	return d.gitHubClientForContext(ctx, projectPath).isPRMerged(ctx, prNumber)
+}
+
+func (d *Daemon) recordDiscoveredBranch(update *TaskStateUpdate, branch string, now time.Time) {
+	if update == nil {
+		return
+	}
+
+	branch = strings.TrimSpace(branch)
+	if branch == "" || branch == update.Active.Task.Branch {
+		return
+	}
+
+	update.Active.Task.Branch = branch
+	update.Active.Task.UpdatedAt = now
+	update.TaskChanged = true
+	update.PaneMetadata = mergeMetadata(update.PaneMetadata, map[string]string{
+		"branch": branch,
+	})
 }
