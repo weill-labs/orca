@@ -37,49 +37,36 @@ func (d *Daemon) confirmPromptDelivery(ctx context.Context, paneID string, profi
 		return nil
 	}
 
-	waits := []time.Duration{defaultAgentHandshakeTimeout, codexPromptDeliveryExtendedTimeout}
-	for index, timeout := range waits {
-		state, err := d.waitForPromptDeliveryMarker(ctx, paneID, profile, timeout, "after prompt")
-		switch state {
-		case promptDeliveryWaitObserved:
-			return nil
-		case promptDeliveryWaitError:
-			return err
-		case promptDeliveryWaitAgentGone:
-			return err
-		case promptDeliveryWaitTimedOut:
-			if index == len(waits)-1 {
-				return err
-			}
-		default:
-			return err
-		}
-
-		if err := d.amux.SendKeys(ctx, paneID, "Enter"); err != nil {
-			return fmt.Errorf("retry prompt delivery: %w", err)
-		}
-		if err := d.amux.WaitIdle(ctx, paneID, codexPromptRetryIdleProbeTime); err != nil {
-			probeState, probeErr := d.waitForPromptDeliveryMarker(ctx, paneID, profile, waits[index+1], "after retry idle failure")
-			switch probeState {
-			case promptDeliveryWaitObserved:
-				return nil
-			case promptDeliveryWaitError:
-				return probeErr
-			case promptDeliveryWaitAgentGone, promptDeliveryWaitTimedOut:
-				return probeErr
-			default:
-				return probeErr
-			}
-		}
+	state, err := d.waitForPromptDeliveryMarker(ctx, paneID, profile, defaultAgentHandshakeTimeout, "after prompt")
+	switch state {
+	case promptDeliveryWaitObserved:
+		return nil
+	case promptDeliveryWaitError, promptDeliveryWaitAgentGone:
+		return err
 	}
 
-	return fmt.Errorf("%w: wait for %q after prompt", ErrPromptDeliveryNotConfirmed, codexWorkingText)
+	if err := d.amux.SendKeys(ctx, paneID, "Enter"); err != nil {
+		return fmt.Errorf("retry prompt delivery: %w", err)
+	}
+	if err := d.amux.WaitIdle(ctx, paneID, codexPromptRetryIdleProbeTime); err != nil {
+		probeState, probeErr := d.waitForPromptDeliveryMarker(ctx, paneID, profile, codexPromptDeliveryExtendedTimeout, "after retry idle failure")
+		if probeState == promptDeliveryWaitObserved {
+			return nil
+		}
+		return probeErr
+	}
+
+	finalState, finalErr := d.waitForPromptDeliveryMarker(ctx, paneID, profile, codexPromptDeliveryExtendedTimeout, "after retry enter")
+	if finalState == promptDeliveryWaitObserved {
+		return nil
+	}
+	return finalErr
 }
 
 func (d *Daemon) waitForPromptDeliveryMarker(ctx context.Context, paneID string, profile AgentProfile, timeout time.Duration, phase string) (promptDeliveryWaitState, error) {
 	if err := d.amux.WaitContent(ctx, paneID, codexWorkingText, timeout); err != nil {
 		if !errors.Is(err, amuxapi.ErrWaitContentTimeout) {
-			return 0, fmt.Errorf("wait for %q %s: %w", codexWorkingText, phase, err)
+			return promptDeliveryWaitError, fmt.Errorf("wait for %q %s: %w", codexWorkingText, phase, err)
 		}
 
 		snapshot, captureErr := d.amux.CapturePane(ctx, paneID)
@@ -87,7 +74,7 @@ func (d *Daemon) waitForPromptDeliveryMarker(ctx context.Context, paneID string,
 			if isPaneGoneError(captureErr) {
 				return promptDeliveryWaitAgentGone, fmt.Errorf("%w: pane disappeared while waiting for %q %s", ErrPromptDeliveryNotConfirmed, codexWorkingText, phase)
 			}
-			return 0, fmt.Errorf("capture pane while waiting for %q %s: %w", codexWorkingText, phase, captureErr)
+			return promptDeliveryWaitError, fmt.Errorf("capture pane while waiting for %q %s: %w", codexWorkingText, phase, captureErr)
 		}
 		if promptDeliveryReturnedToShell(profile, snapshot) {
 			return promptDeliveryWaitAgentGone, promptDeliveryFailure(fmt.Sprintf("%s and codex returned to shell", phase), snapshot)
@@ -118,9 +105,5 @@ func promptDeliveryReturnedToShell(profile AgentProfile, snapshot PaneCapture) b
 }
 
 func promptDeliveryFailure(message string, snapshot PaneCapture) error {
-	detail := describePaneSnapshot(snapshot)
-	if detail == "" {
-		return fmt.Errorf("%w: %s", ErrPromptDeliveryNotConfirmed, message)
-	}
-	return fmt.Errorf("%w: %s: %s", ErrPromptDeliveryNotConfirmed, message, detail)
+	return fmt.Errorf("%w: %s: %s", ErrPromptDeliveryNotConfirmed, message, describePaneSnapshot(snapshot))
 }

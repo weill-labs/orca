@@ -438,6 +438,47 @@ func TestAssignRetriesCodexPromptDeliveryAfterPaneReturnsToShell(t *testing.T) {
 	}
 }
 
+func TestAssignRollsBackWhenPromptDeliveryCheckReturnsHardError(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	deps.amux.waitContentResults = []error{
+		amuxapi.ErrWaitContentTimeout,
+		amuxapi.ErrWaitContentTimeout,
+	}
+	deps.amux.capturePaneErr = errors.New("capture failed")
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-899", "Fail prompt delivery classification", "codex"); err == nil {
+		t.Fatal("Assign() succeeded, want error")
+	} else if !strings.Contains(err.Error(), `send prompt: capture pane while waiting for "Working" after prompt: capture failed`) {
+		t.Fatalf("Assign() error = %v, want prompt delivery capture failure", err)
+	}
+
+	if _, ok := deps.state.task("LAB-899"); ok {
+		t.Fatal("task stored despite prompt delivery classification failure")
+	}
+	worker, ok := deps.state.worker("worker-01")
+	if !ok {
+		t.Fatal("worker missing after prompt delivery classification failure")
+	}
+	if got := worker.PaneID; got != "" {
+		t.Fatalf("worker.PaneID = %q, want empty after rollback", got)
+	}
+	if got, want := deps.amux.killCalls, []string{"pane-1"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("kill calls = %#v, want %#v", got, want)
+	}
+}
+
 func TestAssignRollsBackWhenCodexPromptNeverShowsWorking(t *testing.T) {
 	t.Parallel()
 

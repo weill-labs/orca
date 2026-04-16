@@ -143,3 +143,90 @@ func TestConfirmPromptDeliveryFailsFastWhenCodexReturnsToShell(t *testing.T) {
 	}
 	deps.amux.requireSentKeys(t, "pane-1", nil)
 }
+
+func TestConfirmPromptDeliveryReturnsExitedPaneError(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.amux.waitContentResults = []error{amuxapi.ErrWaitContentTimeout}
+	deps.amux.capturePaneSequence("pane-1", []PaneCapture{{
+		Content:        []string{"codex exited"},
+		CurrentCommand: "codex",
+		Exited:         true,
+	}})
+	d := deps.newDaemon(t)
+
+	err := d.confirmPromptDelivery(context.Background(), "pane-1", AgentProfile{Name: "codex"})
+	if err == nil || !strings.Contains(err.Error(), "after prompt and pane exited") {
+		t.Fatalf("confirmPromptDelivery() error = %v, want exited-pane context", err)
+	}
+}
+
+func TestConfirmPromptDeliveryReturnsPaneGoneError(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.amux.waitContentResults = []error{amuxapi.ErrWaitContentTimeout}
+	deps.amux.capturePaneErr = ErrPaneGone
+	d := deps.newDaemon(t)
+
+	err := d.confirmPromptDelivery(context.Background(), "pane-1", AgentProfile{Name: "codex"})
+	if err == nil || !strings.Contains(err.Error(), `pane disappeared while waiting for "Working" after prompt`) {
+		t.Fatalf("confirmPromptDelivery() error = %v, want pane-gone context", err)
+	}
+}
+
+func TestConfirmPromptDeliveryReturnsCapturePaneError(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.amux.waitContentResults = []error{amuxapi.ErrWaitContentTimeout}
+	deps.amux.capturePaneErr = errors.New("capture failed")
+	d := deps.newDaemon(t)
+
+	err := d.confirmPromptDelivery(context.Background(), "pane-1", AgentProfile{Name: "codex"})
+	if err == nil || !strings.Contains(err.Error(), `capture pane while waiting for "Working" after prompt: capture failed`) {
+		t.Fatalf("confirmPromptDelivery() error = %v, want capture failure", err)
+	}
+}
+
+func TestConfirmPromptDeliveryReturnsRetryIdleFailurePhaseInTimeoutError(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.amux.waitContentResults = []error{
+		amuxapi.ErrWaitContentTimeout,
+		amuxapi.ErrWaitContentTimeout,
+	}
+	deps.amux.waitIdleErr = errors.New("idle failed")
+	deps.amux.capturePaneSequence("pane-1", []PaneCapture{
+		{Content: []string{"OpenAI Codex", "›"}, CurrentCommand: "codex"},
+		{Content: []string{"OpenAI Codex", "›"}, CurrentCommand: "codex"},
+	})
+	d := deps.newDaemon(t)
+
+	err := d.confirmPromptDelivery(context.Background(), "pane-1", AgentProfile{Name: "codex"})
+	if err == nil || !strings.Contains(err.Error(), "after retry idle failure") {
+		t.Fatalf("confirmPromptDelivery() error = %v, want retry-idle phase", err)
+	}
+}
+
+func TestConfirmPromptDeliveryReturnsRetryEnterPhaseInTimeoutError(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.amux.waitContentResults = []error{
+		amuxapi.ErrWaitContentTimeout,
+		amuxapi.ErrWaitContentTimeout,
+	}
+	deps.amux.capturePaneSequence("pane-1", []PaneCapture{
+		{Content: []string{"OpenAI Codex", "›"}, CurrentCommand: "codex"},
+		{Content: []string{"OpenAI Codex", "›"}, CurrentCommand: "codex"},
+	})
+	d := deps.newDaemon(t)
+
+	err := d.confirmPromptDelivery(context.Background(), "pane-1", AgentProfile{Name: "codex"})
+	if err == nil || !strings.Contains(err.Error(), "after retry enter") {
+		t.Fatalf("confirmPromptDelivery() error = %v, want retry-enter phase", err)
+	}
+}
