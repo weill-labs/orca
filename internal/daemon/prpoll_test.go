@@ -356,11 +356,11 @@ func TestPRDetectionUsesAdaptiveIntervalsAfterPRDiscovery(t *testing.T) {
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
 	deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[{"bucket":"pending"}]`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergeable"}, ``, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}, ``, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, ``, nil)
 	deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[{"bucket":"pending"}]`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergeable"}, ``, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}, ``, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, ``, nil)
 
 	d := deps.newDaemon(t)
@@ -428,11 +428,11 @@ func TestPRPollResetsAdaptiveWindowWhenTaskPRNumberChanges(t *testing.T) {
 
 	deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[{"bucket":"pending"}]`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergeable"}, ``, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}, ``, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, ``, nil)
 	deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[{"bucket":"pending"}]`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergeable"}, ``, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}, ``, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, ``, nil)
 
 	d := deps.newDaemon(t)
@@ -552,7 +552,7 @@ func TestPRPollingContinuesFollowUpPollsAfterNonRateLimitMergeLookupError(t *tes
 	deps.tickers.enqueue(captureTicker, prTicker)
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, ``, errors.New("gh failed"))
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergeable"}, `{"mergeable":"MERGEABLE"}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}, `{"mergeable":"MERGEABLE"}`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, ``, nil)
 
 	d := deps.newDaemon(t)
@@ -591,7 +591,7 @@ func TestPRPollingSkipsDiscoveryWhenAssignmentAlreadyTracksPR(t *testing.T) {
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--state", "open", "--json", "number"}, `[{"number":42}]`, nil)
 	deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[{"bucket":"pending"}]`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergeable"}, ``, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}, ``, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, ``, nil)
 
 	d := deps.newDaemon(t)
@@ -689,7 +689,7 @@ func TestPRDetectionContinuesForEscalatedWorkers(t *testing.T) {
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-984", "--json", "number"}, `[{"number":42}]`, nil)
 	deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[{"bucket":"pending"}]`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergeable"}, ``, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}, ``, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, ``, nil)
 
 	d := deps.newDaemon(t)
@@ -750,7 +750,7 @@ func TestPRDetectionContinuesForEscalatedStartingWorkers(t *testing.T) {
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-985", "--json", "number"}, `[{"number":42}]`, nil)
 	deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[{"bucket":"pending"}]`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergeable"}, ``, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}, ``, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, ``, nil)
 
 	now := deps.clock.Now()
@@ -837,10 +837,10 @@ func TestPRMergeablePollingNudgesWorkerOnConflictTransitions(t *testing.T) {
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergeable"}, `{"mergeable":"CONFLICTING"}`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergeable"}, `{"mergeable":"CONFLICTING"}`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergeable"}, `{"mergeable":"MERGEABLE"}`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergeable"}, `{"mergeable":"CONFLICTING"}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}, `{"mergeable":"CONFLICTING"}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}, `{"mergeable":"CONFLICTING"}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}, `{"mergeable":"MERGEABLE"}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}, `{"mergeable":"CONFLICTING"}`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, ``, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, ``, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, ``, nil)
@@ -869,7 +869,7 @@ func TestPRMergeablePollingNudgesWorkerOnConflictTransitions(t *testing.T) {
 
 	tickAndWaitForHeartbeat(t, d, deps, prTicker, adaptivePRFastPollInterval, "second conflict poll cycle completion")
 	waitFor(t, "conflicting state re-polled", func() bool {
-		return deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "mergeable"}) == 2
+		return deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}) == 2
 	})
 	if got, want := deps.amux.countKey("pane-1", conflictNudgePrompt+"\n"), 1; got != want {
 		t.Fatalf("conflict nudge count after repeated conflicting poll = %d, want %d", got, want)
@@ -882,7 +882,7 @@ func TestPRMergeablePollingNudgesWorkerOnConflictTransitions(t *testing.T) {
 	waitFor(t, "mergeable state recovery", func() bool {
 		worker, ok := deps.state.worker("pane-1")
 		return ok &&
-			deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "mergeable"}) == 3 &&
+			deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}) == 3 &&
 			worker.LastMergeableState == "MERGEABLE"
 	})
 	if got, want := deps.amux.countKey("pane-1", conflictNudgePrompt+"\n"), 1; got != want {
@@ -897,7 +897,7 @@ func TestPRMergeablePollingNudgesWorkerOnConflictTransitions(t *testing.T) {
 			worker.LastMergeableState == "CONFLICTING"
 	})
 
-	if got, want := deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "mergeable"}), 4; got != want {
+	if got, want := deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}), 4; got != want {
 		t.Fatalf("mergeable poll count = %d, want %d", got, want)
 	}
 	if got, want := deps.events.countType(EventWorkerNudgedConflict), 2; got != want {
@@ -919,6 +919,149 @@ func TestPRMergeablePollingNudgesWorkerOnConflictTransitions(t *testing.T) {
 	})
 }
 
+func TestPRMergeablePollingRetriesUnknownUntilConflict(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	seedTaskMonitorAssignment(t, deps, "LAB-1293", "pane-1", 42)
+	deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, ``, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}, `{"mergeable":"UNKNOWN","mergeStateStatus":"CLEAN"}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}, `{"mergeable":"CONFLICTING","mergeStateStatus":"DIRTY"}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, ``, nil)
+
+	var sleeps []time.Duration
+	d := deps.newDaemonWithOptions(t, func(opts *Options) {
+		opts.Sleep = func(_ context.Context, delay time.Duration) error {
+			sleeps = append(sleeps, delay)
+			return nil
+		}
+	})
+
+	update := d.checkTaskPRPoll(context.Background(), activeTaskMonitorAssignment(t, deps, "LAB-1293"))
+	update.runNudges(context.Background(), d)
+	d.applyTaskStateUpdate(context.Background(), update)
+
+	worker, ok := deps.state.worker("pane-1")
+	if !ok {
+		t.Fatal("worker missing after unknown mergeable retry")
+	}
+	if got, want := worker.LastMergeableState, "CONFLICTING"; got != want {
+		t.Fatalf("worker.LastMergeableState = %q, want %q", got, want)
+	}
+	if got, want := deps.amux.countKey("pane-1", conflictNudgePrompt+"\n"), 1; got != want {
+		t.Fatalf("conflict nudge count = %d, want %d", got, want)
+	}
+	if got, want := deps.events.countType(EventWorkerNudgedConflict), 1; got != want {
+		t.Fatalf("conflict nudge event count = %d, want %d", got, want)
+	}
+	if got, want := deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}), 2; got != want {
+		t.Fatalf("mergeable poll count = %d, want %d", got, want)
+	}
+	if got, want := sleeps, []time.Duration{mergeableUnknownRetryDelay}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("sleep delays = %#v, want %#v", got, want)
+	}
+}
+
+func TestPRMergeablePollingTreatsPersistentUnknownDirtyStateAsConflict(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	seedTaskMonitorAssignment(t, deps, "LAB-1293", "pane-1", 42)
+	deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, ``, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
+	for i := 0; i < 4; i++ {
+		deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}, `{"mergeable":"UNKNOWN","mergeStateStatus":"DIRTY"}`, nil)
+	}
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, ``, nil)
+
+	var sleeps []time.Duration
+	d := deps.newDaemonWithOptions(t, func(opts *Options) {
+		opts.Sleep = func(_ context.Context, delay time.Duration) error {
+			sleeps = append(sleeps, delay)
+			return nil
+		}
+	})
+
+	update := d.checkTaskPRPoll(context.Background(), activeTaskMonitorAssignment(t, deps, "LAB-1293"))
+	update.runNudges(context.Background(), d)
+	d.applyTaskStateUpdate(context.Background(), update)
+
+	worker, ok := deps.state.worker("pane-1")
+	if !ok {
+		t.Fatal("worker missing after dirty fallback mergeable poll")
+	}
+	if got, want := worker.LastMergeableState, "CONFLICTING"; got != want {
+		t.Fatalf("worker.LastMergeableState = %q, want %q", got, want)
+	}
+	if got, want := deps.amux.countKey("pane-1", conflictNudgePrompt+"\n"), 1; got != want {
+		t.Fatalf("conflict nudge count = %d, want %d", got, want)
+	}
+	if got, want := deps.events.countType(EventWorkerNudgedConflict), 1; got != want {
+		t.Fatalf("conflict nudge event count = %d, want %d", got, want)
+	}
+	if got, want := deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}), 4; got != want {
+		t.Fatalf("mergeable poll count = %d, want %d", got, want)
+	}
+	if got, want := sleeps, []time.Duration{mergeableUnknownRetryDelay, mergeableUnknownRetryDelay, mergeableUnknownRetryDelay}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("sleep delays = %#v, want %#v", got, want)
+	}
+}
+
+func TestPRMergeablePollingLeavesPreviousStateOnPersistentUnknownCleanState(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	seedTaskMonitorAssignment(t, deps, "LAB-1293", "pane-1", 42)
+	worker, ok := deps.state.worker("pane-1")
+	if !ok {
+		t.Fatal("worker missing after seed")
+	}
+	worker.LastMergeableState = "MERGEABLE"
+	if err := deps.state.PutWorker(context.Background(), worker); err != nil {
+		t.Fatalf("PutWorker() error = %v", err)
+	}
+
+	deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, ``, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
+	for i := 0; i < 4; i++ {
+		deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}, `{"mergeable":"UNKNOWN","mergeStateStatus":"CLEAN"}`, nil)
+	}
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, ``, nil)
+
+	var sleeps []time.Duration
+	d := deps.newDaemonWithOptions(t, func(opts *Options) {
+		opts.Sleep = func(_ context.Context, delay time.Duration) error {
+			sleeps = append(sleeps, delay)
+			return nil
+		}
+	})
+
+	update := d.checkTaskPRPoll(context.Background(), activeTaskMonitorAssignment(t, deps, "LAB-1293"))
+	update.runNudges(context.Background(), d)
+	d.applyTaskStateUpdate(context.Background(), update)
+
+	worker, ok = deps.state.worker("pane-1")
+	if !ok {
+		t.Fatal("worker missing after clean unknown mergeable poll")
+	}
+	if got, want := worker.LastMergeableState, "MERGEABLE"; got != want {
+		t.Fatalf("worker.LastMergeableState = %q, want %q", got, want)
+	}
+	if got, want := deps.amux.countKey("pane-1", conflictNudgePrompt+"\n"), 0; got != want {
+		t.Fatalf("conflict nudge count = %d, want %d", got, want)
+	}
+	if got, want := deps.events.countType(EventWorkerNudgedConflict), 0; got != want {
+		t.Fatalf("conflict nudge event count = %d, want %d", got, want)
+	}
+	if got, want := deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}), 4; got != want {
+		t.Fatalf("mergeable poll count = %d, want %d", got, want)
+	}
+	if got, want := sleeps, []time.Duration{mergeableUnknownRetryDelay, mergeableUnknownRetryDelay, mergeableUnknownRetryDelay}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("sleep delays = %#v, want %#v", got, want)
+	}
+}
+
 func TestPRMergeablePollingRetriesConflictNudgeAfterWaitIdleFailure(t *testing.T) {
 	t.Parallel()
 
@@ -929,8 +1072,8 @@ func TestPRMergeablePollingRetriesConflictNudgeAfterWaitIdleFailure(t *testing.T
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergeable"}, `{"mergeable":"CONFLICTING"}`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergeable"}, `{"mergeable":"CONFLICTING"}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}, `{"mergeable":"CONFLICTING"}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}, `{"mergeable":"CONFLICTING"}`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, ``, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, ``, nil)
 	waitIdleCalls := 0

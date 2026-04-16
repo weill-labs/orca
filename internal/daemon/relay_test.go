@@ -259,9 +259,9 @@ func TestDaemonRelayEventPullRequestMergeRefreshesSiblingPRConflicts(t *testing.
 	seedTaskMonitorAssignment(t, deps, "LAB-1255", "pane-2", 42)
 
 	deps.commands.queue("gh", []string{"pr", "view", "41", "--json", "mergedAt"}, `{"mergedAt":"2026-04-13T12:00:00Z"}`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergeable"}, `{"mergeable":"UNKNOWN"}`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergeable"}, `{"mergeable":"UNKNOWN"}`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergeable"}, `{"mergeable":"CONFLICTING"}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}, `{"mergeable":"UNKNOWN","mergeStateStatus":"CLEAN"}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}, `{"mergeable":"UNKNOWN","mergeStateStatus":"CLEAN"}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}, `{"mergeable":"CONFLICTING","mergeStateStatus":"DIRTY"}`, nil)
 
 	var (
 		sleepMu sync.Mutex
@@ -299,17 +299,17 @@ func TestDaemonRelayEventPullRequestMergeRefreshesSiblingPRConflicts(t *testing.
 		return ok && worker.LastMergeableState == "CONFLICTING" && deps.events.countType(EventWorkerNudgedConflict) == 1
 	})
 
-	if got, want := deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "mergeable"}), 3; got != want {
+	if got, want := deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}), 3; got != want {
 		t.Fatalf("mergeable refresh call count = %d, want %d", got, want)
 	}
-	if got, want := deps.commands.countCalls("gh", []string{"pr", "view", "41", "--json", "mergeable"}), 0; got != want {
+	if got, want := deps.commands.countCalls("gh", []string{"pr", "view", "41", "--json", prMergeableJSONFields}), 0; got != want {
 		t.Fatalf("merged PR mergeable refresh calls = %d, want %d", got, want)
 	}
 
 	sleepMu.Lock()
 	gotSleeps := append([]time.Duration(nil), sleeps...)
 	sleepMu.Unlock()
-	if want := []time.Duration{5 * time.Second, 10 * time.Second, 10 * time.Second}; !reflect.DeepEqual(gotSleeps, want) {
+	if want := []time.Duration{5 * time.Second, 5 * time.Second, 5 * time.Second}; !reflect.DeepEqual(gotSleeps, want) {
 		t.Fatalf("sleep delays = %#v, want %#v", gotSleeps, want)
 	}
 }
@@ -344,7 +344,7 @@ func TestDaemonRelayEventPullRequestMergeSkipsSiblingConflictRefreshOnBaseBranch
 		return ok && task.Status == TaskStatusDone
 	})
 
-	if got, want := deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "mergeable"}), 0; got != want {
+	if got, want := deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}), 0; got != want {
 		t.Fatalf("mergeable refresh call count = %d, want %d", got, want)
 	}
 	if got, want := deps.events.countType(EventWorkerNudgedConflict), 0; got != want {

@@ -9,11 +9,17 @@ import (
 )
 
 const (
-	conflictNudgePrompt            = "PR has merge conflicts, rebase onto origin/main and push."
-	relayMergeableInitialDelay     = 5 * time.Second
-	relayMergeableRetryInterval    = 10 * time.Second
-	relayMergeableRetryMaxAttempts = 3
+	conflictNudgePrompt           = "PR has merge conflicts, rebase onto origin/main and push."
+	relayMergeableInitialDelay    = 5 * time.Second
+	prMergeableJSONFields         = "mergeable,mergeStateStatus"
+	mergeableUnknownRetryDelay    = 5 * time.Second
+	mergeableUnknownRetryMaxTries = 3
 )
+
+type prMergeabilityPayload struct {
+	Mergeable        string `json:"mergeable"`
+	MergeStateStatus string `json:"mergeStateStatus"`
+}
 
 func (d *Daemon) handleQueuedPRFailure(ctx context.Context, active ActiveAssignment, prNumber int, prompt string, err error) {
 	if ctx.Err() != nil {
@@ -85,24 +91,33 @@ func (d *Daemon) checkTaskImmediateMergeConflictPoll(ctx context.Context, active
 }
 
 func (d *Daemon) lookupPRMergeableState(ctx context.Context, projectPath string, prNumber int) (string, bool, error) {
-	output, err := d.commandRunner(ctx).Run(ctx, projectPath, "gh", "pr", "view", fmt.Sprintf("%d", prNumber), "--json", "mergeable")
-	if err != nil {
-		return "", false, err
-	}
-	if len(output) == 0 {
-		return "", false, nil
+	payload, ok, err := d.lookupPRMergeability(ctx, projectPath, prNumber)
+	if err != nil || !ok {
+		return "", ok, err
 	}
 
-	var payload struct {
-		Mergeable string `json:"mergeable"`
+	state, ok, retry := resolvePRMergeableState(payload)
+	if ok || !retry {
+		return state, ok, nil
 	}
-	if err := json.Unmarshal(output, &payload); err != nil {
-		return "", false, err
+
+	for attempt := 0; attempt < mergeableUnknownRetryMaxTries; attempt++ {
+		if err := d.sleep(ctx, mergeableUnknownRetryDelay); err != nil {
+			return "", false, err
+		}
+
+		payload, ok, err = d.lookupPRMergeability(ctx, projectPath, prNumber)
+		if err != nil || !ok {
+			return "", ok, err
+		}
+
+		state, ok, retry = resolvePRMergeableState(payload)
+		if ok || !retry {
+			return state, ok, nil
+		}
 	}
-	if payload.Mergeable == "" {
-		return "", false, nil
-	}
-	return payload.Mergeable, true, nil
+
+	return fallbackPRMergeableState(payload)
 }
 
 func (d *Daemon) lookupPRMergeableStateAfterMerge(ctx context.Context, projectPath string, prNumber int) (string, bool, error) {
@@ -110,23 +125,72 @@ func (d *Daemon) lookupPRMergeableStateAfterMerge(ctx context.Context, projectPa
 		return "", false, err
 	}
 
-	state, ok, err := d.lookupPRMergeableState(ctx, projectPath, prNumber)
-	if err != nil || !ok || state != "UNKNOWN" {
-		return state, ok, err
+	return d.lookupPRMergeableState(ctx, projectPath, prNumber)
+}
+
+func (d *Daemon) lookupPRMergeability(ctx context.Context, projectPath string, prNumber int) (prMergeabilityPayload, bool, error) {
+	output, err := d.commandRunner(ctx).Run(ctx, projectPath, "gh", "pr", "view", fmt.Sprintf("%d", prNumber), "--json", prMergeableJSONFields)
+	if err != nil {
+		return prMergeabilityPayload{}, false, err
+	}
+	if len(output) == 0 {
+		return prMergeabilityPayload{}, false, nil
 	}
 
-	for attempt := 0; attempt < relayMergeableRetryMaxAttempts; attempt++ {
-		if err := d.sleep(ctx, relayMergeableRetryInterval); err != nil {
-			return "", false, err
-		}
-
-		state, ok, err = d.lookupPRMergeableState(ctx, projectPath, prNumber)
-		if err != nil || !ok || state != "UNKNOWN" {
-			return state, ok, err
-		}
+	var payload prMergeabilityPayload
+	if err := json.Unmarshal(output, &payload); err != nil {
+		return prMergeabilityPayload{}, false, err
 	}
 
-	return state, ok, err
+	payload.Mergeable = strings.TrimSpace(payload.Mergeable)
+	payload.MergeStateStatus = strings.TrimSpace(payload.MergeStateStatus)
+	d.logPRMergeability(prNumber, payload)
+
+	if payload.Mergeable == "" && payload.MergeStateStatus == "" {
+		return prMergeabilityPayload{}, false, nil
+	}
+
+	return payload, true, nil
+}
+
+func (d *Daemon) logPRMergeability(prNumber int, payload prMergeabilityPayload) {
+	if d.logf == nil {
+		return
+	}
+
+	d.logf(
+		"pr mergeability: pr=%d mergeable=%s mergeStateStatus=%s",
+		prNumber,
+		formatPRMergeabilityField(payload.Mergeable),
+		formatPRMergeabilityField(payload.MergeStateStatus),
+	)
+}
+
+func resolvePRMergeableState(payload prMergeabilityPayload) (string, bool, bool) {
+	if payload.Mergeable == "UNKNOWN" {
+		return "", false, true
+	}
+	if payload.MergeStateStatus == "DIRTY" && payload.Mergeable != "CONFLICTING" {
+		return "CONFLICTING", true, false
+	}
+	if payload.Mergeable == "" {
+		return "", false, false
+	}
+	return payload.Mergeable, true, false
+}
+
+func fallbackPRMergeableState(payload prMergeabilityPayload) (string, bool, error) {
+	if payload.MergeStateStatus == "DIRTY" && payload.Mergeable != "CONFLICTING" {
+		return "CONFLICTING", true, nil
+	}
+	return "", false, nil
+}
+
+func formatPRMergeabilityField(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "<empty>"
+	}
+	return value
 }
 
 func mergeQueueRebaseConflictPrompt(prNumber int) string {

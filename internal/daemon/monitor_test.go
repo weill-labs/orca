@@ -21,7 +21,7 @@ func TestDaemonSkipsBufferedPollTickWhilePollCycleIsRunning(t *testing.T) {
 	firstChecks := deps.commands.block("gh", checkArgs)
 	deps.commands.queue("gh", checkArgs, `[{"bucket":"pending"}]`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergeable"}, ``, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}, ``, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, ``, nil)
 
 	d := deps.newDaemon(t)

@@ -25,7 +25,7 @@ func TestCheckTaskPRPollTransitionsTaskState(t *testing.T) {
 				deps.commands.queue("gh", []string{"pr", "list", "--head", issue, "--json", "number"}, `[{"number":42}]`, nil)
 				deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, ``, nil)
 				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
-				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergeable"}, ``, nil)
+				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}, ``, nil)
 				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, ``, nil)
 			},
 			wantState: TaskStatePRDetected,
@@ -38,7 +38,7 @@ func TestCheckTaskPRPollTransitionsTaskState(t *testing.T) {
 			queue: func(deps *testDeps, _ string) {
 				deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[{"bucket":"pending"}]`, nil)
 				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
-				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergeable"}, ``, nil)
+				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}, ``, nil)
 				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, ``, nil)
 			},
 			wantState:   TaskStateCIPending,
@@ -51,7 +51,7 @@ func TestCheckTaskPRPollTransitionsTaskState(t *testing.T) {
 			queue: func(deps *testDeps, _ string) {
 				deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[{"bucket":"pass"}]`, nil)
 				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
-				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergeable"}, ``, nil)
+				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}, ``, nil)
 				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, ``, nil)
 			},
 			wantState:   TaskStateReviewPending,
