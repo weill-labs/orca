@@ -112,23 +112,31 @@ Print version.`,
 var errInvalidOptions = errors.New("cli: invalid options")
 
 type Options struct {
-	Daemon           daemon.Controller
-	State            state.Reader
-	Stdout           io.Writer
-	Stderr           io.Writer
-	Version          string
-	Cwd              func() (string, error)
-	ProjectStatusRPC func(context.Context, string) (daemon.ProjectStatusRPCResult, error)
+	Daemon             daemon.Controller
+	State              state.Reader
+	Stdout             io.Writer
+	Stderr             io.Writer
+	Version            string
+	Cwd                func() (string, error)
+	ProjectStatusRPC   func(context.Context, string) (daemon.ProjectStatusRPCResult, error)
+	ResolvePaths       func() (daemon.Paths, error)
+	ReadPIDFile        func(string) (int, error)
+	ProcessAlive       func(int) (bool, error)
+	ReadProcessEnviron func(int) ([]string, error)
 }
 
 type App struct {
-	daemon           daemon.Controller
-	state            state.Reader
-	stdout           io.Writer
-	stderr           io.Writer
-	version          string
-	cwd              func() (string, error)
-	projectStatusRPC func(context.Context, string) (daemon.ProjectStatusRPCResult, error)
+	daemon             daemon.Controller
+	state              state.Reader
+	stdout             io.Writer
+	stderr             io.Writer
+	version            string
+	cwd                func() (string, error)
+	projectStatusRPC   func(context.Context, string) (daemon.ProjectStatusRPCResult, error)
+	resolvePaths       func() (daemon.Paths, error)
+	readPIDFile        func(string) (int, error)
+	processAlive       func(int) (bool, error)
+	readProcessEnviron func(int) ([]string, error)
 }
 
 func UsageText() string {
@@ -185,15 +193,35 @@ func New(options Options) *App {
 	if projectStatusRPC == nil {
 		projectStatusRPC = defaultProjectStatusRPC
 	}
+	resolvePaths := options.ResolvePaths
+	if resolvePaths == nil {
+		resolvePaths = daemon.ResolvePaths
+	}
+	readPIDFile := options.ReadPIDFile
+	if readPIDFile == nil {
+		readPIDFile = defaultReadPIDFile
+	}
+	processAlive := options.ProcessAlive
+	if processAlive == nil {
+		processAlive = defaultProcessAlive
+	}
+	readProcessEnviron := options.ReadProcessEnviron
+	if readProcessEnviron == nil {
+		readProcessEnviron = defaultReadProcessEnviron
+	}
 
 	return &App{
-		daemon:           options.Daemon,
-		state:            options.State,
-		stdout:           options.Stdout,
-		stderr:           options.Stderr,
-		version:          version,
-		cwd:              options.Cwd,
-		projectStatusRPC: projectStatusRPC,
+		daemon:             options.Daemon,
+		state:              options.State,
+		stdout:             options.Stdout,
+		stderr:             options.Stderr,
+		version:            version,
+		cwd:                options.Cwd,
+		projectStatusRPC:   projectStatusRPC,
+		resolvePaths:       resolvePaths,
+		readPIDFile:        readPIDFile,
+		processAlive:       processAlive,
+		readProcessEnviron: readProcessEnviron,
 	}
 }
 
@@ -427,14 +455,19 @@ func (a *App) runStatus(ctx context.Context, args []string) error {
 	}
 
 	if issue == "" {
-		status, daemonBuildCommit, err := a.projectStatus(ctx, projectPath)
+		projectStatus, err := a.projectStatus(ctx, projectPath)
 		if err != nil {
 			return err
 		}
-		if jsonOutput {
-			return writeJSON(a.stdout, status)
+		if projectStatus.warning != "" {
+			if _, err := fmt.Fprintln(a.stderr, projectStatus.warning); err != nil {
+				return err
+			}
 		}
-		return writeProjectStatus(a.stdout, status, daemonBuildCommit, a.version)
+		if jsonOutput {
+			return writeJSON(a.stdout, projectStatus.status)
+		}
+		return writeProjectStatus(a.stdout, projectStatus.status, projectStatus.daemonBuildCommit, a.version)
 	}
 
 	taskStatus, err := a.state.TaskStatus(ctx, projectPath, issue)
@@ -1046,22 +1079,6 @@ func isHelpFlag(arg string) bool {
 func writeJSON(w io.Writer, value any) error {
 	encoder := json.NewEncoder(w)
 	return encoder.Encode(value)
-}
-
-func (a *App) projectStatus(ctx context.Context, projectPath string) (state.ProjectStatus, string, error) {
-	status, err := a.state.ProjectStatus(ctx, projectPath)
-	if err != nil {
-		return state.ProjectStatus{}, "", err
-	}
-	if status.Daemon == nil || status.Daemon.Status != "running" {
-		return status, "", nil
-	}
-
-	rpcStatus, err := a.projectStatusRPC(ctx, projectPath)
-	if err != nil {
-		return status, "", nil
-	}
-	return rpcStatus.ProjectStatus, strings.TrimSpace(rpcStatus.BuildCommit), nil
 }
 
 func writeProjectStatus(w io.Writer, status state.ProjectStatus, daemonBuildCommit, installedBuildCommit string) error {

@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	state "github.com/weill-labs/orca/internal/daemonstate"
@@ -104,7 +105,7 @@ func callRPC(ctx context.Context, socketPath, method string, params any, result 
 	dialer := net.Dialer{}
 	conn, err := dialer.DialContext(ctx, "unix", socketPath)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ECONNREFUSED) {
 			return ErrDaemonNotRunning
 		}
 		return fmt.Errorf("dial daemon socket %s: %w", socketPath, err)

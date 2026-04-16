@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/weill-labs/orca/internal/cli"
@@ -18,6 +19,15 @@ import (
 var BuildCommit string
 
 var runDaemonServe = daemon.RunProcess
+
+var (
+	openSQLiteStateStore = func(path string) (stateStore, error) {
+		return state.OpenSQLite(path)
+	}
+	openPostgresStateStore = func(dsn string) (stateStore, error) {
+		return state.OpenPostgres(dsn)
+	}
+)
 
 type stateStore interface {
 	state.Store
@@ -37,10 +47,8 @@ type runDependencies struct {
 }
 
 var defaultRunDependencies = runDependencies{
-	resolvePaths: daemon.ResolvePaths,
-	openStateStore: func(path string) (stateStore, error) {
-		return state.OpenSQLite(path)
-	},
+	resolvePaths:   daemon.ResolvePaths,
+	openStateStore: openDefaultStateStore,
 	newController: func(options daemon.ControllerOptions) (daemon.Controller, error) {
 		return daemon.NewLocalController(options)
 	},
@@ -52,6 +60,13 @@ var defaultRunDependencies = runDependencies{
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+}
+
+func openDefaultStateStore(path string) (stateStore, error) {
+	if dsn := strings.TrimSpace(os.Getenv("ORCA_STATE_DSN")); dsn != "" {
+		return openPostgresStateStore(dsn)
+	}
+	return openSQLiteStateStore(path)
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
