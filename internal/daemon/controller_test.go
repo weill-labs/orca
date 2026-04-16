@@ -486,9 +486,9 @@ func TestLocalControllerAssignAndBatchRPC(t *testing.T) {
 				requests <- req
 				switch req.Method {
 				case "assign":
-					_ = json.NewEncoder(conn).Encode(rpcSuccess(req.ID, TaskActionResult{Project: projectPath, Issue: "LAB-718", Status: TaskStatusActive, Agent: "claude"}))
+					_ = json.NewEncoder(conn).Encode(rpcSuccess(req.ID, TaskActionResult{Project: projectPath, Issue: "GH-718", Status: TaskStatusActive, Agent: "claude"}))
 				case "batch":
-					_ = json.NewEncoder(conn).Encode(rpcSuccess(req.ID, BatchResult{Project: projectPath, Results: []TaskActionResult{{Project: projectPath, Issue: "LAB-719", Status: TaskStatusActive, Agent: "codex"}}}))
+					_ = json.NewEncoder(conn).Encode(rpcSuccess(req.ID, BatchResult{Project: projectPath, Results: []TaskActionResult{{Project: projectPath, Issue: "GH-719", Status: TaskStatusActive, Agent: "codex"}}}))
 				}
 			}
 			_ = conn.Close()
@@ -505,7 +505,7 @@ func TestLocalControllerAssignAndBatchRPC(t *testing.T) {
 
 	assignResult, err := controller.Assign(context.Background(), AssignRequest{
 		Project:    projectPath,
-		Issue:      "  LAB-718  ",
+		Issue:      "  #718  ",
 		Prompt:     "Implement controller assign.",
 		Agent:      "  claude  ",
 		CallerPane: "  pane-13  ",
@@ -514,13 +514,13 @@ func TestLocalControllerAssignAndBatchRPC(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Assign() error = %v", err)
 	}
-	if got, want := assignResult.Issue, "LAB-718"; got != want {
+	if got, want := assignResult.Issue, "GH-718"; got != want {
 		t.Fatalf("assign issue = %q, want %q", got, want)
 	}
 
 	batchReq := BatchRequest{
 		Project:    projectPath,
-		Entries:    []BatchEntry{{Issue: "  LAB-719  ", Agent: "  codex  ", Prompt: "Implement controller batch.", Title: "  Batch title  "}},
+		Entries:    []BatchEntry{{Issue: "  #719  ", Agent: "  codex  ", Prompt: "Implement controller batch.", Title: "  Batch title  "}},
 		Delay:      7 * time.Second,
 		CallerPane: "  pane-13  ",
 	}
@@ -543,7 +543,7 @@ func TestLocalControllerAssignAndBatchRPC(t *testing.T) {
 	}
 	if got, want := assignParams, (assignRPCParams{
 		Project:    projectPath,
-		Issue:      "LAB-718",
+		Issue:      "GH-718",
 		Prompt:     "Implement controller assign.",
 		Agent:      "claude",
 		CallerPane: "pane-13",
@@ -560,7 +560,7 @@ func TestLocalControllerAssignAndBatchRPC(t *testing.T) {
 	if err := json.Unmarshal(batchRPCRequest.Params, &batchParams); err != nil {
 		t.Fatalf("json.Unmarshal(batch params) error = %v", err)
 	}
-	if got, want := batchParams.Entries, []BatchEntry{{Issue: "LAB-719", Agent: "codex", Prompt: "Implement controller batch.", Title: "Batch title"}}; !reflect.DeepEqual(got, want) {
+	if got, want := batchParams.Entries, []BatchEntry{{Issue: "GH-719", Agent: "codex", Prompt: "Implement controller batch.", Title: "Batch title"}}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("batch entries = %#v, want %#v", got, want)
 	}
 	if got, want := batchParams.Project, projectPath; got != want {

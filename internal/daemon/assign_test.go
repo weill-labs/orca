@@ -265,6 +265,108 @@ func TestAssignResolvesPaneTitle(t *testing.T) {
 	}
 }
 
+func TestAssignUsesGitHubIssueContextAndSkipsLinear(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	deps.commands.queue("gh", []string{"issue", "view", "702", "--json", "title,body"}, `{"title":"Assign should accept GitHub issue numbers","body":"## Problem\n\nGitHub issues should be first-class assign targets."}`, nil)
+	deps.commands.queue("gh", []string{"pr", "list", "--head", "GH-702", "--state", "open", "--json", "number"}, `[]`, nil)
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "#702", "Implement the GitHub issue flow", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	waitFor(t, "github-backed task registration", func() bool {
+		task, ok := deps.state.task("GH-702")
+		return ok && task.Status == TaskStatusActive
+	})
+
+	task, ok := deps.state.task("GH-702")
+	if !ok {
+		t.Fatal("task not stored in state")
+	}
+	if got, want := task.Branch, "GH-702"; got != want {
+		t.Fatalf("task.Branch = %q, want %q", got, want)
+	}
+
+	deps.amux.requireMetadata(t, "pane-1", map[string]string{
+		"agent_profile":  "codex",
+		"branch":         "GH-702",
+		"task":           "Assign should accept GitHub issue numbers",
+		"tracked_issues": `[{"id":"GH-702","status":"active"}]`,
+	})
+	deps.amux.requireSentKeys(t, "pane-1", []string{
+		wrappedCodexPrompt(strings.Join([]string{
+			"GitHub issue GH-702",
+			"Title: Assign should accept GitHub issue numbers",
+			"",
+			"Body:",
+			"## Problem",
+			"",
+			"GitHub issues should be first-class assign targets.",
+			"",
+			"Task:",
+			"Implement the GitHub issue flow",
+		}, "\n")) + "\n",
+	})
+	if got := deps.issueTracker.lookups(); len(got) != 0 {
+		t.Fatalf("issue title lookups = %#v, want none", got)
+	}
+	if got := deps.issueTracker.statuses(); len(got) != 0 {
+		t.Fatalf("issue tracker statuses = %#v, want none", got)
+	}
+	if got, want := deps.commands.countCalls("gh", []string{"issue", "view", "702", "--json", "title,body"}), 1; got != want {
+		t.Fatalf("gh issue view calls = %d, want %d", got, want)
+	}
+	if got, want := deps.commands.countCalls("gh", []string{"pr", "list", "--head", "GH-702", "--state", "open", "--json", "number"}), 1; got != want {
+		t.Fatalf("gh pr list calls = %d, want %d", got, want)
+	}
+}
+
+func TestAssignFailsWhenGitHubIssueLookupFailsBeforePRLookupOrCloneAcquire(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	deps.commands.queue("gh", []string{"issue", "view", "702", "--json", "title,body"}, ``, errors.New("gh: issue not found"))
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	err := d.Assign(ctx, "GH-702", "Implement the GitHub issue flow", "codex")
+	if err == nil {
+		t.Fatal("Assign() succeeded, want GitHub issue lookup error")
+	}
+	if !strings.Contains(err.Error(), "lookup GitHub issue GH-702") {
+		t.Fatalf("Assign() error = %v, want GitHub issue lookup context", err)
+	}
+	if got, want := deps.commands.countCalls("gh", []string{"pr", "list", "--head", "GH-702", "--state", "open", "--json", "number"}), 0; got != want {
+		t.Fatalf("gh pr list calls = %d, want %d", got, want)
+	}
+	if got, want := deps.pool.acquireCallCount(), 0; got != want {
+		t.Fatalf("pool acquire calls = %d, want %d", got, want)
+	}
+	if got, want := len(deps.amux.spawnRequests), 0; got != want {
+		t.Fatalf("spawn requests = %d, want %d", got, want)
+	}
+}
+
 func TestAssignRollsBackOnPromptSendFailure(t *testing.T) {
 	t.Parallel()
 
@@ -759,6 +861,18 @@ func TestValidateAssignmentPrompt(t *testing.T) {
 			name:    "allows mentioning the linear issue as context",
 			prompt:  "Follow up from CHANGES_REQUESTED. See the Linear issue for context.",
 			wantErr: false,
+		},
+		{
+			name:    "allows assigned github issue alias from backlog context",
+			issue:   "GH-702",
+			prompt:  "Address #702 from the backlog and start working.",
+			wantErr: false,
+		},
+		{
+			name:    "rejects different github issue alias from backlog context",
+			issue:   "GH-702",
+			prompt:  "Address #703 from the backlog and start working.",
+			wantErr: true,
 		},
 		{
 			name:    "allows mentioning the new worker",
