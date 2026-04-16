@@ -57,36 +57,6 @@ func TestConfirmPromptDeliveryReturnsSendKeysErrorOnRetry(t *testing.T) {
 	deps.amux.requireSentKeys(t, "pane-1", nil)
 }
 
-func TestConfirmPromptDeliveryRetriesAfterWaitIdleTimeout(t *testing.T) {
-	t.Parallel()
-
-	deps := newTestDeps(t)
-	deps.amux.waitContentResults = []error{
-		amuxapi.ErrWaitContentTimeout,
-		amuxapi.ErrWaitContentTimeout,
-		nil,
-	}
-	deps.amux.waitIdleErr = errors.New("wait idle timed out")
-	d := deps.newDaemon(t)
-
-	if err := d.confirmPromptDelivery(context.Background(), "pane-1", AgentProfile{Name: "codex"}); err != nil {
-		t.Fatalf("confirmPromptDelivery() error = %v", err)
-	}
-	if got, want := deps.amux.waitContentCalls, []waitContentCall{
-		{PaneID: "pane-1", Substring: codexWorkingText, Timeout: defaultAgentHandshakeTimeout},
-		{PaneID: "pane-1", Substring: codexWorkingText, Timeout: defaultAgentHandshakeTimeout},
-		{PaneID: "pane-1", Substring: codexWorkingText, Timeout: defaultAgentHandshakeTimeout},
-	}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("waitContent calls = %#v, want %#v", got, want)
-	}
-	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
-		{PaneID: "pane-1", Timeout: codexPromptRetryIdleProbeTime},
-	}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("waitIdle calls = %#v, want %#v", got, want)
-	}
-	deps.amux.requireSentKeys(t, "pane-1", []string{"Enter"})
-}
-
 func TestConfirmPromptDeliverySucceedsWhenWorkingAppearsAfterRetryIdleError(t *testing.T) {
 	t.Parallel()
 
@@ -100,6 +70,17 @@ func TestConfirmPromptDeliverySucceedsWhenWorkingAppearsAfterRetryIdleError(t *t
 
 	if err := d.confirmPromptDelivery(context.Background(), "pane-1", AgentProfile{Name: "codex"}); err != nil {
 		t.Fatalf("confirmPromptDelivery() error = %v", err)
+	}
+	if got, want := deps.amux.waitContentCalls, []waitContentCall{
+		{PaneID: "pane-1", Substring: codexWorkingText, Timeout: defaultAgentHandshakeTimeout},
+		{PaneID: "pane-1", Substring: codexWorkingText, Timeout: 2 * defaultAgentHandshakeTimeout},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("waitContent calls = %#v, want %#v", got, want)
+	}
+	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
+		{PaneID: "pane-1", Timeout: codexPromptRetryIdleProbeTime},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("waitIdle calls = %#v, want %#v", got, want)
 	}
 	deps.amux.requireSentKeys(t, "pane-1", []string{"Enter"})
 }
