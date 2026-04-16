@@ -274,7 +274,19 @@ func TestPRReviewPollingEmitsApprovedEventOncePerApprovalTransition(t *testing.T
 	}, nil))
 	queuePRReviewPayload(deps, 42, marshalReviewPayload(t, "APPROVED", []prReview{
 		testReview("alice", "APPROVED", "Looks good."),
-	}, nil))
+	}, []prComment{
+		testIssueComment("github-actions", "CI finished successfully."),
+	}))
+	queuePRReviewPayload(deps, 42, marshalReviewPayload(t, "CHANGES_REQUESTED", []prReview{
+		testReview("alice", "APPROVED", "Looks good."),
+	}, []prComment{
+		testIssueComment("github-actions", "CI finished successfully."),
+	}))
+	queuePRReviewPayload(deps, 42, marshalReviewPayload(t, "APPROVED", []prReview{
+		testReview("alice", "APPROVED", "Looks good."),
+	}, []prComment{
+		testIssueComment("github-actions", "CI finished successfully."),
+	}))
 
 	d := deps.newDaemon(t)
 	ctx := context.Background()
@@ -294,6 +306,7 @@ func TestPRReviewPollingEmitsApprovedEventOncePerApprovalTransition(t *testing.T
 		worker, ok := deps.state.worker("pane-1")
 		return ok &&
 			worker.LastReviewCount == 1 &&
+			worker.ReviewApproved &&
 			deps.events.countType(EventReviewApproved) == 1 &&
 			stateEventCountByType(deps.state, EventReviewApproved) == 1
 	})
@@ -306,9 +319,13 @@ func TestPRReviewPollingEmitsApprovedEventOncePerApprovalTransition(t *testing.T
 		t.Fatalf("approved event message = %q, want %q", got, want)
 	}
 
-	tickAndWaitForHeartbeat(t, d, deps, prTicker, adaptivePRFastPollInterval, "repeat approval review poll cycle completion")
-	waitFor(t, "repeat approval poll processed", func() bool {
-		return deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}) == 2
+	tickAndWaitForHeartbeat(t, d, deps, prTicker, adaptivePRFastPollInterval, "approval review poll after non-blocking comment")
+	waitFor(t, "approval poll processed with new comment", func() bool {
+		worker, ok := deps.state.worker("pane-1")
+		return ok &&
+			deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}) == 2 &&
+			worker.LastIssueCommentCount == 1 &&
+			worker.ReviewApproved
 	})
 
 	if got, want := deps.events.countType(EventReviewApproved), 1; got != want {
@@ -320,6 +337,24 @@ func TestPRReviewPollingEmitsApprovedEventOncePerApprovalTransition(t *testing.T
 	if got, want := deps.events.countType(EventWorkerNudgedReview), 0; got != want {
 		t.Fatalf("review nudge event count = %d, want %d", got, want)
 	}
+
+	tickAndWaitForHeartbeat(t, d, deps, prTicker, adaptivePRFastPollInterval, "approval state cleared poll cycle completion")
+	waitFor(t, "approval state cleared", func() bool {
+		worker, ok := deps.state.worker("pane-1")
+		return ok &&
+			deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}) == 3 &&
+			!worker.ReviewApproved
+	})
+
+	tickAndWaitForHeartbeat(t, d, deps, prTicker, adaptivePRFastPollInterval, "approval re-emitted poll cycle completion")
+	waitFor(t, "approval re-emitted", func() bool {
+		worker, ok := deps.state.worker("pane-1")
+		return ok &&
+			deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}) == 4 &&
+			worker.ReviewApproved &&
+			deps.events.countType(EventReviewApproved) == 2 &&
+			stateEventCountByType(deps.state, EventReviewApproved) == 2
+	})
 	deps.amux.requireSentKeys(t, "pane-1", []string{wrappedCodexPrompt("Implement daemon core") + "\n"})
 }
 
