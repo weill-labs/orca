@@ -78,6 +78,25 @@ func TestCallRPCAndHelpers(t *testing.T) {
 	}
 }
 
+func TestCallRPCTreatsConnectionRefusedAsDaemonNotRunning(t *testing.T) {
+	t.Parallel()
+
+	socketPath := filepath.Join(t.TempDir(), "orca.sock")
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("Listen(%q) error = %v", socketPath, err)
+	}
+	if err := listener.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	var result MergeQueueActionResult
+	err = callRPC(context.Background(), socketPath, "enqueue", enqueueRPCParams{PRNumber: 42}, &result)
+	if !errors.Is(err, ErrDaemonNotRunning) {
+		t.Fatalf("callRPC() connection refused error = %v, want ErrDaemonNotRunning", err)
+	}
+}
+
 func TestProjectStatusRPC(t *testing.T) {
 	t.Parallel()
 

@@ -378,7 +378,8 @@ func TestAppRunDispatchesCommands(t *testing.T) {
 				Cwd: func() (string, error) {
 					return cwdPath, nil
 				},
-				ProjectStatusRPC: func(context.Context, string) (daemon.ProjectStatusRPCResult, error) {
+				ProjectStatusRPC: func(_ context.Context, project string) (daemon.ProjectStatusRPCResult, error) {
+					s.projectStatusProject = project
 					return daemon.ProjectStatusRPCResult{ProjectStatus: s.projectStatus}, nil
 				},
 			})
@@ -541,7 +542,6 @@ func TestAppRunStatusDaemonVersionAnnotation(t *testing.T) {
 		name            string
 		installedCommit string
 		daemonCommit    string
-		rpcErr          error
 		wantLine        string
 		wantNotContains string
 	}{
@@ -555,13 +555,6 @@ func TestAppRunStatusDaemonVersionAnnotation(t *testing.T) {
 			name:            "matching commits omit warning",
 			installedCommit: "abc1234",
 			daemonCommit:    "abc1234",
-			wantLine:        "daemon: running\n",
-			wantNotContains: "restart recommended",
-		},
-		{
-			name:            "rpc failure falls back to plain running status",
-			installedCommit: "def5678",
-			rpcErr:          errors.New("daemon unavailable"),
 			wantLine:        "daemon: running\n",
 			wantNotContains: "restart recommended",
 		},
@@ -599,10 +592,10 @@ func TestAppRunStatusDaemonVersionAnnotation(t *testing.T) {
 				Cwd: func() (string, error) {
 					return projectPath, nil
 				},
+				ResolvePaths: func() (daemon.Paths, error) {
+					return daemon.Paths{PIDDir: filepath.Join(t.TempDir(), "pids")}, nil
+				},
 				ProjectStatusRPC: func(context.Context, string) (daemon.ProjectStatusRPCResult, error) {
-					if tt.rpcErr != nil {
-						return daemon.ProjectStatusRPCResult{}, tt.rpcErr
-					}
 					return daemon.ProjectStatusRPCResult{
 						ProjectStatus: projectStatus,
 						BuildCommit:   tt.daemonCommit,
@@ -623,6 +616,192 @@ func TestAppRunStatusDaemonVersionAnnotation(t *testing.T) {
 				t.Fatalf("stderr = %q, want empty", stderr.String())
 			}
 		})
+	}
+}
+
+func TestAppRunStatusUsesDaemonRPCBeforeStateFallback(t *testing.T) {
+	t.Parallel()
+
+	projectPath := t.TempDir()
+	if err := os.Mkdir(filepath.Join(projectPath, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+
+	store := &fakeState{
+		projectStatus: state.ProjectStatus{
+			Project: projectPath,
+			Daemon: &state.DaemonStatus{
+				Status:  "stopped",
+				Session: "from-store",
+				PID:     11,
+			},
+		},
+	}
+	liveStatus := state.ProjectStatus{
+		Project: projectPath,
+		Daemon: &state.DaemonStatus{
+			Status:  "running",
+			Session: "from-daemon",
+			PID:     42,
+		},
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	app := New(Options{
+		Daemon:  &fakeDaemon{},
+		State:   store,
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		Version: "build-123",
+		Cwd: func() (string, error) {
+			return projectPath, nil
+		},
+		ResolvePaths: func() (daemon.Paths, error) {
+			return daemon.Paths{PIDDir: filepath.Join(t.TempDir(), "pids")}, nil
+		},
+		ProjectStatusRPC: func(_ context.Context, gotProject string) (daemon.ProjectStatusRPCResult, error) {
+			if got, want := gotProject, projectPath; got != want {
+				t.Fatalf("ProjectStatusRPC project = %q, want %q", got, want)
+			}
+			return daemon.ProjectStatusRPCResult{
+				ProjectStatus: liveStatus,
+				BuildCommit:   "abc1234",
+			}, nil
+		},
+	})
+
+	if err := app.Run(context.Background(), []string{"status"}); err != nil {
+		t.Fatalf("Run(status) error = %v", err)
+	}
+	if store.projectStatusCalls != 0 {
+		t.Fatalf("project status fallback calls = %d, want 0", store.projectStatusCalls)
+	}
+	if got := stdout.String(); !strings.Contains(got, "daemon: running") || !strings.Contains(got, "session: from-daemon") {
+		t.Fatalf("stdout = %q, want live daemon status", got)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+}
+
+func TestAppRunStatusFallsBackToStateWhenDaemonSocketUnavailable(t *testing.T) {
+	t.Parallel()
+
+	projectPath := t.TempDir()
+	if err := os.Mkdir(filepath.Join(projectPath, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+
+	store := &fakeState{
+		projectStatus: state.ProjectStatus{
+			Project: projectPath,
+			Daemon: &state.DaemonStatus{
+				Status:  "running",
+				Session: "from-store",
+				PID:     99,
+			},
+		},
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	app := New(Options{
+		Daemon:  &fakeDaemon{},
+		State:   store,
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		Version: "build-123",
+		Cwd: func() (string, error) {
+			return projectPath, nil
+		},
+		ProjectStatusRPC: func(context.Context, string) (daemon.ProjectStatusRPCResult, error) {
+			return daemon.ProjectStatusRPCResult{}, daemon.ErrDaemonNotRunning
+		},
+		ResolvePaths: func() (daemon.Paths, error) {
+			return daemon.Paths{PIDDir: filepath.Join(t.TempDir(), "pids")}, nil
+		},
+		ReadPIDFile: func(string) (int, error) {
+			return 99, nil
+		},
+		ProcessAlive: func(pid int) (bool, error) {
+			if got, want := pid, 99; got != want {
+				t.Fatalf("ProcessAlive pid = %d, want %d", got, want)
+			}
+			return false, nil
+		},
+	})
+
+	if err := app.Run(context.Background(), []string{"status"}); err != nil {
+		t.Fatalf("Run(status) error = %v", err)
+	}
+	if got, want := store.projectStatusCalls, 1; got != want {
+		t.Fatalf("project status fallback calls = %d, want %d", got, want)
+	}
+	if got := stdout.String(); !strings.Contains(got, "daemon: stopped") {
+		t.Fatalf("stdout = %q, want stopped fallback status", got)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+}
+
+func TestAppRunStatusWarnsWhenDaemonBackendDiffersFromShell(t *testing.T) {
+	projectPath := t.TempDir()
+	if err := os.Mkdir(filepath.Join(projectPath, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+
+	t.Setenv("ORCA_STATE_DSN", "")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	app := New(Options{
+		Daemon:  &fakeDaemon{},
+		State:   &fakeState{},
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		Version: "build-123",
+		Cwd: func() (string, error) {
+			return projectPath, nil
+		},
+		ProjectStatusRPC: func(context.Context, string) (daemon.ProjectStatusRPCResult, error) {
+			return daemon.ProjectStatusRPCResult{
+				ProjectStatus: state.ProjectStatus{
+					Project: projectPath,
+					Daemon: &state.DaemonStatus{
+						Status:  "running",
+						Session: "alpha",
+						PID:     42,
+					},
+				},
+			}, nil
+		},
+		ResolvePaths: func() (daemon.Paths, error) {
+			return daemon.Paths{PIDDir: "/tmp/orca-test-pids"}, nil
+		},
+		ReadPIDFile: func(path string) (int, error) {
+			if got, want := path, filepath.Join("/tmp/orca-test-pids", "orca.pid"); got != want {
+				t.Fatalf("ReadPIDFile path = %q, want %q", got, want)
+			}
+			return 42, nil
+		},
+		ReadProcessEnviron: func(pid int) ([]string, error) {
+			if got, want := pid, 42; got != want {
+				t.Fatalf("ReadProcessEnviron pid = %d, want %d", got, want)
+			}
+			return []string{"ORCA_STATE_DSN=postgres://orca:orca@localhost/orca"}, nil
+		},
+	})
+
+	if err := app.Run(context.Background(), []string{"status"}); err != nil {
+		t.Fatalf("Run(status) error = %v", err)
+	}
+	if got, want := stderr.String(), "Warning: daemon is running on postgres but this shell reads sqlite. Consider sourcing ~/.env.\n"; got != want {
+		t.Fatalf("stderr = %q, want %q", got, want)
+	}
+	if got := stdout.String(); !strings.Contains(got, "daemon: running") {
+		t.Fatalf("stdout = %q, want running daemon status", got)
 	}
 }
 
@@ -1414,6 +1593,10 @@ func TestAppCommandsAcceptProjectFlag(t *testing.T) {
 				Cwd: func() (string, error) {
 					return cwdPath, nil
 				},
+				ProjectStatusRPC: func(_ context.Context, project string) (daemon.ProjectStatusRPCResult, error) {
+					s.projectStatusProject = project
+					return daemon.ProjectStatusRPCResult{ProjectStatus: s.projectStatus}, nil
+				},
 			})
 
 			if tt.name == "batch" {
@@ -1888,6 +2071,7 @@ func (f *fakeDaemon) Resume(_ context.Context, req daemon.ResumeRequest) (daemon
 
 type fakeState struct {
 	projectStatusProject string
+	projectStatusCalls   int
 	taskStatusProject    string
 	taskStatusIssue      string
 	workersProject       string
@@ -1907,6 +2091,7 @@ func (f *fakeState) ProjectStatus(_ context.Context, project string) (state.Proj
 	if f.err != nil {
 		return state.ProjectStatus{}, f.err
 	}
+	f.projectStatusCalls++
 	f.projectStatusProject = project
 	return f.projectStatus, nil
 }
