@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -623,6 +624,95 @@ func TestPRPollingSkipsDiscoveryWhenAssignmentAlreadyTracksPR(t *testing.T) {
 		t.Fatal("task not stored in fake state")
 	} else if got, want := task.PRNumber, 42; got != want {
 		t.Fatalf("task.PRNumber = %d, want %d", got, want)
+	}
+}
+
+func TestPRPollFallsBackToIssueIDSearchAndPersistsObservedBranch(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.config.profiles["codex"] = AgentProfile{
+		Name:              "codex",
+		StartCommand:      "codex --yolo",
+		ResumeSequence:    []string{"codex --yolo resume", "Enter", "."},
+		PostmortemEnabled: false,
+		StuckTimeout:      5 * time.Minute,
+		NudgeCommand:      "Enter",
+		MaxNudgeRetries:   3,
+	}
+	seedTaskMonitorAssignment(t, deps, "LAB-123", "pane-1", 0)
+	task, ok := deps.state.task("LAB-123")
+	if !ok {
+		t.Fatal("task missing after seed")
+	}
+	task.Branch = "LAB-123"
+	deps.state.putTaskForTest(task)
+
+	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-123", "--json", "number"}, `[]`, nil)
+	deps.commands.queue("gh", []string{"pr", "list", "--search", "LAB-123 in:title", "--state", "all", "--json", "number,state,headRefName", "--limit", "5"}, `[{"number":456,"state":"MERGED","headRefName":"lab-123-renamed"}]`, nil)
+	deps.commands.queue("gh", []string{"pr", "checks", "456", "--json", "bucket"}, `[]`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "456", "--json", "mergedAt"}, `{"mergedAt":"2026-04-02T12:00:00Z"}`, nil)
+
+	d := deps.newDaemon(t)
+
+	update := d.checkTaskPRPoll(context.Background(), activeTaskMonitorAssignment(t, deps, "LAB-123"))
+	d.applyTaskStateUpdate(context.Background(), update)
+
+	task, ok = deps.state.task("LAB-123")
+	if !ok {
+		t.Fatal("task missing after poll")
+	}
+	if got, want := task.PRNumber, 456; got != want {
+		t.Fatalf("task.PRNumber = %d, want %d", got, want)
+	}
+	if got, want := task.Branch, "lab-123-renamed"; got != want {
+		t.Fatalf("task.Branch = %q, want %q", got, want)
+	}
+	if got, want := task.Status, TaskStatusDone; got != want {
+		t.Fatalf("task.Status = %q, want %q", got, want)
+	}
+	if got, want := deps.events.countType(EventPRDetected), 1; got != want {
+		t.Fatalf("PR detected event count = %d, want %d", got, want)
+	}
+}
+
+func TestPRPollDoesNotGuessFromAmbiguousIssueIDSearch(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	seedTaskMonitorAssignment(t, deps, "LAB-123", "pane-1", 0)
+
+	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-123", "--json", "number"}, `[]`, nil)
+	deps.commands.queue("gh", []string{"pr", "list", "--search", "LAB-123 in:title", "--state", "all", "--json", "number,state,headRefName", "--limit", "5"}, `[
+		{"number":456,"state":"OPEN","headRefName":"lab-123-renamed"},
+		{"number":457,"state":"MERGED","headRefName":"lab-123-old"}
+	]`, nil)
+
+	var logs strings.Builder
+	d := deps.newDaemonWithOptions(t, func(opts *Options) {
+		opts.Logf = func(format string, args ...any) {
+			fmt.Fprintf(&logs, format, args...)
+		}
+	})
+
+	update := d.checkTaskPRPoll(context.Background(), activeTaskMonitorAssignment(t, deps, "LAB-123"))
+	d.applyTaskStateUpdate(context.Background(), update)
+
+	task, ok := deps.state.task("LAB-123")
+	if !ok {
+		t.Fatal("task missing after poll")
+	}
+	if got := task.PRNumber; got != 0 {
+		t.Fatalf("task.PRNumber = %d, want 0", got)
+	}
+	if got, want := task.Branch, "LAB-123"; got != want {
+		t.Fatalf("task.Branch = %q, want %q", got, want)
+	}
+	if got, want := deps.events.countType(EventPRDetected), 0; got != want {
+		t.Fatalf("PR detected event count = %d, want %d", got, want)
+	}
+	if got := logs.String(); !strings.Contains(got, "LAB-123") || !strings.Contains(got, "multiple pull requests") {
+		t.Fatalf("logs = %q, want ambiguous search message", got)
 	}
 }
 

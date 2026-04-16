@@ -3,7 +3,9 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -276,6 +278,73 @@ func TestGitHubCLIClientLookupOpenOrMergedPRNumber(t *testing.T) {
 	}
 }
 
+func TestGitHubCLIClientFindPRByIssueID(t *testing.T) {
+	t.Parallel()
+
+	t.Run("returns pr number and observed branch for unique match", func(t *testing.T) {
+		t.Parallel()
+
+		commands := newFakeCommands()
+		client := newGitHubCLIClient(gitHubCLIClientConfig{
+			project:     "/tmp/project",
+			commands:    commands,
+			sleep:       noSleep,
+			maxAttempts: 1,
+		})
+		args := []string{"pr", "list", "--search", "LAB-1322 in:title", "--state", "all", "--json", "number,state,headRefName", "--limit", "5"}
+		commands.queue("gh", args, `[{"number":456,"state":"MERGED","headRefName":"lab-1322-renamed"}]`, nil)
+
+		number, branch, err := client.findPRByIssueID(context.Background(), "LAB-1322")
+		if err != nil {
+			t.Fatalf("findPRByIssueID() error = %v", err)
+		}
+		if got, want := number, 456; got != want {
+			t.Fatalf("findPRByIssueID() number = %d, want %d", got, want)
+		}
+		if got, want := branch, "lab-1322-renamed"; got != want {
+			t.Fatalf("findPRByIssueID() branch = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("returns no match and logs when search is ambiguous", func(t *testing.T) {
+		t.Parallel()
+
+		commands := newFakeCommands()
+		var logs []string
+		client := newGitHubCLIClient(gitHubCLIClientConfig{
+			project:     "/tmp/project",
+			commands:    commands,
+			sleep:       noSleep,
+			maxAttempts: 1,
+			logf: func(format string, args ...any) {
+				logs = append(logs, fmt.Sprintf(format, args...))
+			},
+		})
+		args := []string{"pr", "list", "--search", "LAB-1322 in:title", "--state", "all", "--json", "number,state,headRefName", "--limit", "5"}
+		commands.queue("gh", args, `[
+			{"number":456,"state":"OPEN","headRefName":"lab-1322-renamed"},
+			{"number":457,"state":"MERGED","headRefName":"lab-1322-old"}
+		]`, nil)
+
+		number, branch, err := client.findPRByIssueID(context.Background(), "LAB-1322")
+		if err != nil {
+			t.Fatalf("findPRByIssueID() error = %v", err)
+		}
+		if got := number; got != 0 {
+			t.Fatalf("findPRByIssueID() number = %d, want 0", got)
+		}
+		if got := branch; got != "" {
+			t.Fatalf("findPRByIssueID() branch = %q, want empty", got)
+		}
+		if got := len(logs); got != 1 {
+			t.Fatalf("log count = %d, want 1", got)
+		}
+		if got := logs[0]; !strings.Contains(got, "LAB-1322") || !strings.Contains(got, "multiple pull requests") {
+			t.Fatalf("log message = %q, want ambiguous search context", got)
+		}
+	})
+}
+
 func TestParsePRNumberList(t *testing.T) {
 	t.Parallel()
 
@@ -302,6 +371,48 @@ func TestParsePRNumberList(t *testing.T) {
 			}
 			if got != tc.want {
 				t.Fatalf("parsePRNumberList() = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestParseIssueIDPRSearchResults(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		output     []byte
+		wantNumber int
+		wantBranch string
+		wantErr    bool
+	}{
+		{name: "empty output"},
+		{name: "empty list", output: []byte(`[]`)},
+		{name: "single match", output: []byte(`[{"number":456,"state":"MERGED","headRefName":"lab-1322-renamed"}]`), wantNumber: 456, wantBranch: "lab-1322-renamed"},
+		{name: "multiple matches", output: []byte(`[{"number":456,"state":"OPEN","headRefName":"lab-1322-renamed"},{"number":457,"state":"MERGED","headRefName":"lab-1322-old"}]`)},
+		{name: "invalid json", output: []byte(`{`), wantErr: true},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			gotNumber, gotBranch, gotMultiple, err := parseIssueIDPRSearchResults(tt.output)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("parseIssueIDPRSearchResults() error = %v, wantErr = %v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				return
+			}
+			if gotNumber != tt.wantNumber {
+				t.Fatalf("parseIssueIDPRSearchResults() number = %d, want %d", gotNumber, tt.wantNumber)
+			}
+			if gotBranch != tt.wantBranch {
+				t.Fatalf("parseIssueIDPRSearchResults() branch = %q, want %q", gotBranch, tt.wantBranch)
+			}
+			if got, want := gotMultiple, tt.name == "multiple matches"; got != want {
+				t.Fatalf("parseIssueIDPRSearchResults() multiple = %v, want %v", got, want)
 			}
 		})
 	}
