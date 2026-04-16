@@ -81,6 +81,7 @@ func TestReconcileMissingPRNumbersBackfillsMergedPRNumberAndCompletes(t *testing
 	deps.events.requireTypes(t, EventPRDetected, EventPRMerged, EventWorkerPostmortem, EventTaskCompleted)
 	deps.amux.requireSentKeys(t, "pane-1", []string{
 		mergedWrapUpPrompt,
+		"Enter",
 		postmortemCommand,
 		"Enter",
 	})

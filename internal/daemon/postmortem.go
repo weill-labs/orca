@@ -100,7 +100,7 @@ func (d *Daemon) finishAssignmentWithMessage(ctx context.Context, active ActiveA
 	d.stopTaskMonitorForProject(active.Task.Project, active.Task.Issue)
 
 	if merged {
-		if err := d.amux.SendKeys(cleanupCtx, active.Task.PaneID, mergedWrapUpPrompt); err != nil {
+		if err := d.amux.SendKeys(cleanupCtx, active.Task.PaneID, mergedWrapUpPrompt, "Enter"); err != nil {
 			result = errors.Join(result, err)
 		}
 		if err := d.amux.WaitIdle(cleanupCtx, active.Task.PaneID, d.mergeGracePeriod); err != nil {
