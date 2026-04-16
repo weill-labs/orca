@@ -502,6 +502,10 @@ func (s *stubStateStore) UpdateTaskStatus(context.Context, string, string, strin
 	return state.Task{}, nil
 }
 
+func (s *stubStateStore) UpdateTaskBranch(context.Context, string, string, string, time.Time) (state.Task, error) {
+	return state.Task{}, nil
+}
+
 func (s *stubStateStore) AppendEvent(context.Context, state.Event) (state.Event, error) {
 	return state.Event{}, nil
 }
