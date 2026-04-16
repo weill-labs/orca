@@ -288,6 +288,99 @@ func TestDispatchMergeQueueSkipsInFlightAndCleansInvalidEntries(t *testing.T) {
 	}
 }
 
+func TestDispatchMergeQueueMergedEntryCompletesActiveAssignment(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	now := deps.clock.Now()
+	deps.state.mergeQueue = []MergeQueueEntry{
+		{
+			Project:   "/tmp/project",
+			Issue:     "LAB-1317",
+			PRNumber:  42,
+			Status:    MergeQueueStatusQueued,
+			CreatedAt: now,
+			UpdatedAt: now,
+		},
+	}
+	deps.state.putTaskForTest(Task{
+		Project:      "/tmp/project",
+		Issue:        "LAB-1317",
+		Status:       TaskStatusActive,
+		Prompt:       "Finish the merge queue path",
+		WorkerID:     "worker-01",
+		PaneID:       "pane-1",
+		PaneName:     "worker-1",
+		CloneName:    "clone-01",
+		ClonePath:    deps.pool.clone.Path,
+		Branch:       "LAB-1317",
+		AgentProfile: "codex",
+		PRNumber:     42,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	})
+	if err := deps.state.PutWorker(context.Background(), Worker{
+		Project:        "/tmp/project",
+		WorkerID:       "worker-01",
+		PaneID:         "pane-1",
+		PaneName:       "worker-1",
+		Issue:          "LAB-1317",
+		ClonePath:      deps.pool.clone.Path,
+		AgentProfile:   "codex",
+		Health:         WorkerHealthHealthy,
+		LastActivityAt: now,
+		UpdatedAt:      now,
+	}); err != nil {
+		t.Fatalf("PutWorker() error = %v", err)
+	}
+
+	d := deps.newDaemon(t)
+	d.github = staticGitHubClient{mergedPRs: map[int]bool{42: true}}
+	d.mergeQueueInbox = make(chan ProcessQueue, 1)
+
+	d.dispatchMergeQueue(context.Background())
+
+	select {
+	case msg := <-d.mergeQueueInbox:
+		t.Fatalf("dispatchMergeQueue() sent %#v, want no queued work for merged PR", msg)
+	default:
+	}
+
+	task, ok := deps.state.task("LAB-1317")
+	if !ok {
+		t.Fatal("LAB-1317 task missing after dispatch")
+	}
+	if got, want := task.Status, TaskStatusDone; got != want {
+		t.Fatalf("task.Status = %q, want %q", got, want)
+	}
+	if got, want := task.State, TaskStateDone; got != want {
+		t.Fatalf("task.State = %q, want %q", got, want)
+	}
+	if _, ok := deps.state.worker("pane-1"); ok {
+		t.Fatal("worker still present after merged merge queue dispatch")
+	}
+	entry, err := deps.state.MergeEntry(context.Background(), "/tmp/project", 42)
+	if err != nil {
+		t.Fatalf("MergeEntry() error = %v", err)
+	}
+	if entry != nil {
+		t.Fatalf("MergeEntry() = %#v, want nil", entry)
+	}
+	if got, want := deps.issueTracker.statuses(), []issueStatusUpdate{{Issue: "LAB-1317", State: IssueStateDone}}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("issue tracker statuses = %#v, want %#v", got, want)
+	}
+	if got, want := deps.events.countType(EventPRMerged), 1; got != want {
+		t.Fatalf("pr merged event count = %d, want %d", got, want)
+	}
+	deps.events.requireTypes(t, EventPRMerged, EventWorkerPostmortem, EventTaskCompleted)
+	if promptCount := deps.amux.countKey("pane-1", mergedWrapUpPrompt) + deps.amux.countKey("pane-1", mergedWrapUpPrompt+"\n"); promptCount != 1 {
+		t.Fatalf("merged wrap-up prompt count = %d, want 1", promptCount)
+	}
+	if got, want := deps.amux.countKey("pane-1", postmortemCommand+"\n"), 1; got != want {
+		t.Fatalf("postmortem prompt count = %d, want %d", got, want)
+	}
+}
+
 func TestApplyMergeQueueUpdateStatusOnlyPersistenceErrorSkipsEvents(t *testing.T) {
 	t.Parallel()
 

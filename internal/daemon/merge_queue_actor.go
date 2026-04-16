@@ -151,14 +151,17 @@ func (d *Daemon) dispatchMergeQueue(ctx context.Context) {
 			return
 		}
 
+		active, activeErr := d.state.ActiveAssignmentByPRNumber(ctx, entry.Project, entry.PRNumber)
 		merged, err := d.isPRMerged(ctx, entry.Project, entry.PRNumber)
 		if err == nil && merged {
+			if activeErr == nil {
+				d.dispatchTaskMonitorCheck(ctx, active, taskMonitorCheckPRPoll)
+			}
 			_ = d.state.DeleteMergeEntry(ctx, entry.Project, entry.PRNumber)
 			continue
 		}
 
-		_, err = d.state.ActiveAssignmentByPRNumber(ctx, entry.Project, entry.PRNumber)
-		if err != nil {
+		if activeErr != nil {
 			event := d.mergeQueueEvent(nil, EventPRLandingFailed, entry.PRNumber, fmt.Sprintf("PR #%d is no longer tracked by an active assignment", entry.PRNumber), d.now())
 			event.Project = entry.Project
 			d.emit(ctx, event)
