@@ -80,6 +80,17 @@ func (d *Daemon) checkTaskPRPoll(ctx context.Context, active ActiveAssignment) T
 			d.appendGitHubRateLimitEvent(&update, profile, err)
 			return update
 		}
+		if prNumber == 0 {
+			discoveredBranch := ""
+			prNumber, discoveredBranch, err = d.findPRByIssueID(ctx, update.Active.Task.Project, update.Active.Task.Issue)
+			if err != nil {
+				d.appendGitHubRateLimitEvent(&update, profile, err)
+				return update
+			}
+			if prNumber > 0 {
+				d.recordDiscoveredBranch(&update, discoveredBranch, now)
+			}
+		}
 		if prNumber > 0 {
 			metadata, err := d.prPaneMetadata(ctx, update.Active, prNumber)
 			if err != nil {
@@ -177,6 +188,10 @@ func (d *Daemon) lookupPRNumber(ctx context.Context, projectPath, branch string)
 	return d.gitHubClientForContext(ctx, projectPath).lookupPRNumber(ctx, branch)
 }
 
+func (d *Daemon) findPRByIssueID(ctx context.Context, projectPath, issueID string) (int, string, error) {
+	return d.gitHubClientForContext(ctx, projectPath).findPRByIssueID(ctx, issueID)
+}
+
 func (d *Daemon) lookupOpenPRNumber(ctx context.Context, projectPath, branch string) (int, error) {
 	return d.gitHubClientForContext(ctx, projectPath).lookupOpenPRNumber(ctx, branch)
 }
@@ -187,4 +202,22 @@ func (d *Daemon) lookupOpenOrMergedPRNumber(ctx context.Context, projectPath, br
 
 func (d *Daemon) isPRMerged(ctx context.Context, projectPath string, prNumber int) (bool, error) {
 	return d.gitHubClientForContext(ctx, projectPath).isPRMerged(ctx, prNumber)
+}
+
+func (d *Daemon) recordDiscoveredBranch(update *TaskStateUpdate, branch string, now time.Time) {
+	if update == nil {
+		return
+	}
+
+	branch = strings.TrimSpace(branch)
+	if branch == "" || branch == update.Active.Task.Branch {
+		return
+	}
+
+	update.Active.Task.Branch = branch
+	update.Active.Task.UpdatedAt = now
+	update.TaskChanged = true
+	update.PaneMetadata = mergeMetadata(update.PaneMetadata, map[string]string{
+		"branch": branch,
+	})
 }

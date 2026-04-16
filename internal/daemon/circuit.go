@@ -412,6 +412,12 @@ func (c *circuitGitHubClient) lookupPRNumber(ctx context.Context, branch string)
 	})
 }
 
+func (c *circuitGitHubClient) findPRByIssueID(ctx context.Context, issueID string) (int, string, error) {
+	return withCircuit3(c.breaker, func() (int, string, error) {
+		return c.base.findPRByIssueID(ctx, issueID)
+	})
+}
+
 func (c *circuitGitHubClient) lookupOpenPRNumber(ctx context.Context, branch string) (int, error) {
 	return withCircuit(c.breaker, func() (int, error) {
 		return c.base.lookupOpenPRNumber(ctx, branch)

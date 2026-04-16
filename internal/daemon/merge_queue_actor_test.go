@@ -562,6 +562,10 @@ func (c staticGitHubClient) lookupPRNumber(context.Context, string) (int, error)
 	return 0, nil
 }
 
+func (c staticGitHubClient) findPRByIssueID(context.Context, string) (int, string, error) {
+	return 0, "", nil
+}
+
 func (c staticGitHubClient) lookupOpenPRNumber(context.Context, string) (int, error) {
 	return 0, nil
 }
