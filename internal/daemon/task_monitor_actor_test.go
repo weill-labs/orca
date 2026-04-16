@@ -212,6 +212,43 @@ func TestApplyTaskStateUpdateDoesNotPersistUnflaggedWorkerFieldsFromMergedUpdate
 	}
 }
 
+func TestApplyTaskStateUpdateRefreshesPollScheduleWhenPRDetected(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	seedTaskMonitorAssignment(t, deps, "LAB-1318", "pane-1", 0)
+
+	d := deps.newDaemonWithOptions(t, func(opts *Options) {
+		opts.PollInterval = 10 * time.Minute
+	})
+	d.pollIntervalCh = make(chan time.Duration, 1)
+	d.relayHealthy.Store(true)
+
+	active := activeTaskMonitorAssignment(t, deps, "LAB-1318")
+	now := deps.clock.Now()
+	update := TaskStateUpdate{
+		Active:        active,
+		TaskChanged:   true,
+		WorkerChanged: true,
+	}
+	update.Active.Task.PRNumber = 42
+	update.Active.Task.State = TaskStatePRDetected
+	update.Active.Task.UpdatedAt = now
+	update.Active.Worker.LastPRNumber = 42
+	update.Active.Worker.LastPushAt = now
+
+	d.applyTaskStateUpdate(context.Background(), update)
+
+	select {
+	case got := <-d.pollIntervalCh:
+		if got != openPRPollIntervalCap {
+			t.Fatalf("queued poll interval = %v, want %v", got, openPRPollIntervalCap)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for poll interval refresh")
+	}
+}
+
 func TestTaskMonitorPollRunsConflictNudgesWithBoundedConcurrency(t *testing.T) {
 	t.Parallel()
 
