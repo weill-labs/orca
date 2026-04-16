@@ -59,7 +59,7 @@ func TestLocalControllerParallelAssignsSucceedDuringClientSchemaBackfill(t *test
 	}
 	defer listener.Close()
 
-	requests := make(chan rpcRequest, parallelAssigns)
+	requests := make(chan assignRPCParams, parallelAssigns)
 	serverErrCh := make(chan error, 1)
 	go func() {
 		for i := 0; i < parallelAssigns; i++ {
@@ -75,13 +75,25 @@ func TestLocalControllerParallelAssignsSucceedDuringClientSchemaBackfill(t *test
 				serverErrCh <- err
 				return
 			}
-			requests <- req
+			if req.Method != "assign" {
+				_ = conn.Close()
+				serverErrCh <- fmt.Errorf("unexpected rpc method %q", req.Method)
+				return
+			}
+
+			var params assignRPCParams
+			if err := decodeRPCParams(req.Params, &params); err != nil {
+				_ = conn.Close()
+				serverErrCh <- err
+				return
+			}
+			requests <- params
 
 			result := TaskActionResult{
 				Project:   projectPath,
-				Issue:     fmt.Sprintf("LAB-14%02d", i),
+				Issue:     params.Issue,
 				Status:    TaskStatusActive,
-				Agent:     "claude",
+				Agent:     params.Agent,
 				UpdatedAt: time.Now().UTC(),
 			}
 			if err := json.NewEncoder(conn).Encode(rpcSuccess(req.ID, result)); err != nil {
@@ -152,9 +164,9 @@ func TestLocalControllerParallelAssignsSucceedDuringClientSchemaBackfill(t *test
 	if got, want := len(requests), parallelAssigns; got != want {
 		t.Fatalf("assign request count = %d, want %d", got, want)
 	}
-	for req := range requests {
-		if got, want := req.Method, "assign"; got != want {
-			t.Fatalf("rpc method = %q, want %q", got, want)
+	for params := range requests {
+		if got, want := params.Agent, "claude"; got != want {
+			t.Fatalf("rpc agent = %q, want %q", got, want)
 		}
 	}
 
