@@ -709,11 +709,10 @@ func (d *Daemon) checkTaskImmediateMergePoll(ctx context.Context, active ActiveA
 	if err != nil {
 		return update
 	}
-	terminalState, err := d.lookupPRTerminalState(ctx, active.Task.Project, active.Task.PRNumber)
+	_, err = d.resolvePRTerminalState(ctx, &update, profile, now)
 	if err != nil {
 		d.appendGitHubRateLimitEvent(&update, profile, err)
 		return update
 	}
-	d.applyPRTerminalState(&update, profile, terminalState, now)
 	return update
 }

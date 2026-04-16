@@ -113,18 +113,18 @@ func (d *Daemon) checkTaskPRPoll(ctx context.Context, active ActiveAssignment) T
 		return update
 	}
 	if entry, err := d.state.MergeEntry(ctx, update.Active.Task.Project, update.Active.Task.PRNumber); err == nil && entry != nil {
-		terminalState, err := d.lookupPRTerminalState(ctx, update.Active.Task.Project, update.Active.Task.PRNumber)
+		handled, err := d.resolvePRTerminalState(ctx, &update, profile, now)
 		if err != nil {
 			d.appendGitHubRateLimitEvent(&update, profile, err)
 			return update
 		}
-		if d.applyPRTerminalState(&update, profile, terminalState, now) {
+		if handled {
 			return update
 		}
 		return update
 	}
 
-	terminalState, err := d.lookupPRTerminalState(ctx, update.Active.Task.Project, update.Active.Task.PRNumber)
+	handled, err := d.resolvePRTerminalState(ctx, &update, profile, now)
 	if err != nil {
 		if d.appendGitHubRateLimitEvent(&update, profile, err) {
 			return update
@@ -132,7 +132,7 @@ func (d *Daemon) checkTaskPRPoll(ctx context.Context, active ActiveAssignment) T
 		d.handlePRChecksPoll(ctx, &update, profile)
 		return d.continuePRFollowUpPolls(ctx, update, profile)
 	}
-	if d.applyPRTerminalState(&update, profile, terminalState, now) {
+	if handled {
 		return update
 	}
 
@@ -183,6 +183,18 @@ func markTaskPRMerged(update *TaskStateUpdate, now time.Time) {
 		update.TaskChanged = true
 	}
 	update.PRMerged = true
+}
+
+func (d *Daemon) resolvePRTerminalState(ctx context.Context, update *TaskStateUpdate, profile AgentProfile, now time.Time) (bool, error) {
+	if update == nil {
+		return false, nil
+	}
+
+	state, err := d.lookupPRTerminalState(ctx, update.Active.Task.Project, update.Active.Task.PRNumber)
+	if err != nil {
+		return false, err
+	}
+	return d.applyPRTerminalState(update, profile, state, now), nil
 }
 
 func (d *Daemon) applyPRTerminalState(update *TaskStateUpdate, profile AgentProfile, state prTerminalState, now time.Time) bool {
