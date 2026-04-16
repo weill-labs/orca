@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -268,6 +269,33 @@ func TestRunWithDepsCoversProcessSetupBranches(t *testing.T) {
 			wantExitCode: 0,
 		},
 		{
+			name: "migrate state bypasses default state bootstrap",
+			args: []string{"migrate-state", "--from", "sqlite:///tmp/source.db", "--to", "postgres://orca:secret@localhost:5432/orca?sslmode=disable", "--dry-run"},
+			deps: runDependencies{
+				openStateStore: func(string) (stateStore, error) {
+					t.Fatal("openStateStore should not be called for migrate-state")
+					return nil, nil
+				},
+				newController: func(daemon.ControllerOptions) (daemon.Controller, error) {
+					t.Fatal("newController should not be called for migrate-state")
+					return nil, nil
+				},
+				newApp: func(cli.Options) appRunner {
+					t.Fatal("newApp should not be called for migrate-state")
+					return nil
+				},
+				runMigrateState: func(_ context.Context, w io.Writer, args []string) error {
+					if got, want := strings.Join(args, " "), "--from sqlite:///tmp/source.db --to postgres://orca:secret@localhost:5432/orca?sslmode=disable --dry-run"; got != want {
+						t.Fatalf("migrate-state args = %q, want %q", got, want)
+					}
+					_, err := io.WriteString(w, "migration complete\n")
+					return err
+				},
+			},
+			wantExitCode: 0,
+			wantStdout:   "migration complete\n",
+		},
+		{
 			name: "resolve paths failure",
 			args: []string{"status"},
 			deps: runDependencies{
@@ -500,6 +528,9 @@ func fillRunDependencies(overrides runDependencies, store *stubStateStore, app *
 		newApp: func(cli.Options) appRunner {
 			return app
 		},
+		runMigrateState: func(context.Context, io.Writer, []string) error {
+			return nil
+		},
 		runDaemonProcess: func([]string, string) error {
 			return nil
 		},
@@ -516,6 +547,9 @@ func fillRunDependencies(overrides runDependencies, store *stubStateStore, app *
 	}
 	if overrides.newApp != nil {
 		deps.newApp = overrides.newApp
+	}
+	if overrides.runMigrateState != nil {
+		deps.runMigrateState = overrides.runMigrateState
 	}
 	if overrides.runDaemonProcess != nil {
 		deps.runDaemonProcess = overrides.runDaemonProcess

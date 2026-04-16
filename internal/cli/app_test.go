@@ -895,6 +895,7 @@ func allSubcommandHelpCases() []subcommandHelpCase {
 		{command: "stop", wantUsage: "usage: orca stop"},
 		{command: "reload", wantUsage: "usage: orca reload"},
 		{command: "status", wantUsage: "usage: orca status"},
+		{command: "migrate-state", wantUsage: "usage: orca migrate-state"},
 		{command: "metrics", wantUsage: "usage: orca metrics"},
 		{command: "assign", wantUsage: "usage: orca assign ISSUE"},
 		{command: "batch", wantUsage: "usage: orca batch MANIFEST"},

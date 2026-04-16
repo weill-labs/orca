@@ -33,6 +33,7 @@ type runDependencies struct {
 	openStateStore   func(string) (stateStore, error)
 	newController    func(daemon.ControllerOptions) (daemon.Controller, error)
 	newApp           func(cli.Options) appRunner
+	runMigrateState  func(context.Context, io.Writer, []string) error
 	runDaemonProcess func([]string, string) error
 }
 
@@ -47,6 +48,7 @@ var defaultRunDependencies = runDependencies{
 	newApp: func(options cli.Options) appRunner {
 		return cli.New(options)
 	},
+	runMigrateState:  cli.RunMigrateStateCommand,
 	runDaemonProcess: runDaemonProcess,
 }
 
@@ -88,6 +90,13 @@ func runWithDeps(args []string, stdout, stderr io.Writer, deps runDependencies, 
 	if args[0] == "help" {
 		fmt.Fprintf(stderr, "unknown help topic %q\n", args[1])
 		return 1
+	}
+	if args[0] == "migrate-state" {
+		if err := deps.runMigrateState(context.Background(), stdout, args[1:]); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		return 0
 	}
 
 	paths, err := deps.resolvePaths()
