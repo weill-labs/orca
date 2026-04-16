@@ -10,6 +10,7 @@ const (
 	adaptivePRFastPollInterval = 5 * time.Second
 	adaptivePRWarmPollInterval = 15 * time.Second
 	adaptivePRSlowPollInterval = 30 * time.Second
+	openPRPollIntervalCap      = 2 * time.Minute
 	adaptivePRFastPollWindow   = 10 * time.Minute
 	adaptivePRWarmPollWindow   = 30 * time.Minute
 )
