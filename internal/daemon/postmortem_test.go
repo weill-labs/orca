@@ -243,6 +243,138 @@ func TestFinishAssignmentMergedCleanupSetsDoneMetadataAfterPostmortem(t *testing
 	})
 }
 
+func TestFinishAssignmentMergedCleanupMergeNotifyEvent(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name             string
+		configure        func(*testDeps)
+		wantErrSubstring string
+		wantEventCount   int
+		wantEventMessage string
+	}{
+		{
+			name: "send keys error emits event",
+			configure: func(deps *testDeps) {
+				deps.amux.sendKeysResults = []error{errors.New("wrap up failed"), nil}
+			},
+			wantErrSubstring: "wrap up failed",
+			wantEventCount:   1,
+			wantEventMessage: "wrap up failed",
+		},
+		{
+			name: "wait idle error emits event",
+			configure: func(deps *testDeps) {
+				waitIdleErr := errors.New("wait idle timed out")
+				waitIdleCalls := 0
+				deps.amux.waitIdleHook = func(_ string, _ time.Duration, _ time.Duration) {
+					if waitIdleCalls == 0 {
+						deps.amux.waitIdleErr = waitIdleErr
+					} else {
+						deps.amux.waitIdleErr = nil
+					}
+					waitIdleCalls++
+				}
+			},
+			wantErrSubstring: "wait idle timed out",
+			wantEventCount:   1,
+			wantEventMessage: "wait idle timed out",
+		},
+		{
+			name:           "success does not emit event",
+			wantEventCount: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			deps := newTestDeps(t)
+			if tt.configure != nil {
+				tt.configure(deps)
+			}
+
+			d := deps.newDaemon(t)
+			active := newPostmortemAssignment(deps)
+			active.Task.Status = TaskStatusActive
+			seedFinishAssignmentState(t, deps, active)
+
+			err := d.finishAssignment(context.Background(), active, TaskStatusDone, EventTaskCompleted, true)
+			if tt.wantErrSubstring == "" {
+				if err != nil {
+					t.Fatalf("finishAssignment() error = %v, want nil", err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), tt.wantErrSubstring) {
+				t.Fatalf("finishAssignment() error = %v, want substring %q", err, tt.wantErrSubstring)
+			}
+
+			if got, want := deps.events.countType(EventWorkerMergeNotifyFailed), tt.wantEventCount; got != want {
+				t.Fatalf("merge notify failed event count = %d, want %d", got, want)
+			}
+			if tt.wantEventCount == 0 {
+				return
+			}
+
+			event, ok := deps.events.lastEventOfType(EventWorkerMergeNotifyFailed)
+			if !ok {
+				t.Fatalf("lastEventOfType(%q) = false, want true", EventWorkerMergeNotifyFailed)
+			}
+			if got, want := event.PaneID, active.Task.PaneID; got != want {
+				t.Fatalf("event.PaneID = %q, want %q", got, want)
+			}
+			if got, want := event.WorkerID, active.Worker.WorkerID; got != want {
+				t.Fatalf("event.WorkerID = %q, want %q", got, want)
+			}
+			if got, want := event.Issue, active.Task.Issue; got != want {
+				t.Fatalf("event.Issue = %q, want %q", got, want)
+			}
+			if !strings.Contains(event.Message, tt.wantEventMessage) {
+				t.Fatalf("event.Message = %q, want substring %q", event.Message, tt.wantEventMessage)
+			}
+		})
+	}
+}
+
+func TestEmitMergeNotifyFailedSkipsNilError(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	d := deps.newDaemon(t)
+	active := newPostmortemAssignment(deps)
+
+	d.emitMergeNotifyFailed(context.Background(), active, nil)
+
+	if got := deps.events.countType(EventWorkerMergeNotifyFailed); got != 0 {
+		t.Fatalf("merge notify failed event count = %d, want 0", got)
+	}
+}
+
+func TestEmitMergeNotifyFailedUsesTaskWorkerIDAndProfileFallback(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	delete(deps.config.profiles, "codex")
+
+	d := deps.newDaemon(t)
+	active := newPostmortemAssignment(deps)
+	active.Worker.WorkerID = ""
+
+	d.emitMergeNotifyFailed(context.Background(), active, errors.New("wrap up failed"))
+
+	event, ok := deps.events.lastEventOfType(EventWorkerMergeNotifyFailed)
+	if !ok {
+		t.Fatalf("lastEventOfType(%q) = false, want true", EventWorkerMergeNotifyFailed)
+	}
+	if got, want := event.WorkerID, active.Task.WorkerID; got != want {
+		t.Fatalf("event.WorkerID = %q, want %q", got, want)
+	}
+	if got, want := event.AgentProfile, active.Task.AgentProfile; got != want {
+		t.Fatalf("event.AgentProfile = %q, want %q", got, want)
+	}
+}
+
 func TestFinishAssignmentCancelledStrikesTaskTitleBeforeKill(t *testing.T) {
 	t.Parallel()
 
