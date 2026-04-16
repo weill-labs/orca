@@ -337,6 +337,44 @@ func TestFinishAssignmentMergedCleanupMergeNotifyEvent(t *testing.T) {
 	}
 }
 
+func TestEmitMergeNotifyFailedSkipsNilError(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	d := deps.newDaemon(t)
+	active := newPostmortemAssignment(deps)
+
+	d.emitMergeNotifyFailed(context.Background(), active, nil)
+
+	if got := deps.events.countType(EventWorkerMergeNotifyFailed); got != 0 {
+		t.Fatalf("merge notify failed event count = %d, want 0", got)
+	}
+}
+
+func TestEmitMergeNotifyFailedUsesTaskWorkerIDAndProfileFallback(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	delete(deps.config.profiles, "codex")
+
+	d := deps.newDaemon(t)
+	active := newPostmortemAssignment(deps)
+	active.Worker.WorkerID = ""
+
+	d.emitMergeNotifyFailed(context.Background(), active, errors.New("wrap up failed"))
+
+	event, ok := deps.events.lastEventOfType(EventWorkerMergeNotifyFailed)
+	if !ok {
+		t.Fatalf("lastEventOfType(%q) = false, want true", EventWorkerMergeNotifyFailed)
+	}
+	if got, want := event.WorkerID, active.Task.WorkerID; got != want {
+		t.Fatalf("event.WorkerID = %q, want %q", got, want)
+	}
+	if got, want := event.AgentProfile, active.Task.AgentProfile; got != want {
+		t.Fatalf("event.AgentProfile = %q, want %q", got, want)
+	}
+}
+
 func TestFinishAssignmentCancelledStrikesTaskTitleBeforeKill(t *testing.T) {
 	t.Parallel()
 
