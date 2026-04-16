@@ -157,15 +157,18 @@ func (d *Daemon) captureStartupRetryScrollback(ctx context.Context, paneID strin
 }
 
 func (d *Daemon) emitAssignHandshakeRetry(ctx context.Context, result assignStartupResult, profile AgentProfile, attempt, maxAttempts int, err error, scrollback []string) {
-	status := fmt.Sprintf("retrying in %s", assignStartupRetryDelay)
-	if attempt >= maxAttempts {
-		status = "no retries remaining"
-	}
+	d.emitAssignStartupRetry(ctx, result, profile, EventWorkerHandshakeRetry, "startup handshake failed", attempt, maxAttempts, err, scrollback)
+}
 
+func (d *Daemon) emitAssignPromptDeliveryRetry(ctx context.Context, result assignStartupResult, profile AgentProfile, attempt, maxAttempts int, err error, scrollback []string) {
+	d.emitAssignStartupRetry(ctx, result, profile, EventWorkerPromptDeliveryRetry, "prompt delivery failed", attempt, maxAttempts, err, scrollback)
+}
+
+func (d *Daemon) emitAssignStartupRetry(ctx context.Context, result assignStartupResult, profile AgentProfile, eventType, message string, attempt, maxAttempts int, err error, scrollback []string) {
 	event := d.assignmentEvent(ActiveAssignment{
 		Task:   result.task,
 		Worker: result.worker,
-	}, profile, EventWorkerHandshakeRetry, fmt.Sprintf("startup handshake failed on attempt %d/%d; %s: %v", attempt, maxAttempts, status, err))
+	}, profile, eventType, fmt.Sprintf("%s on attempt %d/%d; %s: %v", message, attempt, maxAttempts, assignStartupRetryStatus(attempt, maxAttempts), err))
 	event.Retry = attempt
 	if len(scrollback) > 0 {
 		event.Scrollback = scrollback
@@ -173,19 +176,9 @@ func (d *Daemon) emitAssignHandshakeRetry(ctx context.Context, result assignStar
 	d.emit(ctx, event)
 }
 
-func (d *Daemon) emitAssignPromptDeliveryRetry(ctx context.Context, result assignStartupResult, profile AgentProfile, attempt, maxAttempts int, err error, scrollback []string) {
-	status := fmt.Sprintf("retrying in %s", assignStartupRetryDelay)
+func assignStartupRetryStatus(attempt, maxAttempts int) string {
 	if attempt >= maxAttempts {
-		status = "no retries remaining"
+		return "no retries remaining"
 	}
-
-	event := d.assignmentEvent(ActiveAssignment{
-		Task:   result.task,
-		Worker: result.worker,
-	}, profile, EventWorkerPromptDeliveryRetry, fmt.Sprintf("prompt delivery failed on attempt %d/%d; %s: %v", attempt, maxAttempts, status, err))
-	event.Retry = attempt
-	if len(scrollback) > 0 {
-		event.Scrollback = scrollback
-	}
-	d.emit(ctx, event)
+	return fmt.Sprintf("retrying in %s", assignStartupRetryDelay)
 }
