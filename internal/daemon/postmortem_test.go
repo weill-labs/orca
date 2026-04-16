@@ -192,7 +192,7 @@ func TestFinishAssignmentMergedCleanupSendsWrapUpThenPostmortem(t *testing.T) {
 	}
 
 	if got, want := operations, []string{
-		"send:PR merged, wrap up.",
+		"send:PR merged, wrap up.|Enter",
 		"wait:2m0s",
 		"send:$postmortem|Enter",
 		"wait:2m0s",
@@ -226,7 +226,7 @@ func TestFinishAssignmentMergedCleanupSetsDoneMetadataAfterPostmortem(t *testing
 	}
 
 	if got, want := operations, []string{
-		"send:PR merged, wrap up.",
+		"send:PR merged, wrap up.|Enter",
 		"wait:2m0s",
 		"send:$postmortem|Enter",
 		"wait:2m0s",

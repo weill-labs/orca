@@ -76,7 +76,7 @@ func TestPRMergePollingSendsWrapUpAndCleansClone(t *testing.T) {
 	}
 	deps.amux.requireSentKeys(t, "pane-1", []string{
 		wrappedCodexPrompt("Implement daemon core") + "\n",
-		"PR merged, wrap up.",
+		"PR merged, wrap up.\n",
 		"$postmortem\n",
 	})
 	deps.events.requireTypes(t, EventDaemonStarted, EventTaskAssigned, EventPRDetected, EventPRMerged, EventWorkerPostmortem, EventTaskCompleted)
