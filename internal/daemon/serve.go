@@ -35,7 +35,6 @@ var (
 
 type ServeRequest struct {
 	Session     string
-	LeadPane    string
 	StateDB     string
 	PIDFile     string
 	BuildCommit string
@@ -119,7 +118,6 @@ func runProcess(ctx context.Context, req ServeRequest, deps serveDeps) error {
 	instance, err := New(Options{
 		Project:              "",
 		Session:              req.Session,
-		LeadPane:             req.LeadPane,
 		PIDPath:              req.PIDFile,
 		AllowCurrentPIDReuse: inheritedListener,
 		Config:               builtinConfigProvider{},
@@ -318,7 +316,6 @@ func daemonServeArgs(executable string, req ServeRequest) []string {
 		executable,
 		"__daemon-serve",
 		"--session", req.Session,
-		"--lead-pane", req.LeadPane,
 		"--state-db", req.StateDB,
 		"--pid-file", req.PIDFile,
 	}

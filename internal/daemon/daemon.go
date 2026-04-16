@@ -25,7 +25,6 @@ const (
 type Daemon struct {
 	project              string
 	session              string
-	leadPane             string
 	pidPath              string
 	allowCurrentPIDReuse bool
 	config               ConfigProvider
@@ -137,7 +136,6 @@ func New(opts Options) (*Daemon, error) {
 	return &Daemon{
 		project:              opts.Project,
 		session:              opts.Session,
-		leadPane:             opts.LeadPane,
 		pidPath:              opts.PIDPath,
 		allowCurrentPIDReuse: opts.AllowCurrentPIDReuse,
 		config:               opts.Config,
@@ -213,7 +211,6 @@ func (d *Daemon) Start(ctx context.Context) error {
 		return err
 	}
 
-	d.normalizeLeadPane(ctx)
 	d.stopContext, d.stopCancel = context.WithCancel(context.Background())
 	d.lastHeartbeat.Store(d.now().UnixMilli())
 	d.releaseStalePoolClones(ctx)
@@ -246,32 +243,6 @@ func (d *Daemon) Start(ctx context.Context) error {
 		Message: "daemon started",
 	})
 	return nil
-}
-
-func (d *Daemon) normalizeLeadPane(ctx context.Context) {
-	leadPane := strings.TrimSpace(d.leadPane)
-	if leadPane == "" {
-		return
-	}
-
-	// Best effort only: if amux is unavailable at startup we keep the caller's
-	// configured reference and let later spawn operations surface the error.
-	panes, err := d.amux.ListPanes(ctx)
-	if err != nil {
-		return
-	}
-
-	for _, pane := range panes {
-		paneID := strings.TrimSpace(pane.ID)
-		paneName := strings.TrimSpace(pane.Name)
-		if paneName == "" {
-			continue
-		}
-		if leadPane == paneID || leadPane == paneName {
-			d.leadPane = paneName
-			return
-		}
-	}
 }
 
 func (d *Daemon) initializePIDFile() error {

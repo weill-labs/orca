@@ -251,12 +251,10 @@ func (a *App) runStart(ctx context.Context, args []string) error {
 	fs := newFlagSet("start")
 	var session string
 	var projectPath string
-	var leadPane string
 	var global bool
 	var jsonOutput bool
 	fs.StringVar(&session, "session", "", "amux session name (defaults to AMUX_SESSION)")
 	fs.StringVar(&projectPath, "project", "", "project path")
-	fs.StringVar(&leadPane, "lead-pane", "", "deprecated: fallback pane to split workers from")
 	fs.BoolVar(&global, "global", false, "operate on the machine-wide daemon")
 	fs.BoolVar(&jsonOutput, "json", false, "emit JSON output")
 
@@ -281,9 +279,8 @@ func (a *App) runStart(ctx context.Context, args []string) error {
 	}
 
 	result, err := a.daemon.Start(ctx, daemon.StartRequest{
-		Session:  session,
-		Project:  resolvedProject,
-		LeadPane: leadPane,
+		Session: session,
+		Project: resolvedProject,
 	})
 	if err != nil {
 		return err

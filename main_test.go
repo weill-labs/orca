@@ -188,7 +188,6 @@ func TestRunDaemonProcessPassesBuildCommit(t *testing.T) {
 
 	err := runDaemonProcessWithServe([]string{
 		"--session", "alpha",
-		"--lead-pane", "pane-1",
 		"--state-db", "/tmp/orca.db",
 		"--pid-file", "/tmp/orca.pid",
 	}, "build-851", runDaemonServe)
@@ -200,9 +199,6 @@ func TestRunDaemonProcessPassesBuildCommit(t *testing.T) {
 	}
 	if got, want := gotRequest.Session, "alpha"; got != want {
 		t.Fatalf("ServeRequest.Session = %q, want %q", got, want)
-	}
-	if got, want := gotRequest.LeadPane, "pane-1"; got != want {
-		t.Fatalf("ServeRequest.LeadPane = %q, want %q", got, want)
 	}
 }
 
