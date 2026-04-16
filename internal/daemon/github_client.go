@@ -16,7 +16,7 @@ const (
 	defaultGitHubAPIInitialBackoff = 1 * time.Second
 	defaultGitHubAPIMaxBackoff     = 8 * time.Second
 	defaultGitHubAPIMaxAttempts    = 3
-	issueIDPRSearchJSONFields      = "number,state,headRefName"
+	issueIDPRSearchJSONFields      = "number,state,headRefName,title"
 )
 
 var (
@@ -156,7 +156,7 @@ func (c *gitHubCLIClient) findPRByIssueID(ctx context.Context, issueID string) (
 		return 0, "", err
 	}
 
-	number, branch, multiple, err := parseIssueIDPRSearchResults(output)
+	number, branch, multiple, err := parseIssueIDPRSearchResults(output, issueID)
 	if err != nil {
 		return 0, "", err
 	}
@@ -236,7 +236,7 @@ func parseOpenOrMergedPRNumberList(output []byte) (int, bool, error) {
 	return 0, false, nil
 }
 
-func parseIssueIDPRSearchResults(output []byte) (int, string, bool, error) {
+func parseIssueIDPRSearchResults(output []byte, issueID string) (int, string, bool, error) {
 	if len(output) == 0 {
 		return 0, "", false, nil
 	}
@@ -245,18 +245,62 @@ func parseIssueIDPRSearchResults(output []byte) (int, string, bool, error) {
 		Number      int    `json:"number"`
 		State       string `json:"state"`
 		HeadRefName string `json:"headRefName"`
+		Title       string `json:"title"`
 	}
 	if err := json.Unmarshal(output, &prs); err != nil {
 		return 0, "", false, err
 	}
-	switch len(prs) {
+
+	candidates := prs[:0]
+	for _, pr := range prs {
+		if matchesIssueIDSearchResult(pr.Title, pr.HeadRefName, issueID) {
+			candidates = append(candidates, pr)
+		}
+	}
+
+	switch len(candidates) {
 	case 0:
 		return 0, "", false, nil
 	case 1:
-		return prs[0].Number, prs[0].HeadRefName, false, nil
+		return candidates[0].Number, candidates[0].HeadRefName, false, nil
 	default:
 		return 0, "", true, nil
 	}
+}
+
+func matchesIssueIDSearchResult(title, headRefName, issueID string) bool {
+	return containsIssueIDToken(title, issueID) || containsIssueIDToken(headRefName, issueID)
+}
+
+func containsIssueIDToken(value, issueID string) bool {
+	value = strings.ToUpper(strings.TrimSpace(value))
+	issueID = strings.ToUpper(strings.TrimSpace(issueID))
+	if value == "" || issueID == "" {
+		return false
+	}
+
+	for start := 0; start < len(value); {
+		idx := strings.Index(value[start:], issueID)
+		if idx == -1 {
+			return false
+		}
+		idx += start
+		end := idx + len(issueID)
+		if issueIDTokenBoundary(value, idx-1) && issueIDTokenBoundary(value, end) {
+			return true
+		}
+		start = idx + 1
+	}
+	return false
+}
+
+func issueIDTokenBoundary(value string, idx int) bool {
+	if idx < 0 || idx >= len(value) {
+		return true
+	}
+
+	ch := value[idx]
+	return !(ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9')
 }
 
 func (c *gitHubCLIClient) isPRMerged(ctx context.Context, prNumber int) (bool, error) {

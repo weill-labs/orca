@@ -23,7 +23,6 @@ type Writer interface {
 	MarkDaemonStopped(ctx context.Context, project string, updatedAt time.Time) error
 	UpsertTask(ctx context.Context, project string, task Task) error
 	UpdateTaskStatus(ctx context.Context, project, issue, status string, updatedAt time.Time) (Task, error)
-	UpdateTaskBranch(ctx context.Context, project, issue, branch string, updatedAt time.Time) (Task, error)
 	AppendEvent(ctx context.Context, event Event) (Event, error)
 }
 

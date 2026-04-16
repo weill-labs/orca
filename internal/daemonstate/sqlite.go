@@ -1240,31 +1240,6 @@ func (s *SQLiteStore) UpdateTaskStatus(ctx context.Context, project, issue, stat
 	return s.lookupTask(ctx, project, issue)
 }
 
-func (s *SQLiteStore) UpdateTaskBranch(ctx context.Context, project, issue, branch string, updatedAt time.Time) (Task, error) {
-	if updatedAt.IsZero() {
-		updatedAt = s.now()
-	}
-
-	result, err := s.db.ExecContext(ctx, `
-		UPDATE tasks
-		SET branch = ?, updated_at = ?
-		WHERE project = ? AND issue = ?
-	`, branch, formatTime(updatedAt), project, issue)
-	if err != nil {
-		return Task{}, fmt.Errorf("update task branch: %w", err)
-	}
-
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return Task{}, fmt.Errorf("update task branch rows affected: %w", err)
-	}
-	if rowsAffected == 0 {
-		return Task{}, ErrNotFound
-	}
-
-	return s.lookupTask(ctx, project, issue)
-}
-
 func (s *SQLiteStore) TasksByPane(ctx context.Context, project, paneID string) ([]Task, error) {
 	includeProject := isGlobalProject(project)
 	query := `

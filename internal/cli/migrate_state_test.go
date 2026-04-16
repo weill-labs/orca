@@ -142,10 +142,6 @@ func (*migrateStateStoreStub) UpdateTaskStatus(context.Context, string, string, 
 	return state.Task{}, nil
 }
 
-func (*migrateStateStoreStub) UpdateTaskBranch(context.Context, string, string, string, time.Time) (state.Task, error) {
-	return state.Task{}, nil
-}
-
 func (*migrateStateStoreStub) AppendEvent(context.Context, state.Event) (state.Event, error) {
 	return state.Event{}, nil
 }

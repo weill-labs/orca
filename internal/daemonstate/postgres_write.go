@@ -428,25 +428,6 @@ func (s *PostgresStore) UpdateTaskStatus(ctx context.Context, project, issue, st
 	return s.lookupTask(ctx, project, issue)
 }
 
-func (s *PostgresStore) UpdateTaskBranch(ctx context.Context, project, issue, branch string, updatedAt time.Time) (Task, error) {
-	if updatedAt.IsZero() {
-		updatedAt = s.now()
-	}
-
-	tag, err := s.pool.Exec(ctx, `
-		UPDATE tasks
-		SET branch = $1, updated_at = $2
-		WHERE project = $3 AND issue = $4
-	`, branch, normalizeTime(updatedAt), project, issue)
-	if err != nil {
-		return Task{}, fmt.Errorf("update task branch: %w", err)
-	}
-	if tag.RowsAffected() == 0 {
-		return Task{}, ErrNotFound
-	}
-	return s.lookupTask(ctx, project, issue)
-}
-
 func (s *PostgresStore) AppendEvent(ctx context.Context, event Event) (Event, error) {
 	if event.CreatedAt.IsZero() {
 		event.CreatedAt = s.now()

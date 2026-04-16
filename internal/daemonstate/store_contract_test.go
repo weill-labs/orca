@@ -23,7 +23,6 @@ type storeContract interface {
 	ListClones(context.Context, string) ([]Clone, error)
 	Events(context.Context, string, int64) (<-chan Event, <-chan error)
 	UpdateTaskStatus(context.Context, string, string, string, time.Time) (Task, error)
-	UpdateTaskBranch(context.Context, string, string, string, time.Time) (Task, error)
 	DeleteWorker(context.Context, string, string) error
 	MarkCloneFree(context.Context, string, string) error
 	MarkDaemonStopped(context.Context, string, time.Time) error
@@ -228,13 +227,6 @@ func testStoreLifecycleAndQueries(t *testing.T, h storeContractHarness) {
 	}
 	if got, want := updatedTask.Status, "cancelled"; got != want {
 		t.Fatalf("updatedTask.Status = %q, want %q", got, want)
-	}
-	updatedTask, err = h.store.UpdateTaskBranch(context.Background(), project, "LAB-718", "lab-718-renamed", time.Time{})
-	if err != nil {
-		t.Fatalf("UpdateTaskBranch() error = %v", err)
-	}
-	if got, want := updatedTask.Branch, "lab-718-renamed"; got != want {
-		t.Fatalf("updatedTask.Branch = %q, want %q", got, want)
 	}
 
 	if err := h.store.DeleteWorker(context.Background(), project, "worker-01"); err != nil {

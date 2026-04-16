@@ -649,7 +649,10 @@ func TestPRPollFallsBackToIssueIDSearchAndPersistsObservedBranch(t *testing.T) {
 	deps.state.putTaskForTest(task)
 
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-123", "--json", "number"}, `[]`, nil)
-	deps.commands.queue("gh", []string{"pr", "list", "--search", "LAB-123 in:title", "--state", "all", "--json", "number,state,headRefName", "--limit", "5"}, `[{"number":456,"state":"MERGED","headRefName":"lab-123-renamed"}]`, nil)
+	deps.commands.queue("gh", []string{"pr", "list", "--search", "LAB-123 in:title", "--state", "all", "--json", "number,state,headRefName,title", "--limit", "5"}, `[
+		{"number":455,"state":"MERGED","headRefName":"lab-1230-renamed","title":"LAB-1230: sibling issue"},
+		{"number":456,"state":"MERGED","headRefName":"lab-123-renamed","title":"LAB-123: recover renamed branch"}
+	]`, nil)
 	deps.commands.queue("gh", []string{"pr", "checks", "456", "--json", "bucket"}, `[]`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "456", "--json", "mergedAt"}, `{"mergedAt":"2026-04-02T12:00:00Z"}`, nil)
 
@@ -683,9 +686,9 @@ func TestPRPollDoesNotGuessFromAmbiguousIssueIDSearch(t *testing.T) {
 	seedTaskMonitorAssignment(t, deps, "LAB-123", "pane-1", 0)
 
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-123", "--json", "number"}, `[]`, nil)
-	deps.commands.queue("gh", []string{"pr", "list", "--search", "LAB-123 in:title", "--state", "all", "--json", "number,state,headRefName", "--limit", "5"}, `[
-		{"number":456,"state":"OPEN","headRefName":"lab-123-renamed"},
-		{"number":457,"state":"MERGED","headRefName":"lab-123-old"}
+	deps.commands.queue("gh", []string{"pr", "list", "--search", "LAB-123 in:title", "--state", "all", "--json", "number,state,headRefName,title", "--limit", "5"}, `[
+		{"number":456,"state":"OPEN","headRefName":"lab-123-renamed","title":"LAB-123: current task"},
+		{"number":457,"state":"MERGED","headRefName":"follow-up-lab-123","title":"follow-up for LAB-123"}
 	]`, nil)
 
 	var logs strings.Builder
@@ -713,6 +716,35 @@ func TestPRPollDoesNotGuessFromAmbiguousIssueIDSearch(t *testing.T) {
 	}
 	if got := logs.String(); !strings.Contains(got, "LAB-123") || !strings.Contains(got, "multiple pull requests") {
 		t.Fatalf("logs = %q, want ambiguous search message", got)
+	}
+}
+
+func TestPRPollSkipsSingleFalsePositiveIssueIDSearchResult(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	seedTaskMonitorAssignment(t, deps, "LAB-123", "pane-1", 0)
+
+	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-123", "--json", "number"}, `[]`, nil)
+	deps.commands.queue("gh", []string{"pr", "list", "--search", "LAB-123 in:title", "--state", "all", "--json", "number,state,headRefName,title", "--limit", "5"}, `[{"number":456,"state":"MERGED","headRefName":"lab-1230-renamed","title":"LAB-1230: sibling issue"}]`, nil)
+
+	d := deps.newDaemon(t)
+
+	update := d.checkTaskPRPoll(context.Background(), activeTaskMonitorAssignment(t, deps, "LAB-123"))
+	d.applyTaskStateUpdate(context.Background(), update)
+
+	task, ok := deps.state.task("LAB-123")
+	if !ok {
+		t.Fatal("task missing after poll")
+	}
+	if got := task.PRNumber; got != 0 {
+		t.Fatalf("task.PRNumber = %d, want 0", got)
+	}
+	if got, want := task.Branch, "LAB-123"; got != want {
+		t.Fatalf("task.Branch = %q, want %q", got, want)
+	}
+	if got, want := deps.events.countType(EventPRDetected), 0; got != want {
+		t.Fatalf("PR detected event count = %d, want %d", got, want)
 	}
 }
 
