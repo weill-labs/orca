@@ -608,6 +608,68 @@ func TestGitHubCLIClientIsPRMergedEdgeCases(t *testing.T) {
 	}
 }
 
+func TestGitHubCLIClientLookupPRTerminalState(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		output  string
+		err     error
+		want    prTerminalState
+		wantErr bool
+	}{
+		{
+			name:   "merged pr",
+			output: `{"state":"MERGED","mergedAt":"2026-04-02T12:00:00Z","closedAt":"2026-04-02T12:00:00Z"}`,
+			want:   prTerminalState{merged: true},
+		},
+		{
+			name:   "closed without merge",
+			output: `{"state":"CLOSED","mergedAt":null,"closedAt":"2026-04-02T12:00:00Z"}`,
+			want:   prTerminalState{closedWithoutMerge: true},
+		},
+		{
+			name:   "open pr",
+			output: `{"state":"OPEN","mergedAt":null,"closedAt":null}`,
+			want:   prTerminalState{},
+		},
+		{
+			name: "empty output",
+			want: prTerminalState{},
+		},
+		{
+			name:    "invalid json",
+			output:  `{`,
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			commands := newFakeCommands()
+			client := newGitHubCLIClient(gitHubCLIClientConfig{
+				project:     "/tmp/project",
+				commands:    commands,
+				sleep:       noSleep,
+				maxAttempts: 1,
+			})
+			args := []string{"pr", "view", "42", "--json", "mergedAt,state,closedAt"}
+			commands.queue("gh", args, tt.output, tt.err)
+
+			got, err := client.lookupPRTerminalState(context.Background(), 42)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("lookupPRTerminalState() error = %v, wantErr = %v", err, tt.wantErr)
+			}
+			if got != tt.want {
+				t.Fatalf("lookupPRTerminalState() = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestGitHubCLIClientLookupPRReviewsEdgeCases(t *testing.T) {
 	t.Parallel()
 

@@ -197,6 +197,40 @@ func TestCheckTaskPRPollTransitionsReviewPendingToMerged(t *testing.T) {
 	}
 }
 
+func TestCheckTaskPRPollTransitionsClosedWithoutMergeToCancelledCompletion(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	issue := "LAB-1323"
+	seedTaskMonitorAssignmentWithState(t, deps, issue, "pane-1", 42, TaskStateReviewPending)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt,state,closedAt"}, `{"state":"CLOSED","mergedAt":null,"closedAt":"2026-04-16T12:00:00Z"}`, nil)
+
+	d := deps.newDaemon(t)
+	update := d.checkTaskPRPoll(context.Background(), activeTaskMonitorAssignment(t, deps, issue))
+
+	if got, want := update.CompletionStatus, TaskStatusCancelled; got != want {
+		t.Fatalf("update.CompletionStatus = %q, want %q", got, want)
+	}
+	if got, want := update.CompletionEventType, EventTaskCancelled; got != want {
+		t.Fatalf("update.CompletionEventType = %q, want %q", got, want)
+	}
+	if update.CompletionMerged {
+		t.Fatal("update.CompletionMerged = true, want false")
+	}
+	if got, want := update.CompletionMessage, "pr closed without merge"; got != want {
+		t.Fatalf("update.CompletionMessage = %q, want %q", got, want)
+	}
+	if got, want := len(update.Events), 1; got != want {
+		t.Fatalf("len(update.Events) = %d, want %d", got, want)
+	}
+	if got, want := update.Events[0].Type, EventPRClosedWithoutMerge; got != want {
+		t.Fatalf("update.Events[0].Type = %q, want %q", got, want)
+	}
+	if update.PRMerged {
+		t.Fatal("update.PRMerged = true, want false")
+	}
+}
+
 func TestApplyTaskStateUpdateCompletesMergedTask(t *testing.T) {
 	t.Parallel()
 
