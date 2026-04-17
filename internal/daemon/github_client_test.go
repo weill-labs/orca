@@ -623,6 +623,7 @@ func TestGitHubCLIClientPRTerminalState(t *testing.T) {
 		{name: "merged pr by state", output: `{"state":"MERGED","mergedAt":null}`, wantState: prTerminalStateMerged},
 		{name: "merged pr by mergedAt", output: `{"state":"CLOSED","mergedAt":"2026-04-02T12:00:00Z"}`, wantState: prTerminalStateMerged},
 		{name: "closed without merge", output: `{"state":"CLOSED","mergedAt":null}`, wantState: prTerminalStateClosedWithoutMerge},
+		{name: "command error", err: errors.New("gh failed"), wantErr: true},
 		{name: "invalid json", output: `{`, wantErr: true},
 	}
 

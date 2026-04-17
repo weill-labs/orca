@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+	"time"
 )
 
 func TestCheckTaskPRPollTransitionsTaskState(t *testing.T) {
@@ -271,6 +272,105 @@ func TestCheckTaskPRPollDistinguishesPRTerminalStates(t *testing.T) {
 			}
 			if got, want := update.Events[0].Type, tt.wantEventType; got != want {
 				t.Fatalf("update.Events[0].Type = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+func TestCheckTaskPRPollRegularPathDistinguishesPRTerminalStates(t *testing.T) {
+	t.Parallel()
+
+	until := time.Date(2026, 4, 2, 9, 2, 0, 0, time.UTC)
+	tests := []struct {
+		name                 string
+		queue                func(*testDeps)
+		wantState            string
+		wantPRMerged         bool
+		wantCompletionStatus string
+		wantCompletionType   string
+		wantEventType        string
+		wantRateLimitedUntil time.Time
+	}{
+		{
+			name: "merged pr terminal state marks merged",
+			queue: func(deps *testDeps) {
+				deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[]`, nil)
+				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
+				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "state,mergedAt"}, `{"state":"MERGED","mergedAt":null}`, nil)
+			},
+			wantState:    TaskStateMerged,
+			wantPRMerged: true,
+		},
+		{
+			name: "closed pr terminal state fails task",
+			queue: func(deps *testDeps) {
+				deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[]`, nil)
+				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
+				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "state,mergedAt"}, `{"state":"CLOSED","mergedAt":null}`, nil)
+			},
+			wantState:            TaskStateDone,
+			wantCompletionStatus: TaskStatusFailed,
+			wantCompletionType:   EventTaskFailed,
+			wantEventType:        EventPRClosed,
+		},
+		{
+			name: "rate limited terminal state returns early",
+			queue: func(deps *testDeps) {
+				deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[]`, nil)
+				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
+				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "state,mergedAt"}, "HTTP 429: API rate limit exceeded\nRetry-After: 120\n", errors.New("gh: HTTP 429"))
+			},
+			wantState:            TaskStateReviewPending,
+			wantRateLimitedUntil: until,
+			wantEventType:        EventPRRateLimited,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			deps := newTestDeps(t)
+			issue := "LAB-1315"
+			seedTaskMonitorAssignmentWithState(t, deps, issue, "pane-1", 42, TaskStateReviewPending)
+			tt.queue(deps)
+
+			d := deps.newDaemon(t)
+			update := d.checkTaskPRPoll(context.Background(), activeTaskMonitorAssignment(t, deps, issue))
+
+			if got, want := update.Active.Task.State, tt.wantState; got != want {
+				t.Fatalf("update.Active.Task.State = %q, want %q", got, want)
+			}
+			if got, want := update.PRMerged, tt.wantPRMerged; got != want {
+				t.Fatalf("update.PRMerged = %v, want %v", got, want)
+			}
+			if got, want := update.CompletionStatus, tt.wantCompletionStatus; got != want {
+				t.Fatalf("update.CompletionStatus = %q, want %q", got, want)
+			}
+			if got, want := update.CompletionEventType, tt.wantCompletionType; got != want {
+				t.Fatalf("update.CompletionEventType = %q, want %q", got, want)
+			}
+			if tt.wantEventType == "" {
+				if got := len(update.Events); got != 0 {
+					t.Fatalf("len(update.Events) = %d, want 0", got)
+				}
+			} else {
+				if got, want := len(update.Events), 1; got != want {
+					t.Fatalf("len(update.Events) = %d, want %d", got, want)
+				}
+				if got, want := update.Events[0].Type, tt.wantEventType; got != want {
+					t.Fatalf("update.Events[0].Type = %q, want %q", got, want)
+				}
+				if !tt.wantRateLimitedUntil.IsZero() && !update.Events[0].GitHubRateLimitedUntil.Equal(tt.wantRateLimitedUntil) {
+					t.Fatalf("update.Events[0].GitHubRateLimitedUntil = %v, want %v", update.Events[0].GitHubRateLimitedUntil, tt.wantRateLimitedUntil)
+				}
+			}
+			if got, want := deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}), 0; got != want {
+				t.Fatalf("mergeable follow-up call count = %d, want %d", got, want)
+			}
+			if got, want := deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}), 0; got != want {
+				t.Fatalf("review follow-up call count = %d, want %d", got, want)
 			}
 		})
 	}
