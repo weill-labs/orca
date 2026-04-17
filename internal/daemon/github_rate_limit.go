@@ -48,6 +48,23 @@ func formatGitHubRateLimitWarning(until time.Time) string {
 	return fmt.Sprintf("github: rate limited until %s", until.UTC().Format("15:04"))
 }
 
+func wrapGitHubRateLimitError(err error, output []byte, now time.Time) error {
+	if err == nil {
+		return nil
+	}
+	if _, ok := gitHubRateLimitUntil(err); ok {
+		return err
+	}
+	if !isGitHubRateLimitError(err, output) {
+		return err
+	}
+
+	return &gitHubRateLimitError{
+		err:   err,
+		until: gitHubRateLimitDeadline(err, output, now, defaultGitHubAPIInitialBackoff),
+	}
+}
+
 func (d *Daemon) appendGitHubRateLimitEvent(update *TaskStateUpdate, profile AgentProfile, err error) bool {
 	until, ok := gitHubRateLimitUntil(err)
 	if !ok {

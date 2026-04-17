@@ -18,10 +18,10 @@ const (
 	ciFailureRenudgePollWindow = 2
 )
 
-func (d *Daemon) handlePRChecksPoll(ctx context.Context, update *TaskStateUpdate, profile AgentProfile) {
+func (d *Daemon) handlePRChecksPoll(ctx context.Context, update *TaskStateUpdate, profile AgentProfile) bool {
 	ciState, err := d.lookupPRChecksState(ctx, update.Active.Task.Project, update.Active.Task.PRNumber)
 	if err != nil {
-		return
+		return d.handleCIPollLookupError(update, profile, "lookup_checks_error", err)
 	}
 	now := d.now()
 
@@ -33,7 +33,7 @@ func (d *Daemon) handlePRChecksPoll(ctx context.Context, update *TaskStateUpdate
 		if nextState := taskStateForCIState(ciState); nextState != "" && setTaskState(&update.Active.Task, nextState, now) {
 			update.TaskChanged = true
 		}
-		return
+		return false
 	}
 	if previous != ciStateFail {
 		resetCIFailureNudgeState(&update.Active.Worker)
@@ -43,10 +43,10 @@ func (d *Daemon) handlePRChecksPoll(ctx context.Context, update *TaskStateUpdate
 		if setTaskState(&update.Active.Task, TaskStateCIPending, now) {
 			update.TaskChanged = true
 		}
-		return
+		return false
 	}
 	if update.Active.Worker.CIEscalated {
-		return
+		return false
 	}
 	update.Active.Worker.CIFailurePollCount++
 	update.Active.Worker.LastSeenAt = now
@@ -55,17 +55,44 @@ func (d *Daemon) handlePRChecksPoll(ctx context.Context, update *TaskStateUpdate
 		update.TaskChanged = true
 	}
 	if update.Active.Worker.CIFailurePollCount < ciFailureRenudgePollWindow {
-		return
+		return false
 	}
 	if update.Active.Worker.CINudgeCount >= maxCINudges {
 		update.Active.Worker.CIEscalated = true
 		event := d.assignmentEvent(update.Active, profile, EventWorkerCIEscalated, fmt.Sprintf("CI nudges exhausted after %d attempts; lead intervention required", update.Active.Worker.CINudgeCount))
 		event.Retry = update.Active.Worker.CINudgeCount
 		update.Events = append(update.Events, event)
-		return
+		return false
 	}
 	if d.recordCIFailureNudge(ctx, update, profile, now) {
 		update.WorkerChanged = true
+	}
+	return false
+}
+
+func (d *Daemon) handleCIPollLookupError(update *TaskStateUpdate, profile AgentProfile, action string, err error) bool {
+	if d.appendGitHubRateLimitEvent(update, profile, err) {
+		return true
+	}
+	d.traceCIPoll(update, profile, action, err)
+	return false
+}
+
+func (d *Daemon) traceCIPoll(update *TaskStateUpdate, profile AgentProfile, action string, err error) {
+	if update == nil {
+		return
+	}
+
+	message := fmt.Sprintf(
+		"ci poll trace: issue=%s pr_number=%d action=%s error=%q",
+		update.Active.Task.Issue,
+		update.Active.Task.PRNumber,
+		action,
+		err,
+	)
+	update.Events = append(update.Events, d.assignmentEvent(update.Active, profile, EventCIPollTrace, message))
+	if d.logf != nil {
+		d.logf("%s", message)
 	}
 }
 
@@ -109,6 +136,7 @@ func (d *Daemon) nudgeForCIFailure(ctx context.Context, update *TaskStateUpdate,
 
 	failedChecks, err := d.lookupFailedPRChecks(ctx, update.Active.Task.Project, update.Active.Task.PRNumber)
 	if err != nil {
+		d.handleCIPollLookupError(update, profile, "lookup_failed_checks_error", err)
 		failedChecks = nil
 	}
 	prompt := ciFailurePrompt(update.Active.Task.PRNumber, failedChecks)
@@ -125,11 +153,27 @@ func (d *Daemon) nudgeForCIFailure(ctx context.Context, update *TaskStateUpdate,
 }
 
 func (d *Daemon) lookupPRChecksState(ctx context.Context, projectPath string, prNumber int) (string, error) {
-	return lookupPRChecksState(ctx, d.commandRunner(ctx), projectPath, prNumber)
+	output, err := d.runPRChecksCommand(ctx, projectPath, prNumber, "bucket")
+	if err != nil {
+		return "", err
+	}
+	return parsePRChecksState(output)
 }
 
 func (d *Daemon) lookupFailedPRChecks(ctx context.Context, projectPath string, prNumber int) ([]prCheck, error) {
-	return lookupFailedPRChecks(ctx, d.commandRunner(ctx), projectPath, prNumber)
+	output, err := d.runPRChecksCommand(ctx, projectPath, prNumber, "bucket,name,link")
+	if err != nil {
+		return nil, err
+	}
+	return parseFailedPRChecks(output)
+}
+
+func (d *Daemon) runPRChecksCommand(ctx context.Context, projectPath string, prNumber int, fields string) ([]byte, error) {
+	output, err := runPRChecksCommand(ctx, d.commandRunner(ctx), projectPath, prNumber, fields)
+	if err != nil {
+		return nil, wrapGitHubRateLimitError(err, output, d.now())
+	}
+	return output, nil
 }
 
 type prCheck struct {
@@ -139,10 +183,14 @@ type prCheck struct {
 }
 
 func lookupPRChecksState(ctx context.Context, commands CommandRunner, project string, prNumber int) (string, error) {
-	output, err := commands.Run(ctx, project, "gh", "pr", "checks", fmt.Sprintf("%d", prNumber), "--json", "bucket")
+	output, err := runPRChecksCommand(ctx, commands, project, prNumber, "bucket")
 	if err != nil {
 		return "", err
 	}
+	return parsePRChecksState(output)
+}
+
+func parsePRChecksState(output []byte) (string, error) {
 	if len(output) == 0 {
 		return "", nil
 	}
@@ -167,10 +215,14 @@ func lookupPRChecksState(ctx context.Context, commands CommandRunner, project st
 }
 
 func lookupFailedPRChecks(ctx context.Context, commands CommandRunner, project string, prNumber int) ([]prCheck, error) {
-	output, err := commands.Run(ctx, project, "gh", "pr", "checks", fmt.Sprintf("%d", prNumber), "--json", "bucket,name,link")
+	output, err := runPRChecksCommand(ctx, commands, project, prNumber, "bucket,name,link")
 	if err != nil {
 		return nil, err
 	}
+	return parseFailedPRChecks(output)
+}
+
+func parseFailedPRChecks(output []byte) ([]prCheck, error) {
 	if len(output) == 0 {
 		return nil, nil
 	}
@@ -187,6 +239,10 @@ func lookupFailedPRChecks(ctx context.Context, commands CommandRunner, project s
 		}
 	}
 	return failed, nil
+}
+
+func runPRChecksCommand(ctx context.Context, commands CommandRunner, project string, prNumber int, fields string) ([]byte, error) {
+	return commands.Run(ctx, project, "gh", "pr", "checks", fmt.Sprintf("%d", prNumber), "--json", fields)
 }
 
 func ciFailurePrompt(prNumber int, failedChecks []prCheck) string {
