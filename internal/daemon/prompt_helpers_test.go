@@ -1,5 +1,5 @@
 package daemon
 
-func wrappedCodexPrompt(prompt string) string {
-	return wrapAssignmentPrompt(AgentProfile{Name: "codex"}, prompt)
+func wrappedCodexPrompt(issue, prompt string) string {
+	return wrapAssignmentPrompt(AgentProfile{Name: "codex"}, issue, prompt)
 }

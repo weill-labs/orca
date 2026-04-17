@@ -1,19 +1,45 @@
 package daemon
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 const codexAssignmentPromptSuffix = "When tests pass, commit, push, and open a PR with gh pr create."
 
-func wrapAssignmentPrompt(profile AgentProfile, prompt string) string {
+func wrapAssignmentPrompt(profile AgentProfile, issue, prompt string) string {
 	prompt = strings.TrimSpace(prompt)
 	if !strings.EqualFold(profile.Name, "codex") {
 		return prompt
 	}
-	if prompt == "" {
-		return codexAssignmentPromptSuffix
+
+	titlePrompt := codexAssignmentPRTitlePrompt(issue)
+	hasReminderBlock := strings.Contains(prompt, codexAssignmentPromptSuffix) || (titlePrompt != "" && strings.Contains(prompt, titlePrompt))
+
+	var reminders []string
+	if !strings.Contains(prompt, codexAssignmentPromptSuffix) {
+		reminders = append(reminders, codexAssignmentPromptSuffix)
 	}
-	if strings.Contains(prompt, codexAssignmentPromptSuffix) {
+	if titlePrompt != "" && !strings.Contains(prompt, titlePrompt) {
+		reminders = append(reminders, titlePrompt)
+	}
+	if len(reminders) == 0 {
 		return prompt
 	}
-	return prompt + "\n\n" + codexAssignmentPromptSuffix
+	if prompt == "" {
+		return strings.Join(reminders, "\n")
+	}
+	separator := "\n\n"
+	if hasReminderBlock {
+		separator = "\n"
+	}
+	return prompt + separator + strings.Join(reminders, "\n")
+}
+
+func codexAssignmentPRTitlePrompt(issue string) string {
+	issue = normalizeIssueIdentifier(issue)
+	if issue == "" {
+		return ""
+	}
+	return fmt.Sprintf("Before opening the PR, verify the title follows %q per CLAUDE.md.", issue+": Imperative summary")
 }

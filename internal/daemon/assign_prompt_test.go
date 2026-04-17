@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"context"
-	"fmt"
 	"testing"
 )
 
@@ -12,24 +11,47 @@ func TestWrapAssignmentPrompt(t *testing.T) {
 	tests := []struct {
 		name    string
 		profile AgentProfile
+		issue   string
 		prompt  string
 		want    string
 	}{
 		{
-			name:    "appends codex pr reminder",
+			name:    "appends codex pr reminder and title convention",
 			profile: AgentProfile{Name: "codex"},
+			issue:   "LAB-892",
 			prompt:  "Implement daemon core",
-			want:    "Implement daemon core\n\nWhen tests pass, commit, push, and open a PR with gh pr create.",
+			want:    wantedCodexAssignmentPrompt("LAB-892", "Implement daemon core"),
 		},
 		{
-			name:    "does not duplicate codex pr reminder",
+			name:    "appends only missing title convention reminder",
 			profile: AgentProfile{Name: "codex"},
+			issue:   "LAB-893",
 			prompt:  "Implement daemon core\n\nWhen tests pass, commit, push, and open a PR with gh pr create.",
-			want:    "Implement daemon core\n\nWhen tests pass, commit, push, and open a PR with gh pr create.",
+			want:    "Implement daemon core\n\n" + wantedCodexAssignmentReminder("LAB-893"),
+		},
+		{
+			name:    "does not duplicate full codex reminder",
+			profile: AgentProfile{Name: "codex"},
+			issue:   "LAB-894",
+			prompt:  wantedCodexAssignmentPrompt("LAB-894", "Implement daemon core"),
+			want:    wantedCodexAssignmentPrompt("LAB-894", "Implement daemon core"),
+		},
+		{
+			name:    "omits title convention when issue is empty",
+			profile: AgentProfile{Name: "codex"},
+			prompt:  "Implement daemon core",
+			want:    "Implement daemon core\n\n" + codexAssignmentPromptSuffix,
+		},
+		{
+			name:    "returns reminder block for empty codex prompt",
+			profile: AgentProfile{Name: "codex"},
+			issue:   "LAB-895",
+			want:    wantedCodexAssignmentReminder("LAB-895"),
 		},
 		{
 			name:    "leaves claude prompts unchanged",
 			profile: AgentProfile{Name: "claude"},
+			issue:   "LAB-892",
 			prompt:  "Implement daemon core",
 			want:    "Implement daemon core",
 		},
@@ -40,8 +62,8 @@ func TestWrapAssignmentPrompt(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			if got := wrapAssignmentPrompt(tt.profile, tt.prompt); got != tt.want {
-				t.Fatalf("wrapAssignmentPrompt(%q) = %q, want %q", tt.prompt, got, tt.want)
+			if got := wrapAssignmentPrompt(tt.profile, tt.issue, tt.prompt); got != tt.want {
+				t.Fatalf("wrapAssignmentPrompt(%q, %q) = %q, want %q", tt.issue, tt.prompt, got, tt.want)
 			}
 		})
 	}
@@ -108,9 +130,7 @@ func TestAssignAppendsOnlyMissingCodexPRTitleInstructions(t *testing.T) {
 		return ok && task.Status == TaskStatusActive
 	})
 
-	wantPrompt := prompt + "\nBefore opening the PR, verify the title follows " +
-		`"LAB-893: Imperative summary"` +
-		" per CLAUDE.md."
+	wantPrompt := prompt + "\n" + codexAssignmentPRTitlePrompt("LAB-893")
 	task, ok := deps.state.task("LAB-893")
 	if !ok {
 		t.Fatal("task not stored in state")
@@ -122,8 +142,10 @@ func TestAssignAppendsOnlyMissingCodexPRTitleInstructions(t *testing.T) {
 	deps.amux.requireSentKeys(t, "pane-1", []string{wantPrompt + "\n"})
 }
 
+func wantedCodexAssignmentReminder(issue string) string {
+	return codexAssignmentPromptSuffix + "\n" + codexAssignmentPRTitlePrompt(issue)
+}
+
 func wantedCodexAssignmentPrompt(issue, prompt string) string {
-	return prompt + "\n\n" +
-		"When tests pass, commit, push, and open a PR with gh pr create.\n" +
-		fmt.Sprintf("Before opening the PR, verify the title follows %q per CLAUDE.md.", issue+": Imperative summary")
+	return prompt + "\n\n" + wantedCodexAssignmentReminder(issue)
 }

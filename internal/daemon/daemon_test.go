@@ -246,7 +246,7 @@ func TestAssignAllocatesCloneStartsAgentAndRegistersState(t *testing.T) {
 		"task":           "LAB-689",
 		"tracked_issues": `[{"id":"LAB-689","status":"active"}]`,
 	})
-	deps.amux.requireSentKeys(t, "pane-1", []string{wrappedCodexPrompt("Implement daemon core") + "\n"})
+	deps.amux.requireSentKeys(t, "pane-1", []string{wrappedCodexPrompt("LAB-689", "Implement daemon core") + "\n"})
 
 	deps.events.requireTypes(t, EventDaemonStarted, EventTaskAssigned)
 }
@@ -304,7 +304,7 @@ func TestAssignStoresStablePaneNameReference(t *testing.T) {
 		"task":           "LAB-854",
 		"tracked_issues": `[{"id":"LAB-854","status":"active"}]`,
 	})
-	deps.amux.requireSentKeys(t, "w-LAB-854", []string{wrappedCodexPrompt("Fix pane references") + "\n"})
+	deps.amux.requireSentKeys(t, "w-LAB-854", []string{wrappedCodexPrompt("LAB-854", "Fix pane references") + "\n"})
 }
 
 func TestAssignWithCallerPaneUsesCallerPaneForWorkerSpawn(t *testing.T) {

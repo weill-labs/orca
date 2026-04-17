@@ -97,7 +97,7 @@ func TestCancelSendsPostmortemBeforeCleanup(t *testing.T) {
 		return ok && task.Status == TaskStatusCancelled
 	})
 
-	deps.amux.requireSentKeys(t, "pane-1", []string{wrappedCodexPrompt("Implement daemon core"), "Enter", "$postmortem", "Enter"})
+	deps.amux.requireSentKeys(t, "pane-1", []string{wrappedCodexPrompt("LAB-689", "Implement daemon core"), "Enter", "$postmortem", "Enter"})
 	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
 		{PaneID: "pane-1", Timeout: 2 * time.Minute},
 	}; !reflect.DeepEqual(got, want) {

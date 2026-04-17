@@ -43,7 +43,7 @@ func TestAssignConfirmsCodexTrustPromptBeforeSendingPrompt(t *testing.T) {
 		return ok && task.Status == TaskStatusActive
 	})
 
-	deps.amux.requireSentKeys(t, "pane-1", []string{"Enter", wrappedCodexPrompt("Implement handshake"), "Enter"})
+	deps.amux.requireSentKeys(t, "pane-1", []string{"Enter", wrappedCodexPrompt("LAB-720", "Implement handshake"), "Enter"})
 	if got, want := deps.amux.captureCount("pane-1"), 1; got != want {
 		t.Fatalf("capture count = %d, want %d", got, want)
 	}
@@ -89,7 +89,7 @@ func TestAssignDoesNotBlindlyConfirmWhenTrustPromptNotPresent(t *testing.T) {
 		return ok && task.Status == TaskStatusActive
 	})
 
-	deps.amux.requireSentKeys(t, "pane-1", []string{wrappedCodexPrompt("Implement handshake") + "\n"})
+	deps.amux.requireSentKeys(t, "pane-1", []string{wrappedCodexPrompt("LAB-720", "Implement handshake") + "\n"})
 	if got, want := deps.amux.waitContentCalls, []waitContentCall{
 		{PaneID: "pane-1", Substring: "do you trust", Timeout: defaultTrustPromptTimeout},
 		{PaneID: "pane-1", Substring: codexWorkingText, Timeout: defaultAgentHandshakeTimeout},
@@ -140,7 +140,7 @@ func TestAssignResumesCodexBeforeSendingPrompt(t *testing.T) {
 	deps.amux.requireSentKeys(t, "pane-1", []string{
 		"codex --yolo resume\n",
 		".",
-		wrappedCodexPrompt("Implement resume flow") + "\n",
+		wrappedCodexPrompt("LAB-720", "Implement resume flow") + "\n",
 	})
 	if got, want := deps.amux.waitContentCalls, []waitContentCall{
 		{PaneID: "pane-1", Substring: "do you trust", Timeout: defaultTrustPromptTimeout},
@@ -253,7 +253,7 @@ func TestAssignWaitsForCodexReadyPatternBeforeSendingPrompt(t *testing.T) {
 		return ok && task.Status == TaskStatusActive
 	})
 
-	deps.amux.requireSentKeys(t, "pane-1", []string{wrappedCodexPrompt("Wait for codex readiness") + "\n"})
+	deps.amux.requireSentKeys(t, "pane-1", []string{wrappedCodexPrompt("LAB-1191", "Wait for codex readiness") + "\n"})
 	if got, want := deps.amux.waitContentCalls, []waitContentCall{
 		{PaneID: "pane-1", Substring: "do you trust", Timeout: defaultTrustPromptTimeout},
 		{PaneID: "pane-1", Substring: codexReadyPattern, Timeout: defaultAgentHandshakeTimeout},
@@ -333,7 +333,7 @@ func TestAssignRetriesCodexStartupAfterBareBashHandshakeFailure(t *testing.T) {
 	}
 
 	deps.amux.requireSentKeys(t, "pane-1", nil)
-	deps.amux.requireSentKeys(t, "pane-2", []string{wrappedCodexPrompt("Retry codex startup during assign") + "\n"})
+	deps.amux.requireSentKeys(t, "pane-2", []string{wrappedCodexPrompt("LAB-1209", "Retry codex startup during assign") + "\n"})
 	if got, want := deps.amux.killCalls, []string{"pane-1"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("kill calls = %#v, want %#v", got, want)
 	}

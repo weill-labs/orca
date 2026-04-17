@@ -306,7 +306,7 @@ func TestAssignUsesGitHubIssueContextAndSkipsLinear(t *testing.T) {
 		"tracked_issues": `[{"id":"GH-702","status":"active"}]`,
 	})
 	deps.amux.requireSentKeys(t, "pane-1", []string{
-		wrappedCodexPrompt(strings.Join([]string{
+		wrappedCodexPrompt("GH-702", strings.Join([]string{
 			"GitHub issue GH-702",
 			"Title: Assign should accept GitHub issue numbers",
 			"",
@@ -455,7 +455,7 @@ func TestAssignRetriesCodexPromptUntilWorkingAppears(t *testing.T) {
 	})
 
 	deps.amux.requireSentKeys(t, "pane-1", []string{
-		wrappedCodexPrompt("Verify prompt delivery") + "\n",
+		wrappedCodexPrompt("LAB-898", "Verify prompt delivery") + "\n",
 		"\n",
 	})
 	if got, want := deps.amux.waitContentCalls, []waitContentCall{
@@ -530,8 +530,8 @@ func TestAssignRetriesCodexPromptDeliveryAfterPaneReturnsToShell(t *testing.T) {
 		t.Fatalf("worker.PaneID = %q, want %q", got, want)
 	}
 
-	deps.amux.requireSentKeys(t, "pane-1", []string{wrappedCodexPrompt("Retry prompt delivery on a fresh pane") + "\n"})
-	deps.amux.requireSentKeys(t, "pane-2", []string{wrappedCodexPrompt("Retry prompt delivery on a fresh pane") + "\n"})
+	deps.amux.requireSentKeys(t, "pane-1", []string{wrappedCodexPrompt("LAB-1330", "Retry prompt delivery on a fresh pane") + "\n"})
+	deps.amux.requireSentKeys(t, "pane-2", []string{wrappedCodexPrompt("LAB-1330", "Retry prompt delivery on a fresh pane") + "\n"})
 	if got, want := deps.amux.killCalls, []string{"pane-1"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("kill calls = %#v, want %#v", got, want)
 	}

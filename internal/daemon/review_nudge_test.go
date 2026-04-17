@@ -131,7 +131,7 @@ func TestPRReviewPollingSkipsNudgesForApprovalOrLGTM(t *testing.T) {
 					t.Fatalf("state review approved event message = %q, want %q", got, want)
 				}
 			}
-			deps.amux.requireSentKeys(t, "pane-1", []string{wrappedCodexPrompt("Implement daemon core") + "\n"})
+			deps.amux.requireSentKeys(t, "pane-1", []string{wrappedCodexPrompt("LAB-689", "Implement daemon core") + "\n"})
 		})
 	}
 }
@@ -243,7 +243,7 @@ func TestPRReviewPollingEscalatesAfterThreeNudgesAndResetsAfterApprovalCycle(t *
 		t.Fatalf("review escalation event count = %d, want %d", got, want)
 	}
 	deps.amux.requireSentKeys(t, "pane-1", []string{
-		wrappedCodexPrompt("Implement daemon core") + "\n",
+		wrappedCodexPrompt("LAB-689", "Implement daemon core") + "\n",
 		aliceNudge,
 		bobNudge,
 		carolNudge,
