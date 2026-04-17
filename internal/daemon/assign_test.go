@@ -869,6 +869,12 @@ func TestValidateAssignmentPrompt(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name:    "allows github issue identifier context alongside assigned linear issue",
+			issue:   "LAB-689",
+			prompt:  "Address LAB-689 from the backlog; see gh-702 for context.",
+			wantErr: false,
+		},
+		{
 			name:    "allows assigned github issue alias from backlog context",
 			issue:   "GH-702",
 			prompt:  "Address #702 from the backlog and start working.",
