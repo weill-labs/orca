@@ -13,6 +13,7 @@ import (
 
 const (
 	codexWorkingText                   = "Working"
+	codexWorkingConfirmationAttempts   = 3
 	codexPromptDeliveryExtendedTimeout = 2 * defaultAgentHandshakeTimeout
 	codexPromptRetryIdleProbeTime      = 5 * time.Second
 )
@@ -61,6 +62,36 @@ func (d *Daemon) confirmPromptDelivery(ctx context.Context, paneID string, profi
 		return nil
 	}
 	return finalErr
+}
+
+// Post-start lifecycle prompts can race with Codex input buffering. Send the
+// prompt once, then retry only Enter until Codex transitions to Working or the
+// bounded retry budget is exhausted.
+func (d *Daemon) sendAndConfirmWorking(ctx context.Context, paneID, prompt string) error {
+	if err := d.amux.SendKeys(ctx, paneID, prompt, "Enter"); err != nil {
+		return err
+	}
+
+	profile := AgentProfile{Name: "codex"}
+	phase := "after prompt"
+	for attempt := 1; attempt <= codexWorkingConfirmationAttempts; attempt++ {
+		state, err := d.waitForPromptDeliveryMarker(ctx, paneID, profile, defaultAgentHandshakeTimeout, phase)
+		switch state {
+		case promptDeliveryWaitObserved:
+			return nil
+		case promptDeliveryWaitError, promptDeliveryWaitAgentGone:
+			return err
+		}
+		if attempt == codexWorkingConfirmationAttempts {
+			return err
+		}
+		if err := d.amux.SendKeys(ctx, paneID, "Enter"); err != nil {
+			return fmt.Errorf("retry prompt delivery: %w", err)
+		}
+		phase = "after retry enter"
+	}
+
+	return fmt.Errorf("%w: working confirmation exhausted", ErrPromptDeliveryNotConfirmed)
 }
 
 func (d *Daemon) waitForPromptDeliveryMarker(ctx context.Context, paneID string, profile AgentProfile, timeout time.Duration, phase string) (promptDeliveryWaitState, error) {
