@@ -57,6 +57,7 @@ const (
 	EventWorkerCrashReport         = "worker.crash_report"
 	EventWorkerRecovered           = "worker.recovered"
 	EventWorkerPostmortem          = "worker.postmortem"
+	EventCIPollTrace               = "ci.poll_trace"
 	EventReviewApproved            = "review.approved"
 	EventReviewPollTrace           = "review.poll_trace"
 	EventPRDetected                = "pr.detected"

@@ -124,14 +124,18 @@ func (d *Daemon) checkTaskPRPoll(ctx context.Context, active ActiveAssignment) T
 		if d.appendGitHubRateLimitEvent(&update, profile, err) {
 			return update
 		}
-		d.handlePRChecksPoll(ctx, &update, profile)
+		if d.handlePRChecksPoll(ctx, &update, profile) {
+			return update
+		}
 		return d.continuePRFollowUpPolls(ctx, update, profile)
 	}
 	if handled {
 		return update
 	}
 
-	d.handlePRChecksPoll(ctx, &update, profile)
+	if d.handlePRChecksPoll(ctx, &update, profile) {
+		return update
+	}
 	return d.continuePRFollowUpPolls(ctx, update, profile)
 }
 
