@@ -578,8 +578,8 @@ func (c staticGitHubClient) lookupOpenOrMergedPRNumber(context.Context, string) 
 	return 0, false, nil
 }
 
-func (c staticGitHubClient) lookupPRTerminalState(context.Context, int) (prTerminalState, error) {
-	return prTerminalState{}, nil
+func (c staticGitHubClient) lookupPRTerminalState(_ context.Context, prNumber int) (prTerminalState, error) {
+	return prTerminalState{merged: c.mergedPRs[prNumber]}, nil
 }
 
 func (c staticGitHubClient) isPRMerged(_ context.Context, prNumber int) (bool, error) {

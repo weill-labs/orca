@@ -149,7 +149,7 @@ func TestPRPollFallbackCompletesTaskFromPersistedSQLiteState(t *testing.T) {
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-1293", "--json", "number"}, `[]`, nil)
 	deps.commands.queue("gh", []string{"pr", "list", "--search", "LAB-1293 in:title", "--state", "all", "--json", "number,state,headRefName,title", "--limit", "5"}, `[{"number":166,"state":"MERGED","headRefName":"lab-1293-mergeable-unknown","title":"LAB-1293: recover merged PR detection"}]`, nil)
 	deps.commands.queue("gh", []string{"pr", "checks", "166", "--json", "bucket"}, `[]`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "166", "--json", "mergedAt"}, `{"mergedAt":"2026-04-16T17:48:38Z"}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "166", "--json", prTerminalStateJSONFields}, `{"mergedAt":"2026-04-16T17:48:38Z"}`, nil)
 
 	d := deps.newDaemonWithOptions(t, func(opts *Options) {
 		opts.State = adapter

@@ -136,7 +136,7 @@ func TestIdleTimeoutMergeCheckWrapsUpMergedPRBeforeEscalating(t *testing.T) {
 		NudgeCommand:      "Enter",
 		MaxNudgeRetries:   0,
 	}
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":"2026-04-02T12:00:00Z"}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"mergedAt":"2026-04-02T12:00:00Z"}`, nil)
 
 	d := deps.newDaemon(t)
 	ctx := context.Background()
@@ -183,7 +183,7 @@ func TestIdleTimeoutMergeCheckWrapsUpMergedPRBeforeEscalating(t *testing.T) {
 	if got := deps.events.countType(EventPRMerged); got != 1 {
 		t.Fatalf("PR merged events = %d, want 1", got)
 	}
-	if got := deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "mergedAt"}); got != 1 {
+	if got := deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}); got != 1 {
 		t.Fatalf("merged-at lookup calls = %d, want 1", got)
 	}
 }

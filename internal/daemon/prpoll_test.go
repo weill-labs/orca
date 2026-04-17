@@ -726,7 +726,7 @@ func TestPRPollFallsBackToIssueIDSearchAndPersistsObservedBranch(t *testing.T) {
 		{"number":456,"state":"MERGED","headRefName":"lab-123-renamed","title":"LAB-123: recover renamed branch"}
 	]`, nil)
 	deps.commands.queue("gh", []string{"pr", "checks", "456", "--json", "bucket"}, `[]`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "456", "--json", "mergedAt"}, `{"mergedAt":"2026-04-02T12:00:00Z"}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "456", "--json", prTerminalStateJSONFields}, `{"mergedAt":"2026-04-02T12:00:00Z"}`, nil)
 
 	d := deps.newDaemon(t)
 
