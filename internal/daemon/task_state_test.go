@@ -203,7 +203,7 @@ func TestCheckTaskPRPollTransitionsClosedWithoutMergeToCancelledCompletion(t *te
 	deps := newTestDeps(t)
 	issue := "LAB-1323"
 	seedTaskMonitorAssignmentWithState(t, deps, issue, "pane-1", 42, TaskStateReviewPending)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt,state,closedAt"}, `{"state":"CLOSED","mergedAt":null,"closedAt":"2026-04-16T12:00:00Z"}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"state":"CLOSED","mergedAt":null,"closedAt":"2026-04-16T12:00:00Z"}`, nil)
 
 	d := deps.newDaemon(t)
 	update := d.checkTaskPRPoll(context.Background(), activeTaskMonitorAssignment(t, deps, issue))

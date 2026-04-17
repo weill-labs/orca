@@ -256,7 +256,7 @@ func TestDaemonRelayEventPullRequestClosedWithoutMergeCancelsTask(t *testing.T) 
 
 	deps := newTestDeps(t)
 	seedTaskMonitorAssignment(t, deps, "LAB-1323", "pane-1", 42)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt,state,closedAt"}, `{"state":"CLOSED","mergedAt":null,"closedAt":"2026-04-16T12:00:00Z"}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"state":"CLOSED","mergedAt":null,"closedAt":"2026-04-16T12:00:00Z"}`, nil)
 
 	d := deps.newDaemonWithOptions(t, func(opts *Options) {
 		opts.DetectOrigin = func(projectDir string) (string, error) {

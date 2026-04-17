@@ -306,7 +306,7 @@ func TestPRCloseWithoutMergePollingCancelsTaskAndStopsFollowUpPolls(t *testing.T
 	deps.state.rejectCanceledContext = true
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-1323", "--state", "open", "--json", "number"}, `[]`, nil)
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-1323", "--json", "number"}, `[{"number":42}]`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt,state,closedAt"}, `{"state":"CLOSED","mergedAt":null,"closedAt":"2026-04-16T12:00:00Z"}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"state":"CLOSED","mergedAt":null,"closedAt":"2026-04-16T12:00:00Z"}`, nil)
 
 	d := deps.newDaemon(t)
 	ctx := context.Background()

@@ -113,12 +113,9 @@ func (d *Daemon) checkTaskPRPoll(ctx context.Context, active ActiveAssignment) T
 		return update
 	}
 	if entry, err := d.state.MergeEntry(ctx, update.Active.Task.Project, update.Active.Task.PRNumber); err == nil && entry != nil {
-		handled, err := d.resolvePRTerminalState(ctx, &update, profile, now)
+		_, err := d.resolvePRTerminalState(ctx, &update, profile, now)
 		if err != nil {
 			d.appendGitHubRateLimitEvent(&update, profile, err)
-			return update
-		}
-		if handled {
 			return update
 		}
 		return update
