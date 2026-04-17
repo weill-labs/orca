@@ -315,6 +315,15 @@ func TestHandleRPCConnAndDispatchStatusBranches(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("UpsertTask() error = %v", err)
 	}
+	if err := store.UpsertTask(context.Background(), project, state.Task{
+		Issue:     "GH-718",
+		Status:    "active",
+		Agent:     "codex",
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("UpsertTask(GH-718) error = %v", err)
+	}
 
 	projectStatus := dispatchRPCRequest(context.Background(), rpcRequest{
 		ID:     json.RawMessage(`1`),
@@ -342,6 +351,25 @@ func TestHandleRPCConnAndDispatchStatusBranches(t *testing.T) {
 	}, nil, store, "build-804", project)
 	if taskStatus.Error != nil {
 		t.Fatalf("dispatch status issue error = %#v", taskStatus.Error)
+	}
+	taskStatusAlias := dispatchRPCRequest(context.Background(), rpcRequest{
+		ID:     json.RawMessage(`1`),
+		Method: "status",
+		Params: mustJSON(t, statusRPCParams{Issue: "#718"}),
+	}, nil, store, "build-804", project)
+	if taskStatusAlias.Error != nil {
+		t.Fatalf("dispatch status github alias error = %#v", taskStatusAlias.Error)
+	}
+	taskStatusAliasPayload, err := json.Marshal(taskStatusAlias.Result)
+	if err != nil {
+		t.Fatalf("Marshal(task status github alias result) error = %v", err)
+	}
+	var taskStatusAliasResult state.TaskStatus
+	if err := json.Unmarshal(taskStatusAliasPayload, &taskStatusAliasResult); err != nil {
+		t.Fatalf("Unmarshal(task status github alias result) error = %v", err)
+	}
+	if got, want := taskStatusAliasResult.Task.Issue, "GH-718"; got != want {
+		t.Fatalf("status github alias issue = %q, want %q", got, want)
 	}
 
 	assignErr := dispatchRPCRequest(context.Background(), rpcRequest{

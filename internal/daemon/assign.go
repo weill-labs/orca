@@ -322,7 +322,11 @@ func promptMentionsDifferentIssue(prompt, issue string) bool {
 	if issue == "" {
 		return false
 	}
+	currentIssueIsGitHub := isGitHubIssueIdentifier(issue)
 	for _, candidate := range explicitIssueIDPattern.FindAllString(prompt, -1) {
+		if strings.HasPrefix(candidate, "#") && !currentIssueIsGitHub {
+			continue
+		}
 		if !strings.EqualFold(normalizeIssueIdentifier(candidate), issue) {
 			return true
 		}

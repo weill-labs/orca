@@ -134,6 +134,28 @@ func TestAppRunDispatchesCommands(t *testing.T) {
 			},
 		},
 		{
+			name: "status github issue alias json",
+			args: func(_, _ string) []string { return []string{"status", "#702", "--json"} },
+			prepareState: func(s *fakeState) {
+				s.taskStatus = state.TaskStatus{
+					Task: state.Task{
+						Issue:  "GH-702",
+						Status: "queued",
+						Agent:  "codex",
+					},
+				}
+			},
+			assert: func(t *testing.T, _ *fakeDaemon, s *fakeState, stdout, _ string, repoRoot, _ string) {
+				t.Helper()
+				if s.taskStatusProject != repoRoot || s.taskStatusIssue != "GH-702" {
+					t.Fatalf("expected task status lookup for %q/GH-702, got %q/%q", repoRoot, s.taskStatusProject, s.taskStatusIssue)
+				}
+				if !strings.Contains(stdout, "\"issue\":\"GH-702\"") {
+					t.Fatalf("expected json output, got %q", stdout)
+				}
+			},
+		},
+		{
 			name: "assign default agent",
 			args: func(_, _ string) []string { return []string{"assign", "LAB-690", "--prompt", "Implement CLI wiring"} },
 			assert: func(t *testing.T, d *fakeDaemon, _ *fakeState, stdout, _ string, _, _ string) {

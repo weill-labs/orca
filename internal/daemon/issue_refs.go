@@ -18,6 +18,10 @@ func normalizeIssueIdentifier(issue string) string {
 	return issue
 }
 
+func NormalizeIssueIdentifier(issue string) string {
+	return normalizeIssueIdentifier(issue)
+}
+
 func isGitHubIssueIdentifier(issue string) bool {
 	_, ok := parseGitHubIssueNumber(issue)
 	return ok

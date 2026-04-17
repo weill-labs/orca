@@ -479,6 +479,7 @@ func (a *App) runStatus(ctx context.Context, args []string) error {
 		return writeProjectStatus(a.stdout, projectStatus.status, projectStatus.daemonBuildCommit, a.version)
 	}
 
+	issue = daemon.NormalizeIssueIdentifier(issue)
 	taskStatus, err := a.state.TaskStatus(ctx, projectPath, issue)
 	if err != nil {
 		if errors.Is(err, state.ErrNotFound) {

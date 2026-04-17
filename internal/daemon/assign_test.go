@@ -863,9 +863,21 @@ func TestValidateAssignmentPrompt(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name:    "allows github issue context alongside assigned linear issue",
+			issue:   "LAB-689",
+			prompt:  "Address LAB-689 from the backlog; see context in #702.",
+			wantErr: false,
+		},
+		{
 			name:    "allows assigned github issue alias from backlog context",
 			issue:   "GH-702",
 			prompt:  "Address #702 from the backlog and start working.",
+			wantErr: false,
+		},
+		{
+			name:    "allows mixed case github identifier from backlog context",
+			issue:   "GH-702",
+			prompt:  "Address gh-702 from the backlog and start working.",
 			wantErr: false,
 		},
 		{
@@ -894,6 +906,28 @@ func TestValidateAssignmentPrompt(t *testing.T) {
 				t.Fatalf("validateAssignmentPrompt(%q, %q) error = %v, want nil", tt.issue, tt.prompt, err)
 			}
 		})
+	}
+}
+
+func TestWithGitHubIssueContextOmitsEmptyBody(t *testing.T) {
+	t.Parallel()
+
+	got := withGitHubIssueContext("GH-702", gitHubIssueDetails{
+		Title: "Assign should accept GitHub issue numbers",
+	}, "Implement the GitHub issue flow")
+
+	if strings.Contains(got, "\nBody:\n") {
+		t.Fatalf("withGitHubIssueContext() = %q, want no body section", got)
+	}
+	want := strings.Join([]string{
+		"GitHub issue GH-702",
+		"Title: Assign should accept GitHub issue numbers",
+		"",
+		"Task:",
+		"Implement the GitHub issue flow",
+	}, "\n")
+	if got != want {
+		t.Fatalf("withGitHubIssueContext() = %q, want %q", got, want)
 	}
 }
 

@@ -484,9 +484,10 @@ func (c *LocalController) Cancel(ctx context.Context, req CancelRequest) (TaskAc
 	defer cancel()
 
 	var result TaskActionResult
+	issue := normalizeIssueIdentifier(req.Issue)
 	err = callRPC(callCtx, c.paths.socketFile(), "cancel", cancelRPCParams{
 		Project: projectPath,
-		Issue:   strings.TrimSpace(req.Issue),
+		Issue:   issue,
 	}, &result)
 	if err != nil {
 		return TaskActionResult{}, err
@@ -507,9 +508,10 @@ func (c *LocalController) Resume(ctx context.Context, req ResumeRequest) (TaskAc
 	defer cancel()
 
 	var result TaskActionResult
+	issue := normalizeIssueIdentifier(req.Issue)
 	err = callRPC(callCtx, c.paths.socketFile(), "resume", resumeRPCParams{
 		Project: projectPath,
-		Issue:   strings.TrimSpace(req.Issue),
+		Issue:   issue,
 		Prompt:  strings.TrimSpace(req.Prompt),
 	}, &result)
 	if err != nil {

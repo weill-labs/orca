@@ -474,9 +474,9 @@ func TestLocalControllerAssignAndBatchRPC(t *testing.T) {
 	}
 	defer listener.Close()
 
-	requests := make(chan rpcRequest, 2)
+	requests := make(chan rpcRequest, 4)
 	go func() {
-		for i := 0; i < 2; i++ {
+		for i := 0; i < 4; i++ {
 			conn, err := listener.Accept()
 			if err != nil {
 				return
@@ -489,6 +489,10 @@ func TestLocalControllerAssignAndBatchRPC(t *testing.T) {
 					_ = json.NewEncoder(conn).Encode(rpcSuccess(req.ID, TaskActionResult{Project: projectPath, Issue: "GH-718", Status: TaskStatusActive, Agent: "claude"}))
 				case "batch":
 					_ = json.NewEncoder(conn).Encode(rpcSuccess(req.ID, BatchResult{Project: projectPath, Results: []TaskActionResult{{Project: projectPath, Issue: "GH-719", Status: TaskStatusActive, Agent: "codex"}}}))
+				case "cancel":
+					_ = json.NewEncoder(conn).Encode(rpcSuccess(req.ID, TaskActionResult{Project: projectPath, Issue: "GH-720", Status: TaskStatusCancelled, Agent: "codex"}))
+				case "resume":
+					_ = json.NewEncoder(conn).Encode(rpcSuccess(req.ID, TaskActionResult{Project: projectPath, Issue: "GH-721", Status: TaskStatusActive, Agent: "codex"}))
 				}
 			}
 			_ = conn.Close()
@@ -533,6 +537,29 @@ func TestLocalControllerAssignAndBatchRPC(t *testing.T) {
 		t.Fatalf("batch result count = %d, want %d", got, want)
 	}
 
+	cancelResult, err := controller.Cancel(context.Background(), CancelRequest{
+		Project: projectPath,
+		Issue:   "  #720  ",
+	})
+	if err != nil {
+		t.Fatalf("Cancel() error = %v", err)
+	}
+	if got, want := cancelResult.Issue, "GH-720"; got != want {
+		t.Fatalf("cancel issue = %q, want %q", got, want)
+	}
+
+	resumeResult, err := controller.Resume(context.Background(), ResumeRequest{
+		Project: projectPath,
+		Issue:   "  #721  ",
+		Prompt:  "  Continue the GitHub-backed task  ",
+	})
+	if err != nil {
+		t.Fatalf("Resume() error = %v", err)
+	}
+	if got, want := resumeResult.Issue, "GH-721"; got != want {
+		t.Fatalf("resume issue = %q, want %q", got, want)
+	}
+
 	assignReq := <-requests
 	if got, want := assignReq.Method, "assign"; got != want {
 		t.Fatalf("assign method = %q, want %q", got, want)
@@ -571,6 +598,37 @@ func TestLocalControllerAssignAndBatchRPC(t *testing.T) {
 	}
 	if got, want := batchParams.CallerPane, "pane-13"; got != want {
 		t.Fatalf("batch caller pane = %q, want %q", got, want)
+	}
+
+	cancelReq := <-requests
+	if got, want := cancelReq.Method, "cancel"; got != want {
+		t.Fatalf("cancel method = %q, want %q", got, want)
+	}
+	var cancelParams cancelRPCParams
+	if err := json.Unmarshal(cancelReq.Params, &cancelParams); err != nil {
+		t.Fatalf("json.Unmarshal(cancel params) error = %v", err)
+	}
+	if got, want := cancelParams, (cancelRPCParams{
+		Project: projectPath,
+		Issue:   "GH-720",
+	}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("cancel params = %#v, want %#v", got, want)
+	}
+
+	resumeReq := <-requests
+	if got, want := resumeReq.Method, "resume"; got != want {
+		t.Fatalf("resume method = %q, want %q", got, want)
+	}
+	var resumeParams resumeRPCParams
+	if err := json.Unmarshal(resumeReq.Params, &resumeParams); err != nil {
+		t.Fatalf("json.Unmarshal(resume params) error = %v", err)
+	}
+	if got, want := resumeParams, (resumeRPCParams{
+		Project: projectPath,
+		Issue:   "GH-721",
+		Prompt:  "Continue the GitHub-backed task",
+	}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("resume params = %#v, want %#v", got, want)
 	}
 }
 
