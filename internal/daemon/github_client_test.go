@@ -608,40 +608,24 @@ func TestGitHubCLIClientIsPRMergedEdgeCases(t *testing.T) {
 	}
 }
 
-func TestGitHubCLIClientLookupPRTerminalState(t *testing.T) {
+func TestGitHubCLIClientPRTerminalState(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name    string
-		output  string
-		err     error
-		want    prTerminalState
-		wantErr bool
+		name      string
+		output    string
+		err       error
+		wantState prTerminalState
+		wantErr   bool
 	}{
-		{
-			name:   "merged pr",
-			output: `{"state":"MERGED","mergedAt":"2026-04-02T12:00:00Z","closedAt":"2026-04-02T12:00:00Z"}`,
-			want:   prTerminalState{merged: true},
-		},
-		{
-			name:   "closed without merge",
-			output: `{"state":"CLOSED","mergedAt":null,"closedAt":"2026-04-02T12:00:00Z"}`,
-			want:   prTerminalState{closedWithoutMerge: true},
-		},
-		{
-			name:   "open pr",
-			output: `{"state":"OPEN","mergedAt":null,"closedAt":null}`,
-			want:   prTerminalState{},
-		},
-		{
-			name: "empty output",
-			want: prTerminalState{},
-		},
-		{
-			name:    "invalid json",
-			output:  `{`,
-			wantErr: true,
-		},
+		{name: "empty output defaults open", wantState: prTerminalState{}},
+		{name: "open pr", output: `{"state":"OPEN","mergedAt":null,"closedAt":null}`, wantState: prTerminalState{}},
+		{name: "merged pr by state", output: `{"state":"MERGED","mergedAt":null,"closedAt":null}`, wantState: prTerminalState{merged: true}},
+		{name: "merged pr by mergedAt", output: `{"state":"CLOSED","mergedAt":"2026-04-02T12:00:00Z","closedAt":"2026-04-02T12:00:00Z"}`, wantState: prTerminalState{merged: true}},
+		{name: "closed without merge by state", output: `{"state":"CLOSED","mergedAt":null,"closedAt":null}`, wantState: prTerminalState{closedWithoutMerge: true}},
+		{name: "closed without merge by closedAt", output: `{"state":"OPEN","mergedAt":null,"closedAt":"2026-04-02T12:00:00Z"}`, wantState: prTerminalState{closedWithoutMerge: true}},
+		{name: "command error", err: errors.New("gh failed"), wantErr: true},
+		{name: "invalid json", output: `{`, wantErr: true},
 	}
 
 	for _, tt := range tests {
@@ -663,8 +647,11 @@ func TestGitHubCLIClientLookupPRTerminalState(t *testing.T) {
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("lookupPRTerminalState() error = %v, wantErr = %v", err, tt.wantErr)
 			}
-			if got != tt.want {
-				t.Fatalf("lookupPRTerminalState() = %#v, want %#v", got, tt.want)
+			if tt.wantErr {
+				return
+			}
+			if got != tt.wantState {
+				t.Fatalf("lookupPRTerminalState() = %#v, want %#v", got, tt.wantState)
 			}
 		})
 	}

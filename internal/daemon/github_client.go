@@ -374,7 +374,7 @@ func parsePRTerminalState(output []byte) (prTerminalState, error) {
 		return prTerminalState{}, err
 	}
 
-	merged := payload.MergedAt != nil && strings.TrimSpace(*payload.MergedAt) != ""
+	merged := strings.EqualFold(payload.State, "merged") || (payload.MergedAt != nil && strings.TrimSpace(*payload.MergedAt) != "")
 	closed := strings.EqualFold(payload.State, "closed") || (payload.ClosedAt != nil && strings.TrimSpace(*payload.ClosedAt) != "")
 
 	return prTerminalState{

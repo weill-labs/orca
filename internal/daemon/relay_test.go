@@ -251,7 +251,7 @@ func TestDaemonRelayEventPullRequestClosedMergedCompletesTask(t *testing.T) {
 	}
 }
 
-func TestDaemonRelayEventPullRequestClosedWithoutMergeCancelsTask(t *testing.T) {
+func TestDaemonRelayEventPullRequestClosedWithoutMergeFailsTask(t *testing.T) {
 	t.Parallel()
 
 	deps := newTestDeps(t)
@@ -279,17 +279,20 @@ func TestDaemonRelayEventPullRequestClosedWithoutMergeCancelsTask(t *testing.T) 
 	if !ok {
 		t.Fatal("task not found after relay closed poll")
 	}
-	if got, want := task.Status, TaskStatusCancelled; got != want {
+	if got, want := task.Status, TaskStatusFailed; got != want {
 		t.Fatalf("task.Status = %q, want %q", got, want)
 	}
-	if got, want := deps.events.countType(EventPRClosedWithoutMerge), 1; got != want {
-		t.Fatalf("closed-without-merge event count = %d, want %d", got, want)
+	if got, want := deps.events.countType(EventPRClosed), 1; got != want {
+		t.Fatalf("closed event count = %d, want %d", got, want)
 	}
 	if got, want := deps.events.countType(EventPRMerged), 0; got != want {
 		t.Fatalf("merged event count = %d, want %d", got, want)
 	}
 	if got, want := deps.amux.countKey("pane-1", mergedWrapUpPrompt), 0; got != want {
 		t.Fatalf("merged wrap-up prompt count = %d, want %d", got, want)
+	}
+	if got, want := deps.amux.countKey("pane-1", closedWrapUpPrompt+"\n"), 1; got != want {
+		t.Fatalf("closed wrap-up prompt count = %d, want %d", got, want)
 	}
 }
 

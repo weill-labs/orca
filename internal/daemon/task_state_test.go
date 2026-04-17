@@ -3,7 +3,9 @@ package daemon
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
+	"time"
 )
 
 func TestCheckTaskPRPollTransitionsTaskState(t *testing.T) {
@@ -197,40 +199,213 @@ func TestCheckTaskPRPollTransitionsReviewPendingToMerged(t *testing.T) {
 	}
 }
 
-func TestCheckTaskPRPollTransitionsClosedWithoutMergeToCancelledCompletion(t *testing.T) {
+func TestCheckTaskPRPollDistinguishesPRTerminalStates(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name               string
+		queue              func(*testDeps)
+		wantState          string
+		wantPRMerged       bool
+		wantCompletionType string
+		wantEventType      string
+	}{
+		{
+			name: "merged pr marks merged terminal state",
+			queue: func(deps *testDeps) {
+				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"state":"CLOSED","mergedAt":"2026-04-13T12:00:00Z","closedAt":"2026-04-13T12:00:00Z"}`, nil)
+			},
+			wantState:    TaskStateMerged,
+			wantPRMerged: true,
+		},
+		{
+			name: "closed pr marks failed completion",
+			queue: func(deps *testDeps) {
+				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"state":"CLOSED","mergedAt":null,"closedAt":"2026-04-16T12:00:00Z"}`, nil)
+			},
+			wantState:          TaskStateDone,
+			wantCompletionType: EventTaskFailed,
+			wantEventType:      EventPRClosed,
+		},
+		{
+			name: "open pr stays review pending",
+			queue: func(deps *testDeps) {
+				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"state":"OPEN","mergedAt":null,"closedAt":null}`, nil)
+			},
+			wantState: TaskStateReviewPending,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			deps := newTestDeps(t)
+			issue := "LAB-1315"
+			seedTaskMonitorAssignmentWithState(t, deps, issue, "pane-1", 42, TaskStateReviewPending)
+			seedMergeEntryForTest(t, deps, issue, 42)
+			tt.queue(deps)
+
+			d := deps.newDaemon(t)
+			update := d.checkTaskPRPoll(context.Background(), activeTaskMonitorAssignment(t, deps, issue))
+
+			if got, want := update.Active.Task.State, tt.wantState; got != want {
+				t.Fatalf("update.Active.Task.State = %q, want %q", got, want)
+			}
+			if got, want := update.PRMerged, tt.wantPRMerged; got != want {
+				t.Fatalf("update.PRMerged = %v, want %v", got, want)
+			}
+			if got, want := update.CompletionEventType, tt.wantCompletionType; got != want {
+				t.Fatalf("update.CompletionEventType = %q, want %q", got, want)
+			}
+			if tt.wantEventType == "" {
+				if got := len(update.Events); got != 0 {
+					t.Fatalf("len(update.Events) = %d, want 0", got)
+				}
+				return
+			}
+			if got, want := len(update.Events), 1; got != want {
+				t.Fatalf("len(update.Events) = %d, want %d", got, want)
+			}
+			if got, want := update.Events[0].Type, tt.wantEventType; got != want {
+				t.Fatalf("update.Events[0].Type = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+func TestCheckTaskPRPollRegularPathDistinguishesPRTerminalStates(t *testing.T) {
+	t.Parallel()
+
+	until := time.Date(2026, 4, 2, 9, 2, 0, 0, time.UTC)
+	tests := []struct {
+		name                 string
+		queue                func(*testDeps)
+		wantState            string
+		wantPRMerged         bool
+		wantCompletionStatus string
+		wantCompletionType   string
+		wantEventType        string
+		wantRateLimitedUntil time.Time
+	}{
+		{
+			name: "merged pr terminal state marks merged",
+			queue: func(deps *testDeps) {
+				deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[]`, nil)
+				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"state":"MERGED","mergedAt":null,"closedAt":null}`, nil)
+			},
+			wantState:    TaskStateMerged,
+			wantPRMerged: true,
+		},
+		{
+			name: "closed pr terminal state fails task",
+			queue: func(deps *testDeps) {
+				deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[]`, nil)
+				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"state":"CLOSED","mergedAt":null,"closedAt":"2026-04-16T12:00:00Z"}`, nil)
+			},
+			wantState:            TaskStateDone,
+			wantCompletionStatus: TaskStatusFailed,
+			wantCompletionType:   EventTaskFailed,
+			wantEventType:        EventPRClosed,
+		},
+		{
+			name: "rate limited terminal state returns early",
+			queue: func(deps *testDeps) {
+				deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[]`, nil)
+				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, "HTTP 429: API rate limit exceeded\nRetry-After: 120\n", errors.New("gh: HTTP 429"))
+			},
+			wantState:            TaskStateReviewPending,
+			wantRateLimitedUntil: until,
+			wantEventType:        EventPRRateLimited,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			deps := newTestDeps(t)
+			issue := "LAB-1315"
+			seedTaskMonitorAssignmentWithState(t, deps, issue, "pane-1", 42, TaskStateReviewPending)
+			tt.queue(deps)
+
+			d := deps.newDaemon(t)
+			update := d.checkTaskPRPoll(context.Background(), activeTaskMonitorAssignment(t, deps, issue))
+
+			if got, want := update.Active.Task.State, tt.wantState; got != want {
+				t.Fatalf("update.Active.Task.State = %q, want %q", got, want)
+			}
+			if got, want := update.PRMerged, tt.wantPRMerged; got != want {
+				t.Fatalf("update.PRMerged = %v, want %v", got, want)
+			}
+			if got, want := update.CompletionStatus, tt.wantCompletionStatus; got != want {
+				t.Fatalf("update.CompletionStatus = %q, want %q", got, want)
+			}
+			if got, want := update.CompletionEventType, tt.wantCompletionType; got != want {
+				t.Fatalf("update.CompletionEventType = %q, want %q", got, want)
+			}
+			if tt.wantEventType == "" {
+				if got := len(update.Events); got != 0 {
+					t.Fatalf("len(update.Events) = %d, want 0", got)
+				}
+			} else {
+				if got, want := len(update.Events), 1; got != want {
+					t.Fatalf("len(update.Events) = %d, want %d", got, want)
+				}
+				if got, want := update.Events[0].Type, tt.wantEventType; got != want {
+					t.Fatalf("update.Events[0].Type = %q, want %q", got, want)
+				}
+				if !tt.wantRateLimitedUntil.IsZero() && !update.Events[0].GitHubRateLimitedUntil.Equal(tt.wantRateLimitedUntil) {
+					t.Fatalf("update.Events[0].GitHubRateLimitedUntil = %v, want %v", update.Events[0].GitHubRateLimitedUntil, tt.wantRateLimitedUntil)
+				}
+			}
+			if got, want := deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}), 0; got != want {
+				t.Fatalf("mergeable follow-up call count = %d, want %d", got, want)
+			}
+			if got, want := deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}), 0; got != want {
+				t.Fatalf("review follow-up call count = %d, want %d", got, want)
+			}
+		})
+	}
+}
+
+func TestApplyTaskStateUpdateFailsTaskWhenPRClosesWithoutMerge(t *testing.T) {
 	t.Parallel()
 
 	deps := newTestDeps(t)
-	issue := "LAB-1323"
+	issue := "LAB-1315"
 	seedTaskMonitorAssignmentWithState(t, deps, issue, "pane-1", 42, TaskStateReviewPending)
+	setAssignmentWorkerID(t, deps, issue, "worker-01")
+	seedMergeEntryForTest(t, deps, issue, 42)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"state":"CLOSED","mergedAt":null,"closedAt":"2026-04-16T12:00:00Z"}`, nil)
 
 	d := deps.newDaemon(t)
 	update := d.checkTaskPRPoll(context.Background(), activeTaskMonitorAssignment(t, deps, issue))
+	d.applyTaskStateUpdate(context.Background(), update)
 
-	if got, want := update.CompletionStatus, TaskStatusCancelled; got != want {
-		t.Fatalf("update.CompletionStatus = %q, want %q", got, want)
+	task, ok := deps.state.task(issue)
+	if !ok {
+		t.Fatal("task missing after closed PR completion")
 	}
-	if got, want := update.CompletionEventType, EventTaskCancelled; got != want {
-		t.Fatalf("update.CompletionEventType = %q, want %q", got, want)
+	if got, want := task.Status, TaskStatusFailed; got != want {
+		t.Fatalf("task.Status = %q, want %q", got, want)
 	}
-	if update.CompletionMerged {
-		t.Fatal("update.CompletionMerged = true, want false")
+	if got, want := task.State, TaskStateDone; got != want {
+		t.Fatalf("task.State = %q, want %q", got, want)
 	}
-	if got, want := update.CompletionMessage, "pr closed without merge"; got != want {
-		t.Fatalf("update.CompletionMessage = %q, want %q", got, want)
+	if got, want := deps.pool.releasedClones(), []Clone{{
+		Name:          "clone-" + issue,
+		Path:          "/tmp/" + issue,
+		CurrentBranch: issue,
+		AssignedTask:  issue,
+	}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("released clones = %#v, want %#v", got, want)
 	}
-	if got, want := len(update.Events), 1; got != want {
-		t.Fatalf("len(update.Events) = %d, want %d", got, want)
-	}
-	if got, want := update.Events[0].Type, EventPRClosedWithoutMerge; got != want {
-		t.Fatalf("update.Events[0].Type = %q, want %q", got, want)
-	}
-	if update.PRMerged {
-		t.Fatal("update.PRMerged = true, want false")
-	}
+	deps.amux.requireSentKeys(t, "pane-1", []string{closedWrapUpPrompt + "\n"})
+	deps.events.requireTypes(t, EventPRClosed, EventTaskFailed)
 }
-
 func TestApplyTaskStateUpdateCompletesMergedTask(t *testing.T) {
 	t.Parallel()
 
@@ -271,6 +446,42 @@ func seedTaskMonitorAssignmentWithState(t *testing.T, deps *testDeps, issue, pan
 	}
 	task.State = state
 	deps.state.putTaskForTest(task)
+}
+
+func seedMergeEntryForTest(t *testing.T, deps *testDeps, issue string, prNumber int) {
+	t.Helper()
+
+	now := deps.clock.Now()
+	if _, err := deps.state.EnqueueMerge(context.Background(), MergeQueueEntry{
+		Project:   "/tmp/project",
+		Issue:     issue,
+		PRNumber:  prNumber,
+		Status:    MergeQueueStatusQueued,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("EnqueueMerge() error = %v", err)
+	}
+}
+
+func setAssignmentWorkerID(t *testing.T, deps *testDeps, issue, workerID string) {
+	t.Helper()
+
+	task, ok := deps.state.task(issue)
+	if !ok {
+		t.Fatalf("task %q not found", issue)
+	}
+	task.WorkerID = workerID
+	deps.state.putTaskForTest(task)
+
+	worker, ok := deps.state.worker(task.PaneID)
+	if !ok {
+		t.Fatalf("worker %q not found", task.PaneID)
+	}
+	worker.WorkerID = workerID
+	if err := deps.state.PutWorker(context.Background(), worker); err != nil {
+		t.Fatalf("PutWorker() error = %v", err)
+	}
 }
 
 type paneAwareCaptureAmux struct {

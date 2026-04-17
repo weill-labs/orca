@@ -12,6 +12,7 @@ import (
 
 const (
 	mergedWrapUpPrompt    = "PR merged, wrap up."
+	closedWrapUpPrompt    = "PR closed without merging, wrap up."
 	postmortemCommand     = "$postmortem"
 	postmortemWaitTimeout = 2 * time.Minute
 )
@@ -104,22 +105,30 @@ func (d *Daemon) sendLifecyclePrompt(ctx context.Context, paneID, agentProfile, 
 }
 
 func (d *Daemon) finishAssignment(ctx context.Context, active ActiveAssignment, status, eventType string, merged bool) error {
-	return d.finishAssignmentWithMessage(ctx, active, status, eventType, merged, "")
+	return d.finishAssignmentWithMessageAndPrompt(ctx, active, status, eventType, merged, "", "")
 }
 
 func (d *Daemon) finishAssignmentWithMessage(ctx context.Context, active ActiveAssignment, status, eventType string, merged bool, message string) error {
+	return d.finishAssignmentWithMessageAndPrompt(ctx, active, status, eventType, merged, "", message)
+}
+
+func (d *Daemon) finishAssignmentWithMessageAndPrompt(ctx context.Context, active ActiveAssignment, status, eventType string, merged bool, wrapUpPrompt, message string) error {
 	var result error
 	cancelled := status == TaskStatusCancelled
 	cleanupCtx := context.WithoutCancel(ctx)
 	d.stopTaskMonitorForProject(active.Task.Project, active.Task.Issue)
 
-	if merged {
-		if err := d.sendLifecyclePrompt(cleanupCtx, active.Task.PaneID, active.Task.AgentProfile, mergedWrapUpPrompt); err != nil {
-			d.emitMergeNotifyFailed(cleanupCtx, active, err)
+	if prompt := completionWrapUpPrompt(merged, wrapUpPrompt); prompt != "" {
+		if err := d.sendLifecyclePrompt(cleanupCtx, active.Task.PaneID, active.Task.AgentProfile, prompt); err != nil {
+			if merged {
+				d.emitMergeNotifyFailed(cleanupCtx, active, err)
+			}
 			result = errors.Join(result, err)
 		}
 		if err := d.amux.WaitIdle(cleanupCtx, active.Task.PaneID, d.mergeGracePeriod); err != nil {
-			d.emitMergeNotifyFailed(cleanupCtx, active, err)
+			if merged {
+				d.emitMergeNotifyFailed(cleanupCtx, active, err)
+			}
 			result = errors.Join(result, err)
 		}
 	}
@@ -219,6 +228,16 @@ func (d *Daemon) emitMergeNotifyFailed(ctx context.Context, active ActiveAssignm
 		event.WorkerID = active.Task.WorkerID
 	}
 	d.emit(ctx, event)
+}
+
+func completionWrapUpPrompt(merged bool, prompt string) string {
+	if strings.TrimSpace(prompt) != "" {
+		return prompt
+	}
+	if merged {
+		return mergedWrapUpPrompt
+	}
+	return ""
 }
 
 func paneAlreadyGone(err error) bool {

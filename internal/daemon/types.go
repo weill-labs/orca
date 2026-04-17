@@ -66,6 +66,7 @@ const (
 	EventPRRateLimited             = "pr.rate_limited"
 	EventPRClosedWithoutMerge      = "pr.closed_without_merge"
 	EventPRMerged                  = "pr.merged"
+	EventPRClosed                  = "pr.closed"
 )
 
 var (
