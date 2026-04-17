@@ -405,11 +405,12 @@ func dispatchRPCRequest(ctx context.Context, request rpcRequest, instance *Daemo
 		if !ok {
 			return failure
 		}
-		if err := instance.assign(ctx, projectPath, params.Issue, params.Prompt, params.Agent, params.CallerPane, params.Title); err != nil {
+		issue := normalizeIssueIdentifier(params.Issue)
+		if err := instance.assign(ctx, projectPath, issue, params.Prompt, params.Agent, params.CallerPane, params.Title); err != nil {
 			return rpcFailure(request.ID, -32000, err)
 		}
 
-		result, err := taskActionResultForIssue(ctx, store, projectPath, params.Issue)
+		result, err := taskActionResultForIssue(ctx, store, projectPath, issue)
 		if err != nil {
 			return rpcFailure(request.ID, -32000, err)
 		}
@@ -451,11 +452,12 @@ func dispatchRPCRequest(ctx context.Context, request rpcRequest, instance *Daemo
 		if !ok {
 			return failure
 		}
-		if err := instance.cancel(ctx, projectPath, params.Issue); err != nil {
+		issue := normalizeIssueIdentifier(params.Issue)
+		if err := instance.cancel(ctx, projectPath, issue); err != nil {
 			return rpcFailure(request.ID, -32000, err)
 		}
 
-		result, err := taskActionResultForIssue(ctx, store, projectPath, params.Issue)
+		result, err := taskActionResultForIssue(ctx, store, projectPath, issue)
 		if err != nil {
 			return rpcFailure(request.ID, -32000, err)
 		}
@@ -469,11 +471,12 @@ func dispatchRPCRequest(ctx context.Context, request rpcRequest, instance *Daemo
 		if !ok {
 			return failure
 		}
-		if err := instance.resume(ctx, projectPath, params.Issue, params.Prompt); err != nil {
+		issue := normalizeIssueIdentifier(params.Issue)
+		if err := instance.resume(ctx, projectPath, issue, params.Prompt); err != nil {
 			return rpcFailure(request.ID, -32000, err)
 		}
 
-		result, err := taskActionResultForIssue(ctx, store, projectPath, params.Issue)
+		result, err := taskActionResultForIssue(ctx, store, projectPath, issue)
 		if err != nil {
 			return rpcFailure(request.ID, -32000, err)
 		}
@@ -514,7 +517,7 @@ func dispatchRPCRequest(ctx context.Context, request rpcRequest, instance *Daemo
 			})
 		}
 
-		status, err := store.TaskStatus(ctx, projectPath, params.Issue)
+		status, err := store.TaskStatus(ctx, projectPath, normalizeIssueIdentifier(params.Issue))
 		if err != nil {
 			return rpcFailure(request.ID, -32000, err)
 		}

@@ -32,7 +32,7 @@ func normalizeBatchEntries(entries []BatchEntry) []BatchEntry {
 	normalized := make([]BatchEntry, len(entries))
 	for i, entry := range entries {
 		normalized[i] = BatchEntry{
-			Issue:  strings.TrimSpace(entry.Issue),
+			Issue:  normalizeIssueIdentifier(entry.Issue),
 			Agent:  strings.TrimSpace(entry.Agent),
 			Prompt: entry.Prompt,
 			Title:  strings.TrimSpace(entry.Title),

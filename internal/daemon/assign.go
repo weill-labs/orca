@@ -23,7 +23,7 @@ var autonomousBacklogPromptOverridePattern = regexp.MustCompile(strings.Join([]s
 	`\banother\s+(?:issue|task|ticket)\b`,
 }, "|"))
 
-var explicitIssueIDPattern = regexp.MustCompile(`\b[A-Za-z][A-Za-z0-9_]*-\d+\b`)
+var explicitIssueIDPattern = regexp.MustCompile(`(?i)\b[A-Za-z][A-Za-z0-9_]*-\d+\b|#\d+\b`)
 
 func (d *Daemon) Assign(ctx context.Context, issue, prompt, agentProfile string, title ...string) error {
 	return d.assign(ctx, d.project, issue, prompt, agentProfile, "", title...)
@@ -34,6 +34,7 @@ func (d *Daemon) AssignWithCallerPane(ctx context.Context, issue, prompt, agentP
 }
 
 func (d *Daemon) assign(ctx context.Context, projectPath, issue, prompt, agentProfile, callerPane string, title ...string) error {
+	issue = normalizeIssueIdentifier(issue)
 	if err := d.requireStarted(); err != nil {
 		return err
 	}
@@ -52,6 +53,14 @@ func (d *Daemon) assign(ctx context.Context, projectPath, issue, prompt, agentPr
 	if err := d.validateAssignment(ctx, projectPath, issue, prompt); err != nil {
 		d.emitAssignFailure(ctx, projectPath, issue, "", profile.Name, Clone{}, Pane{}, 0, err)
 		return err
+	}
+	gitHubIssue, hasGitHubIssue, err := d.lookupGitHubIssue(ctx, projectPath, issue)
+	if err != nil {
+		d.emitAssignFailure(ctx, projectPath, issue, "", profile.Name, Clone{}, Pane{}, 0, err)
+		return err
+	}
+	if hasGitHubIssue {
+		prompt = withGitHubIssueContext(issue, gitHubIssue, prompt)
 	}
 	prompt = wrapAssignmentPrompt(profile, prompt)
 
@@ -183,7 +192,11 @@ func (d *Daemon) assign(ctx context.Context, projectPath, issue, prompt, agentPr
 		d.failPendingAssignment(ctx, projectPath, issue, clone, pane, worker, profile, prNumber, err, restoreReservation)
 	}
 
-	startup, err := d.startAssignmentWorker(ctx, projectPath, clone, task, worker, profile, prompt, d.resolveAssignmentTitle(ctx, issue, firstTitle(title)))
+	resolvedTitle := firstTitle(title)
+	if strings.TrimSpace(resolvedTitle) == "" && hasGitHubIssue {
+		resolvedTitle = gitHubIssue.Title
+	}
+	startup, err := d.startAssignmentWorker(ctx, projectPath, clone, task, worker, profile, prompt, d.resolveAssignmentTitle(ctx, issue, resolvedTitle))
 	if err != nil {
 		if startup.pane.ID == "" && startup.pane.Name == "" {
 			failUnspawnedAssignment(err)
@@ -290,21 +303,31 @@ func validateAssignmentPrompt(issue, prompt string) error {
 }
 
 func promptMentionsAssignedIssue(prompt, issue string) bool {
-	issue = strings.TrimSpace(issue)
-	if issue == "" {
-		return false
+	for _, alias := range issuePromptAliases(issue) {
+		var issuePattern *regexp.Regexp
+		if strings.HasPrefix(alias, "#") {
+			issuePattern = regexp.MustCompile(regexp.QuoteMeta(alias) + `\b`)
+		} else {
+			issuePattern = regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(alias) + `\b`)
+		}
+		if issuePattern.MatchString(prompt) {
+			return true
+		}
 	}
-	issuePattern := regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(issue) + `\b`)
-	return issuePattern.MatchString(prompt)
+	return false
 }
 
 func promptMentionsDifferentIssue(prompt, issue string) bool {
-	issue = strings.TrimSpace(issue)
+	issue = normalizeIssueIdentifier(issue)
 	if issue == "" {
 		return false
 	}
+	currentIssueIsGitHub := isGitHubIssueIdentifier(issue)
 	for _, candidate := range explicitIssueIDPattern.FindAllString(prompt, -1) {
-		if !strings.EqualFold(candidate, issue) {
+		if !currentIssueIsGitHub && (strings.HasPrefix(candidate, "#") || isGitHubIssueIdentifier(candidate)) {
+			continue
+		}
+		if !strings.EqualFold(normalizeIssueIdentifier(candidate), issue) {
 			return true
 		}
 	}

@@ -248,7 +248,8 @@ func firstTitle(values []string) string {
 }
 
 func isLinearIssueIdentifier(issue string) bool {
-	return linearIssueIdentifierPattern.MatchString(strings.TrimSpace(issue))
+	issue = strings.TrimSpace(issue)
+	return issue != "" && !isGitHubIssueIdentifier(issue) && linearIssueIdentifierPattern.MatchString(issue)
 }
 
 func trackedIssueMetadata(issue string, status trackedStatus) map[string]string {
@@ -504,7 +505,7 @@ func (d *Daemon) resolveAssignmentTitle(ctx context.Context, issue string, title
 }
 
 func (d *Daemon) setIssueStatus(ctx context.Context, projectPath, issue, state string) error {
-	if d.issueTracker == nil {
+	if d.issueTracker == nil || isGitHubIssueIdentifier(issue) {
 		return nil
 	}
 	err := d.issueTracker.SetIssueStatus(ctx, issue, state)

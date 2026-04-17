@@ -25,6 +25,7 @@ var (
 )
 
 type gitHubClient interface {
+	lookupIssue(ctx context.Context, number int) (gitHubIssue, error)
 	lookupPRNumber(ctx context.Context, branch string) (int, error)
 	findPRByIssueID(ctx context.Context, issueID string) (int, string, error)
 	lookupOpenPRNumber(ctx context.Context, branch string) (int, error)
@@ -58,6 +59,11 @@ type gitHubCLIClient struct {
 
 	mu          sync.Mutex
 	nextAllowed time.Time
+}
+
+type gitHubIssue struct {
+	Title string `json:"title"`
+	Body  string `json:"body"`
 }
 
 func newGitHubCLIClient(cfg gitHubCLIClientConfig) *gitHubCLIClient {
@@ -135,6 +141,24 @@ func (d *Daemon) newGitHubClient(projectPath string) gitHubClient {
 		maxAttempts:    base.maxAttempts,
 		logf:           d.logf,
 	})
+}
+
+func (c *gitHubCLIClient) lookupIssue(ctx context.Context, number int) (gitHubIssue, error) {
+	output, err := c.run(ctx, "issue", "view", fmt.Sprintf("%d", number), "--json", "title,body")
+	if err != nil {
+		return gitHubIssue{}, err
+	}
+	if len(output) == 0 {
+		return gitHubIssue{}, nil
+	}
+
+	var issue gitHubIssue
+	if err := json.Unmarshal(output, &issue); err != nil {
+		return gitHubIssue{}, err
+	}
+	issue.Title = strings.TrimSpace(issue.Title)
+	issue.Body = strings.TrimSpace(issue.Body)
+	return issue, nil
 }
 
 func (c *gitHubCLIClient) lookupPRNumber(ctx context.Context, branch string) (int, error) {
