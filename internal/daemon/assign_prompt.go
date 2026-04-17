@@ -14,13 +14,14 @@ func wrapAssignmentPrompt(profile AgentProfile, issue, prompt string) string {
 	}
 
 	titlePrompt := codexAssignmentPRTitlePrompt(issue)
-	hasReminderBlock := strings.Contains(prompt, codexAssignmentPromptSuffix) || (titlePrompt != "" && strings.Contains(prompt, titlePrompt))
+	hasPROpenReminder := strings.Contains(prompt, codexAssignmentPromptSuffix)
+	hasTitleReminder := titlePrompt != "" && strings.Contains(prompt, titlePrompt)
 
 	var reminders []string
-	if !strings.Contains(prompt, codexAssignmentPromptSuffix) {
+	if !hasPROpenReminder {
 		reminders = append(reminders, codexAssignmentPromptSuffix)
 	}
-	if titlePrompt != "" && !strings.Contains(prompt, titlePrompt) {
+	if titlePrompt != "" && !hasTitleReminder {
 		reminders = append(reminders, titlePrompt)
 	}
 	if len(reminders) == 0 {
@@ -30,7 +31,7 @@ func wrapAssignmentPrompt(profile AgentProfile, issue, prompt string) string {
 		return strings.Join(reminders, "\n")
 	}
 	separator := "\n\n"
-	if hasReminderBlock {
+	if hasPROpenReminder || hasTitleReminder {
 		separator = "\n"
 	}
 	return prompt + separator + strings.Join(reminders, "\n")
