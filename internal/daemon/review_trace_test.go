@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -158,11 +159,16 @@ func assertLatestReviewPollTrace(t *testing.T, deps *testDeps, logs *fakeLogSink
 		t.Fatalf("state trace message = %q, want %q", got, want)
 	}
 
-	messages := logs.messages()
-	if got, wantCount := len(messages), wantCount; got != wantCount {
+	var traceLogs []string
+	for _, message := range logs.messages() {
+		if strings.HasPrefix(message, "review poll trace:") {
+			traceLogs = append(traceLogs, message)
+		}
+	}
+	if got, wantCount := len(traceLogs), wantCount; got != wantCount {
 		t.Fatalf("trace log count = %d, want %d", got, wantCount)
 	}
-	if got, want := messages[len(messages)-1], want; got != want {
+	if got, want := traceLogs[len(traceLogs)-1], want; got != want {
 		t.Fatalf("last trace log = %q, want %q", got, want)
 	}
 }
