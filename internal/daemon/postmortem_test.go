@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	amuxapi "github.com/weill-labs/orca/internal/amux"
 )
 
 func TestEnsureFlag(t *testing.T) {
@@ -143,6 +145,157 @@ func TestPostmortemStatusSendsOrSkips(t *testing.T) {
 				t.Fatalf("waitIdle calls = %d, want %d", got, want)
 			}
 		})
+	}
+}
+
+func TestSendPostmortemWaitsForWorkingBeforeIdle(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	d := deps.newDaemon(t)
+	active := newPostmortemAssignment(deps)
+
+	if err := d.sendPostmortem(context.Background(), active); err != nil {
+		t.Fatalf("sendPostmortem() error = %v", err)
+	}
+
+	deps.amux.requireSentKeys(t, active.Task.PaneID, []string{postmortemCommand + "\n"})
+	if got, want := deps.amux.waitContentCalls, []waitContentCall{{
+		PaneID:    active.Task.PaneID,
+		Substring: codexWorkingText,
+		Timeout:   defaultAgentHandshakeTimeout,
+	}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("waitContent calls = %#v, want %#v", got, want)
+	}
+	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{{
+		PaneID:  active.Task.PaneID,
+		Timeout: postmortemWaitTimeout,
+	}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("waitIdle calls = %#v, want %#v", got, want)
+	}
+}
+
+func TestSendPostmortemRetriesEnterUntilWorkingAppears(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.amux.waitContentResults = []error{
+		amuxapi.ErrWaitContentTimeout,
+		amuxapi.ErrWaitContentTimeout,
+		nil,
+	}
+	deps.amux.capturePaneSequence("pane-1", []PaneCapture{
+		{Content: []string{"OpenAI Codex", "›", postmortemCommand}, CurrentCommand: "codex"},
+		{Content: []string{"OpenAI Codex", "›", postmortemCommand}, CurrentCommand: "codex"},
+	})
+	d := deps.newDaemon(t)
+	active := newPostmortemAssignment(deps)
+
+	if err := d.sendPostmortem(context.Background(), active); err != nil {
+		t.Fatalf("sendPostmortem() error = %v", err)
+	}
+
+	deps.amux.requireSentKeys(t, active.Task.PaneID, []string{
+		postmortemCommand + "\n",
+		"\n",
+		"\n",
+	})
+	if got, want := len(deps.amux.waitContentCalls), 3; got != want {
+		t.Fatalf("waitContent call count = %d, want %d", got, want)
+	}
+	for i, call := range deps.amux.waitContentCalls {
+		if got, want := call.PaneID, active.Task.PaneID; got != want {
+			t.Fatalf("waitContentCalls[%d].PaneID = %q, want %q", i, got, want)
+		}
+		if got, want := call.Substring, codexWorkingText; got != want {
+			t.Fatalf("waitContentCalls[%d].Substring = %q, want %q", i, got, want)
+		}
+		if got, want := call.Timeout, defaultAgentHandshakeTimeout; got != want {
+			t.Fatalf("waitContentCalls[%d].Timeout = %s, want %s", i, got, want)
+		}
+	}
+	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{{
+		PaneID:  active.Task.PaneID,
+		Timeout: postmortemWaitTimeout,
+	}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("waitIdle calls = %#v, want %#v", got, want)
+	}
+}
+
+func TestEnsurePostmortemEmitsFailedStatusWhenWorkingNeverAppears(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.amux.waitContentResults = []error{
+		amuxapi.ErrWaitContentTimeout,
+		amuxapi.ErrWaitContentTimeout,
+		amuxapi.ErrWaitContentTimeout,
+	}
+	deps.amux.capturePaneSequence("pane-1", []PaneCapture{
+		{Content: []string{"OpenAI Codex", "›", postmortemCommand}, CurrentCommand: "codex"},
+		{Content: []string{"OpenAI Codex", "›", postmortemCommand}, CurrentCommand: "codex"},
+		{Content: []string{"OpenAI Codex", "›", postmortemCommand}, CurrentCommand: "codex"},
+	})
+	d := deps.newDaemon(t)
+	active := newPostmortemAssignment(deps)
+
+	err := d.ensurePostmortem(context.Background(), active)
+	if err == nil || !errors.Is(err, ErrPromptDeliveryNotConfirmed) {
+		t.Fatalf("ensurePostmortem() error = %v, want ErrPromptDeliveryNotConfirmed", err)
+	}
+
+	event, ok := deps.events.lastEventOfType(EventWorkerPostmortem)
+	if !ok {
+		t.Fatalf("lastEventOfType(%q) = false, want true", EventWorkerPostmortem)
+	}
+	if got := event.Message; !strings.Contains(got, "failed") {
+		t.Fatalf("event.Message = %q, want failed status", got)
+	}
+	if got := event.Message; !strings.Contains(got, "prompt delivery not confirmed") {
+		t.Fatalf("event.Message = %q, want prompt confirmation context", got)
+	}
+	if got, want := deps.amux.countKey(active.Task.PaneID, "\n"), 2; got != want {
+		t.Fatalf("retry enter count = %d, want %d", got, want)
+	}
+	if got := deps.amux.waitIdleCalls; len(got) != 0 {
+		t.Fatalf("waitIdle calls = %#v, want none after failed confirmation", got)
+	}
+}
+
+func TestFinishAssignmentMergedCleanupRetriesWrapUpEnterUntilWorkingAppears(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.amux.waitContentResults = []error{
+		amuxapi.ErrWaitContentTimeout,
+		nil,
+		nil,
+	}
+	deps.amux.capturePaneSequence("pane-1", []PaneCapture{
+		{Content: []string{"OpenAI Codex", "›", mergedWrapUpPrompt}, CurrentCommand: "codex"},
+	})
+	d := deps.newDaemon(t)
+	active := newPostmortemAssignment(deps)
+	active.Task.Status = TaskStatusActive
+	seedFinishAssignmentState(t, deps, active)
+
+	if err := d.finishAssignment(context.Background(), active, TaskStatusDone, EventTaskCompleted, true); err != nil {
+		t.Fatalf("finishAssignment() error = %v", err)
+	}
+
+	deps.amux.requireSentKeys(t, active.Task.PaneID, []string{
+		mergedWrapUpPrompt + "\n",
+		"\n",
+		postmortemCommand + "\n",
+	})
+	if got, want := len(deps.amux.waitContentCalls), 3; got != want {
+		t.Fatalf("waitContent call count = %d, want %d", got, want)
+	}
+	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
+		{PaneID: active.Task.PaneID, Timeout: d.mergeGracePeriod},
+		{PaneID: active.Task.PaneID, Timeout: postmortemWaitTimeout},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("waitIdle calls = %#v, want %#v", got, want)
 	}
 }
 
