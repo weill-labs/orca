@@ -134,7 +134,65 @@ func resolveWindowFromPane(ctx context.Context, amuxClient AmuxClient, paneRef s
 }
 
 func (d *Daemon) spawnWindowTarget(ctx context.Context, task Task) string {
-	return resolveWindowFromPane(ctx, d.amux, d.taskPaneTarget(task))
+	if window := resolveWindowFromPane(ctx, d.amux, d.spawnPaneTarget(ctx, task)); window != "" {
+		return window
+	}
+	return d.projectWindowTarget(ctx, task)
+}
+
+func (d *Daemon) projectWindowTarget(ctx context.Context, task Task) string {
+	projectPath := d.projectPathForTask(task)
+	window := projectWindowName(projectPath)
+	if window == "" {
+		return ""
+	}
+
+	exists, err := d.windowExists(ctx, window)
+	if err != nil {
+		return ""
+	}
+	if exists {
+		return window
+	}
+	if d.logf != nil {
+		d.logf("worker spawn project window %q for project %q not found in current amux session; falling back to default placement", window, projectPath)
+	}
+	return ""
+}
+
+func (d *Daemon) windowExists(ctx context.Context, window string) (bool, error) {
+	target := strings.TrimSpace(window)
+	if target == "" {
+		return false, nil
+	}
+
+	panes, err := d.amux.ListPanes(ctx)
+	if err != nil {
+		return false, err
+	}
+
+	for _, pane := range panes {
+		if strings.TrimSpace(pane.Window) == target {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
+func projectWindowName(projectPath string) string {
+	projectPath = strings.TrimSpace(projectPath)
+	if projectPath == "" {
+		return ""
+	}
+
+	name := strings.TrimSpace(filepath.Base(filepath.Clean(projectPath)))
+	switch name {
+	case "", ".", string(filepath.Separator):
+		return ""
+	default:
+		return name
+	}
 }
 
 func (d *Daemon) sameWindowNonLeadPane(ctx context.Context, callerPane string) string {

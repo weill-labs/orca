@@ -387,6 +387,50 @@ func TestAssignWithCallerLeadPaneUsesNonLeadPaneInSameWindowForWorkerSpawn(t *te
 	}
 }
 
+func TestAssignWithoutCallerPaneUsesProjectWindowForWorkerSpawn(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	deps.amux.listPanes = []Pane{
+		{ID: "13", Name: "pane-13", Window: "amux"},
+		{ID: "2", Name: "pane-2", Window: "orca"},
+	}
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+	projectPath := "/home/cweill/github/weill-labs/amux"
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.assign(ctx, projectPath, "LAB-1354", "Use target project window when caller pane is unavailable", "codex", ""); err != nil {
+		t.Fatalf("assign() error = %v", err)
+	}
+
+	waitFor(t, "spawn request", func() bool {
+		return len(deps.amux.spawnRequests) == 1
+	})
+
+	if got, want := deps.amux.spawnRequests[0].Window, "amux"; got != want {
+		t.Fatalf("spawn.Window = %q, want %q", got, want)
+	}
+
+	task, ok := deps.state.task("LAB-1354")
+	if !ok {
+		t.Fatal("task not stored in state")
+	}
+	if got, want := task.Project, projectPath; got != want {
+		t.Fatalf("task.Project = %q, want %q", got, want)
+	}
+	if got, want := task.CallerPane, ""; got != want {
+		t.Fatalf("task.CallerPane = %q, want empty", got)
+	}
+}
+
 func TestNewOmitsLegacyPostmortemFields(t *testing.T) {
 	deps := newTestDeps(t)
 	daemon, err := New(Options{
