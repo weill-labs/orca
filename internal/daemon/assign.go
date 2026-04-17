@@ -62,7 +62,7 @@ func (d *Daemon) assign(ctx context.Context, projectPath, issue, prompt, agentPr
 	if hasGitHubIssue {
 		prompt = withGitHubIssueContext(issue, gitHubIssue, prompt)
 	}
-	prompt = wrapAssignmentPrompt(profile, prompt)
+	prompt = wrapAssignmentPrompt(profile, issue, prompt)
 
 	assignmentBranch := issue
 	prNumber, err := d.lookupOpenPRNumber(ctx, projectPath, assignmentBranch)

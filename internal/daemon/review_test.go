@@ -69,7 +69,7 @@ func TestPRReviewPollingNudgesWorkerOncePerNewBlockingReviewBatch(t *testing.T) 
 	}
 
 	deps.amux.requireSentKeys(t, "pane-1", []string{
-		wrappedCodexPrompt("Implement daemon core") + "\n",
+		wrappedCodexPrompt("LAB-689", "Implement daemon core") + "\n",
 		firstNudgeSent,
 		secondNudgeSent,
 	})
@@ -133,7 +133,7 @@ func TestPRReviewPollingNudgesWorkerWithInlineReviewCommentLocation(t *testing.T
 	})
 
 	deps.amux.requireSentKeys(t, "pane-1", []string{
-		wrappedCodexPrompt("Implement daemon core") + "\n",
+		wrappedCodexPrompt("LAB-689", "Implement daemon core") + "\n",
 		nudgeSent,
 	})
 }
@@ -245,7 +245,7 @@ func TestPRReviewPollingAdvancesCountWithoutNudgingForNonBlockingReviews(t *test
 	}
 
 	deps.amux.requireSentKeys(t, "pane-1", []string{
-		wrappedCodexPrompt("Implement daemon core") + "\n",
+		wrappedCodexPrompt("LAB-689", "Implement daemon core") + "\n",
 		firstNudgeSent,
 	})
 	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
@@ -355,7 +355,7 @@ func TestPRReviewPollingEmitsApprovedEventOncePerApprovalTransition(t *testing.T
 			deps.events.countType(EventReviewApproved) == 2 &&
 			stateEventCountByType(deps.state, EventReviewApproved) == 2
 	})
-	deps.amux.requireSentKeys(t, "pane-1", []string{wrappedCodexPrompt("Implement daemon core") + "\n"})
+	deps.amux.requireSentKeys(t, "pane-1", []string{wrappedCodexPrompt("LAB-689", "Implement daemon core") + "\n"})
 }
 
 func TestPRReviewPollingIgnoresEmptyReviewPayload(t *testing.T) {
@@ -465,7 +465,7 @@ func TestPRReviewPollingNudgesWorkerForGitHubActionsIssueCommentsWithoutLGTM(t *
 	}
 
 	deps.amux.requireSentKeys(t, "pane-1", []string{
-		wrappedCodexPrompt("Implement daemon core") + "\n",
+		wrappedCodexPrompt("LAB-689", "Implement daemon core") + "\n",
 		firstNudgeSent,
 	})
 	if got, want := deps.events.countType(EventWorkerNudgedReview), 1; got != want {
