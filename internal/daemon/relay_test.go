@@ -220,7 +220,7 @@ func TestDaemonRelayEventPullRequestClosedMergedCompletesTask(t *testing.T) {
 
 	deps := newTestDeps(t)
 	seedTaskMonitorAssignment(t, deps, "LAB-1166", "pane-1", 42)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":"2026-04-13T12:00:00Z"}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"mergedAt":"2026-04-13T12:00:00Z"}`, nil)
 
 	d := deps.newDaemonWithOptions(t, func(opts *Options) {
 		opts.DetectOrigin = func(projectDir string) (string, error) {
@@ -251,6 +251,48 @@ func TestDaemonRelayEventPullRequestClosedMergedCompletesTask(t *testing.T) {
 	}
 }
 
+func TestDaemonRelayEventPullRequestClosedWithoutMergeCancelsTask(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	seedTaskMonitorAssignment(t, deps, "LAB-1323", "pane-1", 42)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"state":"CLOSED","mergedAt":null,"closedAt":"2026-04-16T12:00:00Z"}`, nil)
+
+	d := deps.newDaemonWithOptions(t, func(opts *Options) {
+		opts.DetectOrigin = func(projectDir string) (string, error) {
+			return "https://github.com/weill-labs/orca.git", nil
+		}
+	})
+
+	d.handleRelayEvent(context.Background(), relayEventMessage{
+		ID:        "evt-closed-1",
+		EventType: "pull_request",
+		Repo:      "weill-labs/orca",
+		PRNumber:  42,
+		PayloadSummary: map[string]any{
+			"action": "closed",
+			"merged": false,
+		},
+	})
+
+	task, ok := deps.state.task("LAB-1323")
+	if !ok {
+		t.Fatal("task not found after relay closed poll")
+	}
+	if got, want := task.Status, TaskStatusCancelled; got != want {
+		t.Fatalf("task.Status = %q, want %q", got, want)
+	}
+	if got, want := deps.events.countType(EventPRClosedWithoutMerge), 1; got != want {
+		t.Fatalf("closed-without-merge event count = %d, want %d", got, want)
+	}
+	if got, want := deps.events.countType(EventPRMerged), 0; got != want {
+		t.Fatalf("merged event count = %d, want %d", got, want)
+	}
+	if got, want := deps.amux.countKey("pane-1", mergedWrapUpPrompt), 0; got != want {
+		t.Fatalf("merged wrap-up prompt count = %d, want %d", got, want)
+	}
+}
+
 func TestDaemonRelayEventPullRequestMergeRefreshesSiblingPRConflicts(t *testing.T) {
 	t.Parallel()
 
@@ -258,7 +300,7 @@ func TestDaemonRelayEventPullRequestMergeRefreshesSiblingPRConflicts(t *testing.
 	seedTaskMonitorAssignment(t, deps, "LAB-1166", "pane-1", 41)
 	seedTaskMonitorAssignment(t, deps, "LAB-1255", "pane-2", 42)
 
-	deps.commands.queue("gh", []string{"pr", "view", "41", "--json", "mergedAt"}, `{"mergedAt":"2026-04-13T12:00:00Z"}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "41", "--json", prTerminalStateJSONFields}, `{"mergedAt":"2026-04-13T12:00:00Z"}`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}, `{"mergeable":"UNKNOWN","mergeStateStatus":"CLEAN"}`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}, `{"mergeable":"UNKNOWN","mergeStateStatus":"CLEAN"}`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}, `{"mergeable":"CONFLICTING","mergeStateStatus":"DIRTY"}`, nil)
@@ -321,7 +363,7 @@ func TestDaemonRelayEventPullRequestMergeSkipsSiblingConflictRefreshOnBaseBranch
 	seedTaskMonitorAssignment(t, deps, "LAB-1166", "pane-1", 41)
 	seedTaskMonitorAssignment(t, deps, "LAB-1255", "pane-2", 42)
 
-	deps.commands.queue("gh", []string{"pr", "view", "41", "--json", "mergedAt"}, `{"mergedAt":"2026-04-13T12:00:00Z"}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "41", "--json", prTerminalStateJSONFields}, `{"mergedAt":"2026-04-13T12:00:00Z"}`, nil)
 
 	d := deps.newDaemonWithOptions(t, func(opts *Options) {
 		opts.DetectOrigin = func(projectDir string) (string, error) {

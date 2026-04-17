@@ -269,7 +269,7 @@ func (d *Daemon) handleRelayPullRequestLifecycleEvent(ctx context.Context, msg r
 		active = d.bindRelayPRToAssignment(ctx, active, msg.PRNumber, false)
 		d.dispatchTaskMonitorCheck(ctx, active, taskMonitorCheckPRPoll)
 		return true
-	case strings.EqualFold(action, "closed") && msg.merged():
+	case strings.EqualFold(action, "closed"):
 		active, ok := d.activeAssignmentForRelayEvent(ctx, msg.Repo, msg.PRNumber)
 		if !ok {
 			active, ok = d.activeAssignmentForBranch(ctx, msg.Repo, msg.headBranch())
@@ -709,13 +709,10 @@ func (d *Daemon) checkTaskImmediateMergePoll(ctx context.Context, active ActiveA
 	if err != nil {
 		return update
 	}
-	merged, err := d.isPRMerged(ctx, active.Task.Project, active.Task.PRNumber)
+	_, err = d.resolvePRTerminalState(ctx, &update, profile, now)
 	if err != nil {
 		d.appendGitHubRateLimitEvent(&update, profile, err)
 		return update
-	}
-	if merged {
-		markTaskPRMerged(&update, now)
 	}
 	return update
 }

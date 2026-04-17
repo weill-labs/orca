@@ -19,7 +19,7 @@ func TestTaskMonitorSpawnsOnAssignmentAndStopsOnCompletion(t *testing.T) {
 	deps.tickers.enqueue(captureTicker, pollTicker)
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-814", "--state", "open", "--json", "number"}, `[]`, nil)
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-814", "--json", "number"}, `[{"number":42}]`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":"2026-04-02T12:00:00Z"}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"mergedAt":"2026-04-02T12:00:00Z"}`, nil)
 
 	d := deps.newDaemon(t)
 	ctx := context.Background()
@@ -64,8 +64,8 @@ func TestTaskMonitorPollsAssignmentsInParallel(t *testing.T) {
 	block42 := deps.commands.block("gh", check42)
 	deps.commands.queue("gh", check41, `[{"bucket":"pending"}]`, nil)
 	deps.commands.queue("gh", check42, `[{"bucket":"pending"}]`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "41", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "41", "--json", prTerminalStateJSONFields}, `{"mergedAt":null}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"mergedAt":null}`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "41", "--json", prMergeableJSONFields}, ``, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}, ``, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "41", "--json", "reviews,reviewDecision,comments"}, ``, nil)
@@ -145,7 +145,7 @@ func TestTaskMonitorStaleResultIsDropped(t *testing.T) {
 	check43 := []string{"pr", "checks", "43", "--json", "bucket"}
 	block43 := deps.commands.block("gh", check43)
 	deps.commands.queue("gh", check43, `[{"bucket":"pending"}]`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "43", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "43", "--json", prTerminalStateJSONFields}, `{"mergedAt":null}`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "43", "--json", prMergeableJSONFields}, ``, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "43", "--json", "reviews,reviewDecision,comments"}, ``, nil)
 
@@ -425,7 +425,7 @@ func seedConflictNudgeAssignments(t *testing.T, deps *testDeps, count int) []Act
 		prNumber := 100 + i
 		seedTaskMonitorAssignment(t, deps, issue, paneID, prNumber)
 		deps.commands.queue("gh", []string{"pr", "checks", fmt.Sprintf("%d", prNumber), "--json", "bucket"}, ``, nil)
-		deps.commands.queue("gh", []string{"pr", "view", fmt.Sprintf("%d", prNumber), "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
+		deps.commands.queue("gh", []string{"pr", "view", fmt.Sprintf("%d", prNumber), "--json", prTerminalStateJSONFields}, `{"mergedAt":null}`, nil)
 		deps.commands.queue("gh", []string{"pr", "view", fmt.Sprintf("%d", prNumber), "--json", prMergeableJSONFields}, `{"mergeable":"CONFLICTING"}`, nil)
 		deps.commands.queue("gh", []string{"pr", "view", fmt.Sprintf("%d", prNumber), "--json", "reviews,reviewDecision,comments"}, ``, nil)
 		assignments = append(assignments, activeTaskMonitorAssignment(t, deps, issue))
@@ -443,7 +443,7 @@ func seedReviewNudgeAssignments(t *testing.T, deps *testDeps, count int) []Activ
 		prNumber := 200 + i
 		seedTaskMonitorAssignment(t, deps, issue, paneID, prNumber)
 		deps.commands.queue("gh", []string{"pr", "checks", fmt.Sprintf("%d", prNumber), "--json", "bucket"}, ``, nil)
-		deps.commands.queue("gh", []string{"pr", "view", fmt.Sprintf("%d", prNumber), "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
+		deps.commands.queue("gh", []string{"pr", "view", fmt.Sprintf("%d", prNumber), "--json", prTerminalStateJSONFields}, `{"mergedAt":null}`, nil)
 		deps.commands.queue("gh", []string{"pr", "view", fmt.Sprintf("%d", prNumber), "--json", prMergeableJSONFields}, `{"mergeable":"MERGEABLE"}`, nil)
 		deps.commands.queue("gh", []string{"pr", "view", fmt.Sprintf("%d", prNumber), "--json", "reviews,reviewDecision,comments"}, marshalReviewPayload(t, "CHANGES_REQUESTED", []prReview{
 			testReview(fmt.Sprintf("reviewer-%d", i+1), "CHANGES_REQUESTED", "Please add tests."),

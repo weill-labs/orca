@@ -64,6 +64,7 @@ const (
 	EventPRLandingStarted          = "pr.landing_started"
 	EventPRLandingFailed           = "pr.landing_failed"
 	EventPRRateLimited             = "pr.rate_limited"
+	EventPRClosedWithoutMerge      = "pr.closed_without_merge"
 	EventPRMerged                  = "pr.merged"
 )
 
