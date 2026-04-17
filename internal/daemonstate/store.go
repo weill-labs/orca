@@ -36,6 +36,7 @@ type DaemonStatus struct {
 	Session   string    `json:"session"`
 	PID       int       `json:"pid"`
 	Status    string    `json:"status"`
+	Reason    string    `json:"reason,omitempty"`
 	StartedAt time.Time `json:"started_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
