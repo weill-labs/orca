@@ -299,6 +299,40 @@ func TestFinishAssignmentMergedCleanupRetriesWrapUpEnterUntilWorkingAppears(t *t
 	}
 }
 
+func TestFinishAssignmentMergedCleanupSkipsWorkingConfirmationForNonCodex(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.config.profiles["claude"] = AgentProfile{
+		Name:              "claude",
+		PostmortemEnabled: true,
+	}
+	d := deps.newDaemon(t)
+	active := newPostmortemAssignment(deps)
+	active.Task.AgentProfile = "claude"
+	active.Worker.AgentProfile = "claude"
+	active.Task.Status = TaskStatusActive
+	seedFinishAssignmentState(t, deps, active)
+
+	if err := d.finishAssignment(context.Background(), active, TaskStatusDone, EventTaskCompleted, true); err != nil {
+		t.Fatalf("finishAssignment() error = %v", err)
+	}
+
+	deps.amux.requireSentKeys(t, active.Task.PaneID, []string{
+		mergedWrapUpPrompt + "\n",
+		postmortemCommand + "\n",
+	})
+	if got := deps.amux.waitContentCalls; len(got) != 0 {
+		t.Fatalf("waitContent calls = %#v, want none for non-codex", got)
+	}
+	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
+		{PaneID: active.Task.PaneID, Timeout: d.mergeGracePeriod},
+		{PaneID: active.Task.PaneID, Timeout: postmortemWaitTimeout},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("waitIdle calls = %#v, want %#v", got, want)
+	}
+}
+
 func TestCleanupCloneAndReleaseDefaultsCloneMetadata(t *testing.T) {
 	t.Parallel()
 

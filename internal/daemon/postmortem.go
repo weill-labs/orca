@@ -90,17 +90,17 @@ func (d *Daemon) sendPostmortem(ctx context.Context, active ActiveAssignment) er
 	if strings.TrimSpace(active.Task.PaneID) == "" {
 		return errors.New("worker pane missing")
 	}
-	if err := d.sendPostmortemPrompt(ctx, active.Task.PaneID, active.Task.AgentProfile); err != nil {
+	if err := d.sendLifecyclePrompt(ctx, active.Task.PaneID, active.Task.AgentProfile, postmortemCommand); err != nil {
 		return err
 	}
 	return d.amux.WaitIdle(ctx, active.Task.PaneID, postmortemWaitTimeout)
 }
 
-func (d *Daemon) sendPostmortemPrompt(ctx context.Context, paneID, agentProfile string) error {
+func (d *Daemon) sendLifecyclePrompt(ctx context.Context, paneID, agentProfile, prompt string) error {
 	if strings.EqualFold(agentProfile, "codex") {
-		return d.sendAndConfirmWorking(ctx, paneID, postmortemCommand)
+		return d.sendAndConfirmWorking(ctx, paneID, prompt)
 	}
-	return d.amux.SendKeys(ctx, paneID, postmortemCommand, "Enter")
+	return d.amux.SendKeys(ctx, paneID, prompt, "Enter")
 }
 
 func (d *Daemon) finishAssignment(ctx context.Context, active ActiveAssignment, status, eventType string, merged bool) error {
@@ -114,7 +114,7 @@ func (d *Daemon) finishAssignmentWithMessage(ctx context.Context, active ActiveA
 	d.stopTaskMonitorForProject(active.Task.Project, active.Task.Issue)
 
 	if merged {
-		if err := d.sendMergedWrapUpPrompt(cleanupCtx, active.Task.PaneID, active.Task.AgentProfile); err != nil {
+		if err := d.sendLifecyclePrompt(cleanupCtx, active.Task.PaneID, active.Task.AgentProfile, mergedWrapUpPrompt); err != nil {
 			d.emitMergeNotifyFailed(cleanupCtx, active, err)
 			result = errors.Join(result, err)
 		}
@@ -201,13 +201,6 @@ func (d *Daemon) finishAssignmentWithMessage(ctx context.Context, active ActiveA
 		Message:      message,
 	})
 	return result
-}
-
-func (d *Daemon) sendMergedWrapUpPrompt(ctx context.Context, paneID, agentProfile string) error {
-	if strings.EqualFold(agentProfile, "codex") {
-		return d.sendAndConfirmWorking(ctx, paneID, mergedWrapUpPrompt)
-	}
-	return d.amux.SendKeys(ctx, paneID, mergedWrapUpPrompt, "Enter")
 }
 
 func (d *Daemon) emitMergeNotifyFailed(ctx context.Context, active ActiveAssignment, err error) {
