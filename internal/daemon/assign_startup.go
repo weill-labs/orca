@@ -9,8 +9,9 @@ import (
 )
 
 const (
-	assignStartupMaxAttempts   = 3
-	assignStartupRetryDelay    = 2 * time.Second
+	assignStartupMaxAttempts = 3
+	assignStartupRetryDelay  = 2 * time.Second
+	// Kept for backward compatibility with handshake_test.go assertions.
 	assignHandshakeMaxAttempts = assignStartupMaxAttempts
 	assignHandshakeRetryDelay  = assignStartupRetryDelay
 )
@@ -58,12 +59,11 @@ func (d *Daemon) startAssignmentWorker(ctx context.Context, projectPath string, 
 
 		startupSnapshot, err := d.agentHandshake(ctx, pane.ID, profile)
 		if err != nil {
-			if shouldRetryAssignStartupHandshake(profile, err) {
-				d.emitAssignHandshakeRetry(cleanupCtx, result, profile, attempt, maxAttempts, err, d.captureStartupRetryScrollback(cleanupCtx, pane.ID))
-			}
-			if !shouldRetryAssignStartupHandshake(profile, err) {
+			retryHandshake := shouldRetryAssignStartupHandshake(profile, err)
+			if !retryHandshake {
 				return result, fmt.Errorf("agent handshake: %w", err)
 			}
+			d.emitAssignHandshakeRetry(cleanupCtx, result, profile, attempt, maxAttempts, err, d.captureStartupRetryScrollback(cleanupCtx, pane.ID))
 			if attempt == maxAttempts {
 				return result, fmt.Errorf("agent handshake failed after %d attempts: %w", maxAttempts, err)
 			}
@@ -101,7 +101,7 @@ func (d *Daemon) startAssignmentWorker(ctx context.Context, projectPath string, 
 		return result, nil
 	}
 
-	return result, fmt.Errorf("agent handshake failed after %d attempts", maxAttempts)
+	return result, fmt.Errorf("assignment startup exhausted after %d attempts", maxAttempts)
 }
 
 func (d *Daemon) assignmentStartupState(projectPath string, clone Clone, task Task, worker Worker, pane Pane) (Task, Worker) {
