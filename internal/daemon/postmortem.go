@@ -76,17 +76,31 @@ func (d *Daemon) postmortemStatus(ctx context.Context, active ActiveAssignment) 
 		return "skipped", "postmortem disabled for agent profile", nil
 	}
 
-	return "sent", "postmortem command sent", d.sendPostmortem(ctx, active)
+	err = d.sendPostmortem(ctx, active)
+	if err == nil {
+		return "sent", "postmortem command sent", nil
+	}
+	if errors.Is(err, ErrPromptDeliveryNotConfirmed) {
+		return "failed", err.Error(), err
+	}
+	return "sent", "postmortem command sent", err
 }
 
 func (d *Daemon) sendPostmortem(ctx context.Context, active ActiveAssignment) error {
 	if strings.TrimSpace(active.Task.PaneID) == "" {
 		return errors.New("worker pane missing")
 	}
-	if err := d.amux.SendKeys(ctx, active.Task.PaneID, postmortemCommand, "Enter"); err != nil {
+	if err := d.sendLifecyclePrompt(ctx, active.Task.PaneID, active.Task.AgentProfile, postmortemCommand); err != nil {
 		return err
 	}
 	return d.amux.WaitIdle(ctx, active.Task.PaneID, postmortemWaitTimeout)
+}
+
+func (d *Daemon) sendLifecyclePrompt(ctx context.Context, paneID, agentProfile, prompt string) error {
+	if strings.EqualFold(agentProfile, "codex") {
+		return d.sendAndConfirmWorking(ctx, paneID, prompt)
+	}
+	return d.amux.SendKeys(ctx, paneID, prompt, "Enter")
 }
 
 func (d *Daemon) finishAssignment(ctx context.Context, active ActiveAssignment, status, eventType string, merged bool) error {
@@ -100,7 +114,7 @@ func (d *Daemon) finishAssignmentWithMessage(ctx context.Context, active ActiveA
 	d.stopTaskMonitorForProject(active.Task.Project, active.Task.Issue)
 
 	if merged {
-		if err := d.amux.SendKeys(cleanupCtx, active.Task.PaneID, mergedWrapUpPrompt, "Enter"); err != nil {
+		if err := d.sendLifecyclePrompt(cleanupCtx, active.Task.PaneID, active.Task.AgentProfile, mergedWrapUpPrompt); err != nil {
 			d.emitMergeNotifyFailed(cleanupCtx, active, err)
 			result = errors.Join(result, err)
 		}
