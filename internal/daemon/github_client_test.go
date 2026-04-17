@@ -618,11 +618,12 @@ func TestGitHubCLIClientPRTerminalState(t *testing.T) {
 		wantState prTerminalState
 		wantErr   bool
 	}{
-		{name: "empty output defaults open", wantState: prTerminalStateOpen},
-		{name: "open pr", output: `{"state":"OPEN","mergedAt":null}`, wantState: prTerminalStateOpen},
-		{name: "merged pr by state", output: `{"state":"MERGED","mergedAt":null}`, wantState: prTerminalStateMerged},
-		{name: "merged pr by mergedAt", output: `{"state":"CLOSED","mergedAt":"2026-04-02T12:00:00Z"}`, wantState: prTerminalStateMerged},
-		{name: "closed without merge", output: `{"state":"CLOSED","mergedAt":null}`, wantState: prTerminalStateClosedWithoutMerge},
+		{name: "empty output defaults open", wantState: prTerminalState{}},
+		{name: "open pr", output: `{"state":"OPEN","mergedAt":null,"closedAt":null}`, wantState: prTerminalState{}},
+		{name: "merged pr by state", output: `{"state":"MERGED","mergedAt":null,"closedAt":null}`, wantState: prTerminalState{merged: true}},
+		{name: "merged pr by mergedAt", output: `{"state":"CLOSED","mergedAt":"2026-04-02T12:00:00Z","closedAt":"2026-04-02T12:00:00Z"}`, wantState: prTerminalState{merged: true}},
+		{name: "closed without merge by state", output: `{"state":"CLOSED","mergedAt":null,"closedAt":null}`, wantState: prTerminalState{closedWithoutMerge: true}},
+		{name: "closed without merge by closedAt", output: `{"state":"OPEN","mergedAt":null,"closedAt":"2026-04-02T12:00:00Z"}`, wantState: prTerminalState{closedWithoutMerge: true}},
 		{name: "command error", err: errors.New("gh failed"), wantErr: true},
 		{name: "invalid json", output: `{`, wantErr: true},
 	}
@@ -639,18 +640,18 @@ func TestGitHubCLIClientPRTerminalState(t *testing.T) {
 				sleep:       noSleep,
 				maxAttempts: 1,
 			})
-			args := []string{"pr", "view", "42", "--json", "state,mergedAt"}
+			args := []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}
 			commands.queue("gh", args, tt.output, tt.err)
 
-			got, err := client.prTerminalState(context.Background(), 42)
+			got, err := client.lookupPRTerminalState(context.Background(), 42)
 			if (err != nil) != tt.wantErr {
-				t.Fatalf("prTerminalState() error = %v, wantErr = %v", err, tt.wantErr)
+				t.Fatalf("lookupPRTerminalState() error = %v, wantErr = %v", err, tt.wantErr)
 			}
 			if tt.wantErr {
 				return
 			}
 			if got != tt.wantState {
-				t.Fatalf("prTerminalState() = %q, want %q", got, tt.wantState)
+				t.Fatalf("lookupPRTerminalState() = %#v, want %#v", got, tt.wantState)
 			}
 		})
 	}

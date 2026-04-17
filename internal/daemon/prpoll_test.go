@@ -294,7 +294,7 @@ func TestPRMergePollingStillSendsPostmortemAfterWrapUpError(t *testing.T) {
 	deps.events.requireTypes(t, EventTaskCompletionFailed)
 }
 
-func TestPRCloseWithoutMergePollingCancelsTaskAndStopsFollowUpPolls(t *testing.T) {
+func TestPRCloseWithoutMergePollingFailsTaskAndStopsFollowUpPolls(t *testing.T) {
 	t.Parallel()
 
 	deps := newTestDeps(t)
@@ -322,9 +322,9 @@ func TestPRCloseWithoutMergePollingCancelsTaskAndStopsFollowUpPolls(t *testing.T
 	}
 
 	prTicker.tick(deps.clock.Now())
-	waitFor(t, "task cancellation after closed PR", func() bool {
+	waitFor(t, "task failure after closed PR", func() bool {
 		task, ok := deps.state.task("LAB-1323")
-		return ok && task.Status == TaskStatusCancelled
+		return ok && task.Status == TaskStatusFailed
 	})
 
 	task, ok := deps.state.task("LAB-1323")
@@ -351,19 +351,22 @@ func TestPRCloseWithoutMergePollingCancelsTaskAndStopsFollowUpPolls(t *testing.T
 	if got, want := deps.amux.countKey("pane-1", "PR merged, wrap up."), 0; got != want {
 		t.Fatalf("merged wrap-up prompt count = %d, want %d", got, want)
 	}
-	if got, want := deps.amux.countKey("pane-1", "$postmortem\n"), 1; got != want {
+	if got, want := deps.amux.countKey("pane-1", closedWrapUpPrompt+"\n"), 1; got != want {
+		t.Fatalf("closed wrap-up prompt count = %d, want %d", got, want)
+	}
+	if got, want := deps.amux.countKey("pane-1", "$postmortem\n"), 0; got != want {
 		t.Fatalf("postmortem prompt count = %d, want %d", got, want)
 	}
-	if got, want := deps.amux.killCalls, []string{"pane-1"}; !reflect.DeepEqual(got, want) {
+	if got, want := deps.amux.killCalls, []string(nil); !reflect.DeepEqual(got, want) {
 		t.Fatalf("kill calls = %#v, want %#v", got, want)
 	}
-	if got, want := deps.events.countType(EventPRClosedWithoutMerge), 1; got != want {
-		t.Fatalf("closed-without-merge event count = %d, want %d", got, want)
+	if got, want := deps.events.countType(EventPRClosed), 1; got != want {
+		t.Fatalf("closed event count = %d, want %d", got, want)
 	}
 	if got, want := deps.events.countType(EventPRMerged), 0; got != want {
 		t.Fatalf("merged event count = %d, want %d", got, want)
 	}
-	deps.events.requireTypes(t, EventDaemonStarted, EventTaskAssigned, EventPRDetected, EventPRClosedWithoutMerge, EventWorkerPostmortem, EventTaskCancelled)
+	deps.events.requireTypes(t, EventDaemonStarted, EventTaskAssigned, EventPRDetected, EventPRClosed, EventTaskFailed)
 }
 
 func TestPRDetectionSyncsPaneMetadata(t *testing.T) {

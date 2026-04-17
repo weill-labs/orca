@@ -213,7 +213,7 @@ func TestCheckTaskPRPollDistinguishesPRTerminalStates(t *testing.T) {
 		{
 			name: "merged pr marks merged terminal state",
 			queue: func(deps *testDeps) {
-				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":"2026-04-13T12:00:00Z"}`, nil)
+				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"state":"CLOSED","mergedAt":"2026-04-13T12:00:00Z","closedAt":"2026-04-13T12:00:00Z"}`, nil)
 			},
 			wantState:    TaskStateMerged,
 			wantPRMerged: true,
@@ -221,8 +221,7 @@ func TestCheckTaskPRPollDistinguishesPRTerminalStates(t *testing.T) {
 		{
 			name: "closed pr marks failed completion",
 			queue: func(deps *testDeps) {
-				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
-				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "state,mergedAt"}, `{"state":"CLOSED","mergedAt":null}`, nil)
+				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"state":"CLOSED","mergedAt":null,"closedAt":"2026-04-16T12:00:00Z"}`, nil)
 			},
 			wantState:          TaskStateDone,
 			wantCompletionType: EventTaskFailed,
@@ -231,8 +230,7 @@ func TestCheckTaskPRPollDistinguishesPRTerminalStates(t *testing.T) {
 		{
 			name: "open pr stays review pending",
 			queue: func(deps *testDeps) {
-				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
-				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "state,mergedAt"}, `{"state":"OPEN","mergedAt":null}`, nil)
+				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"state":"OPEN","mergedAt":null,"closedAt":null}`, nil)
 			},
 			wantState: TaskStateReviewPending,
 		},
@@ -295,8 +293,7 @@ func TestCheckTaskPRPollRegularPathDistinguishesPRTerminalStates(t *testing.T) {
 			name: "merged pr terminal state marks merged",
 			queue: func(deps *testDeps) {
 				deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[]`, nil)
-				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
-				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "state,mergedAt"}, `{"state":"MERGED","mergedAt":null}`, nil)
+				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"state":"MERGED","mergedAt":null,"closedAt":null}`, nil)
 			},
 			wantState:    TaskStateMerged,
 			wantPRMerged: true,
@@ -305,8 +302,7 @@ func TestCheckTaskPRPollRegularPathDistinguishesPRTerminalStates(t *testing.T) {
 			name: "closed pr terminal state fails task",
 			queue: func(deps *testDeps) {
 				deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[]`, nil)
-				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
-				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "state,mergedAt"}, `{"state":"CLOSED","mergedAt":null}`, nil)
+				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"state":"CLOSED","mergedAt":null,"closedAt":"2026-04-16T12:00:00Z"}`, nil)
 			},
 			wantState:            TaskStateDone,
 			wantCompletionStatus: TaskStatusFailed,
@@ -317,8 +313,7 @@ func TestCheckTaskPRPollRegularPathDistinguishesPRTerminalStates(t *testing.T) {
 			name: "rate limited terminal state returns early",
 			queue: func(deps *testDeps) {
 				deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[]`, nil)
-				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
-				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "state,mergedAt"}, "HTTP 429: API rate limit exceeded\nRetry-After: 120\n", errors.New("gh: HTTP 429"))
+				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, "HTTP 429: API rate limit exceeded\nRetry-After: 120\n", errors.New("gh: HTTP 429"))
 			},
 			wantState:            TaskStateReviewPending,
 			wantRateLimitedUntil: until,
@@ -384,8 +379,7 @@ func TestApplyTaskStateUpdateFailsTaskWhenPRClosesWithoutMerge(t *testing.T) {
 	seedTaskMonitorAssignmentWithState(t, deps, issue, "pane-1", 42, TaskStateReviewPending)
 	setAssignmentWorkerID(t, deps, issue, "worker-01")
 	seedMergeEntryForTest(t, deps, issue, 42)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "mergedAt"}, `{"mergedAt":null}`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "state,mergedAt"}, `{"state":"CLOSED","mergedAt":null}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"state":"CLOSED","mergedAt":null,"closedAt":"2026-04-16T12:00:00Z"}`, nil)
 
 	d := deps.newDaemon(t)
 	update := d.checkTaskPRPoll(context.Background(), activeTaskMonitorAssignment(t, deps, issue))
