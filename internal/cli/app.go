@@ -1103,8 +1103,10 @@ func writeProjectStatusAt(w io.Writer, status state.ProjectStatus, daemonBuildCo
 		return err
 	}
 	if status.Daemon != nil {
-		if _, err := fmt.Fprintf(w, "session: %s\n", status.Daemon.Session); err != nil {
-			return err
+		if strings.TrimSpace(status.Daemon.Session) != "" {
+			if _, err := fmt.Fprintf(w, "session: %s\n", status.Daemon.Session); err != nil {
+				return err
+			}
 		}
 		if status.Daemon.PID > 0 {
 			if _, err := fmt.Fprintf(w, "pid: %d\n", status.Daemon.PID); err != nil {
@@ -1176,8 +1178,13 @@ func defaultProjectStatusRPC(ctx context.Context, projectPath string) (daemon.Pr
 
 func daemonStatusText(status state.ProjectStatus, daemonBuildCommit, installedBuildCommit string) string {
 	daemonState := "stopped"
+	daemonReason := ""
 	if status.Daemon != nil && status.Daemon.Status != "" {
 		daemonState = status.Daemon.Status
+		daemonReason = strings.TrimSpace(status.Daemon.Reason)
+	}
+	if daemonState == "unhealthy" && daemonReason != "" {
+		return fmt.Sprintf("%s (%s)", daemonState, daemonReason)
 	}
 
 	daemonBuildCommit = strings.TrimSpace(daemonBuildCommit)

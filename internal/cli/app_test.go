@@ -768,6 +768,126 @@ func TestAppRunStatusFallsBackToStateWhenDaemonSocketUnavailable(t *testing.T) {
 	}
 }
 
+func TestAppRunStatusReportsUnhealthyWhenStoredDaemonPIDIsAliveButSocketUnavailable(t *testing.T) {
+	t.Parallel()
+
+	projectPath := t.TempDir()
+	if err := os.Mkdir(filepath.Join(projectPath, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+
+	store := &fakeState{
+		projectStatus: state.ProjectStatus{
+			Project: projectPath,
+			Daemon: &state.DaemonStatus{
+				Status:  "running",
+				Session: "from-store",
+				PID:     99,
+			},
+		},
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	app := New(Options{
+		Daemon:  &fakeDaemon{},
+		State:   store,
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		Version: "build-123",
+		Cwd: func() (string, error) {
+			return projectPath, nil
+		},
+		ProjectStatusRPC: func(context.Context, string) (daemon.ProjectStatusRPCResult, error) {
+			return daemon.ProjectStatusRPCResult{}, daemon.ErrDaemonNotRunning
+		},
+		ResolvePaths: func() (daemon.Paths, error) {
+			return daemon.Paths{PIDDir: filepath.Join(t.TempDir(), "pids")}, nil
+		},
+		ReadPIDFile: func(string) (int, error) {
+			return 0, os.ErrNotExist
+		},
+		ProcessAlive: func(pid int) (bool, error) {
+			if got, want := pid, 99; got != want {
+				t.Fatalf("ProcessAlive pid = %d, want %d", got, want)
+			}
+			return true, nil
+		},
+	})
+
+	if err := app.Run(context.Background(), []string{"status"}); err != nil {
+		t.Fatalf("Run(status) error = %v", err)
+	}
+	if got := stdout.String(); !strings.Contains(got, "daemon: unhealthy (pid 99 exists but socket not responding)") {
+		t.Fatalf("stdout = %q, want unhealthy daemon fallback", got)
+	}
+	if got := stdout.String(); !strings.Contains(got, "pid: 99") {
+		t.Fatalf("stdout = %q, want stored daemon pid", got)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+}
+
+func TestAppRunStatusReportsUnhealthyWhenPIDFileProcessIsAliveButSocketUnavailable(t *testing.T) {
+	t.Parallel()
+
+	projectPath := t.TempDir()
+	if err := os.Mkdir(filepath.Join(projectPath, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+
+	store := &fakeState{
+		projectStatus: state.ProjectStatus{
+			Project: projectPath,
+		},
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	app := New(Options{
+		Daemon:  &fakeDaemon{},
+		State:   store,
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		Version: "build-123",
+		Cwd: func() (string, error) {
+			return projectPath, nil
+		},
+		ProjectStatusRPC: func(context.Context, string) (daemon.ProjectStatusRPCResult, error) {
+			return daemon.ProjectStatusRPCResult{}, daemon.ErrDaemonNotRunning
+		},
+		ResolvePaths: func() (daemon.Paths, error) {
+			return daemon.Paths{PIDDir: filepath.Join(t.TempDir(), "pids")}, nil
+		},
+		ReadPIDFile: func(path string) (int, error) {
+			if !strings.HasSuffix(path, filepath.Join("pids", "orca.pid")) {
+				t.Fatalf("ReadPIDFile path = %q, want pid path suffix", path)
+			}
+			return 42, nil
+		},
+		ProcessAlive: func(pid int) (bool, error) {
+			if got, want := pid, 42; got != want {
+				t.Fatalf("ProcessAlive pid = %d, want %d", got, want)
+			}
+			return true, nil
+		},
+	})
+
+	if err := app.Run(context.Background(), []string{"status"}); err != nil {
+		t.Fatalf("Run(status) error = %v", err)
+	}
+	if got := stdout.String(); !strings.Contains(got, "daemon: unhealthy (pid 42 exists but socket not responding)") {
+		t.Fatalf("stdout = %q, want unhealthy daemon fallback", got)
+	}
+	if got := stdout.String(); !strings.Contains(got, "pid: 42") {
+		t.Fatalf("stdout = %q, want pid file daemon pid", got)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+}
+
 func TestAppRunStatusWarnsWhenDaemonBackendDiffersFromShell(t *testing.T) {
 	projectPath := t.TempDir()
 	if err := os.Mkdir(filepath.Join(projectPath, ".git"), 0o755); err != nil {

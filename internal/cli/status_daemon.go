@@ -43,12 +43,12 @@ func (a *App) projectStatus(ctx context.Context, projectPath string) (projectSta
 		return projectStatusResult{}, err
 	}
 
-	pid, alive, warning := a.daemonPIDStatus()
-	status = normalizeFallbackDaemonStatus(status, pid, alive)
+	probe := a.fallbackDaemonProbe(status)
+	status = normalizeFallbackDaemonStatus(status, probe)
 
 	return projectStatusResult{
 		status:  status,
-		warning: warning,
+		warning: probe.warning,
 	}, nil
 }
 
@@ -61,49 +61,8 @@ func (a *App) backendMismatchWarning() string {
 }
 
 func (a *App) daemonPIDStatus() (int, bool, string) {
-	paths, err := a.resolvePaths()
-	if err != nil {
-		return 0, false, ""
-	}
-
-	pid, err := a.readPIDFile(pidFilePath(paths))
-	if err != nil {
-		return 0, false, ""
-	}
-
-	alive, err := a.processAlive(pid)
-	if err != nil {
-		return pid, false, ""
-	}
-	if !alive {
-		return pid, false, ""
-	}
-
-	return pid, true, backendMismatchWarningForPID(pid, a.readProcessEnviron)
-}
-
-func normalizeFallbackDaemonStatus(status state.ProjectStatus, pid int, alive bool) state.ProjectStatus {
-	daemonStatus := status.Daemon
-	if daemonStatus == nil {
-		daemonStatus = &state.DaemonStatus{}
-	} else {
-		copy := *daemonStatus
-		daemonStatus = &copy
-	}
-
-	if pid > 0 {
-		daemonStatus.PID = pid
-	}
-	if alive {
-		if strings.TrimSpace(daemonStatus.Status) == "" || daemonStatus.Status == "stopped" {
-			daemonStatus.Status = "running"
-		}
-	} else {
-		daemonStatus.Status = "stopped"
-	}
-
-	status.Daemon = daemonStatus
-	return status
+	probe := a.pidFileDaemonProbe()
+	return probe.pid, probe.alive, probe.warning
 }
 
 func backendMismatchWarningForPID(pid int, readProcessEnviron func(int) ([]string, error)) string {
