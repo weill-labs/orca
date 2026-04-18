@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 func (d *Daemon) Resume(ctx context.Context, issue, prompt string) error {
@@ -278,7 +279,10 @@ func (d *Daemon) storeResumedTaskForProject(ctx context.Context, projectPath str
 	resumedWorker.LastReviewCount = 0
 	resumedWorker.LastInlineReviewCommentCount = 0
 	resumedWorker.LastIssueCommentCount = 0
+	resumedWorker.LastIssueCommentWatermark = ""
+	resumedWorker.LastReviewUpdatedAt = time.Time{}
 	resumedWorker.ReviewNudgeCount = 0
+	resumedWorker.ReviewApproved = false
 	resumedWorker.LastCIState = ""
 	resumedWorker.CINudgeCount = 0
 	resumedWorker.CIFailurePollCount = 0

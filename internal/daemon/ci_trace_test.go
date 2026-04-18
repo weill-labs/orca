@@ -29,7 +29,7 @@ func TestPRPollEmitsGitHubRateLimitEventWhenCICheckStateLookupIsRateLimited(t *t
 	if got, want := deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}), 0; got != want {
 		t.Fatalf("mergeable lookup count = %d, want %d", got, want)
 	}
-	if got, want := deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}), 0; got != want {
+	if got, want := deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", prReviewJSONFields}), 0; got != want {
 		t.Fatalf("review lookup count = %d, want %d", got, want)
 	}
 }
@@ -43,7 +43,7 @@ func TestPRPollLogsAndEmitsTraceWhenCICheckStateLookupFails(t *testing.T) {
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"mergedAt":null}`, nil)
 	deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, ``, errors.New("ci lookup failed"))
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}, ``, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, ``, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prReviewJSONFields}, ``, nil)
 
 	d := deps.newDaemonWithOptions(t, func(opts *Options) {
 		opts.Logf = logs.Printf

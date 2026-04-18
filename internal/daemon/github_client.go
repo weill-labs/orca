@@ -16,8 +16,10 @@ const (
 	defaultGitHubAPIInitialBackoff = 1 * time.Second
 	defaultGitHubAPIMaxBackoff     = 8 * time.Second
 	defaultGitHubAPIMaxAttempts    = 3
+	defaultPRSnapshotTTL           = time.Second
 	issueIDPRSearchJSONFields      = "number,state,headRefName,title"
-	prTerminalStateJSONFields      = "mergedAt,state,closedAt"
+	prTerminalStateJSONFields      = "mergedAt,state,closedAt,mergeable,mergeStateStatus,updatedAt,reviews,reviewDecision,comments"
+	prReviewJSONFields             = "reviews,reviewDecision,comments,updatedAt"
 )
 
 var (
@@ -32,8 +34,10 @@ type gitHubClient interface {
 	lookupOpenPRNumber(ctx context.Context, branch string) (int, error)
 	lookupOpenOrMergedPRNumber(ctx context.Context, branch string) (int, bool, error)
 	lookupPRTerminalState(ctx context.Context, prNumber int) (prTerminalState, error)
+	lookupPRMergeability(ctx context.Context, prNumber int) (prMergeabilityPayload, bool, error)
 	isPRMerged(ctx context.Context, prNumber int) (bool, error)
 	lookupPRReviews(ctx context.Context, prNumber int) (prReviewPayload, bool, error)
+	lookupPRReviewComments(ctx context.Context, prNumber int) ([]prReviewComment, error)
 }
 
 type prTerminalState struct {
@@ -50,6 +54,7 @@ type gitHubCLIClientConfig struct {
 	initialBackoff time.Duration
 	maxBackoff     time.Duration
 	maxAttempts    int
+	prSnapshotTTL  time.Duration
 	logf           func(string, ...any)
 }
 
@@ -62,15 +67,34 @@ type gitHubCLIClient struct {
 	initialBackoff time.Duration
 	maxBackoff     time.Duration
 	maxAttempts    int
+	prSnapshotTTL  time.Duration
 	logf           func(string, ...any)
 
-	mu          sync.Mutex
-	nextAllowed time.Time
+	mu              sync.Mutex
+	nextAllowed     time.Time
+	prSnapshotCache map[int]cachedPRSnapshot
 }
 
 type gitHubIssue struct {
 	Title string `json:"title"`
 	Body  string `json:"body"`
+}
+
+type cachedPRSnapshot struct {
+	payload   prSnapshotPayload
+	expiresAt time.Time
+}
+
+type prSnapshotPayload struct {
+	MergedAt         *string      `json:"mergedAt"`
+	State            *string      `json:"state"`
+	ClosedAt         *string      `json:"closedAt"`
+	Mergeable        *string      `json:"mergeable"`
+	MergeStateStatus *string      `json:"mergeStateStatus"`
+	UpdatedAt        *time.Time   `json:"updatedAt"`
+	ReviewDecision   *string      `json:"reviewDecision"`
+	Reviews          *[]prReview  `json:"reviews"`
+	Comments         *[]prComment `json:"comments"`
 }
 
 func newGitHubCLIClient(cfg gitHubCLIClientConfig) *gitHubCLIClient {
@@ -83,17 +107,22 @@ func newGitHubCLIClient(cfg gitHubCLIClientConfig) *gitHubCLIClient {
 	if cfg.maxAttempts < 1 {
 		cfg.maxAttempts = 1
 	}
+	if cfg.prSnapshotTTL <= 0 {
+		cfg.prSnapshotTTL = defaultPRSnapshotTTL
+	}
 
 	return &gitHubCLIClient{
-		project:        cfg.project,
-		commands:       cfg.commands,
-		now:            cfg.now,
-		sleep:          cfg.sleep,
-		minInterval:    cfg.minInterval,
-		initialBackoff: cfg.initialBackoff,
-		maxBackoff:     cfg.maxBackoff,
-		maxAttempts:    cfg.maxAttempts,
-		logf:           cfg.logf,
+		project:         cfg.project,
+		commands:        cfg.commands,
+		now:             cfg.now,
+		sleep:           cfg.sleep,
+		minInterval:     cfg.minInterval,
+		initialBackoff:  cfg.initialBackoff,
+		maxBackoff:      cfg.maxBackoff,
+		maxAttempts:     cfg.maxAttempts,
+		prSnapshotTTL:   cfg.prSnapshotTTL,
+		logf:            cfg.logf,
+		prSnapshotCache: make(map[int]cachedPRSnapshot),
 	}
 }
 
@@ -107,6 +136,7 @@ func newDefaultGitHubClient(project string, commands CommandRunner, logf func(st
 		initialBackoff: defaultGitHubAPIInitialBackoff,
 		maxBackoff:     defaultGitHubAPIMaxBackoff,
 		maxAttempts:    defaultGitHubAPIMaxAttempts,
+		prSnapshotTTL:  defaultPRSnapshotTTL,
 		logf:           logf,
 	})
 }
@@ -146,6 +176,7 @@ func (d *Daemon) newGitHubClient(projectPath string) gitHubClient {
 		initialBackoff: base.initialBackoff,
 		maxBackoff:     base.maxBackoff,
 		maxAttempts:    base.maxAttempts,
+		prSnapshotTTL:  base.prSnapshotTTL,
 		logf:           d.logf,
 	})
 }
@@ -335,6 +366,10 @@ func issueIDTokenBoundary(value string, idx int) bool {
 }
 
 func (c *gitHubCLIClient) isPRMerged(ctx context.Context, prNumber int) (bool, error) {
+	if payload, ok := c.cachedPRSnapshot(prNumber); ok {
+		return terminalStateFromSnapshot(payload).merged, nil
+	}
+
 	output, err := c.run(ctx, "pr", "view", fmt.Sprintf("%d", prNumber), "--json", "mergedAt")
 	if err != nil {
 		return false, err
@@ -353,11 +388,42 @@ func (c *gitHubCLIClient) isPRMerged(ctx context.Context, prNumber int) (bool, e
 }
 
 func (c *gitHubCLIClient) lookupPRTerminalState(ctx context.Context, prNumber int) (prTerminalState, error) {
-	output, err := c.run(ctx, "pr", "view", fmt.Sprintf("%d", prNumber), "--json", prTerminalStateJSONFields)
+	payload, ok, err := c.lookupPRSnapshot(ctx, prNumber)
 	if err != nil {
 		return prTerminalState{}, err
 	}
-	return parsePRTerminalState(output)
+	if !ok {
+		return prTerminalState{}, nil
+	}
+	return terminalStateFromSnapshot(payload), nil
+}
+
+func (c *gitHubCLIClient) lookupPRMergeability(ctx context.Context, prNumber int) (prMergeabilityPayload, bool, error) {
+	if payload, ok := c.cachedPRSnapshot(prNumber); ok {
+		if mergeability, available := mergeabilityFromSnapshot(payload); available {
+			return mergeability, true, nil
+		}
+	}
+
+	output, err := c.run(ctx, "pr", "view", fmt.Sprintf("%d", prNumber), "--json", prMergeableJSONFields)
+	if err != nil {
+		return prMergeabilityPayload{}, false, err
+	}
+	if len(output) == 0 {
+		return prMergeabilityPayload{}, false, nil
+	}
+
+	var payload prMergeabilityPayload
+	if err := json.Unmarshal(output, &payload); err != nil {
+		return prMergeabilityPayload{}, false, err
+	}
+
+	payload.Mergeable = strings.TrimSpace(payload.Mergeable)
+	payload.MergeStateStatus = strings.TrimSpace(payload.MergeStateStatus)
+	if payload.Mergeable == "" && payload.MergeStateStatus == "" {
+		return prMergeabilityPayload{}, false, nil
+	}
+	return payload, true, nil
 }
 
 func parsePRTerminalState(output []byte) (prTerminalState, error) {
@@ -384,7 +450,13 @@ func parsePRTerminalState(output []byte) (prTerminalState, error) {
 }
 
 func (c *gitHubCLIClient) lookupPRReviews(ctx context.Context, prNumber int) (prReviewPayload, bool, error) {
-	output, err := c.run(ctx, "pr", "view", fmt.Sprintf("%d", prNumber), "--json", "reviews,reviewDecision,comments")
+	if payload, ok := c.cachedPRSnapshot(prNumber); ok {
+		if reviews, available := reviewPayloadFromSnapshot(payload); available {
+			return reviews, true, nil
+		}
+	}
+
+	output, err := c.run(ctx, "pr", "view", fmt.Sprintf("%d", prNumber), "--json", prReviewJSONFields)
 	if err != nil {
 		return prReviewPayload{}, false, err
 	}
@@ -396,11 +468,7 @@ func (c *gitHubCLIClient) lookupPRReviews(ctx context.Context, prNumber int) (pr
 	if err := json.Unmarshal(output, &payload); err != nil {
 		return prReviewPayload{}, false, err
 	}
-	reviewComments, err := c.lookupPRReviewComments(ctx, prNumber)
-	if err != nil {
-		return prReviewPayload{}, false, err
-	}
-	payload.ReviewComments = reviewComments
+	payload.ReviewDecision = strings.TrimSpace(payload.ReviewDecision)
 	return payload, true, nil
 }
 
@@ -418,6 +486,136 @@ func (c *gitHubCLIClient) lookupPRReviewComments(ctx context.Context, prNumber i
 		return nil, err
 	}
 	return comments, nil
+}
+
+func (c *gitHubCLIClient) lookupPRSnapshot(ctx context.Context, prNumber int) (prSnapshotPayload, bool, error) {
+	if payload, ok := c.cachedPRSnapshot(prNumber); ok {
+		return payload, true, nil
+	}
+
+	output, err := c.run(ctx, "pr", "view", fmt.Sprintf("%d", prNumber), "--json", prTerminalStateJSONFields)
+	if err != nil {
+		return prSnapshotPayload{}, false, err
+	}
+	if len(output) == 0 {
+		return prSnapshotPayload{}, false, nil
+	}
+
+	var payload prSnapshotPayload
+	if err := json.Unmarshal(output, &payload); err != nil {
+		return prSnapshotPayload{}, false, err
+	}
+	normalizePRSnapshot(&payload)
+	c.storePRSnapshot(prNumber, payload)
+	return payload, true, nil
+}
+
+func (c *gitHubCLIClient) cachedPRSnapshot(prNumber int) (prSnapshotPayload, bool) {
+	if prNumber <= 0 {
+		return prSnapshotPayload{}, false
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	entry, ok := c.prSnapshotCache[prNumber]
+	if !ok {
+		return prSnapshotPayload{}, false
+	}
+	if now := c.now(); !entry.expiresAt.IsZero() && now.After(entry.expiresAt) {
+		delete(c.prSnapshotCache, prNumber)
+		return prSnapshotPayload{}, false
+	}
+	return entry.payload, true
+}
+
+func (c *gitHubCLIClient) storePRSnapshot(prNumber int, payload prSnapshotPayload) {
+	if prNumber <= 0 || c.prSnapshotTTL <= 0 {
+		return
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.prSnapshotCache == nil {
+		c.prSnapshotCache = make(map[int]cachedPRSnapshot)
+	}
+	c.prSnapshotCache[prNumber] = cachedPRSnapshot{
+		payload:   payload,
+		expiresAt: c.now().Add(c.prSnapshotTTL),
+	}
+}
+
+func normalizePRSnapshot(payload *prSnapshotPayload) {
+	if payload == nil {
+		return
+	}
+
+	payload.State = trimOptionalString(payload.State)
+	payload.Mergeable = trimOptionalString(payload.Mergeable)
+	payload.MergeStateStatus = trimOptionalString(payload.MergeStateStatus)
+	payload.ReviewDecision = trimOptionalString(payload.ReviewDecision)
+}
+
+func trimOptionalString(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(*value)
+	return &trimmed
+}
+
+func terminalStateFromSnapshot(payload prSnapshotPayload) prTerminalState {
+	state := ""
+	if payload.State != nil {
+		state = *payload.State
+	}
+
+	merged := strings.EqualFold(state, "merged") || (payload.MergedAt != nil && strings.TrimSpace(*payload.MergedAt) != "")
+	closed := strings.EqualFold(state, "closed") || (payload.ClosedAt != nil && strings.TrimSpace(*payload.ClosedAt) != "")
+	return prTerminalState{
+		merged:             merged,
+		closedWithoutMerge: closed && !merged,
+	}
+}
+
+func mergeabilityFromSnapshot(payload prSnapshotPayload) (prMergeabilityPayload, bool) {
+	mergeable := ""
+	if payload.Mergeable != nil {
+		mergeable = *payload.Mergeable
+	}
+	stateStatus := ""
+	if payload.MergeStateStatus != nil {
+		stateStatus = *payload.MergeStateStatus
+	}
+	if mergeable == "" && stateStatus == "" {
+		return prMergeabilityPayload{}, false
+	}
+	return prMergeabilityPayload{
+		Mergeable:        mergeable,
+		MergeStateStatus: stateStatus,
+	}, true
+}
+
+func reviewPayloadFromSnapshot(payload prSnapshotPayload) (prReviewPayload, bool) {
+	if payload.ReviewDecision == nil && payload.Reviews == nil && payload.Comments == nil && payload.UpdatedAt == nil {
+		return prReviewPayload{}, false
+	}
+
+	reviewPayload := prReviewPayload{}
+	if payload.ReviewDecision != nil {
+		reviewPayload.ReviewDecision = *payload.ReviewDecision
+	}
+	if payload.Reviews != nil {
+		reviewPayload.Reviews = append([]prReview(nil), (*payload.Reviews)...)
+	}
+	if payload.Comments != nil {
+		reviewPayload.Comments = append([]prComment(nil), (*payload.Comments)...)
+	}
+	if payload.UpdatedAt != nil {
+		reviewPayload.UpdatedAt = *payload.UpdatedAt
+	}
+	return reviewPayload, true
 }
 
 func (c *gitHubCLIClient) run(ctx context.Context, args ...string) ([]byte, error) {

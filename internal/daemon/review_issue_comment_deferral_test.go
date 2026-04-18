@@ -23,7 +23,7 @@ func TestPRReviewPollingRetriesIssueCommentNudgeAfterFreshCaptureDeferral(t *tes
 	waitFor(t, "fresh capture issue comment deferral", func() bool {
 		worker, ok := deps.state.worker("pane-1")
 		return ok &&
-			deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}) == 1 &&
+			deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", prReviewJSONFields}) == 1 &&
 			worker.LastCapture == "still coding after review poll"
 	})
 
@@ -78,7 +78,7 @@ func TestPRReviewPollingDoesNotResetReviewNudgeCountBeforeDeferredIssueCommentNu
 	waitFor(t, "fresh capture review nudge reset deferral", func() bool {
 		worker, ok := deps.state.worker("pane-1")
 		return ok &&
-			deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}) == 1 &&
+			deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", prReviewJSONFields}) == 1 &&
 			worker.LastCapture == "still coding after fresh capture"
 	})
 

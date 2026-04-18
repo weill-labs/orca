@@ -233,6 +233,7 @@ type Worker struct {
 	LastInlineReviewCommentCount int       `json:"last_inline_review_comment_count,omitempty"`
 	LastIssueCommentCount        int       `json:"last_issue_comment_count,omitempty"`
 	LastIssueCommentWatermark    string    `json:"last_issue_comment_watermark,omitempty"`
+	LastReviewUpdatedAt          time.Time `json:"last_review_updated_at,omitempty"`
 	ReviewNudgeCount             int       `json:"review_nudge_count,omitempty"`
 	ReviewApproved               bool      `json:"review_approved,omitempty"`
 	LastCIState                  string    `json:"last_ci_state,omitempty"`

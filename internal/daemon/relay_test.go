@@ -28,7 +28,7 @@ func TestDaemonRelayEventPullRequestReviewTriggersImmediateReviewPoll(t *testing
 		t.Fatalf("PutWorker() error = %v", err)
 	}
 
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, marshalReviewPayload(t, "CHANGES_REQUESTED", []prReview{
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prReviewJSONFields}, marshalReviewPayload(t, "CHANGES_REQUESTED", []prReview{
 		testReview("reviewer", "CHANGES_REQUESTED", "Please add tests."),
 	}, nil), nil)
 

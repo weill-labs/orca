@@ -22,6 +22,7 @@ type reviewWorkerState struct {
 	commentWatermark   string
 	reviewNudgeCount   int
 	reviewApproved     bool
+	updatedAt          time.Time
 }
 
 type prReviewPayload struct {
@@ -29,6 +30,7 @@ type prReviewPayload struct {
 	Reviews        []prReview `json:"reviews"`
 	ReviewComments []prReviewComment
 	Comments       []prComment `json:"comments"`
+	UpdatedAt      time.Time   `json:"updatedAt"`
 }
 
 type prReview struct {
@@ -106,6 +108,7 @@ func (d *Daemon) checkTaskReviewPoll(ctx context.Context, active ActiveAssignmen
 		inlineCommentCount: active.Worker.LastInlineReviewCommentCount,
 		commentCount:       active.Worker.LastIssueCommentCount,
 		reviewNudgeCount:   active.Worker.ReviewNudgeCount,
+		updatedAt:          active.Worker.LastReviewUpdatedAt,
 	}
 	traceAndReturn := func(current *reviewWorkerState, blockingCount int, idleResult, action string, persisted bool) TaskStateUpdate {
 		d.traceReviewPollDecision(&update, profile, previousReviewState, current, blockingCount, idleResult, action, persisted)
@@ -121,10 +124,7 @@ func (d *Daemon) checkTaskReviewPoll(ctx context.Context, active ActiveAssignmen
 		return traceAndReturn(nil, 0, reviewPollIdleNotChecked, "reviews_unavailable", false)
 	}
 	now := d.now()
-	items := reviewItems(payload.Reviews, payload.ReviewComments)
-
 	reviewCount := len(payload.Reviews)
-	inlineCommentCount := len(payload.ReviewComments)
 	commentCount := len(payload.Comments)
 	previousReviewCount := update.Active.Worker.LastReviewCount
 	previousInlineCommentCount := update.Active.Worker.LastInlineReviewCommentCount
@@ -133,32 +133,43 @@ func (d *Daemon) checkTaskReviewPoll(ctx context.Context, active ActiveAssignmen
 	previousReviewApproved := update.Active.Worker.ReviewApproved
 	reviewApproved := payload.ReviewDecision == "APPROVED" || latestReviewContainsLGTM(payload.Reviews)
 	nextReviewState := reviewWorkerState{
-		reviewCount:        reviewCount,
-		inlineCommentCount: inlineCommentCount,
-		commentCount:       commentCount,
-		commentWatermark:   issueCommentWatermark(payload.Comments),
-		reviewNudgeCount:   update.Active.Worker.ReviewNudgeCount,
-		reviewApproved:     reviewApproved,
+		reviewCount:      reviewCount,
+		commentCount:     commentCount,
+		commentWatermark: issueCommentWatermark(payload.Comments),
+		reviewNudgeCount: update.Active.Worker.ReviewNudgeCount,
+		reviewApproved:   reviewApproved,
+		updatedAt:        payload.UpdatedAt,
 	}
+	if reviewPollNeedsInlineCommentLookup(previousReviewState, nextReviewState, payload) {
+		reviewComments, err := d.lookupPRReviewComments(ctx, active.Task.Project, active.Task.PRNumber)
+		if err != nil {
+			d.appendGitHubRateLimitEvent(&update, profile, err)
+			return traceAndReturn(nil, 0, reviewPollIdleNotChecked, "lookup_review_comments_error", false)
+		}
+		payload.ReviewComments = reviewComments
+	}
+	nextReviewState.inlineCommentCount = len(payload.ReviewComments)
+	items := reviewItems(payload.Reviews, payload.ReviewComments)
 	if payload.ReviewDecision != "CHANGES_REQUESTED" && nextReviewState.reviewNudgeCount != 0 {
 		nextReviewState.reviewNudgeCount = 0
 	}
-	if previousReviewCount > reviewCount || previousInlineCommentCount > inlineCommentCount || previousCommentCount > commentCount {
+	if previousReviewCount > reviewCount || previousInlineCommentCount > nextReviewState.inlineCommentCount || previousCommentCount > commentCount {
 		d.persistReviewWorkerState(&update.Active.Worker, nextReviewState, now)
 		update.WorkerChanged = true
 		return traceAndReturn(&nextReviewState, 0, reviewPollIdleNotChecked, "persist_review_watermark_reset", true)
 	}
 	if previousReviewCount == reviewCount &&
-		previousInlineCommentCount == inlineCommentCount &&
+		previousInlineCommentCount == nextReviewState.inlineCommentCount &&
 		previousCommentCount == commentCount &&
 		previousCommentWatermark == nextReviewState.commentWatermark &&
 		previousReviewApproved == nextReviewState.reviewApproved {
 		action := "no_new_review_feedback"
 		persisted := false
-		if nextReviewState.reviewNudgeCount != update.Active.Worker.ReviewNudgeCount {
+		if !nextReviewState.updatedAt.Equal(previousReviewState.updatedAt) ||
+			nextReviewState.reviewNudgeCount != update.Active.Worker.ReviewNudgeCount {
 			d.persistReviewWorkerState(&update.Active.Worker, nextReviewState, now)
 			update.WorkerChanged = true
-			action = "persist_review_nudge_reset"
+			action = "persist_review_snapshot_watermark"
 			persisted = true
 		}
 		return traceAndReturn(&nextReviewState, 0, reviewPollIdleNotChecked, action, persisted)
@@ -223,9 +234,37 @@ func (d *Daemon) persistReviewWorkerState(worker *Worker, state reviewWorkerStat
 	worker.LastInlineReviewCommentCount = state.inlineCommentCount
 	worker.LastIssueCommentCount = state.commentCount
 	worker.LastIssueCommentWatermark = state.commentWatermark
+	worker.LastReviewUpdatedAt = state.updatedAt
 	worker.ReviewNudgeCount = state.reviewNudgeCount
 	worker.ReviewApproved = state.reviewApproved
 	worker.LastSeenAt = now
+}
+
+func reviewPollNeedsInlineCommentLookup(previous, next reviewWorkerState, payload prReviewPayload) bool {
+	if next.reviewApproved {
+		return false
+	}
+	if payload.UpdatedAt.IsZero() {
+		if next.reviewCount != previous.reviewCount || next.commentCount != previous.commentCount || next.reviewApproved != previous.reviewApproved {
+			return true
+		}
+		return previous.reviewCount == 0 &&
+			previous.inlineCommentCount == 0 &&
+			previous.commentCount == 0 &&
+			payload.ReviewDecision == "CHANGES_REQUESTED"
+	}
+
+	if previous.updatedAt.IsZero() {
+		return payload.ReviewDecision == "CHANGES_REQUESTED" ||
+			next.reviewCount != 0 ||
+			next.commentCount != 0 ||
+			previous.inlineCommentCount > 0
+	}
+
+	return next.updatedAt.After(previous.updatedAt) ||
+		next.reviewCount != previous.reviewCount ||
+		next.commentCount != previous.commentCount ||
+		next.reviewApproved != previous.reviewApproved
 }
 
 const (
@@ -351,6 +390,10 @@ func (d *Daemon) recordWorkerOutput(update *TaskStateUpdate, profile AgentProfil
 
 func (d *Daemon) lookupPRReviews(ctx context.Context, projectPath string, prNumber int) (prReviewPayload, bool, error) {
 	return d.gitHubClientForContext(ctx, projectPath).lookupPRReviews(ctx, prNumber)
+}
+
+func (d *Daemon) lookupPRReviewComments(ctx context.Context, projectPath string, prNumber int) ([]prReviewComment, error) {
+	return d.gitHubClientForContext(ctx, projectPath).lookupPRReviewComments(ctx, prNumber)
 }
 
 func latestReviewContainsLGTM(reviews []prReview) bool {

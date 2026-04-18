@@ -24,9 +24,7 @@ func TestRunPollTickKeepsGitHubCallsWithinPerTaskBudget(t *testing.T) {
 		assignments = append(assignments, activeTaskMonitorAssignment(t, deps, issue))
 
 		deps.commands.queue("gh", []string{"pr", "checks", fmt.Sprintf("%d", prNumber), "--json", "bucket"}, `[{"bucket":"pending"}]`, nil)
-		deps.commands.queue("gh", []string{"pr", "view", fmt.Sprintf("%d", prNumber), "--json", prTerminalStateJSONFields}, `{"mergedAt":null,"state":"OPEN","closedAt":null}`, nil)
-		deps.commands.queue("gh", []string{"pr", "view", fmt.Sprintf("%d", prNumber), "--json", prMergeableJSONFields}, `{"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}`, nil)
-		queuePRReviewPayload(deps, prNumber, `{"reviewDecision":"","reviews":[],"comments":[]}`)
+		deps.commands.queue("gh", []string{"pr", "view", fmt.Sprintf("%d", prNumber), "--json", prTerminalStateJSONFields}, `{"mergedAt":null,"state":"OPEN","closedAt":null,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","updatedAt":"2026-04-02T09:00:00Z","reviewDecision":"","reviews":[],"comments":[]}`, nil)
 	}
 
 	d.runPollTick(context.Background())

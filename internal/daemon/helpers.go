@@ -132,7 +132,10 @@ func (d *Daemon) releaseWorkerClaim(ctx context.Context, worker Worker) error {
 	worker.LastReviewCount = 0
 	worker.LastInlineReviewCommentCount = 0
 	worker.LastIssueCommentCount = 0
+	worker.LastIssueCommentWatermark = ""
+	worker.LastReviewUpdatedAt = time.Time{}
 	worker.ReviewNudgeCount = 0
+	worker.ReviewApproved = false
 	worker.LastCIState = ""
 	worker.CINudgeCount = 0
 	worker.CIFailurePollCount = 0

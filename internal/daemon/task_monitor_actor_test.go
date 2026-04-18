@@ -68,8 +68,8 @@ func TestTaskMonitorPollsAssignmentsInParallel(t *testing.T) {
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"mergedAt":null}`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "41", "--json", prMergeableJSONFields}, ``, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}, ``, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "41", "--json", "reviews,reviewDecision,comments"}, ``, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, ``, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "41", "--json", prReviewJSONFields}, ``, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prReviewJSONFields}, ``, nil)
 
 	d := deps.newDaemon(t)
 	ctx := context.Background()
@@ -147,7 +147,7 @@ func TestTaskMonitorStaleResultIsDropped(t *testing.T) {
 	deps.commands.queue("gh", check43, `[{"bucket":"pending"}]`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "43", "--json", prTerminalStateJSONFields}, `{"mergedAt":null}`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "43", "--json", prMergeableJSONFields}, ``, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "43", "--json", "reviews,reviewDecision,comments"}, ``, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "43", "--json", prReviewJSONFields}, ``, nil)
 
 	d := deps.newDaemon(t)
 	ctx := context.Background()
@@ -427,7 +427,7 @@ func seedConflictNudgeAssignments(t *testing.T, deps *testDeps, count int) []Act
 		deps.commands.queue("gh", []string{"pr", "checks", fmt.Sprintf("%d", prNumber), "--json", "bucket"}, ``, nil)
 		deps.commands.queue("gh", []string{"pr", "view", fmt.Sprintf("%d", prNumber), "--json", prTerminalStateJSONFields}, `{"mergedAt":null}`, nil)
 		deps.commands.queue("gh", []string{"pr", "view", fmt.Sprintf("%d", prNumber), "--json", prMergeableJSONFields}, `{"mergeable":"CONFLICTING"}`, nil)
-		deps.commands.queue("gh", []string{"pr", "view", fmt.Sprintf("%d", prNumber), "--json", "reviews,reviewDecision,comments"}, ``, nil)
+		deps.commands.queue("gh", []string{"pr", "view", fmt.Sprintf("%d", prNumber), "--json", prReviewJSONFields}, ``, nil)
 		assignments = append(assignments, activeTaskMonitorAssignment(t, deps, issue))
 	}
 	return assignments
@@ -445,7 +445,7 @@ func seedReviewNudgeAssignments(t *testing.T, deps *testDeps, count int) []Activ
 		deps.commands.queue("gh", []string{"pr", "checks", fmt.Sprintf("%d", prNumber), "--json", "bucket"}, ``, nil)
 		deps.commands.queue("gh", []string{"pr", "view", fmt.Sprintf("%d", prNumber), "--json", prTerminalStateJSONFields}, `{"mergedAt":null}`, nil)
 		deps.commands.queue("gh", []string{"pr", "view", fmt.Sprintf("%d", prNumber), "--json", prMergeableJSONFields}, `{"mergeable":"MERGEABLE"}`, nil)
-		deps.commands.queue("gh", []string{"pr", "view", fmt.Sprintf("%d", prNumber), "--json", "reviews,reviewDecision,comments"}, marshalReviewPayload(t, "CHANGES_REQUESTED", []prReview{
+		deps.commands.queue("gh", []string{"pr", "view", fmt.Sprintf("%d", prNumber), "--json", prReviewJSONFields}, marshalReviewPayload(t, "CHANGES_REQUESTED", []prReview{
 			testReview(fmt.Sprintf("reviewer-%d", i+1), "CHANGES_REQUESTED", "Please add tests."),
 		}, nil), nil)
 		assignments = append(assignments, activeTaskMonitorAssignment(t, deps, issue))

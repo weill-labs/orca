@@ -3,7 +3,7 @@ package daemon
 import "fmt"
 
 func queuePRReviewPayload(deps *testDeps, prNumber int, payload string) {
-	deps.commands.queue("gh", []string{"pr", "view", fmt.Sprintf("%d", prNumber), "--json", "reviews,reviewDecision,comments"}, payload, nil)
+	deps.commands.queue("gh", []string{"pr", "view", fmt.Sprintf("%d", prNumber), "--json", prReviewJSONFields}, payload, nil)
 	if payload == "" {
 		return
 	}

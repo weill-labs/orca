@@ -163,6 +163,7 @@ func (d *Daemon) assign(ctx context.Context, projectPath, issue, prompt, agentPr
 		LastReviewCount:              0,
 		LastInlineReviewCommentCount: 0,
 		LastIssueCommentCount:        0,
+		LastReviewUpdatedAt:          time.Time{},
 		ReviewNudgeCount:             0,
 		LastCIState:                  "",
 		CINudgeCount:                 0,

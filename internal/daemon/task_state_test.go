@@ -28,7 +28,7 @@ func TestCheckTaskPRPollTransitionsTaskState(t *testing.T) {
 				deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, ``, nil)
 				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"mergedAt":null}`, nil)
 				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}, ``, nil)
-				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, ``, nil)
+				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prReviewJSONFields}, ``, nil)
 			},
 			wantState: TaskStatePRDetected,
 			wantEvent: EventPRDetected,
@@ -41,7 +41,7 @@ func TestCheckTaskPRPollTransitionsTaskState(t *testing.T) {
 				deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[{"bucket":"pending"}]`, nil)
 				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"mergedAt":null}`, nil)
 				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}, ``, nil)
-				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, ``, nil)
+				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prReviewJSONFields}, ``, nil)
 			},
 			wantState:   TaskStateCIPending,
 			wantCIState: ciStatePending,
@@ -54,7 +54,7 @@ func TestCheckTaskPRPollTransitionsTaskState(t *testing.T) {
 				deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[{"bucket":"pass"}]`, nil)
 				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"mergedAt":null}`, nil)
 				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}, ``, nil)
-				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, ``, nil)
+				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prReviewJSONFields}, ``, nil)
 			},
 			wantState:   TaskStateReviewPending,
 			wantCIState: ciStatePass,
@@ -364,7 +364,7 @@ func TestCheckTaskPRPollRegularPathDistinguishesPRTerminalStates(t *testing.T) {
 			if got, want := deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}), 0; got != want {
 				t.Fatalf("mergeable follow-up call count = %d, want %d", got, want)
 			}
-			if got, want := deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}), 0; got != want {
+			if got, want := deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", prReviewJSONFields}), 0; got != want {
 				t.Fatalf("review follow-up call count = %d, want %d", got, want)
 			}
 		})

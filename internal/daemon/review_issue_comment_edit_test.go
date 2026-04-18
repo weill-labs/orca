@@ -46,7 +46,7 @@ func TestPRReviewPollingNudgesForEditedBlockingIssueCommentWithoutCountChange(t 
 	waitFor(t, "progress issue comment watermark advance", func() bool {
 		worker, ok := deps.state.worker("pane-1")
 		return ok &&
-			deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}) == 1 &&
+			deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", prReviewJSONFields}) == 1 &&
 			worker.LastIssueCommentCount == 1
 	})
 
@@ -72,7 +72,7 @@ func TestPRReviewPollingNudgesForEditedBlockingIssueCommentWithoutCountChange(t 
 
 	tickAndWaitForHeartbeat(t, d, deps, prTicker, adaptivePRFastPollInterval, "repeat edited blocking issue comment poll cycle completion")
 	waitFor(t, "repeat edited blocking issue comment poll", func() bool {
-		return deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}) == 3
+		return deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", prReviewJSONFields}) == 3
 	})
 
 	if got, want := deps.amux.countKey("pane-1", nudgeSent), 1; got != want {

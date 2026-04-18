@@ -479,7 +479,7 @@ func testStorePersistsWorkerMonitorStateAndMergeQueue(t *testing.T, h storeContr
 		WorkerID: "worker-01", CurrentPaneID: "pane-1", Agent: "codex", State: "escalated", Issue: "LAB-735", ClonePath: "/clones/orca01",
 		LastReviewCount: 2, LastInlineReviewCommentCount: 1, LastIssueCommentCount: 4, ReviewNudgeCount: 3, LastCIState: "fail",
 		CINudgeCount: 2, CIFailurePollCount: 1, CIEscalated: true, LastMergeableState: "blocked", NudgeCount: 3, LastCapture: "permission prompt",
-		LastActivityAt: now, LastPRNumber: 42, LastPushAt: now.Add(-2 * time.Minute), LastPRPollAt: now.Add(-time.Minute),
+		LastActivityAt: now, LastPRNumber: 42, LastPushAt: now.Add(-2 * time.Minute), LastPRPollAt: now.Add(-time.Minute), LastReviewUpdatedAt: now.Add(-90 * time.Second),
 		RestartCount: 2, FirstCrashAt: now.Add(-3 * time.Minute), CreatedAt: now, LastSeenAt: now,
 	}); err != nil {
 		t.Fatalf("UpsertWorker() error = %v", err)
@@ -537,6 +537,9 @@ func testStorePersistsWorkerMonitorStateAndMergeQueue(t *testing.T, h storeContr
 	}
 	if got, want := worker.LastPRPollAt, now.Add(-time.Minute); !got.Equal(want) {
 		t.Fatalf("worker.LastPRPollAt = %v, want %v", got, want)
+	}
+	if got, want := worker.LastReviewUpdatedAt, now.Add(-90*time.Second); !got.Equal(want) {
+		t.Fatalf("worker.LastReviewUpdatedAt = %v, want %v", got, want)
 	}
 	if got, want := worker.RestartCount, 2; got != want {
 		t.Fatalf("worker.RestartCount = %d, want %d", got, want)
@@ -630,7 +633,7 @@ func testStoreWorkerByPaneAndNonTerminalTasks(t *testing.T, h storeContractHarne
 		WorkerID: "worker-02", CurrentPaneID: "pane-2", Agent: "codex", State: "escalated", Issue: "LAB-741", ClonePath: "/clones/clone-02",
 		LastReviewCount: 2, LastInlineReviewCommentCount: 1, LastIssueCommentCount: 4, ReviewNudgeCount: 3, LastCIState: "fail",
 		CINudgeCount: 2, CIFailurePollCount: 1, CIEscalated: true, LastMergeableState: "CONFLICTING", NudgeCount: 3, LastCapture: "permission prompt",
-		LastActivityAt: now, LastPRNumber: 42, LastPushAt: now.Add(-4 * time.Minute), LastPRPollAt: now.Add(-2 * time.Minute),
+		LastActivityAt: now, LastPRNumber: 42, LastPushAt: now.Add(-4 * time.Minute), LastPRPollAt: now.Add(-2 * time.Minute), LastReviewUpdatedAt: now.Add(-3 * time.Minute),
 		RestartCount: 2, FirstCrashAt: now.Add(-2 * time.Minute), CreatedAt: now, LastSeenAt: now.Add(time.Minute),
 	}); err != nil {
 		t.Fatalf("UpsertWorker() error = %v", err)
@@ -721,6 +724,9 @@ func testStoreWorkerByPaneAndNonTerminalTasks(t *testing.T, h storeContractHarne
 	}
 	if got, want := worker.LastPRPollAt, now.Add(-2*time.Minute); !got.Equal(want) {
 		t.Fatalf("worker.LastPRPollAt = %v, want %v", got, want)
+	}
+	if got, want := worker.LastReviewUpdatedAt, now.Add(-3*time.Minute); !got.Equal(want) {
+		t.Fatalf("worker.LastReviewUpdatedAt = %v, want %v", got, want)
 	}
 	if got, want := worker.RestartCount, 2; got != want {
 		t.Fatalf("worker.RestartCount = %d, want %d", got, want)
