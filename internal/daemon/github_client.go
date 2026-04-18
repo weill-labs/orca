@@ -426,29 +426,6 @@ func (c *gitHubCLIClient) lookupPRMergeability(ctx context.Context, prNumber int
 	return payload, true, nil
 }
 
-func parsePRTerminalState(output []byte) (prTerminalState, error) {
-	if len(output) == 0 {
-		return prTerminalState{}, nil
-	}
-
-	var payload struct {
-		MergedAt *string `json:"mergedAt"`
-		State    string  `json:"state"`
-		ClosedAt *string `json:"closedAt"`
-	}
-	if err := json.Unmarshal(output, &payload); err != nil {
-		return prTerminalState{}, err
-	}
-
-	merged := strings.EqualFold(payload.State, "merged") || (payload.MergedAt != nil && strings.TrimSpace(*payload.MergedAt) != "")
-	closed := strings.EqualFold(payload.State, "closed") || (payload.ClosedAt != nil && strings.TrimSpace(*payload.ClosedAt) != "")
-
-	return prTerminalState{
-		merged:             merged,
-		closedWithoutMerge: closed && !merged,
-	}, nil
-}
-
 func (c *gitHubCLIClient) lookupPRReviews(ctx context.Context, prNumber int) (prReviewPayload, bool, error) {
 	if payload, ok := c.cachedPRSnapshot(prNumber); ok {
 		if reviews, available := reviewPayloadFromSnapshot(payload); available {
