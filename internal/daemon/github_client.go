@@ -18,7 +18,7 @@ const (
 	defaultGitHubAPIMaxAttempts    = 3
 	defaultPRSnapshotTTL           = time.Second
 	issueIDPRSearchJSONFields      = "number,state,headRefName,title"
-	prTerminalStateJSONFields      = "mergedAt,state,closedAt,mergeable,mergeStateStatus,updatedAt,reviews,reviewDecision,comments"
+	prSnapshotJSONFields      = "mergedAt,state,closedAt,mergeable,mergeStateStatus,updatedAt,reviews,reviewDecision,comments"
 	prReviewJSONFields             = "reviews,reviewDecision,comments,updatedAt"
 )
 
@@ -470,7 +470,7 @@ func (c *gitHubCLIClient) lookupPRSnapshot(ctx context.Context, prNumber int) (p
 		return payload, true, nil
 	}
 
-	output, err := c.run(ctx, "pr", "view", fmt.Sprintf("%d", prNumber), "--json", prTerminalStateJSONFields)
+	output, err := c.run(ctx, "pr", "view", fmt.Sprintf("%d", prNumber), "--json", prSnapshotJSONFields)
 	if err != nil {
 		return prSnapshotPayload{}, false, err
 	}

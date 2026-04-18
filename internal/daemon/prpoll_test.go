@@ -23,7 +23,7 @@ func TestPRMergePollingSendsWrapUpAndCleansClone(t *testing.T) {
 	deps.state.rejectCanceledContext = true
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--state", "open", "--json", "number"}, `[]`, nil)
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"mergedAt":"2026-04-02T12:00:00Z"}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, `{"mergedAt":"2026-04-02T12:00:00Z"}`, nil)
 
 	d := deps.newDaemon(t)
 	ctx := context.Background()
@@ -105,7 +105,7 @@ func TestQueuedPRMergePollingCompletesTaskWithoutExtraTick(t *testing.T) {
 	deps.pool.rejectCanceledContext = true
 	deps.state.rejectCanceledContext = true
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--state", "open", "--json", "number"}, `[]`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"mergedAt":"2026-04-02T12:00:00Z"}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, `{"mergedAt":"2026-04-02T12:00:00Z"}`, nil)
 
 	d := deps.newDaemon(t)
 	ctx := context.Background()
@@ -196,7 +196,7 @@ func TestPRMergeCleanupContinuesWhenIssueTrackerDoneUpdateFails(t *testing.T) {
 		IssueStateDone: errors.New("linear unavailable"),
 	}
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"mergedAt":"2026-04-02T12:00:00Z"}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, `{"mergedAt":"2026-04-02T12:00:00Z"}`, nil)
 
 	d := deps.newDaemon(t)
 	ctx := context.Background()
@@ -251,7 +251,7 @@ func TestPRMergePollingStillSendsPostmortemAfterWrapUpError(t *testing.T) {
 	deps.tickers.enqueue(captureTicker, prTicker)
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--state", "open", "--json", "number"}, `[]`, nil)
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"mergedAt":"2026-04-02T12:00:00Z"}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, `{"mergedAt":"2026-04-02T12:00:00Z"}`, nil)
 
 	d := deps.newDaemon(t)
 	ctx := context.Background()
@@ -306,7 +306,7 @@ func TestPRCloseWithoutMergePollingFailsTaskAndStopsFollowUpPolls(t *testing.T) 
 	deps.state.rejectCanceledContext = true
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-1323", "--state", "open", "--json", "number"}, `[]`, nil)
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-1323", "--json", "number"}, `[{"number":42}]`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"state":"CLOSED","mergedAt":null,"closedAt":"2026-04-16T12:00:00Z"}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, `{"state":"CLOSED","mergedAt":null,"closedAt":"2026-04-16T12:00:00Z"}`, nil)
 
 	d := deps.newDaemon(t)
 	ctx := context.Background()
@@ -377,7 +377,7 @@ func TestPRDetectionSyncsPaneMetadata(t *testing.T) {
 	prTicker := newFakeTicker()
 	deps.tickers.enqueue(captureTicker, prTicker)
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"mergedAt":null}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, `{"mergedAt":null}`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prReviewJSONFields}, ``, nil)
 
 	d := deps.newDaemon(t)
@@ -431,11 +431,11 @@ func TestPRDetectionUsesAdaptiveIntervalsAfterPRDiscovery(t *testing.T) {
 	deps.tickers.enqueue(captureTicker, prTicker)
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
 	deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[{"bucket":"pending"}]`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"mergedAt":null}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, `{"mergedAt":null}`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}, ``, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prReviewJSONFields}, ``, nil)
 	deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[{"bucket":"pending"}]`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"mergedAt":null}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, `{"mergedAt":null}`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}, ``, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prReviewJSONFields}, ``, nil)
 
@@ -503,11 +503,11 @@ func TestPRPollResetsAdaptiveWindowWhenTaskPRNumberChanges(t *testing.T) {
 	}
 
 	deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[{"bucket":"pending"}]`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"mergedAt":null}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, `{"mergedAt":null}`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}, ``, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prReviewJSONFields}, ``, nil)
 	deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[{"bucket":"pending"}]`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"mergedAt":null}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, `{"mergedAt":null}`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}, ``, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prReviewJSONFields}, ``, nil)
 
@@ -551,7 +551,7 @@ func TestPRPollingLogsGitHubRateLimitWarnings(t *testing.T) {
 	prTicker := newFakeTicker()
 	deps.tickers.enqueue(captureTicker, prTicker)
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, "HTTP 429: API rate limit exceeded\nRetry-After: 120\n", errors.New("gh: HTTP 429"))
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, "HTTP 429: API rate limit exceeded\nRetry-After: 120\n", errors.New("gh: HTTP 429"))
 
 	d := deps.newDaemon(t)
 	ctx := context.Background()
@@ -627,7 +627,7 @@ func TestPRPollingContinuesFollowUpPollsAfterNonRateLimitMergeLookupError(t *tes
 	prTicker := newFakeTicker()
 	deps.tickers.enqueue(captureTicker, prTicker)
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, ``, errors.New("gh failed"))
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, ``, errors.New("gh failed"))
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}, `{"mergeable":"MERGEABLE"}`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prReviewJSONFields}, ``, nil)
 
@@ -666,7 +666,7 @@ func TestPRPollingSkipsDiscoveryWhenAssignmentAlreadyTracksPR(t *testing.T) {
 	deps.tickers.enqueue(captureTicker, prTicker)
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--state", "open", "--json", "number"}, `[{"number":42}]`, nil)
 	deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[{"bucket":"pending"}]`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"mergedAt":null}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, `{"mergedAt":null}`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}, ``, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prReviewJSONFields}, ``, nil)
 
@@ -729,7 +729,7 @@ func TestPRPollFallsBackToIssueIDSearchAndPersistsObservedBranch(t *testing.T) {
 		{"number":456,"state":"MERGED","headRefName":"lab-123-renamed","title":"LAB-123: recover renamed branch"}
 	]`, nil)
 	deps.commands.queue("gh", []string{"pr", "checks", "456", "--json", "bucket"}, `[]`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "456", "--json", prTerminalStateJSONFields}, `{"mergedAt":"2026-04-02T12:00:00Z"}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "456", "--json", prSnapshotJSONFields}, `{"mergedAt":"2026-04-02T12:00:00Z"}`, nil)
 
 	d := deps.newDaemon(t)
 
@@ -831,7 +831,7 @@ func TestPRDetectionPreservesTrackedHistoryForReusedPane(t *testing.T) {
 	prTicker := newFakeTicker()
 	deps.tickers.enqueue(captureTicker, prTicker)
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"mergedAt":null}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, `{"mergedAt":null}`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prReviewJSONFields}, ``, nil)
 
 	d := deps.newDaemon(t)
@@ -885,7 +885,7 @@ func TestPRDetectionContinuesForEscalatedWorkers(t *testing.T) {
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-984", "--state", "open", "--json", "number"}, `[]`, nil)
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-984", "--json", "number"}, `[{"number":42}]`, nil)
 	deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[{"bucket":"pending"}]`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"mergedAt":null}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, `{"mergedAt":null}`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}, ``, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prReviewJSONFields}, ``, nil)
 
@@ -946,7 +946,7 @@ func TestPRDetectionContinuesForEscalatedStartingWorkers(t *testing.T) {
 	deps.tickers.enqueue(captureTicker, prTicker)
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-985", "--json", "number"}, `[{"number":42}]`, nil)
 	deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[{"bucket":"pending"}]`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"mergedAt":null}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, `{"mergedAt":null}`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}, ``, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prReviewJSONFields}, ``, nil)
 
@@ -1030,10 +1030,10 @@ func TestPRMergeablePollingNudgesWorkerOnConflictTransitions(t *testing.T) {
 	prTicker := newFakeTicker()
 	deps.tickers.enqueue(captureTicker, prTicker)
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"mergedAt":null}`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"mergedAt":null}`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"mergedAt":null}`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"mergedAt":null}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, `{"mergedAt":null}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, `{"mergedAt":null}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, `{"mergedAt":null}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, `{"mergedAt":null}`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}, `{"mergeable":"CONFLICTING"}`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}, `{"mergeable":"CONFLICTING"}`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}, `{"mergeable":"MERGEABLE"}`, nil)
@@ -1122,7 +1122,7 @@ func TestPRMergeablePollingRetriesUnknownUntilConflict(t *testing.T) {
 	deps := newTestDeps(t)
 	seedTaskMonitorAssignment(t, deps, "LAB-1293", "pane-1", 42)
 	deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, ``, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"mergedAt":null}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, `{"mergedAt":null}`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}, `{"mergeable":"UNKNOWN","mergeStateStatus":"CLEAN"}`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}, `{"mergeable":"CONFLICTING","mergeStateStatus":"DIRTY"}`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prReviewJSONFields}, ``, nil)
@@ -1166,7 +1166,7 @@ func TestPRMergeablePollingTreatsPersistentUnknownDirtyStateAsConflict(t *testin
 	deps := newTestDeps(t)
 	seedTaskMonitorAssignment(t, deps, "LAB-1293", "pane-1", 42)
 	deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, ``, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"mergedAt":null}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, `{"mergedAt":null}`, nil)
 	for i := 0; i < 4; i++ {
 		deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}, `{"mergeable":"UNKNOWN","mergeStateStatus":"DIRTY"}`, nil)
 	}
@@ -1220,7 +1220,7 @@ func TestPRMergeablePollingLeavesPreviousStateOnPersistentUnknownCleanState(t *t
 	}
 
 	deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, ``, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"mergedAt":null}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, `{"mergedAt":null}`, nil)
 	for i := 0; i < 4; i++ {
 		deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}, `{"mergeable":"UNKNOWN","mergeStateStatus":"CLEAN"}`, nil)
 	}
@@ -1267,8 +1267,8 @@ func TestPRMergeablePollingRetriesConflictNudgeAfterWaitIdleFailure(t *testing.T
 	prTicker := newFakeTicker()
 	deps.tickers.enqueue(captureTicker, prTicker)
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"mergedAt":null}`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"mergedAt":null}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, `{"mergedAt":null}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, `{"mergedAt":null}`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}, `{"mergeable":"CONFLICTING"}`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}, `{"mergeable":"CONFLICTING"}`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prReviewJSONFields}, ``, nil)

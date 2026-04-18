@@ -12,7 +12,7 @@ func TestPRPollEmitsGitHubRateLimitEventWhenCICheckStateLookupIsRateLimited(t *t
 
 	deps := newTestDeps(t)
 	seedTaskMonitorAssignment(t, deps, "LAB-1367", "pane-1", 42)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"mergedAt":null}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, `{"mergedAt":null}`, nil)
 	deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, "HTTP 429: API rate limit exceeded\nRetry-After: 120\n", errors.New("gh: HTTP 429"))
 
 	d := deps.newDaemon(t)
@@ -40,7 +40,7 @@ func TestPRPollLogsAndEmitsTraceWhenCICheckStateLookupFails(t *testing.T) {
 	deps := newTestDeps(t)
 	logs := &fakeLogSink{}
 	seedTaskMonitorAssignment(t, deps, "LAB-1367", "pane-1", 42)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"mergedAt":null}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, `{"mergedAt":null}`, nil)
 	deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, ``, errors.New("ci lookup failed"))
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}, ``, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prReviewJSONFields}, ``, nil)
@@ -65,7 +65,7 @@ func TestPRPollLogsAndEmitsTraceWhenDetailedCICheckLookupFails(t *testing.T) {
 	deps := newTestDeps(t)
 	logs := &fakeLogSink{}
 	seedTaskMonitorAssignment(t, deps, "LAB-1367", "pane-1", 42)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"mergedAt":null}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, `{"mergedAt":null}`, nil)
 	deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[{"bucket":"fail"}]`, nil)
 	deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket,name,link"}, ``, errors.New("detailed ci lookup failed"))
 

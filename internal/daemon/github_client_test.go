@@ -640,7 +640,7 @@ func TestGitHubCLIClientPRTerminalState(t *testing.T) {
 				sleep:       noSleep,
 				maxAttempts: 1,
 			})
-			args := []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}
+			args := []string{"pr", "view", "42", "--json", prSnapshotJSONFields}
 			commands.queue("gh", args, tt.output, tt.err)
 
 			got, err := client.lookupPRTerminalState(context.Background(), 42)

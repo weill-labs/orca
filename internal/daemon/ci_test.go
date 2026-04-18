@@ -94,7 +94,7 @@ func TestPRPollRenudgesFailingCIOnScheduleAndEscalatesAfterMax(t *testing.T) {
 		deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket,name,link"}, ciFailedChecksOutput, nil)
 	}
 	for range 9 {
-		deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"mergedAt":null}`, nil)
+		deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, `{"mergedAt":null}`, nil)
 	}
 
 	d := deps.newDaemon(t)
@@ -192,7 +192,7 @@ func TestPRPollRetriesCINudgeAfterSendKeysFailure(t *testing.T) {
 	deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket,name,link"}, ciFailedChecksOutput, nil)
 	deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket,name,link"}, ciFailedChecksOutput, nil)
 	for range 2 {
-		deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"mergedAt":null}`, nil)
+		deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, `{"mergedAt":null}`, nil)
 	}
 	deps.amux.sendKeysResults = []error{nil, nil, errors.New("ci nudge failed"), nil}
 
@@ -238,7 +238,7 @@ func TestPRPollFallsBackToGenericCINudgeWhenDetailedCheckLookupFails(t *testing.
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
 	deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[{"bucket":"fail"}]`, nil)
 	deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket,name,link"}, ``, errors.New("details lookup failed"))
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"mergedAt":null}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, `{"mergedAt":null}`, nil)
 
 	d := deps.newDaemon(t)
 	ctx := context.Background()
@@ -269,7 +269,7 @@ func TestPRPollRetriesScheduledCIRenudgeAfterSendKeysFailure(t *testing.T) {
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
 	for range 4 {
 		deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[{"bucket":"fail"}]`, nil)
-		deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"mergedAt":null}`, nil)
+		deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, `{"mergedAt":null}`, nil)
 	}
 	for range 3 {
 		deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket,name,link"}, ciFailedChecksOutput, nil)

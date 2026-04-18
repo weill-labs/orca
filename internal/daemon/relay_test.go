@@ -220,7 +220,7 @@ func TestDaemonRelayEventPullRequestClosedMergedCompletesTask(t *testing.T) {
 
 	deps := newTestDeps(t)
 	seedTaskMonitorAssignment(t, deps, "LAB-1166", "pane-1", 42)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"mergedAt":"2026-04-13T12:00:00Z"}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, `{"mergedAt":"2026-04-13T12:00:00Z"}`, nil)
 
 	d := deps.newDaemonWithOptions(t, func(opts *Options) {
 		opts.DetectOrigin = func(projectDir string) (string, error) {
@@ -256,7 +256,7 @@ func TestDaemonRelayEventPullRequestClosedWithoutMergeFailsTask(t *testing.T) {
 
 	deps := newTestDeps(t)
 	seedTaskMonitorAssignment(t, deps, "LAB-1323", "pane-1", 42)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"state":"CLOSED","mergedAt":null,"closedAt":"2026-04-16T12:00:00Z"}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, `{"state":"CLOSED","mergedAt":null,"closedAt":"2026-04-16T12:00:00Z"}`, nil)
 
 	d := deps.newDaemonWithOptions(t, func(opts *Options) {
 		opts.DetectOrigin = func(projectDir string) (string, error) {
@@ -303,7 +303,7 @@ func TestDaemonRelayEventPullRequestMergeRefreshesSiblingPRConflicts(t *testing.
 	seedTaskMonitorAssignment(t, deps, "LAB-1166", "pane-1", 41)
 	seedTaskMonitorAssignment(t, deps, "LAB-1255", "pane-2", 42)
 
-	deps.commands.queue("gh", []string{"pr", "view", "41", "--json", prTerminalStateJSONFields}, `{"mergedAt":"2026-04-13T12:00:00Z"}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "41", "--json", prSnapshotJSONFields}, `{"mergedAt":"2026-04-13T12:00:00Z"}`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}, `{"mergeable":"UNKNOWN","mergeStateStatus":"CLEAN"}`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}, `{"mergeable":"UNKNOWN","mergeStateStatus":"CLEAN"}`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}, `{"mergeable":"CONFLICTING","mergeStateStatus":"DIRTY"}`, nil)
@@ -366,7 +366,7 @@ func TestDaemonRelayEventPullRequestMergeSkipsSiblingConflictRefreshOnBaseBranch
 	seedTaskMonitorAssignment(t, deps, "LAB-1166", "pane-1", 41)
 	seedTaskMonitorAssignment(t, deps, "LAB-1255", "pane-2", 42)
 
-	deps.commands.queue("gh", []string{"pr", "view", "41", "--json", prTerminalStateJSONFields}, `{"mergedAt":"2026-04-13T12:00:00Z"}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "41", "--json", prSnapshotJSONFields}, `{"mergedAt":"2026-04-13T12:00:00Z"}`, nil)
 
 	d := deps.newDaemonWithOptions(t, func(opts *Options) {
 		opts.DetectOrigin = func(projectDir string) (string, error) {

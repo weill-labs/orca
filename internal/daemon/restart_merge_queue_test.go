@@ -179,8 +179,8 @@ func TestRestartDropsMergedQueueEntryWithoutFailureNotice(t *testing.T) {
 	deps := newTestDeps(t)
 	pollTicker := newFakeTicker()
 	deps.tickers.enqueue(newFakeTicker(), pollTicker)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"mergedAt":"2026-04-06T03:00:00Z"}`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"mergedAt":"2026-04-06T03:00:00Z"}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, `{"mergedAt":"2026-04-06T03:00:00Z"}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, `{"mergedAt":"2026-04-06T03:00:00Z"}`, nil)
 
 	d := deps.newDaemon(t)
 	ctx := context.Background()
