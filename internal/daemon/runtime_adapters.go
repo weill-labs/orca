@@ -274,36 +274,7 @@ func (a *sqliteStateAdapter) PutWorker(ctx context.Context, worker Worker) error
 	if lastSeenAt.IsZero() {
 		lastSeenAt = worker.UpdatedAt
 	}
-	return a.store.UpsertWorker(ctx, worker.Project, state.Worker{
-		WorkerID:                     worker.WorkerID,
-		CurrentPaneID:                worker.PaneID,
-		Agent:                        worker.AgentProfile,
-		State:                        worker.Health,
-		Issue:                        worker.Issue,
-		ClonePath:                    worker.ClonePath,
-		LastReviewCount:              worker.LastReviewCount,
-		LastInlineReviewCommentCount: worker.LastInlineReviewCommentCount,
-		LastIssueCommentCount:        worker.LastIssueCommentCount,
-		LastIssueCommentWatermark:    worker.LastIssueCommentWatermark,
-		LastReviewUpdatedAt:          worker.LastReviewUpdatedAt,
-		ReviewNudgeCount:             worker.ReviewNudgeCount,
-		ReviewApproved:               worker.ReviewApproved,
-		LastCIState:                  worker.LastCIState,
-		CINudgeCount:                 worker.CINudgeCount,
-		CIFailurePollCount:           worker.CIFailurePollCount,
-		CIEscalated:                  worker.CIEscalated,
-		LastMergeableState:           worker.LastMergeableState,
-		NudgeCount:                   worker.NudgeCount,
-		RestartCount:                 worker.RestartCount,
-		LastCapture:                  worker.LastCapture,
-		LastActivityAt:               worker.LastActivityAt,
-		LastPRNumber:                 worker.LastPRNumber,
-		LastPushAt:                   worker.LastPushAt,
-		LastPRPollAt:                 worker.LastPRPollAt,
-		FirstCrashAt:                 worker.FirstCrashAt,
-		CreatedAt:                    worker.CreatedAt,
-		LastSeenAt:                   lastSeenAt,
-	})
+	return a.store.UpsertWorker(ctx, worker.Project, stateWorkerFromRuntime(worker, lastSeenAt))
 }
 
 func (a *sqliteStateAdapter) ClaimWorker(ctx context.Context, worker Worker) (Worker, error) {
@@ -311,73 +282,14 @@ func (a *sqliteStateAdapter) ClaimWorker(ctx context.Context, worker Worker) (Wo
 	if lastSeenAt.IsZero() {
 		lastSeenAt = worker.UpdatedAt
 	}
-	claimed, err := a.store.ClaimWorker(ctx, worker.Project, state.Worker{
-		WorkerID:                     worker.WorkerID,
-		CurrentPaneID:                worker.PaneID,
-		Agent:                        worker.AgentProfile,
-		State:                        worker.Health,
-		Issue:                        worker.Issue,
-		ClonePath:                    worker.ClonePath,
-		LastReviewCount:              worker.LastReviewCount,
-		LastInlineReviewCommentCount: worker.LastInlineReviewCommentCount,
-		LastIssueCommentCount:        worker.LastIssueCommentCount,
-		LastIssueCommentWatermark:    worker.LastIssueCommentWatermark,
-		LastReviewUpdatedAt:          worker.LastReviewUpdatedAt,
-		ReviewNudgeCount:             worker.ReviewNudgeCount,
-		ReviewApproved:               worker.ReviewApproved,
-		LastCIState:                  worker.LastCIState,
-		CINudgeCount:                 worker.CINudgeCount,
-		CIFailurePollCount:           worker.CIFailurePollCount,
-		CIEscalated:                  worker.CIEscalated,
-		LastMergeableState:           worker.LastMergeableState,
-		NudgeCount:                   worker.NudgeCount,
-		RestartCount:                 worker.RestartCount,
-		LastCapture:                  worker.LastCapture,
-		LastActivityAt:               worker.LastActivityAt,
-		LastPRNumber:                 worker.LastPRNumber,
-		LastPushAt:                   worker.LastPushAt,
-		LastPRPollAt:                 worker.LastPRPollAt,
-		FirstCrashAt:                 worker.FirstCrashAt,
-		CreatedAt:                    worker.CreatedAt,
-		LastSeenAt:                   lastSeenAt,
-	})
+	claimed, err := a.store.ClaimWorker(ctx, worker.Project, stateWorkerFromRuntime(worker, lastSeenAt))
 	if err != nil {
 		return Worker{}, err
 	}
 
-	return Worker{
-		Project:                      worker.Project,
-		PaneID:                       worker.PaneID,
-		WorkerID:                     claimed.WorkerID,
-		PaneName:                     workerPaneName(claimed.Issue, claimed.WorkerID),
-		Issue:                        claimed.Issue,
-		ClonePath:                    claimed.ClonePath,
-		AgentProfile:                 claimed.Agent,
-		Health:                       claimed.State,
-		LastReviewCount:              claimed.LastReviewCount,
-		LastInlineReviewCommentCount: claimed.LastInlineReviewCommentCount,
-		LastIssueCommentCount:        claimed.LastIssueCommentCount,
-		LastIssueCommentWatermark:    claimed.LastIssueCommentWatermark,
-		LastReviewUpdatedAt:          claimed.LastReviewUpdatedAt,
-		ReviewNudgeCount:             claimed.ReviewNudgeCount,
-		ReviewApproved:               claimed.ReviewApproved,
-		LastCIState:                  claimed.LastCIState,
-		CINudgeCount:                 claimed.CINudgeCount,
-		CIFailurePollCount:           claimed.CIFailurePollCount,
-		CIEscalated:                  claimed.CIEscalated,
-		LastMergeableState:           claimed.LastMergeableState,
-		NudgeCount:                   claimed.NudgeCount,
-		RestartCount:                 claimed.RestartCount,
-		LastCapture:                  claimed.LastCapture,
-		LastActivityAt:               claimed.LastActivityAt,
-		LastPRNumber:                 claimed.LastPRNumber,
-		LastPushAt:                   claimed.LastPushAt,
-		LastPRPollAt:                 claimed.LastPRPollAt,
-		FirstCrashAt:                 claimed.FirstCrashAt,
-		CreatedAt:                    claimed.CreatedAt,
-		LastSeenAt:                   claimed.LastSeenAt,
-		UpdatedAt:                    claimed.LastSeenAt,
-	}, nil
+	claimedWorker := runtimeWorkerFromState(worker.Project, claimed)
+	claimedWorker.PaneID = worker.PaneID
+	return claimedWorker, nil
 }
 
 func (a *sqliteStateAdapter) WorkerByID(ctx context.Context, project, workerID string) (Worker, error) {
@@ -389,39 +301,7 @@ func (a *sqliteStateAdapter) WorkerByID(ctx context.Context, project, workerID s
 		return Worker{}, err
 	}
 
-	return Worker{
-		Project:                      firstNonEmpty(worker.Project, project),
-		WorkerID:                     worker.WorkerID,
-		PaneID:                       worker.CurrentPaneID,
-		PaneName:                     workerPaneName(worker.Issue, worker.WorkerID),
-		Issue:                        worker.Issue,
-		ClonePath:                    worker.ClonePath,
-		AgentProfile:                 worker.Agent,
-		Health:                       worker.State,
-		LastReviewCount:              worker.LastReviewCount,
-		LastInlineReviewCommentCount: worker.LastInlineReviewCommentCount,
-		LastIssueCommentCount:        worker.LastIssueCommentCount,
-		LastIssueCommentWatermark:    worker.LastIssueCommentWatermark,
-		LastReviewUpdatedAt:          worker.LastReviewUpdatedAt,
-		ReviewNudgeCount:             worker.ReviewNudgeCount,
-		ReviewApproved:               worker.ReviewApproved,
-		LastCIState:                  worker.LastCIState,
-		CINudgeCount:                 worker.CINudgeCount,
-		CIFailurePollCount:           worker.CIFailurePollCount,
-		CIEscalated:                  worker.CIEscalated,
-		LastMergeableState:           worker.LastMergeableState,
-		NudgeCount:                   worker.NudgeCount,
-		RestartCount:                 worker.RestartCount,
-		LastCapture:                  worker.LastCapture,
-		LastActivityAt:               worker.LastActivityAt,
-		LastPRNumber:                 worker.LastPRNumber,
-		LastPushAt:                   worker.LastPushAt,
-		LastPRPollAt:                 worker.LastPRPollAt,
-		FirstCrashAt:                 worker.FirstCrashAt,
-		CreatedAt:                    worker.CreatedAt,
-		LastSeenAt:                   worker.LastSeenAt,
-		UpdatedAt:                    worker.LastSeenAt,
-	}, nil
+	return runtimeWorkerFromState(project, worker), nil
 }
 
 func (a *sqliteStateAdapter) WorkerByPane(ctx context.Context, project, paneID string) (Worker, error) {
@@ -433,39 +313,7 @@ func (a *sqliteStateAdapter) WorkerByPane(ctx context.Context, project, paneID s
 		return Worker{}, err
 	}
 
-	return Worker{
-		Project:                      firstNonEmpty(worker.Project, project),
-		WorkerID:                     worker.WorkerID,
-		PaneID:                       worker.CurrentPaneID,
-		PaneName:                     workerPaneName(worker.Issue, worker.WorkerID),
-		Issue:                        worker.Issue,
-		ClonePath:                    worker.ClonePath,
-		AgentProfile:                 worker.Agent,
-		Health:                       worker.State,
-		LastReviewCount:              worker.LastReviewCount,
-		LastInlineReviewCommentCount: worker.LastInlineReviewCommentCount,
-		LastIssueCommentCount:        worker.LastIssueCommentCount,
-		LastIssueCommentWatermark:    worker.LastIssueCommentWatermark,
-		LastReviewUpdatedAt:          worker.LastReviewUpdatedAt,
-		ReviewNudgeCount:             worker.ReviewNudgeCount,
-		ReviewApproved:               worker.ReviewApproved,
-		LastCIState:                  worker.LastCIState,
-		CINudgeCount:                 worker.CINudgeCount,
-		CIFailurePollCount:           worker.CIFailurePollCount,
-		CIEscalated:                  worker.CIEscalated,
-		LastMergeableState:           worker.LastMergeableState,
-		NudgeCount:                   worker.NudgeCount,
-		RestartCount:                 worker.RestartCount,
-		LastCapture:                  worker.LastCapture,
-		LastActivityAt:               worker.LastActivityAt,
-		LastPRNumber:                 worker.LastPRNumber,
-		LastPushAt:                   worker.LastPushAt,
-		LastPRPollAt:                 worker.LastPRPollAt,
-		FirstCrashAt:                 worker.FirstCrashAt,
-		CreatedAt:                    worker.CreatedAt,
-		LastSeenAt:                   worker.LastSeenAt,
-		UpdatedAt:                    worker.LastSeenAt,
-	}, nil
+	return runtimeWorkerFromState(project, worker), nil
 }
 
 func (a *sqliteStateAdapter) DeleteWorker(ctx context.Context, project, workerID string) error {
@@ -490,39 +338,7 @@ func (a *sqliteStateAdapter) ListWorkers(ctx context.Context, project string) ([
 
 	out := make([]Worker, 0, len(workers))
 	for _, worker := range workers {
-		out = append(out, Worker{
-			Project:                      firstNonEmpty(worker.Project, project),
-			WorkerID:                     worker.WorkerID,
-			PaneID:                       worker.CurrentPaneID,
-			PaneName:                     workerPaneName(worker.Issue, worker.WorkerID),
-			Issue:                        worker.Issue,
-			ClonePath:                    worker.ClonePath,
-			AgentProfile:                 worker.Agent,
-			Health:                       worker.State,
-			LastReviewCount:              worker.LastReviewCount,
-			LastInlineReviewCommentCount: worker.LastInlineReviewCommentCount,
-			LastIssueCommentCount:        worker.LastIssueCommentCount,
-			LastIssueCommentWatermark:    worker.LastIssueCommentWatermark,
-			LastReviewUpdatedAt:          worker.LastReviewUpdatedAt,
-			ReviewNudgeCount:             worker.ReviewNudgeCount,
-			ReviewApproved:               worker.ReviewApproved,
-			LastCIState:                  worker.LastCIState,
-			CINudgeCount:                 worker.CINudgeCount,
-			CIFailurePollCount:           worker.CIFailurePollCount,
-			CIEscalated:                  worker.CIEscalated,
-			LastMergeableState:           worker.LastMergeableState,
-			NudgeCount:                   worker.NudgeCount,
-			RestartCount:                 worker.RestartCount,
-			LastCapture:                  worker.LastCapture,
-			LastActivityAt:               worker.LastActivityAt,
-			LastPRNumber:                 worker.LastPRNumber,
-			LastPushAt:                   worker.LastPushAt,
-			LastPRPollAt:                 worker.LastPRPollAt,
-			FirstCrashAt:                 worker.FirstCrashAt,
-			CreatedAt:                    worker.CreatedAt,
-			LastSeenAt:                   worker.LastSeenAt,
-			UpdatedAt:                    worker.LastSeenAt,
-		})
+		out = append(out, runtimeWorkerFromState(project, worker))
 	}
 	return out, nil
 }
@@ -690,39 +506,7 @@ func convertAssignment(project string, assignment state.Assignment) ActiveAssign
 		task.PRNumber = *assignment.Task.PRNumber
 	}
 
-	worker := Worker{
-		Project:                      firstNonEmpty(assignment.Worker.Project, project),
-		WorkerID:                     assignment.Worker.WorkerID,
-		PaneID:                       assignment.Worker.CurrentPaneID,
-		PaneName:                     workerPaneName(assignment.Worker.Issue, assignment.Worker.WorkerID),
-		Issue:                        assignment.Worker.Issue,
-		ClonePath:                    assignment.Worker.ClonePath,
-		AgentProfile:                 assignment.Worker.Agent,
-		Health:                       assignment.Worker.State,
-		LastReviewCount:              assignment.Worker.LastReviewCount,
-		LastInlineReviewCommentCount: assignment.Worker.LastInlineReviewCommentCount,
-		LastIssueCommentCount:        assignment.Worker.LastIssueCommentCount,
-		LastIssueCommentWatermark:    assignment.Worker.LastIssueCommentWatermark,
-		LastReviewUpdatedAt:          assignment.Worker.LastReviewUpdatedAt,
-		ReviewNudgeCount:             assignment.Worker.ReviewNudgeCount,
-		ReviewApproved:               assignment.Worker.ReviewApproved,
-		LastCIState:                  assignment.Worker.LastCIState,
-		CINudgeCount:                 assignment.Worker.CINudgeCount,
-		CIFailurePollCount:           assignment.Worker.CIFailurePollCount,
-		CIEscalated:                  assignment.Worker.CIEscalated,
-		LastMergeableState:           assignment.Worker.LastMergeableState,
-		NudgeCount:                   assignment.Worker.NudgeCount,
-		RestartCount:                 assignment.Worker.RestartCount,
-		LastCapture:                  assignment.Worker.LastCapture,
-		LastActivityAt:               assignment.Worker.LastActivityAt,
-		LastPRNumber:                 assignment.Worker.LastPRNumber,
-		LastPushAt:                   assignment.Worker.LastPushAt,
-		LastPRPollAt:                 assignment.Worker.LastPRPollAt,
-		FirstCrashAt:                 assignment.Worker.FirstCrashAt,
-		CreatedAt:                    assignment.Worker.CreatedAt,
-		LastSeenAt:                   assignment.Worker.LastSeenAt,
-		UpdatedAt:                    assignment.Worker.LastSeenAt,
-	}
+	worker := runtimeWorkerFromState(project, assignment.Worker)
 
 	task.State = taskStateForAssignment(ActiveAssignment{Task: task, Worker: worker})
 
@@ -739,6 +523,76 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func stateWorkerFromRuntime(worker Worker, lastSeenAt time.Time) state.Worker {
+	return state.Worker{
+		WorkerID:                     worker.WorkerID,
+		CurrentPaneID:                worker.PaneID,
+		Agent:                        worker.AgentProfile,
+		State:                        worker.Health,
+		Issue:                        worker.Issue,
+		ClonePath:                    worker.ClonePath,
+		LastReviewCount:              worker.LastReviewCount,
+		LastInlineReviewCommentCount: worker.LastInlineReviewCommentCount,
+		LastIssueCommentCount:        worker.LastIssueCommentCount,
+		LastIssueCommentWatermark:    worker.LastIssueCommentWatermark,
+		LastReviewUpdatedAt:          worker.LastReviewUpdatedAt,
+		ReviewNudgeCount:             worker.ReviewNudgeCount,
+		ReviewApproved:               worker.ReviewApproved,
+		LastCIState:                  worker.LastCIState,
+		CINudgeCount:                 worker.CINudgeCount,
+		CIFailurePollCount:           worker.CIFailurePollCount,
+		CIEscalated:                  worker.CIEscalated,
+		LastMergeableState:           worker.LastMergeableState,
+		NudgeCount:                   worker.NudgeCount,
+		RestartCount:                 worker.RestartCount,
+		LastCapture:                  worker.LastCapture,
+		LastActivityAt:               worker.LastActivityAt,
+		LastPRNumber:                 worker.LastPRNumber,
+		LastPushAt:                   worker.LastPushAt,
+		LastPRPollAt:                 worker.LastPRPollAt,
+		FirstCrashAt:                 worker.FirstCrashAt,
+		CreatedAt:                    worker.CreatedAt,
+		LastSeenAt:                   lastSeenAt,
+	}
+}
+
+func runtimeWorkerFromState(project string, worker state.Worker) Worker {
+	project = firstNonEmpty(worker.Project, project)
+	return Worker{
+		Project:                      project,
+		WorkerID:                     worker.WorkerID,
+		PaneID:                       worker.CurrentPaneID,
+		PaneName:                     workerPaneName(worker.Issue, worker.WorkerID),
+		Issue:                        worker.Issue,
+		ClonePath:                    worker.ClonePath,
+		AgentProfile:                 worker.Agent,
+		Health:                       worker.State,
+		LastReviewCount:              worker.LastReviewCount,
+		LastInlineReviewCommentCount: worker.LastInlineReviewCommentCount,
+		LastIssueCommentCount:        worker.LastIssueCommentCount,
+		LastIssueCommentWatermark:    worker.LastIssueCommentWatermark,
+		LastReviewUpdatedAt:          worker.LastReviewUpdatedAt,
+		ReviewNudgeCount:             worker.ReviewNudgeCount,
+		ReviewApproved:               worker.ReviewApproved,
+		LastCIState:                  worker.LastCIState,
+		CINudgeCount:                 worker.CINudgeCount,
+		CIFailurePollCount:           worker.CIFailurePollCount,
+		CIEscalated:                  worker.CIEscalated,
+		LastMergeableState:           worker.LastMergeableState,
+		NudgeCount:                   worker.NudgeCount,
+		RestartCount:                 worker.RestartCount,
+		LastCapture:                  worker.LastCapture,
+		LastActivityAt:               worker.LastActivityAt,
+		LastPRNumber:                 worker.LastPRNumber,
+		LastPushAt:                   worker.LastPushAt,
+		LastPRPollAt:                 worker.LastPRPollAt,
+		FirstCrashAt:                 worker.FirstCrashAt,
+		CreatedAt:                    worker.CreatedAt,
+		LastSeenAt:                   worker.LastSeenAt,
+		UpdatedAt:                    worker.LastSeenAt,
+	}
 }
 
 type execCommandRunner struct{}
