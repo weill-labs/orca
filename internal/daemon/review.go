@@ -147,8 +147,10 @@ func (d *Daemon) checkTaskReviewPoll(ctx context.Context, active ActiveAssignmen
 			return traceAndReturn(nil, 0, reviewPollIdleNotChecked, "lookup_review_comments_error", false)
 		}
 		payload.ReviewComments = reviewComments
+		nextReviewState.inlineCommentCount = len(payload.ReviewComments)
+	} else {
+		nextReviewState.inlineCommentCount = previousReviewState.inlineCommentCount
 	}
-	nextReviewState.inlineCommentCount = len(payload.ReviewComments)
 	items := reviewItems(payload.Reviews, payload.ReviewComments)
 	if payload.ReviewDecision != "CHANGES_REQUESTED" && nextReviewState.reviewNudgeCount != 0 {
 		nextReviewState.reviewNudgeCount = 0
