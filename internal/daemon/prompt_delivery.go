@@ -16,11 +16,18 @@ const (
 	codexWorkingConfirmationAttempts   = 3
 	codexPromptDeliveryExtendedTimeout = 2 * defaultAgentHandshakeTimeout
 	codexPromptRetryIdleProbeTime      = 5 * time.Second
+	codexWorkingFreshnessProbeTimeout  = 500 * time.Millisecond
+	codexWorkingFreshnessPollInterval  = 50 * time.Millisecond
 )
 
 var ErrPromptDeliveryNotConfirmed = errors.New("prompt delivery not confirmed")
 
 type promptDeliveryWaitState int
+
+type promptDeliveryBaseline struct {
+	output     string
+	hasWorking bool
+}
 
 const (
 	promptDeliveryWaitError promptDeliveryWaitState = iota
@@ -68,6 +75,16 @@ func (d *Daemon) confirmPromptDelivery(ctx context.Context, paneID string, profi
 // prompt once, then retry only Enter until Codex transitions to Working or the
 // bounded retry budget is exhausted.
 func (d *Daemon) sendAndConfirmWorking(ctx context.Context, paneID, prompt string) error {
+	baseline, err := d.capturePromptDeliveryBaseline(ctx, paneID)
+	if err != nil {
+		return err
+	}
+	if baseline.hasWorking {
+		if err := d.amux.WaitIdle(ctx, paneID, defaultAgentHandshakeTimeout); err != nil {
+			return fmt.Errorf("wait for idle before prompt delivery: %w", err)
+		}
+	}
+
 	if err := d.amux.SendKeys(ctx, paneID, prompt, "Enter"); err != nil {
 		return err
 	}
@@ -75,7 +92,7 @@ func (d *Daemon) sendAndConfirmWorking(ctx context.Context, paneID, prompt strin
 	profile := AgentProfile{Name: "codex"}
 	phase := "after prompt"
 	for attempt := 1; attempt <= codexWorkingConfirmationAttempts; attempt++ {
-		state, err := d.waitForPromptDeliveryMarker(ctx, paneID, profile, defaultAgentHandshakeTimeout, phase)
+		state, err := d.waitForPromptDeliveryConfirmation(ctx, paneID, profile, phase, baseline)
 		switch state {
 		case promptDeliveryWaitObserved:
 			return nil
@@ -92,6 +109,13 @@ func (d *Daemon) sendAndConfirmWorking(ctx context.Context, paneID, prompt strin
 	}
 
 	return fmt.Errorf("%w: working confirmation exhausted", ErrPromptDeliveryNotConfirmed)
+}
+
+func (d *Daemon) waitForPromptDeliveryConfirmation(ctx context.Context, paneID string, profile AgentProfile, phase string, baseline promptDeliveryBaseline) (promptDeliveryWaitState, error) {
+	if !baseline.hasWorking {
+		return d.waitForPromptDeliveryMarker(ctx, paneID, profile, defaultAgentHandshakeTimeout, phase)
+	}
+	return d.waitForFreshPromptDeliveryMarker(ctx, paneID, profile, codexWorkingFreshnessProbeTimeout, phase, baseline)
 }
 
 func (d *Daemon) waitForPromptDeliveryMarker(ctx context.Context, paneID string, profile AgentProfile, timeout time.Duration, phase string) (promptDeliveryWaitState, error) {
@@ -116,6 +140,92 @@ func (d *Daemon) waitForPromptDeliveryMarker(ctx context.Context, paneID string,
 		return promptDeliveryWaitTimedOut, promptDeliveryFailure(fmt.Sprintf("wait for %q %s timed out", codexWorkingText, phase), snapshot)
 	}
 	return promptDeliveryWaitObserved, nil
+}
+
+func (d *Daemon) waitForFreshPromptDeliveryMarker(ctx context.Context, paneID string, profile AgentProfile, timeout time.Duration, phase string, baseline promptDeliveryBaseline) (promptDeliveryWaitState, error) {
+	deadline := d.now().Add(timeout)
+
+	for {
+		snapshot, err := d.capturePromptDeliverySnapshot(ctx, paneID)
+		if err != nil {
+			if isPaneGoneError(err) {
+				return promptDeliveryWaitAgentGone, fmt.Errorf("%w: pane disappeared while waiting for fresh %q %s", ErrPromptDeliveryNotConfirmed, codexWorkingText, phase)
+			}
+			return promptDeliveryWaitError, fmt.Errorf("capture prompt delivery state while waiting for fresh %q %s: %w", codexWorkingText, phase, err)
+		}
+		if promptDeliveryHasFreshWorking(baseline, snapshot) {
+			return promptDeliveryWaitObserved, nil
+		}
+		if promptDeliveryReturnedToShell(profile, snapshot) {
+			return promptDeliveryWaitAgentGone, promptDeliveryFailure(fmt.Sprintf("%s and codex returned to shell", phase), snapshot)
+		}
+		if snapshot.Exited {
+			return promptDeliveryWaitAgentGone, promptDeliveryFailure(fmt.Sprintf("%s and pane exited", phase), snapshot)
+		}
+		if !d.now().Before(deadline) {
+			return promptDeliveryWaitTimedOut, promptDeliveryFailure(fmt.Sprintf("wait for fresh %q %s timed out", codexWorkingText, phase), snapshot)
+		}
+
+		sleepFor := codexWorkingFreshnessPollInterval
+		if remaining := deadline.Sub(d.now()); remaining < sleepFor {
+			sleepFor = remaining
+		}
+		if sleepFor <= 0 {
+			return promptDeliveryWaitTimedOut, promptDeliveryFailure(fmt.Sprintf("wait for fresh %q %s timed out", codexWorkingText, phase), snapshot)
+		}
+		if err := d.sleep(ctx, sleepFor); err != nil {
+			return promptDeliveryWaitError, fmt.Errorf("wait for fresh %q %s: %w", codexWorkingText, phase, err)
+		}
+	}
+}
+
+func (d *Daemon) capturePromptDeliveryBaseline(ctx context.Context, paneID string) (promptDeliveryBaseline, error) {
+	snapshot, err := d.capturePromptDeliverySnapshot(ctx, paneID)
+	if err != nil {
+		return promptDeliveryBaseline{}, fmt.Errorf("capture prompt delivery baseline: %w", err)
+	}
+	output := strings.ToLower(snapshot.Output())
+	return promptDeliveryBaseline{
+		output:     output,
+		hasWorking: strings.Contains(output, strings.ToLower(codexWorkingText)),
+	}, nil
+}
+
+func (d *Daemon) capturePromptDeliverySnapshot(ctx context.Context, paneID string) (PaneCapture, error) {
+	history, err := d.amux.CaptureHistory(ctx, paneID)
+	if err == nil && len(history.Content) > 0 {
+		return history, nil
+	}
+
+	snapshot, captureErr := d.amux.CapturePane(ctx, paneID)
+	if captureErr == nil {
+		return snapshot, nil
+	}
+	if err != nil {
+		return PaneCapture{}, fmt.Errorf("capture history: %w; capture pane: %v", err, captureErr)
+	}
+	return PaneCapture{}, captureErr
+}
+
+func promptDeliveryHasFreshWorking(baseline promptDeliveryBaseline, snapshot PaneCapture) bool {
+	needle := strings.ToLower(codexWorkingText)
+	current := strings.ToLower(snapshot.Output())
+	if current == "" || !strings.Contains(current, needle) {
+		return false
+	}
+	if !baseline.hasWorking {
+		return true
+	}
+	if strings.HasPrefix(current, baseline.output) {
+		return strings.Contains(current[len(baseline.output):], needle)
+	}
+
+	baseCount := strings.Count(baseline.output, needle)
+	currentCount := strings.Count(current, needle)
+	if currentCount > baseCount {
+		return true
+	}
+	return strings.LastIndex(current, needle) > strings.LastIndex(baseline.output, needle)
 }
 
 func promptDeliveryReturnedToShell(profile AgentProfile, snapshot PaneCapture) bool {
