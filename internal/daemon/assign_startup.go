@@ -79,7 +79,7 @@ func (d *Daemon) startAssignmentWorker(ctx context.Context, projectPath string, 
 		attemptWorker.LastCapture = startupSnapshot.Output()
 		result.worker = attemptWorker
 
-		if err := d.sendPromptAndEnter(ctx, pane.ID, prompt); err != nil {
+		if err := d.sendNormalizedPromptAndEnter(ctx, pane.ID, prompt); err != nil {
 			return result, fmt.Errorf("send prompt: %w", err)
 		}
 		if err := d.confirmPromptDelivery(ctx, pane.ID, profile); err != nil {
