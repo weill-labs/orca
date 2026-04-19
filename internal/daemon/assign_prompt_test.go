@@ -102,7 +102,7 @@ func TestAssignWrapsCodexPromptWithPROpeningInstructions(t *testing.T) {
 		t.Fatalf("task.Prompt = %q, want %q", got, wantPrompt)
 	}
 
-	deps.amux.requireSentKeys(t, "pane-1", []string{wantPrompt + "\n"})
+	deps.amux.requireSentKeys(t, "pane-1", []string{wrappedCodexPrompt("LAB-892", "Implement daemon core") + "\n"})
 }
 
 func TestAssignAppendsOnlyMissingCodexPRTitleInstructions(t *testing.T) {
@@ -139,7 +139,9 @@ func TestAssignAppendsOnlyMissingCodexPRTitleInstructions(t *testing.T) {
 		t.Fatalf("task.Prompt = %q, want %q", got, wantPrompt)
 	}
 
-	deps.amux.requireSentKeys(t, "pane-1", []string{wantPrompt + "\n"})
+	deps.amux.requireSentKeys(t, "pane-1", []string{
+		"Implement daemon core " + codexAssignmentPromptSuffix + " " + codexAssignmentPRTitlePrompt("LAB-893") + "\n",
+	})
 }
 
 func wantedCodexAssignmentReminder(issue string) string {

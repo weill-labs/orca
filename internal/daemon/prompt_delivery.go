@@ -85,7 +85,12 @@ func (d *Daemon) sendAndConfirmWorking(ctx context.Context, paneID, prompt strin
 		}
 	}
 
-	if err := d.amux.SendKeys(ctx, paneID, prompt, "Enter"); err != nil {
+	deliveryPrompt, err := normalizePromptForDelivery(prompt)
+	if err != nil {
+		return err
+	}
+
+	if err := d.amux.SendKeys(ctx, paneID, deliveryPrompt, "Enter"); err != nil {
 		return err
 	}
 

@@ -726,6 +726,14 @@ func (d *Daemon) sendPromptAndEnter(ctx context.Context, paneID, prompt string) 
 	return d.sendPromptAndCommand(ctx, paneID, prompt, "Enter")
 }
 
+func (d *Daemon) sendNormalizedPromptAndEnter(ctx context.Context, paneID, prompt string) error {
+	deliveryPrompt, err := normalizePromptForDelivery(prompt)
+	if err != nil {
+		return err
+	}
+	return d.sendPromptAndCommand(ctx, paneID, deliveryPrompt, "Enter")
+}
+
 func (d *Daemon) sendPromptAndCommand(ctx context.Context, paneID, prompt, command string) error {
 	trimmed := strings.TrimRight(prompt, "\r\n")
 	if trimmed == "" {
