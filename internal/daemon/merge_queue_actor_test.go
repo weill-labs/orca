@@ -582,10 +582,18 @@ func (c staticGitHubClient) lookupPRTerminalState(_ context.Context, prNumber in
 	return prTerminalState{merged: c.mergedPRs[prNumber]}, nil
 }
 
+func (c staticGitHubClient) lookupPRMergeability(context.Context, int) (prMergeabilityPayload, bool, error) {
+	return prMergeabilityPayload{}, false, nil
+}
+
 func (c staticGitHubClient) isPRMerged(_ context.Context, prNumber int) (bool, error) {
 	return c.mergedPRs[prNumber], nil
 }
 
 func (c staticGitHubClient) lookupPRReviews(context.Context, int) (prReviewPayload, bool, error) {
 	return prReviewPayload{}, false, nil
+}
+
+func (c staticGitHubClient) lookupPRReviewComments(context.Context, int) ([]prReviewComment, error) {
+	return nil, nil
 }

@@ -641,10 +641,18 @@ func (c circuitGitHubClientStub) lookupPRTerminalState(context.Context, int) (pr
 	return c.terminal, c.err
 }
 
+func (c circuitGitHubClientStub) lookupPRMergeability(context.Context, int) (prMergeabilityPayload, bool, error) {
+	return prMergeabilityPayload{}, false, c.err
+}
+
 func (c circuitGitHubClientStub) isPRMerged(context.Context, int) (bool, error) {
 	return c.merged, c.err
 }
 
 func (c circuitGitHubClientStub) lookupPRReviews(context.Context, int) (prReviewPayload, bool, error) {
 	return prReviewPayload{}, false, c.err
+}
+
+func (c circuitGitHubClientStub) lookupPRReviewComments(context.Context, int) ([]prReviewComment, error) {
+	return nil, c.err
 }

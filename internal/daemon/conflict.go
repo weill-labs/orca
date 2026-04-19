@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -129,21 +128,13 @@ func (d *Daemon) lookupPRMergeableStateAfterMerge(ctx context.Context, projectPa
 }
 
 func (d *Daemon) lookupPRMergeability(ctx context.Context, projectPath string, prNumber int) (prMergeabilityPayload, bool, error) {
-	output, err := d.commandRunner(ctx).Run(ctx, projectPath, "gh", "pr", "view", fmt.Sprintf("%d", prNumber), "--json", prMergeableJSONFields)
+	payload, ok, err := d.gitHubClientForContext(ctx, projectPath).lookupPRMergeability(ctx, prNumber)
 	if err != nil {
 		return prMergeabilityPayload{}, false, err
 	}
-	if len(output) == 0 {
+	if !ok {
 		return prMergeabilityPayload{}, false, nil
 	}
-
-	var payload prMergeabilityPayload
-	if err := json.Unmarshal(output, &payload); err != nil {
-		return prMergeabilityPayload{}, false, err
-	}
-
-	payload.Mergeable = strings.TrimSpace(payload.Mergeable)
-	payload.MergeStateStatus = strings.TrimSpace(payload.MergeStateStatus)
 	d.logPRMergeability(prNumber, payload)
 
 	if payload.Mergeable == "" && payload.MergeStateStatus == "" {

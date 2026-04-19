@@ -640,7 +640,7 @@ func TestGitHubCLIClientPRTerminalState(t *testing.T) {
 				sleep:       noSleep,
 				maxAttempts: 1,
 			})
-			args := []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}
+			args := []string{"pr", "view", "42", "--json", prSnapshotJSONFields}
 			commands.queue("gh", args, tt.output, tt.err)
 
 			got, err := client.lookupPRTerminalState(context.Background(), 42)
@@ -675,7 +675,7 @@ func TestGitHubCLIClientLookupPRReviewsEdgeCases(t *testing.T) {
 			output:       `{"reviewDecision":"CHANGES_REQUESTED","reviews":[{"author":{"login":"alice"},"state":"CHANGES_REQUESTED","body":"Please add tests."}]}`,
 			wantOK:       true,
 			wantBody:     "Please add tests.",
-			wantAPICalls: 1,
+			wantAPICalls: 0,
 		},
 		{name: "invalid json", output: `{`, wantErr: true},
 	}
@@ -692,7 +692,7 @@ func TestGitHubCLIClientLookupPRReviewsEdgeCases(t *testing.T) {
 				sleep:       noSleep,
 				maxAttempts: 1,
 			})
-			args := []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}
+			args := []string{"pr", "view", "42", "--json", prReviewJSONFields}
 			commands.queue("gh", args, tc.output, nil)
 			if tc.wantAPICalls > 0 {
 				commands.queue("gh", apiArgs, `[]`, nil)
@@ -725,10 +725,9 @@ func TestGitHubCLIClientLookupPRReviewsIncludesIssueComments(t *testing.T) {
 		sleep:       noSleep,
 		maxAttempts: 1,
 	})
-	viewArgs := []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}
+	viewArgs := []string{"pr", "view", "42", "--json", prReviewJSONFields}
 	apiArgs := []string{"api", "repos/{owner}/{repo}/pulls/42/comments?per_page=100"}
 	commands.queue("gh", viewArgs, `{"reviewDecision":"APPROVED","reviews":[],"comments":[{"author":{"login":"github-actions"},"body":"### Blocking Issues\n\n**1. Add regression coverage**"}]}`, nil)
-	commands.queue("gh", apiArgs, `[]`, nil)
 
 	payload, ok, err := client.lookupPRReviews(context.Background(), 42)
 	if err != nil {
@@ -746,12 +745,12 @@ func TestGitHubCLIClientLookupPRReviewsIncludesIssueComments(t *testing.T) {
 	if got, want := payload.Comments[0].Body, "### Blocking Issues\n\n**1. Add regression coverage**"; got != want {
 		t.Fatalf("first comment body = %q, want %q", got, want)
 	}
-	if got, want := commands.countCalls("gh", apiArgs), 1; got != want {
+	if got, want := commands.countCalls("gh", apiArgs), 0; got != want {
 		t.Fatalf("inline comments api call count = %d, want %d", got, want)
 	}
 }
 
-func TestGitHubCLIClientLookupPRReviewsIncludesInlineReviewComments(t *testing.T) {
+func TestGitHubCLIClientLookupPRReviewCommentsIncludesInlineReviewComments(t *testing.T) {
 	t.Parallel()
 
 	commands := newFakeCommands()
@@ -761,9 +760,7 @@ func TestGitHubCLIClientLookupPRReviewsIncludesInlineReviewComments(t *testing.T
 		sleep:       noSleep,
 		maxAttempts: 1,
 	})
-	viewArgs := []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}
 	apiArgs := []string{"api", "repos/{owner}/{repo}/pulls/42/comments?per_page=100"}
-	commands.queue("gh", viewArgs, `{"reviewDecision":"CHANGES_REQUESTED","reviews":[],"comments":[]}`, nil)
 	commands.queue("gh", apiArgs, `[
 		{
 			"user":{"login":"alice"},
@@ -774,23 +771,20 @@ func TestGitHubCLIClientLookupPRReviewsIncludesInlineReviewComments(t *testing.T
 		}
 	]`, nil)
 
-	payload, ok, err := client.lookupPRReviews(context.Background(), 42)
+	payload, err := client.lookupPRReviewComments(context.Background(), 42)
 	if err != nil {
-		t.Fatalf("lookupPRReviews() error = %v", err)
+		t.Fatalf("lookupPRReviewComments() error = %v", err)
 	}
-	if !ok {
-		t.Fatal("lookupPRReviews() ok = false, want true")
-	}
-	if got, want := len(payload.ReviewComments), 1; got != want {
+	if got, want := len(payload), 1; got != want {
 		t.Fatalf("len(payload.ReviewComments) = %d, want %d", got, want)
 	}
-	if got, want := payload.ReviewComments[0].User.Login, "alice"; got != want {
+	if got, want := payload[0].User.Login, "alice"; got != want {
 		t.Fatalf("first review comment author = %q, want %q", got, want)
 	}
-	if got, want := payload.ReviewComments[0].Path, "internal/daemon/review.go"; got != want {
+	if got, want := payload[0].Path, "internal/daemon/review.go"; got != want {
 		t.Fatalf("first review comment path = %q, want %q", got, want)
 	}
-	if got, want := payload.ReviewComments[0].Line, 174; got != want {
+	if got, want := payload[0].Line, 174; got != want {
 		t.Fatalf("first review comment line = %d, want %d", got, want)
 	}
 }

@@ -146,16 +146,17 @@ func TestSQLiteStateAdapterRoundTrip(t *testing.T) {
 	}
 
 	if err := adapter.PutWorker(context.Background(), Worker{
-		Project:      "/repo",
-		PaneID:       "pane-1",
-		Issue:        "LAB-718",
-		ClonePath:    "/clone",
-		AgentProfile: "codex",
-		Health:       WorkerHealthHealthy,
-		LastPRNumber: 17,
-		LastPushAt:   now.Add(-time.Minute),
-		LastPRPollAt: now,
-		UpdatedAt:    now,
+		Project:             "/repo",
+		PaneID:              "pane-1",
+		Issue:               "LAB-718",
+		ClonePath:           "/clone",
+		AgentProfile:        "codex",
+		Health:              WorkerHealthHealthy,
+		LastPRNumber:        17,
+		LastPushAt:          now.Add(-time.Minute),
+		LastPRPollAt:        now,
+		LastReviewUpdatedAt: now.Add(-30 * time.Second),
+		UpdatedAt:           now,
 	}); err != nil {
 		t.Fatalf("PutWorker() error = %v", err)
 	}
@@ -171,6 +172,9 @@ func TestSQLiteStateAdapterRoundTrip(t *testing.T) {
 	}
 	if got, want := worker.LastPRPollAt, now; !got.Equal(want) {
 		t.Fatalf("worker.LastPRPollAt = %v, want %v", got, want)
+	}
+	if got, want := worker.LastReviewUpdatedAt, now.Add(-30*time.Second); !got.Equal(want) {
+		t.Fatalf("worker.LastReviewUpdatedAt = %v, want %v", got, want)
 	}
 	active, err := adapter.ActiveAssignmentByBranch(context.Background(), "/repo", "feature/relay-opened")
 	if err != nil {

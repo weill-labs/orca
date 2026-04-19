@@ -26,9 +26,9 @@ func TestCheckTaskPRPollTransitionsTaskState(t *testing.T) {
 			queue: func(deps *testDeps, issue string) {
 				deps.commands.queue("gh", []string{"pr", "list", "--head", issue, "--json", "number"}, `[{"number":42}]`, nil)
 				deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, ``, nil)
-				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"mergedAt":null}`, nil)
+				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, `{"mergedAt":null}`, nil)
 				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}, ``, nil)
-				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, ``, nil)
+				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prReviewJSONFields}, ``, nil)
 			},
 			wantState: TaskStatePRDetected,
 			wantEvent: EventPRDetected,
@@ -39,9 +39,9 @@ func TestCheckTaskPRPollTransitionsTaskState(t *testing.T) {
 			prNumber:     42,
 			queue: func(deps *testDeps, _ string) {
 				deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[{"bucket":"pending"}]`, nil)
-				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"mergedAt":null}`, nil)
+				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, `{"mergedAt":null}`, nil)
 				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}, ``, nil)
-				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, ``, nil)
+				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prReviewJSONFields}, ``, nil)
 			},
 			wantState:   TaskStateCIPending,
 			wantCIState: ciStatePending,
@@ -52,9 +52,9 @@ func TestCheckTaskPRPollTransitionsTaskState(t *testing.T) {
 			prNumber:     42,
 			queue: func(deps *testDeps, _ string) {
 				deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[{"bucket":"pass"}]`, nil)
-				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"mergedAt":null}`, nil)
+				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, `{"mergedAt":null}`, nil)
 				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}, ``, nil)
-				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, ``, nil)
+				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prReviewJSONFields}, ``, nil)
 			},
 			wantState:   TaskStateReviewPending,
 			wantCIState: ciStatePass,
@@ -186,7 +186,7 @@ func TestCheckTaskPRPollTransitionsReviewPendingToMerged(t *testing.T) {
 	issue := "LAB-1256"
 	seedTaskMonitorAssignmentWithState(t, deps, issue, "pane-1", 42, TaskStateReviewPending)
 	deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[]`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"mergedAt":"2026-04-13T12:00:00Z"}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, `{"mergedAt":"2026-04-13T12:00:00Z"}`, nil)
 
 	d := deps.newDaemon(t)
 	update := d.checkTaskPRPoll(context.Background(), activeTaskMonitorAssignment(t, deps, issue))
@@ -213,7 +213,7 @@ func TestCheckTaskPRPollDistinguishesPRTerminalStates(t *testing.T) {
 		{
 			name: "merged pr marks merged terminal state",
 			queue: func(deps *testDeps) {
-				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"state":"CLOSED","mergedAt":"2026-04-13T12:00:00Z","closedAt":"2026-04-13T12:00:00Z"}`, nil)
+				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, `{"state":"CLOSED","mergedAt":"2026-04-13T12:00:00Z","closedAt":"2026-04-13T12:00:00Z"}`, nil)
 			},
 			wantState:    TaskStateMerged,
 			wantPRMerged: true,
@@ -221,7 +221,7 @@ func TestCheckTaskPRPollDistinguishesPRTerminalStates(t *testing.T) {
 		{
 			name: "closed pr marks failed completion",
 			queue: func(deps *testDeps) {
-				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"state":"CLOSED","mergedAt":null,"closedAt":"2026-04-16T12:00:00Z"}`, nil)
+				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, `{"state":"CLOSED","mergedAt":null,"closedAt":"2026-04-16T12:00:00Z"}`, nil)
 			},
 			wantState:          TaskStateDone,
 			wantCompletionType: EventTaskFailed,
@@ -230,7 +230,7 @@ func TestCheckTaskPRPollDistinguishesPRTerminalStates(t *testing.T) {
 		{
 			name: "open pr stays review pending",
 			queue: func(deps *testDeps) {
-				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"state":"OPEN","mergedAt":null,"closedAt":null}`, nil)
+				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, `{"state":"OPEN","mergedAt":null,"closedAt":null}`, nil)
 			},
 			wantState: TaskStateReviewPending,
 		},
@@ -293,7 +293,7 @@ func TestCheckTaskPRPollRegularPathDistinguishesPRTerminalStates(t *testing.T) {
 			name: "merged pr terminal state marks merged",
 			queue: func(deps *testDeps) {
 				deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[]`, nil)
-				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"state":"MERGED","mergedAt":null,"closedAt":null}`, nil)
+				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, `{"state":"MERGED","mergedAt":null,"closedAt":null}`, nil)
 			},
 			wantState:    TaskStateMerged,
 			wantPRMerged: true,
@@ -302,7 +302,7 @@ func TestCheckTaskPRPollRegularPathDistinguishesPRTerminalStates(t *testing.T) {
 			name: "closed pr terminal state fails task",
 			queue: func(deps *testDeps) {
 				deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[]`, nil)
-				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"state":"CLOSED","mergedAt":null,"closedAt":"2026-04-16T12:00:00Z"}`, nil)
+				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, `{"state":"CLOSED","mergedAt":null,"closedAt":"2026-04-16T12:00:00Z"}`, nil)
 			},
 			wantState:            TaskStateDone,
 			wantCompletionStatus: TaskStatusFailed,
@@ -313,7 +313,7 @@ func TestCheckTaskPRPollRegularPathDistinguishesPRTerminalStates(t *testing.T) {
 			name: "rate limited terminal state returns early",
 			queue: func(deps *testDeps) {
 				deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[]`, nil)
-				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, "HTTP 429: API rate limit exceeded\nRetry-After: 120\n", errors.New("gh: HTTP 429"))
+				deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, "HTTP 429: API rate limit exceeded\nRetry-After: 120\n", errors.New("gh: HTTP 429"))
 			},
 			wantState:            TaskStateReviewPending,
 			wantRateLimitedUntil: until,
@@ -364,7 +364,7 @@ func TestCheckTaskPRPollRegularPathDistinguishesPRTerminalStates(t *testing.T) {
 			if got, want := deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}), 0; got != want {
 				t.Fatalf("mergeable follow-up call count = %d, want %d", got, want)
 			}
-			if got, want := deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}), 0; got != want {
+			if got, want := deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", prReviewJSONFields}), 0; got != want {
 				t.Fatalf("review follow-up call count = %d, want %d", got, want)
 			}
 		})
@@ -379,7 +379,7 @@ func TestApplyTaskStateUpdateFailsTaskWhenPRClosesWithoutMerge(t *testing.T) {
 	seedTaskMonitorAssignmentWithState(t, deps, issue, "pane-1", 42, TaskStateReviewPending)
 	setAssignmentWorkerID(t, deps, issue, "worker-01")
 	seedMergeEntryForTest(t, deps, issue, 42)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"state":"CLOSED","mergedAt":null,"closedAt":"2026-04-16T12:00:00Z"}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, `{"state":"CLOSED","mergedAt":null,"closedAt":"2026-04-16T12:00:00Z"}`, nil)
 
 	d := deps.newDaemon(t)
 	update := d.checkTaskPRPoll(context.Background(), activeTaskMonitorAssignment(t, deps, issue))

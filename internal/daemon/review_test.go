@@ -48,7 +48,7 @@ func TestPRReviewPollingNudgesWorkerOncePerNewBlockingReviewBatch(t *testing.T) 
 
 	tickAndWaitForHeartbeat(t, d, deps, prTicker, adaptivePRFastPollInterval, "second review poll cycle completion")
 	waitFor(t, "second review poll processed", func() bool {
-		return deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}) == 2
+		return deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", prReviewJSONFields}) == 2
 	})
 	if got, want := deps.amux.countKey("pane-1", firstNudgeSent), 1; got != want {
 		t.Fatalf("first review nudge count = %d, want %d", got, want)
@@ -95,7 +95,7 @@ func TestPRReviewPollingNudgesWorkerWithInlineReviewCommentLocation(t *testing.T
 	deps.tickers.enqueue(captureTicker, prTicker)
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--state", "open", "--json", "number"}, `[]`, nil)
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, `{"reviewDecision":"CHANGES_REQUESTED","reviews":[],"comments":[]}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prReviewJSONFields}, `{"reviewDecision":"CHANGES_REQUESTED","reviews":[],"comments":[]}`, nil)
 	deps.commands.queue("gh", []string{"api", "repos/{owner}/{repo}/pulls/42/comments?per_page=100"}, `[
 		{
 			"user":{"login":"alice"},
@@ -147,9 +147,9 @@ func TestPRReviewPollingDoesNotDuplicateSeenReviewsWhenOlderInlineCommentArrives
 	deps.tickers.enqueue(captureTicker, prTicker)
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--state", "open", "--json", "number"}, `[]`, nil)
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, `{"reviewDecision":"CHANGES_REQUESTED","reviews":[{"author":{"login":"bob"},"state":"CHANGES_REQUESTED","body":"Please add tests.","submittedAt":"2026-04-02T09:05:00Z"}],"comments":[]}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prReviewJSONFields}, `{"reviewDecision":"CHANGES_REQUESTED","updatedAt":"2026-04-02T09:05:00Z","reviews":[{"author":{"login":"bob"},"state":"CHANGES_REQUESTED","body":"Please add tests.","submittedAt":"2026-04-02T09:05:00Z"}],"comments":[]}`, nil)
 	deps.commands.queue("gh", []string{"api", "repos/{owner}/{repo}/pulls/42/comments?per_page=100"}, `[]`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, `{"reviewDecision":"CHANGES_REQUESTED","reviews":[{"author":{"login":"bob"},"state":"CHANGES_REQUESTED","body":"Please add tests.","submittedAt":"2026-04-02T09:05:00Z"}],"comments":[]}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prReviewJSONFields}, `{"reviewDecision":"CHANGES_REQUESTED","updatedAt":"2026-04-02T09:06:00Z","reviews":[{"author":{"login":"bob"},"state":"CHANGES_REQUESTED","body":"Please add tests.","submittedAt":"2026-04-02T09:05:00Z"}],"comments":[]}`, nil)
 	deps.commands.queue("gh", []string{"api", "repos/{owner}/{repo}/pulls/42/comments?per_page=100"}, `[
 		{
 			"user":{"login":"alice"},
@@ -233,7 +233,7 @@ func TestPRReviewPollingAdvancesCountWithoutNudgingForNonBlockingReviews(t *test
 	waitFor(t, "non-blocking review poll processed", func() bool {
 		worker, ok := deps.state.worker("pane-1")
 		return ok &&
-			deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}) == 2 &&
+			deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", prReviewJSONFields}) == 2 &&
 			worker.LastReviewCount == 2
 	})
 	worker, ok := deps.state.worker("pane-1")
@@ -323,7 +323,7 @@ func TestPRReviewPollingEmitsApprovedEventOncePerApprovalTransition(t *testing.T
 	waitFor(t, "approval poll processed with new comment", func() bool {
 		worker, ok := deps.state.worker("pane-1")
 		return ok &&
-			deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}) == 2 &&
+			deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", prReviewJSONFields}) == 2 &&
 			worker.LastIssueCommentCount == 1 &&
 			worker.ReviewApproved
 	})
@@ -342,7 +342,7 @@ func TestPRReviewPollingEmitsApprovedEventOncePerApprovalTransition(t *testing.T
 	waitFor(t, "approval state cleared", func() bool {
 		worker, ok := deps.state.worker("pane-1")
 		return ok &&
-			deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}) == 3 &&
+			deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", prReviewJSONFields}) == 3 &&
 			!worker.ReviewApproved
 	})
 
@@ -350,7 +350,7 @@ func TestPRReviewPollingEmitsApprovedEventOncePerApprovalTransition(t *testing.T
 	waitFor(t, "approval re-emitted", func() bool {
 		worker, ok := deps.state.worker("pane-1")
 		return ok &&
-			deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}) == 4 &&
+			deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", prReviewJSONFields}) == 4 &&
 			worker.ReviewApproved &&
 			deps.events.countType(EventReviewApproved) == 2 &&
 			stateEventCountByType(deps.state, EventReviewApproved) == 2
@@ -395,7 +395,7 @@ func TestPRReviewPollingIgnoresEmptyReviewPayload(t *testing.T) {
 
 	tickAndWaitForHeartbeat(t, d, deps, prTicker, adaptivePRFastPollInterval, "empty review poll cycle completion")
 	waitFor(t, "empty review poll processed", func() bool {
-		return deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}) == 2
+		return deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", prReviewJSONFields}) == 2
 	})
 
 	worker, ok := deps.state.worker("pane-1")
@@ -452,7 +452,7 @@ func TestPRReviewPollingNudgesWorkerForGitHubActionsIssueCommentsWithoutLGTM(t *
 	waitFor(t, "non-bot comment poll processed", func() bool {
 		worker, ok := deps.state.worker("pane-1")
 		return ok &&
-			deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}) == 2 &&
+			deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", prReviewJSONFields}) == 2 &&
 			worker.LastIssueCommentCount == 2
 	})
 
@@ -484,11 +484,11 @@ func TestPRReviewPollingResumesFromPersistedWorkerStateAfterRestart(t *testing.T
 	deps.tickers.enqueue(firstCaptureTicker, firstPollTicker, secondCaptureTicker, secondPollTicker)
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--state", "open", "--json", "number"}, `[]`, nil)
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"mergedAt":null}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, `{"mergedAt":null}`, nil)
 	queuePRReviewPayload(deps, 42, `{"reviewDecision":"CHANGES_REQUESTED","reviews":[{"author":{"login":"alice"},"state":"CHANGES_REQUESTED","body":"Please add tests."}]}`)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"mergedAt":null}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, `{"mergedAt":null}`, nil)
 	queuePRReviewPayload(deps, 42, `{"reviewDecision":"CHANGES_REQUESTED","reviews":[{"author":{"login":"alice"},"state":"CHANGES_REQUESTED","body":"Please add tests."}]}`)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"mergedAt":null}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, `{"mergedAt":null}`, nil)
 	queuePRReviewPayload(deps, 42, `{"reviewDecision":"CHANGES_REQUESTED","reviews":[{"author":{"login":"alice"},"state":"CHANGES_REQUESTED","body":"Please add tests."},{"author":{"login":"bob"},"state":"CHANGES_REQUESTED","body":"Handle the nil case too."}]}`)
 
 	first := deps.newDaemon(t)
@@ -527,7 +527,7 @@ func TestPRReviewPollingResumesFromPersistedWorkerStateAfterRestart(t *testing.T
 
 	tickAndWaitForHeartbeat(t, second, deps, secondPollTicker, adaptivePRFastPollInterval, "restart review poll cycle completion")
 	waitFor(t, "restart review poll", func() bool {
-		return deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}) >= 2
+		return deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", prReviewJSONFields}) >= 2
 	})
 	if got, want := deps.amux.countKey("pane-1", firstNudgeSent), 1; got != want {
 		t.Fatalf("first review nudge count after restart = %d, want %d", got, want)
@@ -551,11 +551,11 @@ func TestPRReviewPollingResumesIssueCommentCursorAfterRestart(t *testing.T) {
 	deps.tickers.enqueue(firstCaptureTicker, firstPollTicker, secondCaptureTicker, secondPollTicker)
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--state", "open", "--json", "number"}, `[]`, nil)
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"mergedAt":null}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, `{"mergedAt":null}`, nil)
 	queuePRReviewPayload(deps, 42, `{"reviewDecision":"CHANGES_REQUESTED","reviews":[],"comments":[{"author":{"login":"github-actions"},"body":"### PR Review\n\n### Blocking Issues\n\n**1. Add regression coverage for issue comments**"}]}`)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"mergedAt":null}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, `{"mergedAt":null}`, nil)
 	queuePRReviewPayload(deps, 42, `{"reviewDecision":"CHANGES_REQUESTED","reviews":[],"comments":[{"author":{"login":"github-actions"},"body":"### PR Review\n\n### Blocking Issues\n\n**1. Add regression coverage for issue comments**"}]}`)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"mergedAt":null}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, `{"mergedAt":null}`, nil)
 	queuePRReviewPayload(deps, 42, `{"reviewDecision":"CHANGES_REQUESTED","reviews":[],"comments":[{"author":{"login":"github-actions"},"body":"### PR Review\n\n### Blocking Issues\n\n**1. Add regression coverage for issue comments**"},{"author":{"login":"github-actions"},"body":"### PR Review\n\n### Blocking Issue\n\n**1. Persist the issue comment cursor across restarts**"}]}`)
 
 	first := deps.newDaemon(t)
@@ -594,7 +594,7 @@ func TestPRReviewPollingResumesIssueCommentCursorAfterRestart(t *testing.T) {
 
 	tickAndWaitForHeartbeat(t, second, deps, secondPollTicker, adaptivePRFastPollInterval, "restart issue comment poll cycle completion")
 	waitFor(t, "restart issue comment poll", func() bool {
-		return deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}) >= 2
+		return deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", prReviewJSONFields}) >= 2
 	})
 	if got, want := deps.amux.countKey("pane-1", firstNudgeSent), 1; got != want {
 		t.Fatalf("first issue comment nudge count after restart = %d, want %d", got, want)
@@ -638,7 +638,7 @@ func TestPRReviewPollingDefersBlockingReviewNudgeUntilWorkerIsIdle(t *testing.T)
 
 	tickAndWaitForHeartbeat(t, d, deps, prTicker, adaptivePRFastPollInterval, "busy worker review poll cycle completion")
 	waitFor(t, "busy worker review poll", func() bool {
-		return deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}) == 1
+		return deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", prReviewJSONFields}) == 1
 	})
 
 	worker, ok := deps.state.worker("pane-1")
@@ -726,14 +726,14 @@ func TestPRReviewPollingRetriesIssueCommentNudgeAfterBusyDeferral(t *testing.T) 
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--state", "open", "--json", "number"}, `[]`, nil)
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
 	deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[{"bucket":"pending"}]`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"mergedAt":null}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, `{"mergedAt":null}`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}, ``, nil)
 	payload := marshalReviewPayload(t, "", nil, []prComment{
 		testIssueComment("github-actions", "Potential bug: add regression coverage."),
 	})
 	queuePRReviewPayload(deps, 42, payload)
 	deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[{"bucket":"pending"}]`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"mergedAt":null}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, `{"mergedAt":null}`, nil)
 	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}, ``, nil)
 	queuePRReviewPayload(deps, 42, payload)
 
@@ -757,7 +757,7 @@ func TestPRReviewPollingRetriesIssueCommentNudgeAfterBusyDeferral(t *testing.T) 
 	waitFor(t, "busy worker issue comment poll", func() bool {
 		worker, ok := deps.state.worker("pane-1")
 		return ok &&
-			deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}) == 1 &&
+			deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", prReviewJSONFields}) == 1 &&
 			worker.LastCIState == ciStatePending
 	})
 
@@ -794,8 +794,8 @@ func TestPRReviewPollingLogsGitHubRateLimitWarnings(t *testing.T) {
 	prTicker := newFakeTicker()
 	deps.tickers.enqueue(captureTicker, prTicker)
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prTerminalStateJSONFields}, `{"mergedAt":null}`, nil)
-	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}, "HTTP 429: API rate limit exceeded\nRetry-After: 120\n", errors.New("gh: HTTP 429"))
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, `{"mergedAt":null}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prReviewJSONFields}, "HTTP 429: API rate limit exceeded\nRetry-After: 120\n", errors.New("gh: HTTP 429"))
 
 	d := deps.newDaemon(t)
 	ctx := context.Background()
@@ -822,7 +822,7 @@ func TestPRReviewPollingLogsGitHubRateLimitWarnings(t *testing.T) {
 	if got, want := event.Message, "github: rate limited until 09:02"; got != want {
 		t.Fatalf("event.Message = %q, want %q", got, want)
 	}
-	if got, want := deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}), 1; got != want {
+	if got, want := deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", prReviewJSONFields}), 1; got != want {
 		t.Fatalf("review poll count = %d, want %d", got, want)
 	}
 }

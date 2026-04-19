@@ -51,6 +51,7 @@ func scanPostgresTask(scanner rowScanner, includeProject bool) (Task, error) {
 func scanPostgresWorker(scanner rowScanner, includeProject bool) (Worker, error) {
 	var worker Worker
 	var lastActivityAt sql.NullTime
+	var lastReviewUpdatedAt sql.NullTime
 	var lastPushAt sql.NullTime
 	var lastPRPollAt sql.NullTime
 	var firstCrashAt sql.NullTime
@@ -66,6 +67,7 @@ func scanPostgresWorker(scanner rowScanner, includeProject bool) (Worker, error)
 		&worker.LastInlineReviewCommentCount,
 		&worker.LastIssueCommentCount,
 		&worker.LastIssueCommentWatermark,
+		&lastReviewUpdatedAt,
 		&worker.ReviewNudgeCount,
 		&worker.ReviewApproved,
 		&worker.LastCIState,
@@ -97,6 +99,9 @@ func scanPostgresWorker(scanner rowScanner, includeProject bool) (Worker, error)
 	if lastActivityAt.Valid {
 		worker.LastActivityAt = normalizeTime(lastActivityAt.Time)
 	}
+	if lastReviewUpdatedAt.Valid {
+		worker.LastReviewUpdatedAt = normalizeTime(lastReviewUpdatedAt.Time)
+	}
 	if lastPushAt.Valid {
 		worker.LastPushAt = normalizeTime(lastPushAt.Time)
 	}
@@ -114,6 +119,7 @@ func scanPostgresAssignment(scanner rowScanner, includeProject bool) (Assignment
 	var worker Worker
 	var prNumber sql.NullInt64
 	var lastActivityAt sql.NullTime
+	var lastReviewUpdatedAt sql.NullTime
 	var lastPushAt sql.NullTime
 	var lastPRPollAt sql.NullTime
 	var firstCrashAt sql.NullTime
@@ -142,6 +148,7 @@ func scanPostgresAssignment(scanner rowScanner, includeProject bool) (Assignment
 		&worker.LastInlineReviewCommentCount,
 		&worker.LastIssueCommentCount,
 		&worker.LastIssueCommentWatermark,
+		&lastReviewUpdatedAt,
 		&worker.ReviewNudgeCount,
 		&worker.ReviewApproved,
 		&worker.LastCIState,
@@ -183,6 +190,9 @@ func scanPostgresAssignment(scanner rowScanner, includeProject bool) (Assignment
 	worker.LastSeenAt = normalizeTime(worker.LastSeenAt)
 	if lastActivityAt.Valid {
 		worker.LastActivityAt = normalizeTime(lastActivityAt.Time)
+	}
+	if lastReviewUpdatedAt.Valid {
+		worker.LastReviewUpdatedAt = normalizeTime(lastReviewUpdatedAt.Time)
 	}
 	if lastPushAt.Valid {
 		worker.LastPushAt = normalizeTime(lastPushAt.Time)

@@ -100,7 +100,7 @@ func TestPRReviewPollingSkipsNudgesForApprovalOrLGTM(t *testing.T) {
 			waitFor(t, "review poll processed", func() bool {
 				worker, ok := deps.state.worker("pane-1")
 				return ok &&
-					deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}) == 1 &&
+					deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", prReviewJSONFields}) == 1 &&
 					worker.LastReviewCount == tt.wantReviewCount &&
 					worker.LastIssueCommentCount == tt.wantIssueCommentCount
 			})
@@ -225,7 +225,7 @@ func TestPRReviewPollingEscalatesAfterThreeNudgesAndResetsAfterApprovalCycle(t *
 
 	tickAndWaitForHeartbeat(t, d, deps, prTicker, adaptivePRFastPollInterval, "approval poll cycle completion")
 	waitFor(t, "approval poll processed", func() bool {
-		return deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}) == 5
+		return deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", prReviewJSONFields}) == 5
 	})
 
 	tickAndWaitForHeartbeat(t, d, deps, prTicker, adaptivePRFastPollInterval, "post-reset review poll cycle completion")
@@ -402,7 +402,7 @@ func TestPRReviewPollingDefersReviewNudgeUntilWorkerAppearsIdle(t *testing.T) {
 
 			tickAndWaitForHeartbeat(t, d, deps, prTicker, adaptivePRFastPollInterval, "review poll cycle completion")
 			waitFor(t, "review poll processed", func() bool {
-				return deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", "reviews,reviewDecision,comments"}) == 1
+				return deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", prReviewJSONFields}) == 1
 			})
 
 			if got := deps.events.countType(EventWorkerNudgedReview); got != 0 {

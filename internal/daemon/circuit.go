@@ -442,6 +442,12 @@ func (c *circuitGitHubClient) lookupPRTerminalState(ctx context.Context, prNumbe
 	})
 }
 
+func (c *circuitGitHubClient) lookupPRMergeability(ctx context.Context, prNumber int) (prMergeabilityPayload, bool, error) {
+	return withCircuit3(c.breaker, func() (prMergeabilityPayload, bool, error) {
+		return c.base.lookupPRMergeability(ctx, prNumber)
+	})
+}
+
 func (c *circuitGitHubClient) isPRMerged(ctx context.Context, prNumber int) (bool, error) {
 	return withCircuit(c.breaker, func() (bool, error) {
 		return c.base.isPRMerged(ctx, prNumber)
@@ -451,6 +457,12 @@ func (c *circuitGitHubClient) isPRMerged(ctx context.Context, prNumber int) (boo
 func (c *circuitGitHubClient) lookupPRReviews(ctx context.Context, prNumber int) (prReviewPayload, bool, error) {
 	return withCircuit3(c.breaker, func() (prReviewPayload, bool, error) {
 		return c.base.lookupPRReviews(ctx, prNumber)
+	})
+}
+
+func (c *circuitGitHubClient) lookupPRReviewComments(ctx context.Context, prNumber int) ([]prReviewComment, error) {
+	return withCircuit(c.breaker, func() ([]prReviewComment, error) {
+		return c.base.lookupPRReviewComments(ctx, prNumber)
 	})
 }
 
