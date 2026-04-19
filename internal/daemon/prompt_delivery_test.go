@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	amuxapi "github.com/weill-labs/orca/internal/amux"
 )
@@ -229,4 +230,86 @@ func TestConfirmPromptDeliveryReturnsRetryEnterPhaseInTimeoutError(t *testing.T)
 	if err == nil || !strings.Contains(err.Error(), "after retry enter") {
 		t.Fatalf("confirmPromptDelivery() error = %v, want retry-enter phase", err)
 	}
+}
+
+func TestSendAndConfirmWorkingTreatsStaleWorkingAsUnconfirmed(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	var sleeps []time.Duration
+	deps.sleep = recordSleep(&sleeps, deps.clock)
+	stale := PaneCapture{
+		Content:        []string{"OpenAI Codex", "Working (5m 12s • esc to interrupt)", "› $postmortem"},
+		CurrentCommand: "codex",
+	}
+	deps.amux.captureHistorySequence("pane-1", repeatPaneCaptures(stale, 32))
+	d := deps.newDaemon(t)
+
+	err := d.sendAndConfirmWorking(context.Background(), "pane-1", "$postmortem")
+	if !errors.Is(err, ErrPromptDeliveryNotConfirmed) {
+		t.Fatalf("sendAndConfirmWorking() error = %v, want ErrPromptDeliveryNotConfirmed", err)
+	}
+	deps.amux.requireSentKeys(t, "pane-1", []string{"$postmortem\n", "\n", "\n"})
+	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
+		{PaneID: "pane-1", Timeout: defaultAgentHandshakeTimeout},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("waitIdle calls = %#v, want %#v", got, want)
+	}
+	if got := deps.amux.captureHistoryCount("pane-1"); got == 0 {
+		t.Fatal("capture history count = 0, want stale-scrollback probe")
+	}
+	if len(sleeps) == 0 {
+		t.Fatal("sleep calls = 0, want freshness polling between stale captures")
+	}
+}
+
+func TestSendAndConfirmWorkingRetriesWhenFreshWorkingAppearsAfterStaleScrollback(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	var sleeps []time.Duration
+	deps.sleep = recordSleep(&sleeps, deps.clock)
+	stale := PaneCapture{
+		Content:        []string{"OpenAI Codex", "Working (5m 12s • esc to interrupt)", "› $postmortem"},
+		CurrentCommand: "codex",
+	}
+	fresh := PaneCapture{
+		Content:        []string{"OpenAI Codex", "Working (5m 12s • esc to interrupt)", "$postmortem", "• Working (0s • esc to interrupt)"},
+		CurrentCommand: "codex",
+	}
+	deps.amux.captureHistorySequence("pane-1", repeatPaneCaptures(stale, 16))
+	deps.amux.sendKeysHook = func(paneID string, keys []string) {
+		if len(keys) == 1 && keys[0] == "Enter" {
+			deps.amux.captureHistorySequence(paneID, []PaneCapture{fresh})
+		}
+	}
+	d := deps.newDaemon(t)
+
+	if err := d.sendAndConfirmWorking(context.Background(), "pane-1", "$postmortem"); err != nil {
+		t.Fatalf("sendAndConfirmWorking() error = %v", err)
+	}
+	deps.amux.requireSentKeys(t, "pane-1", []string{"$postmortem\n", "\n"})
+	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
+		{PaneID: "pane-1", Timeout: defaultAgentHandshakeTimeout},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("waitIdle calls = %#v, want %#v", got, want)
+	}
+	if got := deps.amux.captureHistoryCount("pane-1"); got == 0 {
+		t.Fatal("capture history count = 0, want stale-scrollback probe")
+	}
+	if len(sleeps) == 0 {
+		t.Fatal("sleep calls = 0, want freshness polling before retry")
+	}
+}
+
+func repeatPaneCaptures(capture PaneCapture, count int) []PaneCapture {
+	if count <= 0 {
+		return nil
+	}
+
+	repeated := make([]PaneCapture, count)
+	for i := range repeated {
+		repeated[i] = clonePaneCapture(capture)
+	}
+	return repeated
 }
