@@ -85,7 +85,26 @@ func (d *Daemon) sendAndConfirmWorking(ctx context.Context, paneID, prompt strin
 		}
 	}
 
-	if err := d.amux.SendKeys(ctx, paneID, prompt, "Enter"); err != nil {
+	deliveryPrompt := strings.TrimRight(prompt, "\r\n")
+	if strings.ContainsAny(deliveryPrompt, "\r\n") {
+		lines := strings.FieldsFunc(deliveryPrompt, func(r rune) bool {
+			return r == '\r' || r == '\n'
+		})
+		flattened := lines[:0]
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			flattened = append(flattened, line)
+		}
+		deliveryPrompt = strings.Join(flattened, " ")
+	}
+	if deliveryPrompt == "" {
+		return errors.New("prompt is empty")
+	}
+
+	if err := d.amux.SendKeys(ctx, paneID, deliveryPrompt, "Enter"); err != nil {
 		return err
 	}
 
