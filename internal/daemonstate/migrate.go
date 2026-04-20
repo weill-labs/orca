@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 var migrationTableOrder = []string{
@@ -35,6 +36,33 @@ type MigrationSummary struct {
 	DryRun   bool                    `json:"dry_run"`
 	Truncate bool                    `json:"truncate"`
 	Tables   []TableMigrationSummary `json:"tables"`
+}
+
+type pgxQueryExecer interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+}
+
+type migrationDeps struct {
+	beginTx           func(context.Context, *PostgresStore) (pgx.Tx, error)
+	truncateTables    func(context.Context, pgx.Tx) error
+	copyTable         func(context.Context, *SQLiteStore, pgx.Tx, string) error
+	syncEventSequence func(context.Context, pgxQueryExecer) error
+	tableCount        func(context.Context, pgxCountQueryer, string) (int64, error)
+	wait              func(context.Context, time.Duration) error
+}
+
+func defaultMigrationDeps() migrationDeps {
+	return migrationDeps{
+		beginTx: func(ctx context.Context, destination *PostgresStore) (pgx.Tx, error) {
+			return destination.pool.Begin(ctx)
+		},
+		truncateTables:    truncateMigrationTables,
+		copyTable:         copyMigrationTable,
+		syncEventSequence: syncPostgresEventSequence,
+		tableCount:        postgresTableCount,
+		wait:              waitForPostCopyRetry,
+	}
 }
 
 func (s MigrationSummary) TotalSourceRows() int64 {
@@ -72,11 +100,15 @@ func Migrate(ctx context.Context, from Store, to Store, options MigrationOptions
 		return MigrationSummary{}, fmt.Errorf("migrate state destination must be Postgres, got %T", to)
 	}
 
-	return migrateSQLiteToPostgres(ctx, source, destination, options)
+	return migrateSQLiteToPostgresWithDeps(ctx, source, destination, options, defaultMigrationDeps())
 }
 
 func migrateSQLiteToPostgres(ctx context.Context, source *SQLiteStore, destination *PostgresStore, options MigrationOptions) (MigrationSummary, error) {
-	summary, err := migrationCounts(ctx, source, destination)
+	return migrateSQLiteToPostgresWithDeps(ctx, source, destination, options, defaultMigrationDeps())
+}
+
+func migrateSQLiteToPostgresWithDeps(ctx context.Context, source *SQLiteStore, destination *PostgresStore, options MigrationOptions, deps migrationDeps) (MigrationSummary, error) {
+	summary, err := migrationCountsWithDeps(ctx, source, destination, deps.tableCount)
 	if err != nil {
 		return MigrationSummary{}, err
 	}
@@ -84,6 +116,7 @@ func migrateSQLiteToPostgres(ctx context.Context, source *SQLiteStore, destinati
 	summary.Truncate = options.Truncate
 
 	if options.DryRun {
+		EmitMigrationProgress(ctx, MigrationProgress{Phase: MigrationProgressDryRun})
 		for i := range summary.Tables {
 			summary.Tables[i].DestinationRowsAfter = summary.Tables[i].DestinationRowsBefore
 		}
@@ -98,7 +131,7 @@ func migrateSQLiteToPostgres(ctx context.Context, source *SQLiteStore, destinati
 		}
 	}
 
-	tx, err := destination.pool.Begin(ctx)
+	tx, err := deps.beginTx(ctx, destination)
 	if err != nil {
 		return MigrationSummary{}, fmt.Errorf("begin destination migration tx: %w", err)
 	}
@@ -107,27 +140,34 @@ func migrateSQLiteToPostgres(ctx context.Context, source *SQLiteStore, destinati
 	}()
 
 	if options.Truncate {
-		if err := truncateMigrationTables(ctx, tx); err != nil {
+		EmitMigrationProgress(ctx, MigrationProgress{Phase: MigrationProgressTruncate})
+		if err := deps.truncateTables(ctx, tx); err != nil {
 			return MigrationSummary{}, err
 		}
 	}
 
 	for _, table := range migrationTableOrder {
-		if err := copyMigrationTable(ctx, source, tx, table); err != nil {
+		if err := deps.copyTable(ctx, source, tx, table); err != nil {
 			return MigrationSummary{}, err
 		}
-	}
-
-	if err := syncPostgresEventSequence(ctx, tx); err != nil {
-		return MigrationSummary{}, err
+		EmitMigrationProgress(ctx, MigrationProgress{
+			Phase:      MigrationProgressCopyTable,
+			Table:      table,
+			SourceRows: sourceRowsForMigrationTable(summary, table),
+		})
 	}
 
 	if err := tx.Commit(ctx); err != nil {
 		return MigrationSummary{}, fmt.Errorf("commit destination migration tx: %w", err)
 	}
+	EmitMigrationProgress(ctx, MigrationProgress{Phase: MigrationProgressCommit})
+
+	if err := retrySyncPostgresEventSequence(ctx, destination.pool, deps.syncEventSequence, deps.wait); err != nil {
+		return MigrationSummary{}, err
+	}
 
 	for i := range summary.Tables {
-		count, err := postgresTableCount(ctx, destination.pool, summary.Tables[i].Table)
+		count, err := retryPostgresTableCountWithFunc(ctx, destination.pool, summary.Tables[i].Table, deps.tableCount, deps.wait)
 		if err != nil {
 			return MigrationSummary{}, err
 		}
@@ -141,6 +181,15 @@ func migrateSQLiteToPostgres(ctx context.Context, source *SQLiteStore, destinati
 }
 
 func migrationCounts(ctx context.Context, source *SQLiteStore, destination *PostgresStore) (MigrationSummary, error) {
+	return migrationCountsWithDeps(ctx, source, destination, postgresTableCount)
+}
+
+func migrationCountsWithDeps(
+	ctx context.Context,
+	source *SQLiteStore,
+	destination *PostgresStore,
+	tableCount func(context.Context, pgxCountQueryer, string) (int64, error),
+) (MigrationSummary, error) {
 	summary := MigrationSummary{
 		Tables: make([]TableMigrationSummary, 0, len(migrationTableOrder)),
 	}
@@ -150,7 +199,7 @@ func migrationCounts(ctx context.Context, source *SQLiteStore, destination *Post
 		if err != nil {
 			return MigrationSummary{}, err
 		}
-		destinationRows, err := postgresTableCount(ctx, destination.pool, table)
+		destinationRows, err := tableCount(ctx, destination.pool, table)
 		if err != nil {
 			return MigrationSummary{}, err
 		}
@@ -190,9 +239,9 @@ func copyMigrationTable(ctx context.Context, source *SQLiteStore, destination pg
 	}
 }
 
-func syncPostgresEventSequence(ctx context.Context, tx pgx.Tx) error {
+func syncPostgresEventSequence(ctx context.Context, queryer pgxQueryExecer) error {
 	var maxID sql.NullInt64
-	if err := tx.QueryRow(ctx, `SELECT MAX(id) FROM events`).Scan(&maxID); err != nil {
+	if err := queryer.QueryRow(ctx, `SELECT MAX(id) FROM events`).Scan(&maxID); err != nil {
 		return fmt.Errorf("query max event id: %w", err)
 	}
 
@@ -203,7 +252,7 @@ func syncPostgresEventSequence(ctx context.Context, tx pgx.Tx) error {
 		sequenceCalled = true
 	}
 
-	if _, err := tx.Exec(ctx, `SELECT setval(pg_get_serial_sequence('events', 'id'), $1, $2)`, sequenceValue, sequenceCalled); err != nil {
+	if _, err := queryer.Exec(ctx, `SELECT setval(pg_get_serial_sequence('events', 'id'), $1, $2)`, sequenceValue, sequenceCalled); err != nil {
 		return fmt.Errorf("sync event id sequence: %w", err)
 	}
 	return nil
@@ -227,6 +276,15 @@ func postgresTableCount(ctx context.Context, queryer pgxCountQueryer, table stri
 		return 0, fmt.Errorf("count postgres %s rows: %w", table, err)
 	}
 	return count, nil
+}
+
+func sourceRowsForMigrationTable(summary MigrationSummary, table string) int64 {
+	for _, entry := range summary.Tables {
+		if entry.Table == table {
+			return entry.SourceRows
+		}
+	}
+	return 0
 }
 
 func parseRequiredMigrationTime(table, column, value string) (time.Time, error) {

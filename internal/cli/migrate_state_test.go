@@ -113,6 +113,142 @@ func TestRunMigrateStateCommandWritesSummary(t *testing.T) {
 	}
 }
 
+func TestRunMigrateStateCommandWritesProgressBeforeSummary(t *testing.T) {
+	t.Parallel()
+
+	sourceStore := &migrateStateStoreStub{}
+	destinationStore := &migrateStateStoreStub{}
+
+	var stdout bytes.Buffer
+	err := runMigrateStateCommand(context.Background(), &stdout, []string{
+		"--from", "sqlite:///tmp/source.db",
+		"--to", "postgres://orca:secret@localhost:5432/orca?sslmode=disable",
+	}, migrateStateCommandDeps{
+		openSourceStore:      func(string) (state.Store, error) { return sourceStore, nil },
+		openDestinationStore: func(string) (state.Store, error) { return destinationStore, nil },
+		migrate: func(ctx context.Context, _, _ state.Store, _ state.MigrationOptions) (state.MigrationSummary, error) {
+			state.EmitMigrationProgress(ctx, state.MigrationProgress{
+				Phase:      state.MigrationProgressCopyTable,
+				Table:      "events",
+				SourceRows: 5,
+			})
+			state.EmitMigrationProgress(ctx, state.MigrationProgress{
+				Phase:       state.MigrationProgressSyncSequence,
+				Attempt:     1,
+				MaxAttempts: 3,
+			})
+
+			return state.MigrationSummary{
+				Tables: []state.TableMigrationSummary{
+					{Table: "events", SourceRows: 5, DestinationRowsBefore: 0, DestinationRowsAfter: 5},
+				},
+			}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("runMigrateStateCommand() error = %v", err)
+	}
+
+	output := stdout.String()
+	progressLine := "progress: copied events (5 rows)"
+	summaryLine := "mode:"
+	progressIndex := strings.Index(output, progressLine)
+	summaryIndex := strings.Index(output, summaryLine)
+	if progressIndex == -1 {
+		t.Fatalf("stdout = %q, want substring %q", output, progressLine)
+	}
+	if summaryIndex == -1 {
+		t.Fatalf("stdout = %q, want substring %q", output, summaryLine)
+	}
+	if progressIndex > summaryIndex {
+		t.Fatalf("stdout = %q, want progress before summary", output)
+	}
+	if !strings.Contains(output, "progress: syncing event id sequence (attempt 1/3)") {
+		t.Fatalf("stdout = %q, want sync progress line", output)
+	}
+}
+
+func TestFormatMigrationProgress(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		progress state.MigrationProgress
+		want     string
+	}{
+		{
+			name:     "dry run",
+			progress: state.MigrationProgress{Phase: state.MigrationProgressDryRun},
+			want:     "dry run; skipping destination writes",
+		},
+		{
+			name:     "truncate",
+			progress: state.MigrationProgress{Phase: state.MigrationProgressTruncate},
+			want:     "truncating destination tables",
+		},
+		{
+			name: "copy table",
+			progress: state.MigrationProgress{
+				Phase:      state.MigrationProgressCopyTable,
+				Table:      "events",
+				SourceRows: 5,
+			},
+			want: "copied events (5 rows)",
+		},
+		{
+			name:     "commit",
+			progress: state.MigrationProgress{Phase: state.MigrationProgressCommit},
+			want:     "committed copied rows",
+		},
+		{
+			name: "sync attempt",
+			progress: state.MigrationProgress{
+				Phase:       state.MigrationProgressSyncSequence,
+				Attempt:     2,
+				MaxAttempts: 3,
+			},
+			want: "syncing event id sequence (attempt 2/3)",
+		},
+		{
+			name: "verify table",
+			progress: state.MigrationProgress{
+				Phase:       state.MigrationProgressVerifyTable,
+				Table:       "tasks",
+				Attempt:     1,
+				MaxAttempts: 3,
+			},
+			want: "verifying tasks row count (attempt 1/3)",
+		},
+		{
+			name:     "unknown",
+			progress: state.MigrationProgress{},
+			want:     "",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := formatMigrationProgress(tt.progress); got != tt.want {
+				t.Fatalf("formatMigrationProgress(%+v) = %q, want %q", tt.progress, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFormatMigrationAttempt(t *testing.T) {
+	t.Parallel()
+
+	if got, want := formatMigrationAttempt("syncing", 0, 0), "syncing"; got != want {
+		t.Fatalf("formatMigrationAttempt() = %q, want %q", got, want)
+	}
+	if got, want := formatMigrationAttempt("syncing", 2, 3), "syncing (attempt 2/3)"; got != want {
+		t.Fatalf("formatMigrationAttempt() = %q, want %q", got, want)
+	}
+}
+
 type migrateStateStoreStub struct {
 	closed bool
 }

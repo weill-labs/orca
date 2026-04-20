@@ -79,6 +79,12 @@ func runMigrateStateCommand(ctx context.Context, stdout io.Writer, args []string
 	}
 	defer destinationStore.Close()
 
+	ctx = state.WithMigrationProgress(ctx, func(progress state.MigrationProgress) {
+		if line := formatMigrationProgress(progress); line != "" {
+			_, _ = fmt.Fprintf(stdout, "progress: %s\n", line)
+		}
+	})
+
 	summary, err := deps.migrate(ctx, sourceStore, destinationStore, state.MigrationOptions{
 		DryRun:   dryRun,
 		Truncate: truncate,
@@ -186,4 +192,30 @@ func writeMigrationSummary(w io.Writer, fromURI, toURI string, summary state.Mig
 	}
 
 	return tw.Flush()
+}
+
+func formatMigrationProgress(progress state.MigrationProgress) string {
+	switch progress.Phase {
+	case state.MigrationProgressDryRun:
+		return "dry run; skipping destination writes"
+	case state.MigrationProgressTruncate:
+		return "truncating destination tables"
+	case state.MigrationProgressCopyTable:
+		return fmt.Sprintf("copied %s (%d rows)", progress.Table, progress.SourceRows)
+	case state.MigrationProgressCommit:
+		return "committed copied rows"
+	case state.MigrationProgressSyncSequence:
+		return formatMigrationAttempt("syncing event id sequence", progress.Attempt, progress.MaxAttempts)
+	case state.MigrationProgressVerifyTable:
+		return formatMigrationAttempt(fmt.Sprintf("verifying %s row count", progress.Table), progress.Attempt, progress.MaxAttempts)
+	default:
+		return ""
+	}
+}
+
+func formatMigrationAttempt(label string, attempt, maxAttempts int) string {
+	if attempt <= 0 || maxAttempts <= 0 {
+		return label
+	}
+	return fmt.Sprintf("%s (attempt %d/%d)", label, attempt, maxAttempts)
 }

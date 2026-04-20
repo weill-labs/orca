@@ -9,6 +9,7 @@ import (
 	"os"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -24,6 +25,7 @@ var (
 	postgresTestContainer     *pgmodule.PostgresContainer
 	postgresTestBaseDSN       string
 	postgresTestContainerErr  error
+	postgresTestSchemaSeq     atomic.Int64
 )
 
 func TestMain(m *testing.M) {
@@ -406,7 +408,7 @@ func newPostgresContractHarness(t *testing.T) storeContractHarness {
 	t.Helper()
 
 	baseDSN := ensurePostgresTestContainer(t)
-	schema := fmt.Sprintf("test_%d", time.Now().UnixNano())
+	schema := fmt.Sprintf("test_%d_%d", time.Now().UnixNano(), postgresTestSchemaSeq.Add(1))
 
 	adminPool, err := openReadyPostgresPool(baseDSN)
 	if err != nil {
