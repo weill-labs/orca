@@ -14,6 +14,7 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	pgmodule "github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
+	"github.com/weill-labs/orca/internal/amux"
 	state "github.com/weill-labs/orca/internal/daemonstate"
 )
 
@@ -92,7 +93,7 @@ func TestPRPollTickLeavesEvidenceWithPostgresState(t *testing.T) {
 	})
 
 	tickAndWaitForHeartbeat(t, d, deps, pollTicker, time.Second, "poll tick heartbeat")
-	if got := deps.events.countType("pr.poll_trace"); got != 1 {
+	if got := deps.events.countType(EventPRPollTrace); got != 1 {
 		t.Fatalf("pr.poll_trace event count = %d, want 1 after one poll tick; events = %#v", got, fakeEventTypes(deps.events))
 	}
 }
@@ -198,7 +199,9 @@ func openDaemonReadyPostgresPool(dsn string) (*pgxpool.Pool, error) {
 			lastErr = err
 			pool.Close()
 		}
-		time.Sleep(100 * time.Millisecond)
+		if err := amux.Wait(context.Background(), 100*time.Millisecond); err != nil {
+			return nil, err
+		}
 	}
 	return nil, lastErr
 }

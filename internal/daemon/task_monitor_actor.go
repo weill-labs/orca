@@ -54,6 +54,7 @@ type taskMonitorRequest struct {
 
 type taskMonitorResult struct {
 	key     string
+	kind    taskMonitorCheckKind
 	monitor *TaskMonitor
 	update  TaskStateUpdate
 }
@@ -81,6 +82,7 @@ func (m *TaskMonitor) run() {
 			update := m.handle(request.ctx, request.kind, request.active)
 			request.response <- taskMonitorResult{
 				key:     m.key,
+				kind:    request.kind,
 				monitor: m,
 				update:  update,
 			}
@@ -341,10 +343,16 @@ func (d *Daemon) dispatchTaskMonitorResponses(ctx context.Context, assignments [
 	for _, active := range assignments {
 		monitor := monitorFor(active)
 		if monitor == nil {
+			if kind == taskMonitorCheckPRPoll {
+				d.emitPRPollTaskTrace(ctx, active.Task, active.Worker, "monitor_missing", nil)
+			}
 			continue
 		}
 		response := monitor.dispatch(ctx, kind, active)
 		if response == nil {
+			if kind == taskMonitorCheckPRPoll {
+				d.emitPRPollTaskTrace(ctx, active.Task, active.Worker, "monitor_dispatch_dropped", nil)
+			}
 			continue
 		}
 		responses = append(responses, response)
@@ -368,6 +376,9 @@ func (d *Daemon) collectTaskMonitorResults(ctx context.Context, responses []<-ch
 func (d *Daemon) applyTaskMonitorResults(ctx context.Context, results []taskMonitorResult) {
 	for _, result := range results {
 		if !d.isCurrentTaskMonitor(result.key, result.monitor) {
+			if result.kind == taskMonitorCheckPRPoll {
+				d.emitPRPollTaskTrace(ctx, result.update.Active.Task, result.update.Active.Worker, "stale_result_dropped", nil)
+			}
 			continue
 		}
 		d.applyTaskStateUpdate(ctx, result.update)

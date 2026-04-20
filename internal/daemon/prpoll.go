@@ -49,8 +49,8 @@ func (d *Daemon) enqueue(ctx context.Context, projectPath string, prNumber int) 
 	}, nil
 }
 
-func (d *Daemon) checkTaskPRPoll(ctx context.Context, active ActiveAssignment) TaskStateUpdate {
-	update := TaskStateUpdate{Active: active}
+func (d *Daemon) checkTaskPRPoll(ctx context.Context, active ActiveAssignment) (update TaskStateUpdate) {
+	update = TaskStateUpdate{Active: active}
 	update.Active.Task.State = normalizeTaskState(update.Active.Task)
 	now := d.now()
 	if syncWorkerPRTracking(now, &update.Active) {
@@ -58,25 +58,39 @@ func (d *Daemon) checkTaskPRPoll(ctx context.Context, active ActiveAssignment) T
 	}
 	update.Active.Worker.LastPRPollAt = now
 	update.WorkerChanged = true
-	profile, err := d.profileForTask(ctx, active.Task)
+	profile := AgentProfile{Name: active.Task.AgentProfile}
+	traceAction := "poll_complete"
+	var traceErr error
+	defer func() {
+		d.tracePRPoll(&update, profile, traceAction, traceErr)
+	}()
+
+	loadedProfile, err := d.profileForTask(ctx, active.Task)
 	if err != nil {
+		traceAction = "profile_error"
+		traceErr = err
 		return update
 	}
+	profile = loadedProfile
 
 	switch update.Active.Task.State {
 	case TaskStateDone:
+		traceAction = "task_done"
 		return update
 	case TaskStateMerged:
 		update.CompletionStatus = TaskStatusDone
 		update.CompletionEventType = EventTaskCompleted
 		update.CompletionMerged = true
 		update.CompletionMessage = "task finished"
+		traceAction = "task_already_merged"
 		return update
 	}
 
 	if update.Active.Task.PRNumber == 0 {
 		prNumber, err := d.lookupPRNumber(ctx, update.Active.Task.Project, update.Active.Task.Branch)
 		if err != nil {
+			traceAction = "lookup_pr_error"
+			traceErr = err
 			d.appendGitHubRateLimitEvent(&update, profile, err)
 			return update
 		}
@@ -84,6 +98,8 @@ func (d *Daemon) checkTaskPRPoll(ctx context.Context, active ActiveAssignment) T
 			discoveredBranch := ""
 			prNumber, discoveredBranch, err = d.findPRByIssueID(ctx, update.Active.Task.Project, update.Active.Task.Issue)
 			if err != nil {
+				traceAction = "find_pr_by_issue_error"
+				traceErr = err
 				d.appendGitHubRateLimitEvent(&update, profile, err)
 				return update
 			}
@@ -104,38 +120,50 @@ func (d *Daemon) checkTaskPRPoll(ctx context.Context, active ActiveAssignment) T
 				update.TaskChanged = true
 			}
 			update.Events = append(update.Events, d.assignmentEvent(update.Active, profile, EventPRDetected, "pull request detected"))
+			traceAction = "pr_detected"
 		}
 	}
 
 	if update.Active.Task.PRNumber == 0 {
+		traceAction = "no_pr_found"
 		return update
 	}
 	if entry, err := d.state.MergeEntry(ctx, update.Active.Task.Project, update.Active.Task.PRNumber); err == nil && entry != nil {
 		_, err := d.resolvePRTerminalState(ctx, &update, profile, now)
 		if err != nil {
+			traceAction = "queued_terminal_state_error"
+			traceErr = err
 			d.appendGitHubRateLimitEvent(&update, profile, err)
 			return update
 		}
+		traceAction = "merge_queue_terminal_state_polled"
 		return update
 	}
 
 	handled, err := d.resolvePRTerminalState(ctx, &update, profile, now)
 	if err != nil {
+		traceAction = "terminal_state_error"
+		traceErr = err
 		if d.appendGitHubRateLimitEvent(&update, profile, err) {
 			return update
 		}
 		if d.handlePRChecksPoll(ctx, &update, profile) {
+			traceAction = "ci_poll_after_terminal_error"
 			return update
 		}
+		traceAction = "follow_up_after_terminal_error"
 		return d.continuePRFollowUpPolls(ctx, update, profile)
 	}
 	if handled {
+		traceAction = "terminal_state_handled"
 		return update
 	}
 
 	if d.handlePRChecksPoll(ctx, &update, profile) {
+		traceAction = "ci_poll_handled"
 		return update
 	}
+	traceAction = "follow_up_poll"
 	return d.continuePRFollowUpPolls(ctx, update, profile)
 }
 
