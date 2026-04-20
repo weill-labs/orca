@@ -8,7 +8,8 @@ import (
 )
 
 func TestResolveStateBackendUsesConfigFileByDefault(t *testing.T) {
-	t.Parallel()
+	t.Setenv("ORCA_STATE_DB", "")
+	t.Setenv("ORCA_STATE_DSN", "")
 
 	configDir := t.TempDir()
 	stateDBPath := filepath.Join(configDir, "state.db")
@@ -34,8 +35,6 @@ func TestResolveStateBackendUsesConfigFileByDefault(t *testing.T) {
 }
 
 func TestResolveStateBackendUsesExplicitSQLiteOverride(t *testing.T) {
-	t.Parallel()
-
 	t.Setenv("ORCA_STATE_DB", "sqlite:///tmp/orca-shell.db")
 
 	backend, err := ResolveStateBackend(filepath.Join(t.TempDir(), "state.db"))
@@ -50,8 +49,25 @@ func TestResolveStateBackendUsesExplicitSQLiteOverride(t *testing.T) {
 	}
 }
 
+func TestResolveStateBackendUsesExplicitPostgresOverride(t *testing.T) {
+	t.Setenv("ORCA_STATE_DB", "")
+	t.Setenv("ORCA_STATE_DSN", "postgres://orca:orca@127.0.0.1:55432/orca?sslmode=disable")
+
+	backend, err := ResolveStateBackend(filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatalf("ResolveStateBackend() error = %v", err)
+	}
+	if got, want := backend.Kind, StateBackendPostgres; got != want {
+		t.Fatalf("backend.Kind = %q, want %q", got, want)
+	}
+	if got, want := backend.DSN, "postgres://orca:orca@127.0.0.1:55432/orca?sslmode=disable"; got != want {
+		t.Fatalf("backend.DSN = %q, want %q", got, want)
+	}
+}
+
 func TestResolveStateBackendRequiresConfiguredPostgresDSN(t *testing.T) {
-	t.Parallel()
+	t.Setenv("ORCA_STATE_DB", "")
+	t.Setenv("ORCA_STATE_DSN", "")
 
 	configDir := t.TempDir()
 	stateDBPath := filepath.Join(configDir, "state.db")
@@ -65,5 +81,28 @@ func TestResolveStateBackendRequiresConfiguredPostgresDSN(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "make dev-postgres") {
 		t.Fatalf("ResolveStateBackend() error = %q, want setup hint", err)
+	}
+}
+
+func TestResolveStateBackendRejectsUnsupportedConfigDSN(t *testing.T) {
+	t.Setenv("ORCA_STATE_DB", "")
+	t.Setenv("ORCA_STATE_DSN", "")
+
+	configDir := t.TempDir()
+	configPath := filepath.Join(configDir, "config.toml")
+	if err := os.WriteFile(configPath, []byte(strings.Join([]string{
+		"[state]",
+		`dsn = "mysql://localhost/orca"`,
+		"",
+	}, "\n")), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", configPath, err)
+	}
+
+	_, err := ResolveStateBackend(filepath.Join(configDir, "state.db"))
+	if err == nil {
+		t.Fatal("ResolveStateBackend() error = nil, want unsupported backend error")
+	}
+	if !strings.Contains(err.Error(), "postgres://") {
+		t.Fatalf("ResolveStateBackend() error = %q, want syntax guidance", err)
 	}
 }

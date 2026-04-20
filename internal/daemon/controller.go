@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/weill-labs/orca/internal/amux"
+	"github.com/weill-labs/orca/internal/config"
 	state "github.com/weill-labs/orca/internal/daemonstate"
 	"github.com/weill-labs/orca/internal/pool"
 	"github.com/weill-labs/orca/internal/project"
@@ -178,10 +179,14 @@ type LocalController struct {
 
 func ResolvePaths() (Paths, error) {
 	if stateDB := strings.TrimSpace(os.Getenv("ORCA_STATE_DB")); stateDB != "" {
+		resolvedStateDB, err := config.ResolveSQLitePath(stateDB)
+		if err != nil {
+			return Paths{}, err
+		}
 		return Paths{
-			ConfigDir: filepath.Dir(stateDB),
-			StateDB:   stateDB,
-			PIDDir:    filepath.Join(filepath.Dir(stateDB), "pids"),
+			ConfigDir: filepath.Dir(resolvedStateDB),
+			StateDB:   resolvedStateDB,
+			PIDDir:    filepath.Join(filepath.Dir(resolvedStateDB), "pids"),
 		}, nil
 	}
 

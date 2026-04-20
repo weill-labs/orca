@@ -7,10 +7,10 @@ import (
 	"io"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 
 	"github.com/weill-labs/orca/internal/cli"
+	"github.com/weill-labs/orca/internal/config"
 	"github.com/weill-labs/orca/internal/daemon"
 	state "github.com/weill-labs/orca/internal/daemonstate"
 )
@@ -40,6 +40,7 @@ type appRunner interface {
 
 type runDependencies struct {
 	resolvePaths     func() (daemon.Paths, error)
+	bootstrapState   func(context.Context, string, daemon.Paths) error
 	openStateStore   func(string) (stateStore, error)
 	newController    func(daemon.ControllerOptions) (daemon.Controller, error)
 	newApp           func(cli.Options) appRunner
@@ -48,7 +49,10 @@ type runDependencies struct {
 }
 
 var defaultRunDependencies = runDependencies{
-	resolvePaths:   daemon.ResolvePaths,
+	resolvePaths: daemon.ResolvePaths,
+	bootstrapState: func(ctx context.Context, command string, paths daemon.Paths) error {
+		return bootstrapLegacySQLiteState(ctx, command, paths, defaultStateBootstrapDeps)
+	},
 	openStateStore: openDefaultStateStore,
 	newController: func(options daemon.ControllerOptions) (daemon.Controller, error) {
 		return daemon.NewLocalController(options)
@@ -65,10 +69,14 @@ func main() {
 }
 
 func openDefaultStateStore(path string) (stateStore, error) {
-	if dsn := strings.TrimSpace(os.Getenv("ORCA_STATE_DSN")); dsn != "" {
-		return openPostgresStateStore(dsn)
+	backend, err := config.ResolveStateBackend(path)
+	if err != nil {
+		return nil, err
 	}
-	return openSQLiteStateStore(path)
+	if backend.Kind == config.StateBackendSQLite {
+		return openSQLiteStateStore(backend.SQLitePath)
+	}
+	return openPostgresStateStore(backend.DSN)
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
@@ -118,6 +126,13 @@ func runWithDeps(args []string, stdout, stderr io.Writer, deps runDependencies, 
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
+	}
+
+	if deps.bootstrapState != nil {
+		if err := deps.bootstrapState(context.Background(), args[0], paths); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
 	}
 
 	store, err := deps.openStateStore(paths.StateDB)

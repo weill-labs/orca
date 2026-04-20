@@ -111,8 +111,6 @@ func TestStartLaunchesDaemonInOwnProcessGroup(t *testing.T) {
 }
 
 func TestResolvePathsAcceptsSQLiteURIOverride(t *testing.T) {
-	t.Parallel()
-
 	t.Setenv("ORCA_STATE_DB", "sqlite:///tmp/orca-state.db")
 
 	paths, err := ResolvePaths()

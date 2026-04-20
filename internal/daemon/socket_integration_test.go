@@ -44,6 +44,7 @@ func TestRunProcessAssignResumeAndCancelOverUnixSocket(t *testing.T) {
 	}
 	stateDB := filepath.Join(configDir, "state.db")
 	pidFile := paths.pidFile()
+	t.Setenv("ORCA_STATE_DB", stateDB)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -244,6 +245,7 @@ func TestRunProcessCancelOverUnixSocketIgnoresDeadPane(t *testing.T) {
 	}
 	stateDB := filepath.Join(configDir, "state.db")
 	pidFile := paths.pidFile()
+	t.Setenv("ORCA_STATE_DB", stateDB)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -386,6 +388,7 @@ func TestRunProcessBatchOverUnixSocket(t *testing.T) {
 	}
 	stateDB := filepath.Join(configDir, "state.db")
 	pidFile := paths.pidFile()
+	t.Setenv("ORCA_STATE_DB", stateDB)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

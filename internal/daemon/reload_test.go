@@ -413,6 +413,7 @@ func TestRunProcessReloadOverUnixSocket(t *testing.T) {
 	}
 	stateDB := paths.StateDB
 	pidFile := paths.pidFile()
+	t.Setenv("ORCA_STATE_DB", stateDB)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

@@ -34,7 +34,7 @@ func (a *App) pidFileDaemonProbe() daemonFallbackProbe {
 	return daemonFallbackProbe{
 		pid:     pid,
 		alive:   true,
-		warning: backendMismatchWarningForPID(pid, a.readProcessEnviron),
+		warning: backendMismatchWarningForPID(pid, a.readProcessEnviron, a.resolvePaths),
 	}
 }
 
@@ -54,7 +54,7 @@ func (a *App) fallbackDaemonProbe(status state.ProjectStatus) daemonFallbackProb
 			return daemonFallbackProbe{
 				pid:     storedPID,
 				alive:   true,
-				warning: backendMismatchWarningForPID(storedPID, a.readProcessEnviron),
+				warning: backendMismatchWarningForPID(storedPID, a.readProcessEnviron, a.resolvePaths),
 			}
 		}
 	}

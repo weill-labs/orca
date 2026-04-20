@@ -122,6 +122,9 @@ func TestStartDaemonLifecycleStopsAndMarksStoppedWhenStatusUpdateFails(t *testin
 }
 
 func TestOpenDaemonStoreUsesConfiguredPostgresByDefault(t *testing.T) {
+	t.Setenv("ORCA_STATE_DB", "")
+	t.Setenv("ORCA_STATE_DSN", "")
+
 	configDir := t.TempDir()
 	configPath := filepath.Join(configDir, "config.toml")
 	if err := os.WriteFile(configPath, []byte(strings.Join([]string{

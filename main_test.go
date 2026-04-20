@@ -239,6 +239,9 @@ func TestRunDaemonProcessRejectsLegacyProjectFlag(t *testing.T) {
 }
 
 func TestOpenDefaultStateStoreUsesConfiguredPostgresByDefault(t *testing.T) {
+	t.Setenv("ORCA_STATE_DB", "")
+	t.Setenv("ORCA_STATE_DSN", "")
+
 	configDir := t.TempDir()
 	configPath := filepath.Join(configDir, "config.toml")
 	if err := os.WriteFile(configPath, []byte(strings.Join([]string{
@@ -460,6 +463,75 @@ func TestBootstrapLegacySQLiteStateSkipsNonStartCommandsAndNonEmptyPostgres(t *t
 			}
 			if openPostgresCalls != 0 {
 				t.Fatalf("openPostgresStore calls = %d, want 0", openPostgresCalls)
+			}
+		})
+	}
+}
+
+func TestBootstrapLegacySQLiteStateSkipsSQLiteBackendsAndMissingLegacyState(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		backend       config.StateBackend
+		statErr       error
+		wantOpenCalls int
+	}{
+		{
+			name: "configured sqlite backend",
+			backend: config.StateBackend{
+				Kind:       config.StateBackendSQLite,
+				SQLitePath: "/tmp/override.db",
+			},
+			wantOpenCalls: 0,
+		},
+		{
+			name: "missing legacy sqlite file",
+			backend: config.StateBackend{
+				Kind: config.StateBackendPostgres,
+				DSN:  "postgres://orca:orca@127.0.0.1:55432/orca?sslmode=disable",
+			},
+			statErr:       os.ErrNotExist,
+			wantOpenCalls: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			paths := daemon.Paths{StateDB: "/tmp/orca/state.db"}
+			openCalls := 0
+
+			err := bootstrapLegacySQLiteState(context.Background(), "start", paths, stateBootstrapDeps{
+				resolveStateBackend: func(string) (config.StateBackend, error) {
+					return tt.backend, nil
+				},
+				stat: func(string) (os.FileInfo, error) {
+					if tt.statErr != nil {
+						return nil, tt.statErr
+					}
+					return stubFileInfo{}, nil
+				},
+				openSQLiteStore: func(string) (stateStore, error) {
+					openCalls++
+					return &stubStateStore{}, nil
+				},
+				openPostgresStore: func(string) (stateStore, error) {
+					openCalls++
+					return &stubStateStore{}, nil
+				},
+				migrate: func(context.Context, state.Store, state.Store, state.MigrationOptions) (state.MigrationSummary, error) {
+					t.Fatal("migrate should not be called")
+					return state.MigrationSummary{}, nil
+				},
+			})
+			if err != nil {
+				t.Fatalf("bootstrapLegacySQLiteState() error = %v", err)
+			}
+			if got, want := openCalls, tt.wantOpenCalls; got != want {
+				t.Fatalf("open calls = %d, want %d", got, want)
 			}
 		})
 	}

@@ -28,10 +28,36 @@ go install github.com/weill-labs/orca@latest
 make install  # builds to ~/.local/bin/orca
 ```
 
+## State backend
+
+Orca uses Postgres by default. For local development, run:
+
+```bash
+make setup
+```
+
+That activates git hooks, starts a local Postgres container, and writes
+`~/.config/orca/config.toml`:
+
+```toml
+[state]
+dsn = "postgres://orca:orca@127.0.0.1:55432/orca?sslmode=disable"
+```
+
+If you already have legacy SQLite state at `~/.config/orca/state.db`, the next
+`orca start` auto-migrates it into the configured Postgres database before the
+daemon starts.
+
+Need SQLite for a one-off? Set `ORCA_STATE_DB=/absolute/path/to/state.db` or
+`ORCA_STATE_DSN=sqlite:///absolute/path/to/state.db` explicitly.
+
 ## Quick start
 
 ```bash
-# 1. Configure clone pool and agent profiles
+# 1. Start local Postgres and write ~/.config/orca/config.toml
+make setup
+
+# 2. Configure clone pool and agent profiles
 mkdir -p ~/sync/github/myproject/myproject/.orca
 cat > ~/sync/github/myproject/myproject/.orca/config.toml << 'EOF'
 [pool]
@@ -46,20 +72,20 @@ nudge_command = "Enter"
 max_nudge_retries = 3
 EOF
 
-# 2. Create clones with pool markers
+# 3. Create clones with pool markers
 for i in 1 2 3; do
   git clone ~/sync/github/myproject/myproject ~/sync/github/myproject/myproject-${i}
   touch ~/sync/github/myproject/myproject-${i}/.orca-pool
 done
 
-# 3. Start the daemon
+# 4. Start the daemon
 export AMUX_SESSION=my-session
 orca start --project ~/sync/github/myproject/myproject
 
-# 4. Assign work
+# 5. Assign work
 orca assign LAB-123 --prompt "Fix the auth bug. TDD. Open a PR when done."
 
-# 4b. Or batch multiple assignments with a default 5s delay between dispatches
+# 5b. Or batch multiple assignments with a default 5s delay between dispatches
 cat > tasks.json <<'EOF'
 [
   {"issue":"LAB-123","agent":"codex","prompt":"Fix the auth bug. TDD. Open a PR when done."},
@@ -68,16 +94,16 @@ cat > tasks.json <<'EOF'
 EOF
 orca batch tasks.json --delay 10s
 
-# 5. Monitor
+# 6. Monitor
 orca status
 orca workers
 orca pool
 orca events        # NDJSON event stream
 
-# 5b. Queue a ready PR for serialized landing
+# 6b. Queue a ready PR for serialized landing
 orca enqueue 123
 
-# 6. Cancel or stop
+# 7. Cancel or stop
 orca cancel LAB-123
 orca stop
 ```
