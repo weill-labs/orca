@@ -80,6 +80,10 @@ The design for LAB-1408 should evolve the current `TaskMonitor` into a
 `TaskLifecycleActor` rather than introducing a second competing per-task
 concurrency model.
 
+Because the actor stores `Task`, `Worker`, and `taskMonitorNudge`, the actor and
+machine types should live in `internal/daemon`, not a separate
+`internal/daemon/taskfsm` package.
+
 ### Actor model
 
 - One actor per active task.
@@ -178,6 +182,72 @@ type Event interface {
 	Kind() EventKind
 }
 
+type PRDiscovered struct {
+	PRNumber int
+	Source   string // prpoll, relay, reconcile
+}
+
+func (PRDiscovered) Kind() EventKind { return EventPRDiscovered }
+
+type CIObserved struct {
+	Bucket string // pending, fail, pass, cancel, skipping
+}
+
+func (CIObserved) Kind() EventKind { return EventCIObserved }
+
+type PRMergedObserved struct{}
+
+func (PRMergedObserved) Kind() EventKind { return EventPRMergedObserved }
+
+type PRClosedObserved struct{}
+
+func (PRClosedObserved) Kind() EventKind { return EventPRClosedObserved }
+
+type ReviewObserved struct {
+	BlockingCount        int
+	Idle                 bool
+	NudgeBudgetExhausted bool
+}
+
+func (ReviewObserved) Kind() EventKind { return EventReviewObserved }
+
+type ReviewApprovedObserved struct{}
+
+func (ReviewApprovedObserved) Kind() EventKind { return EventReviewApprovedObserved }
+
+type MergeConflictObserved struct {
+	State string // CONFLICTING, MERGEABLE, UNKNOWN...
+}
+
+func (MergeConflictObserved) Kind() EventKind { return EventMergeConflictObserved }
+
+type WorkerEscalated struct {
+	Reason string
+}
+
+func (WorkerEscalated) Kind() EventKind { return EventWorkerEscalated }
+
+type WorkerRecovered struct{}
+
+func (WorkerRecovered) Kind() EventKind { return EventWorkerRecovered }
+
+type UserCancelled struct{}
+
+func (UserCancelled) Kind() EventKind { return EventUserCancelled }
+
+type LifecycleCompleted struct {
+	Outcome string // done, cancelled, failed
+}
+
+func (LifecycleCompleted) Kind() EventKind { return EventLifecycleCompleted }
+
+type FatalErrorObserved struct {
+	Outcome string // always "failed"
+	Reason  string
+}
+
+func (FatalErrorObserved) Kind() EventKind { return EventFatalErrorObserved }
+
 type TaskLifecycleActor struct {
 	key    string
 	daemon *Daemon
@@ -221,41 +291,7 @@ const (
 	ResumeReviewPending
 )
 
-type PRDiscovered struct {
-	PRNumber int
-	Source   string // prpoll, relay, reconcile
-}
-
-type CIObserved struct {
-	Bucket string // pending, fail, pass, cancel, skipping
-}
-
-type ReviewObserved struct {
-	BlockingCount int
-	Idle          bool
-	NudgeBudgetExhausted bool
-}
-
-type MergeConflictObserved struct {
-	State string // CONFLICTING, MERGEABLE, UNKNOWN...
-}
-
-type WorkerEscalated struct {
-	Reason string
-}
-
-type WorkerRecovered struct {
-	Target ResumeTarget
-}
-
-type LifecycleCompleted struct {
-	Outcome string // done, cancelled, failed
-}
-
-type FatalErrorObserved struct {
-	Outcome string // failed or cancelled
-	Reason  string
-}
+func ResumeTargetFor(snapshot Snapshot) (ResumeTarget, error)
 
 type Machine struct {
 	state State
@@ -303,7 +339,7 @@ func (m *Machine) Apply(snapshot Snapshot, event Event) (TaskActorResult, error)
 
 type FSM interface {
 	Apply(snapshot Snapshot, event Event) (TaskActorResult, error)
-	HydrateLegacy(snapshot Snapshot) State
+	HydrateLegacy(snapshot Snapshot) (State, error)
 }
 ```
 
@@ -376,7 +412,8 @@ call sites are migrated. Self-loops are explicit because they still carry hooks.
 | `PRDetected` | `CIObserved` | `Bucket in {pass, cancel, skipping}` | `ReviewPending` | `persist_ci_observation` |
 | `PRDetected` | `ReviewObserved` | any | `PRDetected` | `persist_review_observation`, `maybe_queue_review_nudge`, `maybe_emit_review_escalation` |
 | `PRDetected` | `ReviewApprovedObserved` | none | `PRDetected` | `persist_review_observation`, `maybe_emit_review_approved` |
-| `PRDetected` | `MergeConflictObserved` | `State == CONFLICTING` | `PRDetected` | `maybe_queue_conflict_nudge` |
+| `PRDetected` | `MergeConflictObserved` | `State == CONFLICTING` | `PRDetected` | `persist_mergeability_observation`, `maybe_queue_conflict_nudge` |
+| `PRDetected` | `MergeConflictObserved` | `State != CONFLICTING` | `PRDetected` | `persist_mergeability_observation` |
 | `PRDetected` | `PRMergedObserved` | none | `Merged` | `emit_pr_merged`, `request_completion` |
 | `PRDetected` | `PRClosedObserved` | none | `Failed` | `emit_pr_closed`, `request_completion` |
 | `PRDetected` | `WorkerEscalated` | none | `Escalated` | `mark_worker_escalated`, `emit_worker_escalated` |
@@ -387,27 +424,33 @@ call sites are migrated. Self-loops are explicit because they still carry hooks.
 | `CIPending` | `CIObserved` | `Bucket in {pass, cancel, skipping}` | `ReviewPending` | `persist_ci_observation` |
 | `CIPending` | `ReviewObserved` | any | `CIPending` | `persist_review_observation`, `maybe_queue_review_nudge`, `maybe_emit_review_escalation` |
 | `CIPending` | `ReviewApprovedObserved` | none | `CIPending` | `persist_review_observation`, `maybe_emit_review_approved` |
-| `CIPending` | `MergeConflictObserved` | `State == CONFLICTING` | `CIPending` | `maybe_queue_conflict_nudge` |
+| `CIPending` | `MergeConflictObserved` | `State == CONFLICTING` | `CIPending` | `persist_mergeability_observation`, `maybe_queue_conflict_nudge` |
+| `CIPending` | `MergeConflictObserved` | `State != CONFLICTING` | `CIPending` | `persist_mergeability_observation` |
 | `CIPending` | `PRMergedObserved` | none | `Merged` | `emit_pr_merged`, `request_completion` |
 | `CIPending` | `PRClosedObserved` | none | `Failed` | `emit_pr_closed`, `request_completion` |
 | `CIPending` | `WorkerEscalated` | none | `Escalated` | `mark_worker_escalated`, `emit_worker_escalated` |
 | `CIPending` | `UserCancelled` | none | `Cancelled` | `request_completion` |
 | `CIPending` | `FatalErrorObserved` | `Outcome == failed` | `Failed` | `request_completion` |
+| `ReviewPending` | `CIObserved` | `Bucket in {pending, fail}` | `CIPending` | `persist_ci_observation`, `maybe_queue_ci_nudge`, `maybe_emit_ci_escalation` |
+| `ReviewPending` | `CIObserved` | `Bucket in {pass, cancel, skipping}` | `ReviewPending` | `persist_ci_observation` |
 | `ReviewPending` | `ReviewObserved` | `BlockingCount == 0` | `ReviewPending` | `persist_review_observation` |
 | `ReviewPending` | `ReviewObserved` | `BlockingCount > 0 && !Idle` | `ReviewPending` | `persist_review_observation` |
 | `ReviewPending` | `ReviewObserved` | `BlockingCount > 0 && Idle && !NudgeBudgetExhausted` | `ReviewPending` | `persist_review_observation`, `maybe_queue_review_nudge` |
 | `ReviewPending` | `ReviewObserved` | `BlockingCount > 0 && NudgeBudgetExhausted` | `ReviewPending` | `persist_review_observation`, `maybe_emit_review_escalation` |
 | `ReviewPending` | `ReviewApprovedObserved` | none | `ReviewPending` | `persist_review_observation`, `maybe_emit_review_approved` |
-| `ReviewPending` | `MergeConflictObserved` | `State == CONFLICTING` | `ReviewPending` | `maybe_queue_conflict_nudge` |
+| `ReviewPending` | `MergeConflictObserved` | `State == CONFLICTING` | `ReviewPending` | `persist_mergeability_observation`, `maybe_queue_conflict_nudge` |
+| `ReviewPending` | `MergeConflictObserved` | `State != CONFLICTING` | `ReviewPending` | `persist_mergeability_observation` |
 | `ReviewPending` | `PRMergedObserved` | none | `Merged` | `emit_pr_merged`, `request_completion` |
 | `ReviewPending` | `PRClosedObserved` | none | `Failed` | `emit_pr_closed`, `request_completion` |
 | `ReviewPending` | `WorkerEscalated` | none | `Escalated` | `mark_worker_escalated`, `emit_worker_escalated` |
 | `ReviewPending` | `UserCancelled` | none | `Cancelled` | `request_completion` |
 | `ReviewPending` | `FatalErrorObserved` | `Outcome == failed` | `Failed` | `request_completion` |
-| `Escalated` | `WorkerRecovered` | `Target == ResumeAssigned` | `Assigned` | `clear_worker_escalation`, `emit_worker_recovered` |
-| `Escalated` | `WorkerRecovered` | `Target == ResumePRDetected` | `PRDetected` | `clear_worker_escalation`, `emit_worker_recovered` |
-| `Escalated` | `WorkerRecovered` | `Target == ResumeCIPending` | `CIPending` | `clear_worker_escalation`, `emit_worker_recovered` |
-| `Escalated` | `WorkerRecovered` | `Target == ResumeReviewPending` | `ReviewPending` | `clear_worker_escalation`, `emit_worker_recovered` |
+| `Escalated` | `PRMergedObserved` | none | `Merged` | `emit_pr_merged`, `request_completion` |
+| `Escalated` | `PRClosedObserved` | none | `Failed` | `emit_pr_closed`, `request_completion` |
+| `Escalated` | `WorkerRecovered` | `ResumeTargetFor(snapshot) == ResumeAssigned` | `Assigned` | `clear_worker_escalation`, `emit_worker_recovered` |
+| `Escalated` | `WorkerRecovered` | `ResumeTargetFor(snapshot) == ResumePRDetected` | `PRDetected` | `clear_worker_escalation`, `emit_worker_recovered` |
+| `Escalated` | `WorkerRecovered` | `ResumeTargetFor(snapshot) == ResumeCIPending` | `CIPending` | `clear_worker_escalation`, `emit_worker_recovered` |
+| `Escalated` | `WorkerRecovered` | `ResumeTargetFor(snapshot) == ResumeReviewPending` | `ReviewPending` | `clear_worker_escalation`, `emit_worker_recovered` |
 | `Escalated` | `UserCancelled` | none | `Cancelled` | `request_completion` |
 | `Escalated` | `FatalErrorObserved` | `Outcome == failed` | `Failed` | `request_completion` |
 | `Merged` | `LifecycleCompleted` | `Outcome == done` | `Done` | none |
@@ -420,10 +463,15 @@ call sites are migrated. Self-loops are explicit because they still carry hooks.
   current daemon does.
 - CI/review nudge exhaustion is modeled as a self-loop with escalation hooks,
   not a forced transition to `Escalated`, because that matches current behavior.
+- `ReviewPending + CIObserved` stays legal because the current daemon can re-run
+  CI after review has already started, for example after a new push.
 - Review and merge-conflict hooks stay legal from `PRDetected` and `CIPending`,
   because those pollers already run before the task becomes `review_pending`.
-- Recovery from `Escalated` is parameterized by a resume target, because the
-  current daemon resumes to different non-terminal states based on worker facts.
+- Recovery from `Escalated` is parameterized by `ResumeTargetFor(snapshot)`,
+  because the current daemon resumes to different non-terminal states based on
+  worker facts and that derivation should stay inside the actor/FSM boundary.
+- `Merged + UserCancelled` is intentionally invalid. Once the PR is merged, the
+  actor only accepts `LifecycleCompleted`; a later cancel cannot "unmerge" work.
 - `Merged` stays explicit even though current code usually collapses it to
   `done` in the same update. The explicit state makes hooks reviewable.
 
@@ -432,6 +480,10 @@ call sites are migrated. Self-loops are explicit because they still carry hooks.
 The end-state FSM above should not encode the current read-time derivation hacks
 as normal transitions. Instead, the migration keeps a separate
 `HydrateLegacy(snapshot)` adapter until every writer emits real events.
+
+Rows are evaluated top-to-bottom. First match wins. Inconsistent snapshots
+should return an error from `HydrateLegacy(...)` rather than silently inventing
+state.
 
 | Legacy snapshot condition | Hydrated state | Current sources |
 | --- | --- | --- |
@@ -457,7 +509,7 @@ explicit because they currently write task state directly.
 | Persisted task pane exists check fails or capture fails | `Escalated` | `recovery.go: escalateAssignmentError(...)` |
 | Persisted task pane is missing on daemon startup | `Escalated` | `recovery.go: escalateAssignmentError(...)` |
 | Persisted task was `starting` and pane exited on startup | `Failed` | `recovery.go: failAssignment(...)` |
-| Exited pane auto-restart succeeds | `WorkerRecovered(Target=...)` | `exited.go` via `taskStateForAssignment(...)` |
+| Exited pane auto-restart succeeds | `WorkerRecovered` + `ResumeTargetFor(snapshot)` | `exited.go` via `taskStateForAssignment(...)` |
 
 ## Guard And Hook Design
 
@@ -536,13 +588,14 @@ Actor-side behavior:
 The current transition and its side effects become visible in one place instead
 of being split across `task_state.go`, `ci.go`, and post-apply daemon code.
 
-### Concrete example: `Escalated + WorkerRecovered(Target=ReviewPending) -> ReviewPending`
+### Concrete example: `Escalated + WorkerRecovered -> ReviewPending`
 
 Input:
 
 ```go
 actor.fsm.state = StateEscalated
-event := WorkerRecovered{Target: ResumeReviewPending}
+event := WorkerRecovered{}
+next, err := ResumeTargetFor(snapshot) // returns ResumeReviewPending
 ```
 
 Actor-owned result:
@@ -556,7 +609,18 @@ TaskActorResult{
 }
 ```
 
-This matches the real behavior better than hard-coding `Escalated -> PRDetected`.
+This matches the real behavior better than hard-coding `Escalated -> PRDetected`
+or forcing producers to re-implement the old `taskStateForAssignment(...)`
+derivation.
+
+### Explicit producer obligations
+
+- `PRDiscovered` is emitted only on `PRNumber == 0 -> PRNumber > 0`. Once a task
+  already has a PR number, duplicate `PRDiscovered` events are treated as a
+  producer bug and rejected by the impossible-transition guard.
+- `MergeConflictObserved` is emitted for the full mergeability stream. Non-
+  conflicting values are explicit self-loops because the actor still needs to
+  persist `LastMergeableState` even when no task-state transition occurs.
 
 ## Migration Plan
 
@@ -568,7 +632,8 @@ Ship an actor-owned FSM alongside the existing logic:
 - a `TaskLifecycleActor` that serializes per-task event handling,
 - the authoritative transition table,
 - `PersistedTaskState(...)`,
-- `HydrateLegacy(snapshot)`, and
+- `HydrateLegacy(snapshot) (State, error)`,
+- `ResumeTargetFor(snapshot) (ResumeTarget, error)`, and
 - table-driven tests that prove every row and every impossible transition.
 
 No behavior change in this phase. Existing producers can still route through the
