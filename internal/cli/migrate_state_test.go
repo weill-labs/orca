@@ -124,7 +124,7 @@ func TestRunMigrateStateCommandWritesProgressBeforeSummary(t *testing.T) {
 		"--from", "sqlite:///tmp/source.db",
 		"--to", "postgres://orca:secret@localhost:5432/orca?sslmode=disable",
 	}, migrateStateCommandDeps{
-		openSourceStore: func(string) (state.Store, error) { return sourceStore, nil },
+		openSourceStore:      func(string) (state.Store, error) { return sourceStore, nil },
 		openDestinationStore: func(string) (state.Store, error) { return destinationStore, nil },
 		migrate: func(ctx context.Context, _, _ state.Store, _ state.MigrationOptions) (state.MigrationSummary, error) {
 			state.EmitMigrationProgress(ctx, state.MigrationProgress{
