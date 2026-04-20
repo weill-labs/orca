@@ -14,7 +14,7 @@ if ! echo "$command" | grep -qE 'amux (send-keys|type-keys)'; then
 fi
 
 # Block commands that tell workers to pick up work autonomously
-if echo "$command" | grep -qiE 'pick up.*(work|issue|task|ticket)|from.*(backlog|queue|linear)|new work|next (issue|task|ticket)|find.*(issue|task|work).*backlog'; then
+if echo "$command" | grep -qiE '\<pick up\>[^.!?]{0,40}\<(work|issue|task|ticket)\>|\<from\>[^.!?]{0,40}\<(backlog|queue|linear)\>|\<new work\>|\<next (issue|task|ticket)\>|\<find\>[^.!?]{0,40}\<(issue|task|work)\>[^.!?]{0,40}\<(backlog|queue|linear)\>'; then
     echo "BLOCKED: Do not tell workers to autonomously pick up work from the backlog. Only assign specific, user-approved issues. Ask the user which issue to assign." >&2
     exit 2
 fi
