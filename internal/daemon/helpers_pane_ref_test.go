@@ -5,6 +5,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/weill-labs/orca/internal/amux"
 )
 
 func TestStableWorkerRef(t *testing.T) {
@@ -316,6 +318,20 @@ func TestSendPromptAndCommandReturnsErrPaneGone(t *testing.T) {
 			t.Fatalf("waitIdle calls = %d, want 0", got)
 		}
 	})
+
+	t.Run("when pane exists returns ErrPaneNotFound", func(t *testing.T) {
+		t.Parallel()
+
+		deps := newTestDeps(t)
+		d := deps.newDaemon(t)
+		deps.amux.paneExistsErr = amux.ErrPaneNotFound
+
+		err := d.sendPromptAndCommand(context.Background(), "pane-1", "Continue work", "Enter")
+		if err == nil || !strings.Contains(err.Error(), "pane gone") {
+			t.Fatalf("sendPromptAndCommand() error = %v, want pane-gone error", err)
+		}
+		deps.amux.requireSentKeys(t, "pane-1", nil)
+	})
 }
 
 func TestStartAgentInPaneReturnsErrPaneGone(t *testing.T) {
@@ -330,4 +346,33 @@ func TestStartAgentInPaneReturnsErrPaneGone(t *testing.T) {
 		t.Fatalf("startAgentInPane() error = %v, want pane-gone error", err)
 	}
 	deps.amux.requireSentKeys(t, "pane-1", nil)
+}
+
+func TestClearStaleWorkerPaneRefClearsErrPaneNotFound(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	d := deps.newDaemon(t)
+	worker := Worker{
+		Project:      "/tmp/project",
+		WorkerID:     "worker-01",
+		PaneID:       "pane-1",
+		PaneName:     "w-LAB-854",
+		AgentProfile: "codex",
+		LastCapture:  "stale output",
+	}
+	deps.amux.paneExistsErr = amux.ErrPaneNotFound
+
+	if err := d.clearStaleWorkerPaneRef(context.Background(), &worker); err != nil {
+		t.Fatalf("clearStaleWorkerPaneRef() error = %v", err)
+	}
+	if got := worker.PaneID; got != "" {
+		t.Fatalf("worker.PaneID = %q, want empty", got)
+	}
+	if got, want := worker.PaneName, "worker-01"; got != want {
+		t.Fatalf("worker.PaneName = %q, want %q", got, want)
+	}
+	if got := worker.LastCapture; got != "" {
+		t.Fatalf("worker.LastCapture = %q, want empty", got)
+	}
 }

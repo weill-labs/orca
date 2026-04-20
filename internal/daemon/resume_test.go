@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/weill-labs/orca/internal/amux"
 )
 
 type daemonResumer interface {
@@ -486,6 +488,37 @@ func TestResumeHandlesWorkerLookupAndPaneErrors(t *testing.T) {
 		err := d.Resume(context.Background(), "LAB-757", "")
 		if err == nil || !strings.Contains(err.Error(), "check pane pane-1") {
 			t.Fatalf("Resume() error = %v, want pane lookup context", err)
+		}
+	})
+
+	t.Run("pane not found resumes on a fresh pane", func(t *testing.T) {
+		t.Parallel()
+
+		deps := newTestDeps(t)
+		deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+		seedActiveAssignment(t, deps, "LAB-757", "pane-1")
+		deps.amux.paneExistsErr = amux.ErrPaneNotFound
+		deps.amux.spawnPane = Pane{ID: "pane-2", Name: "w-LAB-757"}
+		deps.amux.spawnHook = func(SpawnRequest) {
+			deps.amux.paneExistsErr = nil
+		}
+
+		d := deps.newDaemon(t)
+		if err := d.Start(context.Background()); err != nil {
+			t.Fatalf("Start() error = %v", err)
+		}
+		t.Cleanup(func() { _ = d.Stop(context.Background()) })
+
+		if err := d.Resume(context.Background(), "LAB-757", ""); err != nil {
+			t.Fatalf("Resume() error = %v", err)
+		}
+
+		task, ok := deps.state.task("LAB-757")
+		if !ok {
+			t.Fatal("task missing after resume")
+		}
+		if got, want := task.PaneID, "pane-2"; got != want {
+			t.Fatalf("task.PaneID = %q, want %q", got, want)
 		}
 	})
 }

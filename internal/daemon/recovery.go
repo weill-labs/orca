@@ -81,7 +81,7 @@ func (d *Daemon) reconcileTaskOnStartup(ctx context.Context, task Task) {
 		Worker: worker,
 	}
 
-	exists, err := d.amux.PaneExists(ctx, active.Task.PaneID)
+	exists, _, err := d.paneExists(ctx, active.Task.PaneID)
 	if err != nil {
 		d.escalateTaskStartupPaneError(ctx, active, "worker pane liveness check failed on daemon startup", err)
 		return

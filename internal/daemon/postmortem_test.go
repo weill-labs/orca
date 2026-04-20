@@ -47,6 +47,7 @@ func TestPaneAlreadyGone(t *testing.T) {
 		want bool
 	}{
 		{name: "nil", err: nil, want: false},
+		{name: "typed pane not found", err: amuxapi.ErrPaneNotFound, want: true},
 		{name: "pane not found", err: errors.New("amux kill pane-1: exit status 1: pane not found"), want: true},
 		{name: "pane missing", err: errors.New("amux kill pane-1: exit status 1: pane missing"), want: true},
 		{name: "no such pane", err: errors.New("amux kill pane-1: exit status 1: no such pane"), want: true},

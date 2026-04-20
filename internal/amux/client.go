@@ -16,6 +16,36 @@ import (
 var spawnPanePattern = regexp.MustCompile(`\bpane\s+(\S+)`)
 
 var ErrWaitContentTimeout = errors.New("amux wait content timeout")
+var ErrPaneNotFound = errors.New("amux pane not found")
+
+type paneNotFoundError struct {
+	err error
+}
+
+func newPaneNotFoundError(err error) error {
+	return paneNotFoundError{err: err}
+}
+
+func (e paneNotFoundError) Error() string {
+	if e.err != nil {
+		return e.err.Error()
+	}
+	return ErrPaneNotFound.Error()
+}
+
+func (e paneNotFoundError) Unwrap() []error {
+	if e.err == nil {
+		return []error{ErrPaneNotFound}
+	}
+	return []error{ErrPaneNotFound, e.err}
+}
+
+func (e paneNotFoundError) Is(target error) bool {
+	if target == nil {
+		return false
+	}
+	return target == ErrPaneNotFound || errors.Is(e.err, target)
+}
 
 // Client wraps the amux CLI for daemon code and tests.
 type Client interface {
@@ -219,9 +249,6 @@ func (c *CLIClient) PaneExists(ctx context.Context, paneID string) (bool, error)
 	if pane.Error == nil {
 		return true, nil
 	}
-	if paneMissing(pane.Error) {
-		return false, nil
-	}
 	return false, paneCaptureError(pane.Error)
 }
 
@@ -330,6 +357,9 @@ func (c *CLIClient) rawCapturePane(ctx context.Context, paneID string, history b
 
 	output, err := c.run(ctx, c.session, "capture", args...)
 	if err != nil {
+		if paneNotFoundMessage(err.Error()) {
+			return capturePane{}, newPaneNotFoundError(err)
+		}
 		return capturePane{}, err
 	}
 
@@ -413,6 +443,14 @@ func commandError(binary string, args []string, output []byte, err error) error 
 }
 
 func paneCaptureError(errInfo *captureCommandError) error {
+	base := formatCaptureCommandError(errInfo)
+	if paneMissing(errInfo) {
+		return newPaneNotFoundError(base)
+	}
+	return base
+}
+
+func formatCaptureCommandError(errInfo *captureCommandError) error {
 	if errInfo == nil {
 		return fmt.Errorf("capture failed")
 	}
@@ -428,6 +466,9 @@ func paneCaptureError(errInfo *captureCommandError) error {
 func captureUnavailable(err error) bool {
 	if err == nil {
 		return false
+	}
+	if errors.Is(err, ErrPaneNotFound) {
+		return true
 	}
 
 	// Keep this in sync with paneCaptureError/paneMissing so ListPanes can
@@ -458,8 +499,14 @@ func paneMissing(errInfo *captureCommandError) bool {
 	if strings.EqualFold(errInfo.Code, "not_found") {
 		return true
 	}
-	message := strings.ToLower(strings.TrimSpace(errInfo.Message))
-	return strings.Contains(message, "not found") || strings.Contains(message, "missing")
+	return paneNotFoundMessage(errInfo.Message)
+}
+
+func paneNotFoundMessage(message string) bool {
+	message = strings.ToLower(strings.TrimSpace(message))
+	return strings.Contains(message, "not found") ||
+		strings.Contains(message, "missing") ||
+		strings.Contains(message, "no such pane")
 }
 
 func waitContentTimedOut(output []byte) bool {

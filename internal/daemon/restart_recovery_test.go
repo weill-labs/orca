@@ -5,6 +5,8 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+
+	"github.com/weill-labs/orca/internal/amux"
 )
 
 func TestDaemonStartReconcilesNonTerminalAssignments(t *testing.T) {
@@ -102,6 +104,18 @@ func TestDaemonStartReconcilesNonTerminalAssignments(t *testing.T) {
 			taskStatus:        TaskStatusStarting,
 			paneID:            "pane-1",
 			paneExists:        map[string]bool{"pane-1": false},
+			wantTaskStatus:    TaskStatusStarting,
+			wantWorker:        true,
+			wantWorkerHealth:  WorkerHealthEscalated,
+			wantEscalateEvent: 1,
+			wantEventType:     EventWorkerEscalated,
+			wantEventMessage:  "worker pane missing on daemon startup",
+		},
+		{
+			name:              "starting worker treats ErrPaneNotFound as missing pane",
+			taskStatus:        TaskStatusStarting,
+			paneID:            "pane-1",
+			paneExistsErr:     amux.ErrPaneNotFound,
 			wantTaskStatus:    TaskStatusStarting,
 			wantWorker:        true,
 			wantWorkerHealth:  WorkerHealthEscalated,
