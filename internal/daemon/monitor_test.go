@@ -374,3 +374,99 @@ func TestDaemonPollTickSkipsMissingTrackedPaneBeforePRPoll(t *testing.T) {
 		t.Fatalf("event.Message = %q, want %q", got, want)
 	}
 }
+
+type prPollErrorState struct {
+	*fakeState
+	nonTerminalErr error
+}
+
+func (s *prPollErrorState) NonTerminalTasks(ctx context.Context, project string) ([]Task, error) {
+	if s.nonTerminalErr != nil {
+		return nil, s.nonTerminalErr
+	}
+	return s.fakeState.NonTerminalTasks(ctx, project)
+}
+
+func TestPRPollAssignmentsEmitsTraceWhenTaskQueryFails(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	stateErr := errors.New("postgres unavailable")
+	d := deps.newDaemonWithOptions(t, func(opts *Options) {
+		opts.State = &prPollErrorState{fakeState: deps.state, nonTerminalErr: stateErr}
+	})
+
+	assignments, err := d.prPollAssignments(context.Background())
+	if err == nil || !errors.Is(err, stateErr) {
+		t.Fatalf("prPollAssignments() error = %v, want %v", err, stateErr)
+	}
+	if got := len(assignments); got != 0 {
+		t.Fatalf("len(assignments) = %d, want 0", got)
+	}
+	event, ok := deps.events.lastEventOfType(EventPRPollTrace)
+	if !ok {
+		t.Fatal("pr poll trace event missing")
+	}
+	if got, want := event.Message, `pr poll trace: action=list_non_terminal_tasks_error error="postgres unavailable"`; got != want {
+		t.Fatalf("event.Message = %q, want %q", got, want)
+	}
+}
+
+func TestPRPollAssignmentsEmitsTraceWhenWorkerCannotResume(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.state.putTaskForTest(Task{
+		Project:      "/tmp/project",
+		Issue:        "LAB-1415",
+		Status:       TaskStatusActive,
+		State:        TaskStateAssigned,
+		WorkerID:     "worker-01",
+		PaneID:       "pane-1",
+		PaneName:     "w-LAB-1415",
+		ClonePath:    deps.pool.clone.Path,
+		Branch:       "LAB-1415",
+		AgentProfile: "codex",
+		CreatedAt:    deps.clock.Now(),
+		UpdatedAt:    deps.clock.Now(),
+	})
+
+	d := deps.newDaemon(t)
+	assignments, err := d.prPollAssignments(context.Background())
+	if err != nil {
+		t.Fatalf("prPollAssignments() error = %v", err)
+	}
+	if got := len(assignments); got != 0 {
+		t.Fatalf("len(assignments) = %d, want 0", got)
+	}
+	event, ok := deps.events.lastEventOfType(EventPRPollTrace)
+	if !ok {
+		t.Fatal("pr poll trace event missing")
+	}
+	if got, want := event.Message, "pr poll trace: issue=LAB-1415 pr_number=0 action=resume_worker_missing"; got != want {
+		t.Fatalf("event.Message = %q, want %q", got, want)
+	}
+}
+
+func TestReconcileTrackedPanesEmitsTraceOnPaneExistsError(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	seedTaskMonitorAssignment(t, deps, "LAB-1415", "pane-1", 0)
+	deps.amux.paneExistsErr = errors.New("amux unavailable")
+
+	d := deps.newDaemon(t)
+	assignments := []ActiveAssignment{activeTaskMonitorAssignment(t, deps, "LAB-1415")}
+
+	reconciled := d.reconcileTrackedPanes(context.Background(), assignments)
+	if got, want := len(reconciled), 1; got != want {
+		t.Fatalf("len(reconciled) = %d, want %d", got, want)
+	}
+	event, ok := deps.events.lastEventOfType(EventPRPollTrace)
+	if !ok {
+		t.Fatal("pr poll trace event missing")
+	}
+	if got, want := event.Message, `pr poll trace: issue=LAB-1415 pr_number=0 action=pane_exists_error error="amux unavailable"`; got != want {
+		t.Fatalf("event.Message = %q, want %q", got, want)
+	}
+}

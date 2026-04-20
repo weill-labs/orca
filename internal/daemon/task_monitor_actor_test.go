@@ -177,6 +177,45 @@ func TestTaskMonitorStaleResultIsDropped(t *testing.T) {
 	if got := worker.LastCIState; got != "" {
 		t.Fatalf("worker.LastCIState = %q, want stale result dropped", got)
 	}
+	event, ok := deps.events.lastEventOfType(EventPRPollTrace)
+	if !ok {
+		t.Fatal("pr poll trace event missing")
+	}
+	if got, want := event.Message, "pr poll trace: issue=LAB-903 pr_number=43 action=stale_result_dropped"; got != want {
+		t.Fatalf("event.Message = %q, want %q", got, want)
+	}
+}
+
+func TestDispatchTaskMonitorChecksEmitsTraceWhenStoppedPRPollMonitorDropsDispatch(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	seedTaskMonitorAssignment(t, deps, "LAB-904", "pane-4", 0)
+
+	d := deps.newDaemon(t)
+	active := activeTaskMonitorAssignment(t, deps, "LAB-904")
+	key := taskMonitorKey(active.Task.Project, active.Task.Issue)
+
+	stopped := newTaskMonitor(d, key)
+	stopped.stop()
+	stopped.wait()
+
+	d.taskMonitorMu.Lock()
+	d.taskMonitors = map[string]*TaskMonitor{key: stopped}
+	d.taskMonitorMu.Unlock()
+
+	results := d.dispatchTaskMonitorChecks(context.Background(), []ActiveAssignment{active}, taskMonitorCheckPRPoll)
+	if got := len(results); got != 0 {
+		t.Fatalf("len(results) = %d, want 0", got)
+	}
+
+	event, ok := deps.events.lastEventOfType(EventPRPollTrace)
+	if !ok {
+		t.Fatal("pr poll trace event missing")
+	}
+	if got, want := event.Message, "pr poll trace: issue=LAB-904 pr_number=0 action=monitor_dispatch_dropped"; got != want {
+		t.Fatalf("event.Message = %q, want %q", got, want)
+	}
 }
 
 func TestApplyTaskStateUpdateDoesNotPersistUnflaggedWorkerFieldsFromMergedUpdate(t *testing.T) {

@@ -60,6 +60,7 @@ const (
 	EventCIPollTrace               = "ci.poll_trace"
 	EventReviewApproved            = "review.approved"
 	EventReviewPollTrace           = "review.poll_trace"
+	EventPRPollTrace               = "pr.poll_trace"
 	EventPRDetected                = "pr.detected"
 	EventPREnqueued                = "pr.enqueued"
 	EventPRLandingStarted          = "pr.landing_started"

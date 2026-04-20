@@ -260,16 +260,19 @@ func TestCheckTaskPRPollDistinguishesPRTerminalStates(t *testing.T) {
 				t.Fatalf("update.CompletionEventType = %q, want %q", got, want)
 			}
 			if tt.wantEventType == "" {
-				if got := len(update.Events); got != 0 {
-					t.Fatalf("len(update.Events) = %d, want 0", got)
+				if got, want := len(update.Events), 1; got != want {
+					t.Fatalf("len(update.Events) = %d, want %d", got, want)
 				}
-				return
+			} else {
+				if got, want := len(update.Events), 2; got != want {
+					t.Fatalf("len(update.Events) = %d, want %d", got, want)
+				}
+				if got, want := update.Events[0].Type, tt.wantEventType; got != want {
+					t.Fatalf("update.Events[0].Type = %q, want %q", got, want)
+				}
 			}
-			if got, want := len(update.Events), 1; got != want {
-				t.Fatalf("len(update.Events) = %d, want %d", got, want)
-			}
-			if got, want := update.Events[0].Type, tt.wantEventType; got != want {
-				t.Fatalf("update.Events[0].Type = %q, want %q", got, want)
+			if got, want := update.Events[len(update.Events)-1].Type, EventPRPollTrace; got != want {
+				t.Fatalf("update.Events[last].Type = %q, want %q", got, want)
 			}
 		})
 	}
@@ -347,11 +350,11 @@ func TestCheckTaskPRPollRegularPathDistinguishesPRTerminalStates(t *testing.T) {
 				t.Fatalf("update.CompletionEventType = %q, want %q", got, want)
 			}
 			if tt.wantEventType == "" {
-				if got := len(update.Events); got != 0 {
-					t.Fatalf("len(update.Events) = %d, want 0", got)
+				if got, want := len(update.Events), 1; got != want {
+					t.Fatalf("len(update.Events) = %d, want %d", got, want)
 				}
 			} else {
-				if got, want := len(update.Events), 1; got != want {
+				if got, want := len(update.Events), 2; got != want {
 					t.Fatalf("len(update.Events) = %d, want %d", got, want)
 				}
 				if got, want := update.Events[0].Type, tt.wantEventType; got != want {
@@ -360,6 +363,9 @@ func TestCheckTaskPRPollRegularPathDistinguishesPRTerminalStates(t *testing.T) {
 				if !tt.wantRateLimitedUntil.IsZero() && !update.Events[0].GitHubRateLimitedUntil.Equal(tt.wantRateLimitedUntil) {
 					t.Fatalf("update.Events[0].GitHubRateLimitedUntil = %v, want %v", update.Events[0].GitHubRateLimitedUntil, tt.wantRateLimitedUntil)
 				}
+			}
+			if got, want := update.Events[len(update.Events)-1].Type, EventPRPollTrace; got != want {
+				t.Fatalf("update.Events[last].Type = %q, want %q", got, want)
 			}
 			if got, want := deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}), 0; got != want {
 				t.Fatalf("mergeable follow-up call count = %d, want %d", got, want)

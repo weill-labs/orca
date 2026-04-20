@@ -136,13 +136,28 @@ func (d *Daemon) runPollTick(ctx context.Context) {
 func (d *Daemon) prPollAssignments(ctx context.Context) ([]ActiveAssignment, error) {
 	tasks, err := d.state.NonTerminalTasks(ctx, d.project)
 	if err != nil {
+		d.emitProjectPRPollTrace(ctx, d.project, "list_non_terminal_tasks_error", err)
 		return nil, err
 	}
 
 	assignments := make([]ActiveAssignment, 0, len(tasks))
 	for _, task := range tasks {
 		worker, hasWorker, err := d.resumeWorker(ctx, task)
-		if err != nil || !hasWorker {
+		taskWorker := Worker{
+			Project:      task.Project,
+			WorkerID:     task.WorkerID,
+			PaneID:       task.PaneID,
+			PaneName:     task.PaneName,
+			Issue:        task.Issue,
+			ClonePath:    task.ClonePath,
+			AgentProfile: task.AgentProfile,
+		}
+		if err != nil {
+			d.emitPRPollTaskTrace(ctx, task, taskWorker, "resume_worker_error", err)
+			continue
+		}
+		if !hasWorker {
+			d.emitPRPollTaskTrace(ctx, task, taskWorker, "resume_worker_missing", nil)
 			continue
 		}
 		assignments = append(assignments, ActiveAssignment{
@@ -163,7 +178,12 @@ func (d *Daemon) reconcileTrackedPanes(ctx context.Context, assignments []Active
 		}
 
 		exists, err := d.amux.PaneExists(ctx, paneID)
-		if err != nil || exists {
+		if err != nil {
+			d.emitPRPollTaskTrace(ctx, active.Task, active.Worker, "pane_exists_error", err)
+			reconciled = append(reconciled, active)
+			continue
+		}
+		if exists {
 			reconciled = append(reconciled, active)
 			continue
 		}
