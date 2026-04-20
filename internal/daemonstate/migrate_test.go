@@ -23,9 +23,9 @@ func TestMigrateSQLiteToPostgresCopiesAllRows(t *testing.T) {
 	destination := mustPostgresStore(t)
 	wantCounts := seedSQLiteMigrationFixture(t, source)
 
-	summary, err := Migrate(context.Background(), source, destination, MigrationOptions{})
+	summary, err := migrateSQLiteToPostgres(context.Background(), source, destination, MigrationOptions{})
 	if err != nil {
-		t.Fatalf("Migrate() error = %v", err)
+		t.Fatalf("migrateSQLiteToPostgres() error = %v", err)
 	}
 
 	assertMigrationCounts(t, summary, wantCounts)
@@ -44,6 +44,23 @@ func TestMigrateSQLiteToPostgresCopiesAllRows(t *testing.T) {
 	}
 	if got, want := event.ID, int64(10); got != want {
 		t.Fatalf("AppendEvent() id = %d, want %d", got, want)
+	}
+}
+
+func TestMigrateValidatesStoreTypes(t *testing.T) {
+	t.Parallel()
+
+	source := newTestStore(t)
+	destination := mustPostgresStore(t)
+
+	_, err := Migrate(context.Background(), destination, destination, MigrationOptions{})
+	if err == nil || !strings.Contains(err.Error(), "source must be SQLite") {
+		t.Fatalf("Migrate() source error = %v, want source type failure", err)
+	}
+
+	_, err = Migrate(context.Background(), source, source, MigrationOptions{})
+	if err == nil || !strings.Contains(err.Error(), "destination must be Postgres") {
+		t.Fatalf("Migrate() destination error = %v, want destination type failure", err)
 	}
 }
 
@@ -102,6 +119,44 @@ func TestMigrateSQLiteToPostgresDryRunAndTruncate(t *testing.T) {
 
 	assertMigrationCounts(t, summary, wantCounts)
 	assertMigrationTablesEqual(t, source, destination)
+}
+
+func TestMigrationCounts(t *testing.T) {
+	t.Parallel()
+
+	source := newTestStore(t)
+	destination := mustPostgresStore(t)
+	seedSQLiteMigrationFixture(t, source)
+	seedPostgresMigrationDestinationJunk(t, destination)
+
+	summary, err := migrationCounts(context.Background(), source, destination)
+	if err != nil {
+		t.Fatalf("migrationCounts() error = %v", err)
+	}
+
+	if got, want := summary.TotalSourceRows(), int64(13); got != want {
+		t.Fatalf("TotalSourceRows() = %d, want %d", got, want)
+	}
+	if got, want := summary.TotalDestinationRowsBefore(), int64(2); got != want {
+		t.Fatalf("TotalDestinationRowsBefore() = %d, want %d", got, want)
+	}
+
+	for _, table := range summary.Tables {
+		switch table.Table {
+		case "tasks":
+			if got, want := table.DestinationRowsBefore, int64(1); got != want {
+				t.Fatalf("tasks destination rows before = %d, want %d", got, want)
+			}
+		case "events":
+			if got, want := table.DestinationRowsBefore, int64(1); got != want {
+				t.Fatalf("events destination rows before = %d, want %d", got, want)
+			}
+		default:
+			if got := table.DestinationRowsBefore; got != 0 {
+				t.Fatalf("%s destination rows before = %d, want 0", table.Table, got)
+			}
+		}
+	}
 }
 
 func TestMigrateSQLiteToPostgresRetriesEventSequenceSyncAfterEOF(t *testing.T) {
@@ -247,6 +302,164 @@ func TestIsRetryablePostCopyError(t *testing.T) {
 				t.Fatalf("isRetryablePostCopyError(%v) = %t, want %t", tt.err, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestWaitForPostCopyRetry(t *testing.T) {
+	t.Parallel()
+
+	if err := waitForPostCopyRetry(context.Background(), 0); err != nil {
+		t.Fatalf("waitForPostCopyRetry() zero delay error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := waitForPostCopyRetry(ctx, time.Second); !errors.Is(err, context.Canceled) {
+		t.Fatalf("waitForPostCopyRetry() canceled error = %v, want %v", err, context.Canceled)
+	}
+}
+
+func TestRetryPostCopyStepReturnsNonRetryableError(t *testing.T) {
+	t.Parallel()
+
+	calls := 0
+	err := retryPostCopyStep(context.Background(), MigrationProgressSyncSequence, "", func(context.Context, time.Duration) error {
+		t.Fatal("wait should not be called for non-retryable errors")
+		return nil
+	}, func() error {
+		calls++
+		return errors.New("boom")
+	})
+	if err == nil || err.Error() != "boom" {
+		t.Fatalf("retryPostCopyStep() error = %v, want boom", err)
+	}
+	if got, want := calls, 1; got != want {
+		t.Fatalf("retryPostCopyStep() calls = %d, want %d", got, want)
+	}
+}
+
+func TestWithMigrationProgressNilReporterLeavesContextUntouched(t *testing.T) {
+	t.Parallel()
+
+	base := context.Background()
+	if got := WithMigrationProgress(base, nil); got != base {
+		t.Fatal("WithMigrationProgress(nil) should return the original context")
+	}
+}
+
+func TestEmitMigrationProgressIgnoresNilContext(t *testing.T) {
+	t.Parallel()
+
+	EmitMigrationProgress(nil, MigrationProgress{Phase: MigrationProgressCommit})
+}
+
+func TestMigrationSummaryTotals(t *testing.T) {
+	t.Parallel()
+
+	summary := MigrationSummary{
+		Tables: []TableMigrationSummary{
+			{Table: "tasks", SourceRows: 3, DestinationRowsBefore: 1, DestinationRowsAfter: 3},
+			{Table: "events", SourceRows: 5, DestinationRowsBefore: 2, DestinationRowsAfter: 5},
+		},
+	}
+
+	if got, want := summary.TotalSourceRows(), int64(8); got != want {
+		t.Fatalf("TotalSourceRows() = %d, want %d", got, want)
+	}
+	if got, want := summary.TotalDestinationRowsBefore(), int64(3); got != want {
+		t.Fatalf("TotalDestinationRowsBefore() = %d, want %d", got, want)
+	}
+	if got, want := summary.TotalDestinationRowsAfter(), int64(8); got != want {
+		t.Fatalf("TotalDestinationRowsAfter() = %d, want %d", got, want)
+	}
+}
+
+func TestTruncateMigrationTables(t *testing.T) {
+	t.Parallel()
+
+	destination := mustPostgresStore(t)
+	seedPostgresMigrationDestinationJunk(t, destination)
+
+	tx, err := destination.pool.Begin(context.Background())
+	if err != nil {
+		t.Fatalf("Begin() error = %v", err)
+	}
+	defer func() {
+		_ = tx.Rollback(context.Background())
+	}()
+
+	if err := truncateMigrationTables(context.Background(), tx); err != nil {
+		t.Fatalf("truncateMigrationTables() error = %v", err)
+	}
+	if err := tx.Commit(context.Background()); err != nil {
+		t.Fatalf("Commit() error = %v", err)
+	}
+
+	for _, table := range []string{"tasks", "events"} {
+		got, countErr := postgresTableCount(context.Background(), destination.pool, table)
+		if countErr != nil {
+			t.Fatalf("postgresTableCount(%s) error = %v", table, countErr)
+		}
+		if got != 0 {
+			t.Fatalf("%s rows after truncate = %d, want 0", table, got)
+		}
+	}
+}
+
+func TestSourceRowsForMigrationTable(t *testing.T) {
+	t.Parallel()
+
+	summary := MigrationSummary{
+		Tables: []TableMigrationSummary{
+			{Table: "tasks", SourceRows: 3},
+		},
+	}
+
+	if got, want := sourceRowsForMigrationTable(summary, "tasks"), int64(3); got != want {
+		t.Fatalf("sourceRowsForMigrationTable(tasks) = %d, want %d", got, want)
+	}
+	if got := sourceRowsForMigrationTable(summary, "events"); got != 0 {
+		t.Fatalf("sourceRowsForMigrationTable(events) = %d, want 0", got)
+	}
+}
+
+func TestParseMigrationTimes(t *testing.T) {
+	t.Parallel()
+
+	required, err := parseRequiredMigrationTime("events", "created_at", "2026-04-20T10:11:12.123456789Z")
+	if err != nil {
+		t.Fatalf("parseRequiredMigrationTime() error = %v", err)
+	}
+	if got, want := required, time.Date(2026, 4, 20, 10, 11, 12, 123456789, time.UTC); got != want {
+		t.Fatalf("parseRequiredMigrationTime() = %v, want %v", got, want)
+	}
+
+	if _, err := parseRequiredMigrationTime("events", "created_at", ""); err == nil || !strings.Contains(err.Error(), "empty value") {
+		t.Fatalf("parseRequiredMigrationTime() empty error = %v, want empty value", err)
+	}
+
+	if _, err := parseRequiredMigrationTime("events", "created_at", "not-a-time"); err == nil || !strings.Contains(err.Error(), "not-a-time") {
+		t.Fatalf("parseRequiredMigrationTime() invalid error = %v, want parse failure", err)
+	}
+
+	optional, err := parseOptionalMigrationTime("workers", "last_seen_at", sql.NullString{Valid: true, String: "2026-04-20T10:11:12Z"})
+	if err != nil {
+		t.Fatalf("parseOptionalMigrationTime() error = %v", err)
+	}
+	if got, want := optional.(time.Time), time.Date(2026, 4, 20, 10, 11, 12, 0, time.UTC); got != want {
+		t.Fatalf("parseOptionalMigrationTime() = %v, want %v", got, want)
+	}
+
+	optional, err = parseOptionalMigrationTime("workers", "last_seen_at", sql.NullString{})
+	if err != nil {
+		t.Fatalf("parseOptionalMigrationTime() null error = %v", err)
+	}
+	if optional != nil {
+		t.Fatalf("parseOptionalMigrationTime() = %v, want nil", optional)
+	}
+
+	if _, err := parseOptionalMigrationTime("workers", "last_seen_at", sql.NullString{Valid: true, String: "bad"}); err == nil || !strings.Contains(err.Error(), "bad") {
+		t.Fatalf("parseOptionalMigrationTime() invalid error = %v, want parse failure", err)
 	}
 }
 
