@@ -126,7 +126,7 @@ func (r *parallelCodexStartupRace) onSendKeys(paneID string, keys []string) {
 	}
 	r.mu.Unlock()
 
-	time.Sleep(r.promptHold)
+	r.holdPromptWindow()
 
 	r.mu.Lock()
 	r.activePromptTexts--
@@ -164,6 +164,12 @@ func (r *parallelCodexStartupRace) maxConcurrentPromptTexts() int {
 
 func isParallelAssignStartupPrompt(keys []string) bool {
 	return len(keys) == 1 && keys[0] != "Enter" && strings.Contains(keys[0], codexAssignmentPromptSuffix)
+}
+
+func (r *parallelCodexStartupRace) holdPromptWindow() {
+	timer := time.NewTimer(r.promptHold)
+	defer timer.Stop()
+	<-timer.C
 }
 
 func parallelAssignPromptIssue(prompt string) string {

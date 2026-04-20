@@ -68,6 +68,7 @@ type Daemon struct {
 	monitorRuns       sync.WaitGroup
 	taskMonitorMu     sync.Mutex
 	taskMonitors      map[string]*TaskMonitor
+	codexStartupMu    sync.Mutex
 	relayConnMu       sync.Mutex
 	relayConn         relayConnection
 	relayReconnect    atomic.Bool

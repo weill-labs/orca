@@ -16,10 +16,35 @@ const (
 	assignHandshakeRetryDelay  = assignStartupRetryDelay
 )
 
+type assignStartupPhase string
+
+const (
+	assignStartupPhaseHandshake assignStartupPhase = "handshake"
+	assignStartupPhasePrompt    assignStartupPhase = "prompt"
+)
+
 type assignStartupResult struct {
 	pane   Pane
 	task   Task
 	worker Worker
+}
+
+type assignStartupAttemptError struct {
+	phase assignStartupPhase
+	err   error
+}
+
+func (e assignStartupAttemptError) Error() string {
+	switch e.phase {
+	case assignStartupPhasePrompt:
+		return fmt.Sprintf("send prompt: %v", e.err)
+	default:
+		return e.err.Error()
+	}
+}
+
+func (e assignStartupAttemptError) Unwrap() error {
+	return e.err
 }
 
 func (d *Daemon) startAssignmentWorker(ctx context.Context, projectPath string, clone Clone, task Task, worker Worker, profile AgentProfile, prompt, paneTitle string) (assignStartupResult, error) {
@@ -58,7 +83,41 @@ func (d *Daemon) startAssignmentWorker(ctx context.Context, projectPath string, 
 		}
 
 		startupSnapshot, err := d.agentHandshake(ctx, pane.ID, profile)
+		if err == nil {
+			attemptWorker.LastCapture = startupSnapshot.Output()
+			result.worker = attemptWorker
+			d.emitAssignStartupTransition(ctx, result, profile, attempt, maxAttempts, assignStartupStepHandshakeReady)
+			err = d.withAssignStartupGate(ctx, result, profile, attempt, maxAttempts, func() error {
+				if err := d.sendNormalizedPromptAndEnter(ctx, pane.ID, prompt); err != nil {
+					return assignStartupAttemptError{phase: assignStartupPhasePrompt, err: err}
+				}
+				d.emitAssignStartupTransition(ctx, result, profile, attempt, maxAttempts, assignStartupStepPromptSubmitted)
+				if err := d.confirmPromptDelivery(ctx, pane.ID, profile); err != nil {
+					return assignStartupAttemptError{phase: assignStartupPhasePrompt, err: err}
+				}
+				d.emitAssignStartupTransition(ctx, result, profile, attempt, maxAttempts, assignStartupStepPromptConfirmed)
+				return nil
+			})
+		}
 		if err != nil {
+			var phaseErr assignStartupAttemptError
+			if errors.As(err, &phaseErr) && phaseErr.phase == assignStartupPhasePrompt {
+				if !shouldRetryAssignStartupPromptDelivery(profile, err) {
+					return result, err
+				}
+				d.emitAssignPromptDeliveryRetry(cleanupCtx, result, profile, attempt, maxAttempts, err, d.captureStartupRetryScrollback(cleanupCtx, pane.ID))
+				if attempt == maxAttempts {
+					return result, fmt.Errorf("prompt delivery failed after %d attempts: %w", maxAttempts, err)
+				}
+				if err := ignorePaneAlreadyGoneError(d.amux.KillPane(cleanupCtx, paneKillRef(pane))); err != nil {
+					return result, fmt.Errorf("kill pane after prompt delivery failure: %w", err)
+				}
+				if err := d.sleep(ctx, assignStartupRetryDelay); err != nil {
+					return result, fmt.Errorf("wait before prompt delivery retry: %w", err)
+				}
+				continue
+			}
+
 			retryHandshake := shouldRetryAssignStartupHandshake(profile, err)
 			if !retryHandshake {
 				return result, fmt.Errorf("agent handshake: %w", err)
@@ -72,29 +131,6 @@ func (d *Daemon) startAssignmentWorker(ctx context.Context, projectPath string, 
 			}
 			if err := d.sleep(ctx, assignStartupRetryDelay); err != nil {
 				return result, fmt.Errorf("wait before handshake retry: %w", err)
-			}
-			continue
-		}
-
-		attemptWorker.LastCapture = startupSnapshot.Output()
-		result.worker = attemptWorker
-
-		if err := d.sendNormalizedPromptAndEnter(ctx, pane.ID, prompt); err != nil {
-			return result, fmt.Errorf("send prompt: %w", err)
-		}
-		if err := d.confirmPromptDelivery(ctx, pane.ID, profile); err != nil {
-			if !shouldRetryAssignStartupPromptDelivery(profile, err) {
-				return result, fmt.Errorf("send prompt: %w", err)
-			}
-			d.emitAssignPromptDeliveryRetry(cleanupCtx, result, profile, attempt, maxAttempts, err, d.captureStartupRetryScrollback(cleanupCtx, pane.ID))
-			if attempt == maxAttempts {
-				return result, fmt.Errorf("prompt delivery failed after %d attempts: %w", maxAttempts, err)
-			}
-			if err := ignorePaneAlreadyGoneError(d.amux.KillPane(cleanupCtx, paneKillRef(pane))); err != nil {
-				return result, fmt.Errorf("kill pane after prompt delivery failure: %w", err)
-			}
-			if err := d.sleep(ctx, assignStartupRetryDelay); err != nil {
-				return result, fmt.Errorf("wait before prompt delivery retry: %w", err)
 			}
 			continue
 		}
