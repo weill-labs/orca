@@ -1,4 +1,4 @@
-.PHONY: setup install vet test test-race test-flakes bench coverage release-dry-run verify
+.PHONY: setup install vet test test-hooks test-race test-flakes bench coverage release-dry-run verify
 
 BUILD_COMMIT ?= $(shell git rev-parse --short=7 HEAD 2>/dev/null || echo dev)
 GO_LDFLAGS := -ldflags "-X main.BuildCommit=$(BUILD_COMMIT)"
@@ -13,7 +13,11 @@ install: ## Install orca
 vet: ## Run go vet
 	go vet ./...
 
+test-hooks: ## Run shell-based hook regression tests
+	./.claude/hooks/block-autonomous-backlog.test.sh
+
 test: ## Run all tests
+	$(MAKE) test-hooks
 	go test ./... -timeout 120s
 
 test-race: ## Run the test suite with the race detector
