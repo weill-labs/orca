@@ -3,6 +3,8 @@ package daemon
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -119,8 +121,48 @@ func TestStartDaemonLifecycleStopsAndMarksStoppedWhenStatusUpdateFails(t *testin
 	}
 }
 
-func TestOpenDaemonStoreUsesSQLiteByDefault(t *testing.T) {
-	t.Setenv("ORCA_STATE_DSN", "")
+func TestOpenDaemonStoreUsesConfiguredPostgresByDefault(t *testing.T) {
+	configDir := t.TempDir()
+	configPath := filepath.Join(configDir, "config.toml")
+	if err := os.WriteFile(configPath, []byte(strings.Join([]string{
+		"[state]",
+		`dsn = "postgres://orca:orca@127.0.0.1:55432/orca?sslmode=disable"`,
+		"",
+	}, "\n")), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", configPath, err)
+	}
+
+	originalSQLite := openSQLiteDaemonStore
+	originalPostgres := openPostgresDaemonStore
+	t.Cleanup(func() {
+		openSQLiteDaemonStore = originalSQLite
+		openPostgresDaemonStore = originalPostgres
+	})
+
+	var gotDSN string
+	openSQLiteDaemonStore = func(string) (daemonStateStore, error) {
+		t.Fatal("openSQLiteDaemonStore should not be called when config.toml selects Postgres")
+		return nil, nil
+	}
+	openPostgresDaemonStore = func(dsn string) (daemonStateStore, error) {
+		gotDSN = dsn
+		return fakeDaemonStateStore{}, nil
+	}
+
+	store, err := openDaemonStore(filepath.Join(configDir, "state.db"))
+	if err != nil {
+		t.Fatalf("openDaemonStore() error = %v", err)
+	}
+	if store == nil {
+		t.Fatal("openDaemonStore() = nil, want store")
+	}
+	if got, want := gotDSN, "postgres://orca:orca@127.0.0.1:55432/orca?sslmode=disable"; got != want {
+		t.Fatalf("postgres dsn = %q, want %q", got, want)
+	}
+}
+
+func TestOpenDaemonStoreUsesExplicitSQLiteOverride(t *testing.T) {
+	t.Setenv("ORCA_STATE_DB", "sqlite:///tmp/orca-daemon.db")
 
 	originalSQLite := openSQLiteDaemonStore
 	originalPostgres := openPostgresDaemonStore
@@ -135,7 +177,7 @@ func TestOpenDaemonStoreUsesSQLiteByDefault(t *testing.T) {
 		return fakeDaemonStateStore{}, nil
 	}
 	openPostgresDaemonStore = func(string) (daemonStateStore, error) {
-		t.Fatal("openPostgresDaemonStore should not be called when ORCA_STATE_DSN is unset")
+		t.Fatal("openPostgresDaemonStore should not be called when ORCA_STATE_DB selects SQLite")
 		return nil, nil
 	}
 
@@ -146,40 +188,8 @@ func TestOpenDaemonStoreUsesSQLiteByDefault(t *testing.T) {
 	if store == nil {
 		t.Fatal("openDaemonStore() = nil, want store")
 	}
-	if got, want := gotPath, "/tmp/orca/state.db"; got != want {
+	if got, want := gotPath, "/tmp/orca-daemon.db"; got != want {
 		t.Fatalf("sqlite path = %q, want %q", got, want)
-	}
-}
-
-func TestOpenDaemonStoreUsesPostgresWhenDSNIsSet(t *testing.T) {
-	t.Setenv("ORCA_STATE_DSN", "postgres://orca:orca@localhost:5432/orca?sslmode=disable")
-
-	originalSQLite := openSQLiteDaemonStore
-	originalPostgres := openPostgresDaemonStore
-	t.Cleanup(func() {
-		openSQLiteDaemonStore = originalSQLite
-		openPostgresDaemonStore = originalPostgres
-	})
-
-	var gotDSN string
-	openSQLiteDaemonStore = func(string) (daemonStateStore, error) {
-		t.Fatal("openSQLiteDaemonStore should not be called when ORCA_STATE_DSN is set")
-		return nil, nil
-	}
-	openPostgresDaemonStore = func(dsn string) (daemonStateStore, error) {
-		gotDSN = dsn
-		return fakeDaemonStateStore{}, nil
-	}
-
-	store, err := openDaemonStore("/tmp/orca/state.db")
-	if err != nil {
-		t.Fatalf("openDaemonStore() error = %v", err)
-	}
-	if store == nil {
-		t.Fatal("openDaemonStore() = nil, want store")
-	}
-	if got, want := gotDSN, "postgres://orca:orca@localhost:5432/orca?sslmode=disable"; got != want {
-		t.Fatalf("postgres dsn = %q, want %q", got, want)
 	}
 }
 

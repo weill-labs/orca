@@ -894,7 +894,7 @@ func TestAppRunStatusWarnsWhenDaemonBackendDiffersFromShell(t *testing.T) {
 		t.Fatalf("Mkdir(.git) error = %v", err)
 	}
 
-	t.Setenv("ORCA_STATE_DSN", "")
+	t.Setenv("ORCA_STATE_DB", "/tmp/orca-shell.db")
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -939,7 +939,7 @@ func TestAppRunStatusWarnsWhenDaemonBackendDiffersFromShell(t *testing.T) {
 	if err := app.Run(context.Background(), []string{"status"}); err != nil {
 		t.Fatalf("Run(status) error = %v", err)
 	}
-	if got, want := stderr.String(), "Warning: daemon is running on postgres but this shell reads sqlite. Consider sourcing ~/.env.\n"; got != want {
+	if got, want := stderr.String(), "Warning: daemon is running on postgres but this shell reads sqlite. Update ~/.config/orca/config.toml or ORCA_STATE_* overrides so they match.\n"; got != want {
 		t.Fatalf("stderr = %q, want %q", got, want)
 	}
 	if got := stdout.String(); !strings.Contains(got, "daemon: running") {

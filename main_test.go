@@ -7,11 +7,13 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/weill-labs/orca/internal/cli"
+	"github.com/weill-labs/orca/internal/config"
 	"github.com/weill-labs/orca/internal/daemon"
 	state "github.com/weill-labs/orca/internal/daemonstate"
 )
@@ -236,40 +238,16 @@ func TestRunDaemonProcessRejectsLegacyProjectFlag(t *testing.T) {
 	}
 }
 
-func TestOpenDefaultStateStoreUsesSQLiteByDefault(t *testing.T) {
-	t.Setenv("ORCA_STATE_DSN", "")
-
-	originalSQLite := openSQLiteStateStore
-	originalPostgres := openPostgresStateStore
-	t.Cleanup(func() {
-		openSQLiteStateStore = originalSQLite
-		openPostgresStateStore = originalPostgres
-	})
-
-	var gotPath string
-	openSQLiteStateStore = func(path string) (stateStore, error) {
-		gotPath = path
-		return &stubStateStore{}, nil
+func TestOpenDefaultStateStoreUsesConfiguredPostgresByDefault(t *testing.T) {
+	configDir := t.TempDir()
+	configPath := filepath.Join(configDir, "config.toml")
+	if err := os.WriteFile(configPath, []byte(strings.Join([]string{
+		"[state]",
+		`dsn = "postgres://orca:orca@127.0.0.1:55432/orca?sslmode=disable"`,
+		"",
+	}, "\n")), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", configPath, err)
 	}
-	openPostgresStateStore = func(string) (stateStore, error) {
-		t.Fatal("openPostgresStateStore should not be called when ORCA_STATE_DSN is unset")
-		return nil, nil
-	}
-
-	store, err := openDefaultStateStore("/tmp/orca.db")
-	if err != nil {
-		t.Fatalf("openDefaultStateStore() error = %v", err)
-	}
-	if got, want := gotPath, "/tmp/orca.db"; got != want {
-		t.Fatalf("sqlite path = %q, want %q", got, want)
-	}
-	if store == nil {
-		t.Fatal("openDefaultStateStore() returned nil store")
-	}
-}
-
-func TestOpenDefaultStateStoreUsesPostgresWhenConfigured(t *testing.T) {
-	t.Setenv("ORCA_STATE_DSN", "postgres://orca:orca@localhost:5432/orca?sslmode=disable")
 
 	originalSQLite := openSQLiteStateStore
 	originalPostgres := openPostgresStateStore
@@ -280,7 +258,7 @@ func TestOpenDefaultStateStoreUsesPostgresWhenConfigured(t *testing.T) {
 
 	var gotDSN string
 	openSQLiteStateStore = func(string) (stateStore, error) {
-		t.Fatal("openSQLiteStateStore should not be called when ORCA_STATE_DSN is set")
+		t.Fatal("openSQLiteStateStore should not be called when config.toml selects Postgres")
 		return nil, nil
 	}
 	openPostgresStateStore = func(dsn string) (stateStore, error) {
@@ -288,15 +266,202 @@ func TestOpenDefaultStateStoreUsesPostgresWhenConfigured(t *testing.T) {
 		return &stubStateStore{}, nil
 	}
 
-	store, err := openDefaultStateStore("/tmp/orca.db")
+	store, err := openDefaultStateStore(filepath.Join(configDir, "state.db"))
 	if err != nil {
 		t.Fatalf("openDefaultStateStore() error = %v", err)
 	}
-	if got, want := gotDSN, "postgres://orca:orca@localhost:5432/orca?sslmode=disable"; got != want {
+	if got, want := gotDSN, "postgres://orca:orca@127.0.0.1:55432/orca?sslmode=disable"; got != want {
 		t.Fatalf("postgres dsn = %q, want %q", got, want)
 	}
 	if store == nil {
 		t.Fatal("openDefaultStateStore() returned nil store")
+	}
+}
+
+func TestOpenDefaultStateStoreUsesExplicitSQLiteOverride(t *testing.T) {
+	t.Setenv("ORCA_STATE_DB", "sqlite:///tmp/orca-shell.db")
+
+	originalSQLite := openSQLiteStateStore
+	originalPostgres := openPostgresStateStore
+	t.Cleanup(func() {
+		openSQLiteStateStore = originalSQLite
+		openPostgresStateStore = originalPostgres
+	})
+
+	var gotDSN string
+	openSQLiteStateStore = func(path string) (stateStore, error) {
+		gotDSN = path
+		return &stubStateStore{}, nil
+	}
+	openPostgresStateStore = func(string) (stateStore, error) {
+		t.Fatal("openPostgresStateStore should not be called when ORCA_STATE_DB selects SQLite")
+		return nil, nil
+	}
+
+	store, err := openDefaultStateStore("/tmp/orca.db")
+	if err != nil {
+		t.Fatalf("openDefaultStateStore() error = %v", err)
+	}
+	if got, want := gotDSN, "/tmp/orca-shell.db"; got != want {
+		t.Fatalf("sqlite path = %q, want %q", got, want)
+	}
+	if store == nil {
+		t.Fatal("openDefaultStateStore() returned nil store")
+	}
+}
+
+func TestBootstrapLegacySQLiteStateMigratesIntoEmptyPostgresOnStart(t *testing.T) {
+	t.Parallel()
+
+	paths := daemon.Paths{StateDB: "/tmp/orca/state.db"}
+	sourceStore := &stubStateStore{}
+	destinationStore := &stubStateStore{}
+	migrateCalls := 0
+
+	err := bootstrapLegacySQLiteState(context.Background(), "start", paths, stateBootstrapDeps{
+		resolveStateBackend: func(path string) (config.StateBackend, error) {
+			if got, want := path, paths.StateDB; got != want {
+				t.Fatalf("resolveStateBackend path = %q, want %q", got, want)
+			}
+			return config.StateBackend{
+				Kind: config.StateBackendPostgres,
+				DSN:  "postgres://orca:orca@127.0.0.1:55432/orca?sslmode=disable",
+			}, nil
+		},
+		stat: func(path string) (os.FileInfo, error) {
+			if got, want := path, paths.StateDB; got != want {
+				t.Fatalf("stat path = %q, want %q", got, want)
+			}
+			return stubFileInfo{}, nil
+		},
+		openSQLiteStore: func(path string) (stateStore, error) {
+			if got, want := path, paths.StateDB; got != want {
+				t.Fatalf("openSQLiteStore path = %q, want %q", got, want)
+			}
+			return sourceStore, nil
+		},
+		openPostgresStore: func(dsn string) (stateStore, error) {
+			if got, want := dsn, "postgres://orca:orca@127.0.0.1:55432/orca?sslmode=disable"; got != want {
+				t.Fatalf("openPostgresStore dsn = %q, want %q", got, want)
+			}
+			return destinationStore, nil
+		},
+		migrate: func(_ context.Context, from, to state.Store, options state.MigrationOptions) (state.MigrationSummary, error) {
+			if got, want := from, state.Store(sourceStore); got != want {
+				t.Fatalf("migrate from = %#v, want %#v", got, want)
+			}
+			if got, want := to, state.Store(destinationStore); got != want {
+				t.Fatalf("migrate to = %#v, want %#v", got, want)
+			}
+			migrateCalls++
+			if migrateCalls == 1 {
+				if !options.DryRun {
+					t.Fatalf("first migrate call options = %#v, want dry run", options)
+				}
+				return state.MigrationSummary{
+					DryRun: true,
+					Tables: []state.TableMigrationSummary{{Table: "tasks", DestinationRowsBefore: 0}},
+				}, nil
+			}
+			if migrateCalls == 2 {
+				if options.DryRun {
+					t.Fatalf("second migrate call options = %#v, want live migration", options)
+				}
+				return state.MigrationSummary{}, nil
+			}
+			t.Fatalf("migrate called %d times, want 2", migrateCalls)
+			return state.MigrationSummary{}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("bootstrapLegacySQLiteState() error = %v", err)
+	}
+	if got, want := migrateCalls, 2; got != want {
+		t.Fatalf("migrate calls = %d, want %d", got, want)
+	}
+	if !sourceStore.closed {
+		t.Fatal("expected source store to be closed")
+	}
+	if !destinationStore.closed {
+		t.Fatal("expected destination store to be closed")
+	}
+}
+
+func TestBootstrapLegacySQLiteStateSkipsNonStartCommandsAndNonEmptyPostgres(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		command      string
+		destination  int64
+		wantMigrate  int
+		wantOpenPost bool
+	}{
+		{
+			name:        "status command skips bootstrap",
+			command:     "status",
+			destination: 0,
+			wantMigrate: 0,
+		},
+		{
+			name:         "start skips when destination already has rows",
+			command:      "start",
+			destination:  3,
+			wantMigrate:  1,
+			wantOpenPost: true,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			paths := daemon.Paths{StateDB: "/tmp/orca/state.db"}
+			migrateCalls := 0
+			openPostgresCalls := 0
+
+			err := bootstrapLegacySQLiteState(context.Background(), tt.command, paths, stateBootstrapDeps{
+				resolveStateBackend: func(string) (config.StateBackend, error) {
+					return config.StateBackend{
+						Kind: config.StateBackendPostgres,
+						DSN:  "postgres://orca:orca@127.0.0.1:55432/orca?sslmode=disable",
+					}, nil
+				},
+				stat: func(string) (os.FileInfo, error) {
+					return stubFileInfo{}, nil
+				},
+				openSQLiteStore: func(string) (stateStore, error) {
+					return &stubStateStore{}, nil
+				},
+				openPostgresStore: func(string) (stateStore, error) {
+					openPostgresCalls++
+					return &stubStateStore{}, nil
+				},
+				migrate: func(context.Context, state.Store, state.Store, state.MigrationOptions) (state.MigrationSummary, error) {
+					migrateCalls++
+					return state.MigrationSummary{
+						DryRun: true,
+						Tables: []state.TableMigrationSummary{{Table: "tasks", DestinationRowsBefore: tt.destination}},
+					}, nil
+				},
+			})
+			if err != nil {
+				t.Fatalf("bootstrapLegacySQLiteState() error = %v", err)
+			}
+			if got, want := migrateCalls, tt.wantMigrate; got != want {
+				t.Fatalf("migrate calls = %d, want %d", got, want)
+			}
+			if tt.wantOpenPost {
+				if got, want := openPostgresCalls, 1; got != want {
+					t.Fatalf("openPostgresStore calls = %d, want %d", got, want)
+				}
+				return
+			}
+			if openPostgresCalls != 0 {
+				t.Fatalf("openPostgresStore calls = %d, want 0", openPostgresCalls)
+			}
+		})
 	}
 }
 
@@ -517,6 +682,15 @@ func (s *stubStateStore) ListWorkers(context.Context, string) ([]state.Worker, e
 func (s *stubStateStore) ListClones(context.Context, string) ([]state.Clone, error) {
 	return nil, nil
 }
+
+type stubFileInfo struct{}
+
+func (stubFileInfo) Name() string       { return "state.db" }
+func (stubFileInfo) Size() int64        { return 0 }
+func (stubFileInfo) Mode() os.FileMode  { return 0o644 }
+func (stubFileInfo) ModTime() time.Time { return time.Time{} }
+func (stubFileInfo) IsDir() bool        { return false }
+func (stubFileInfo) Sys() any           { return nil }
 
 func (s *stubStateStore) Events(context.Context, string, int64) (<-chan state.Event, <-chan error) {
 	eventsCh := make(chan state.Event)
