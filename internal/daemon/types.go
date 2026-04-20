@@ -45,6 +45,7 @@ const (
 	EventTaskCompletionFailed      = "task.completion_failed"
 	EventWorkerHandshake           = "worker.handshake"
 	EventWorkerHandshakeRetry      = "worker.handshake_retry"
+	EventWorkerStartupTransition   = "worker.startup_transition"
 	EventWorkerMergeNotifyFailed   = "worker.merge_notify_failed"
 	EventWorkerPromptDeliveryRetry = "worker.prompt_delivery_retry"
 	EventWorkerNudged              = "worker.nudged"

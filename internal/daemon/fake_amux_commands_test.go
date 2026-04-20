@@ -37,6 +37,7 @@ type fakeAmux struct {
 	waitContentErr               error
 	waitContentResults           []error
 	waitContentHook              func(paneID, substring string, timeout time.Duration)
+	waitContentFunc              func(paneID, substring string, timeout time.Duration) (bool, error)
 	capturePaneErr               error
 	rejectCanceledContext        bool
 	disableAutomaticReadyCapture bool
@@ -453,6 +454,14 @@ func (a *fakeAmux) WaitContent(ctx context.Context, paneID, substring string, ti
 	if a.waitContentHook != nil {
 		a.waitContentHook(paneID, substring, timeout)
 	}
+
+	var (
+		handled bool
+		err     error
+	)
+	if a.waitContentFunc != nil {
+		handled, err = a.waitContentFunc(paneID, substring, timeout)
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.waitContentCalls = append(a.waitContentCalls, waitContentCall{
@@ -460,13 +469,16 @@ func (a *fakeAmux) WaitContent(ctx context.Context, paneID, substring string, ti
 		Substring: substring,
 		Timeout:   timeout,
 	})
+	if handled {
+		return err
+	}
 	if len(a.waitContentResults) > 0 {
-		err := a.waitContentResults[0]
+		resultErr := a.waitContentResults[0]
 		a.waitContentResults = a.waitContentResults[1:]
-		if err == nil {
+		if resultErr == nil {
 			a.seedSuccessfulWaitContentLocked(paneID, substring)
 		}
-		return err
+		return resultErr
 	}
 	if substring == codexWorkingText {
 		return nil
