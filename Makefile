@@ -14,6 +14,7 @@ vet: ## Run go vet
 	go vet ./...
 
 test: ## Run all tests
+	./.claude/hooks/block-autonomous-backlog.test.sh
 	go test ./... -timeout 120s
 
 test-race: ## Run the test suite with the race detector
