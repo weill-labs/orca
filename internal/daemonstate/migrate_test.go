@@ -3,7 +3,9 @@ package state
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"io"
 	"slices"
 	"strconv"
 	"strings"
@@ -99,6 +101,152 @@ func TestMigrateSQLiteToPostgresDryRunAndTruncate(t *testing.T) {
 
 	assertMigrationCounts(t, summary, wantCounts)
 	assertMigrationTablesEqual(t, source, destination)
+}
+
+func TestMigrateSQLiteToPostgresRetriesEventSequenceSyncAfterEOF(t *testing.T) {
+	t.Parallel()
+
+	source := newTestStore(t)
+	destination := mustPostgresStore(t)
+	wantCounts := seedSQLiteMigrationFixture(t, source)
+
+	deps := defaultMigrationDeps()
+	deps.wait = func(context.Context, time.Duration) error { return nil }
+
+	syncCalls := 0
+	deps.syncEventSequence = func(ctx context.Context, queryer pgxQueryExecer) error {
+		syncCalls++
+		if syncCalls == 1 {
+			return fmt.Errorf("sync event id sequence: unexpected EOF")
+		}
+		return syncPostgresEventSequence(ctx, queryer)
+	}
+
+	summary, err := migrateSQLiteToPostgresWithDeps(context.Background(), source, destination, MigrationOptions{}, deps)
+	if err != nil {
+		t.Fatalf("migrateSQLiteToPostgresWithDeps() error = %v", err)
+	}
+	if got, want := syncCalls, 2; got != want {
+		t.Fatalf("sync event sequence calls = %d, want %d", got, want)
+	}
+
+	assertMigrationCounts(t, summary, wantCounts)
+	assertMigrationTablesEqual(t, source, destination)
+
+	event, err := destination.AppendEvent(context.Background(), Event{
+		Project:   "/repo-alpha",
+		Kind:      "migration.retry.check",
+		Issue:     "LAB-1407",
+		WorkerID:  "worker-01",
+		Message:   "sequence advanced after retry",
+		CreatedAt: time.Date(2026, 4, 20, 9, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("AppendEvent() after retrying sequence sync error = %v", err)
+	}
+	if got, want := event.ID, int64(10); got != want {
+		t.Fatalf("AppendEvent() id = %d, want %d", got, want)
+	}
+}
+
+func TestMigrateSQLiteToPostgresCommitsCopiedRowsBeforeSequenceSync(t *testing.T) {
+	source := newTestStore(t)
+	destination := mustPostgresStore(t)
+	wantCounts := seedSQLiteMigrationFixture(t, source)
+
+	deps := defaultMigrationDeps()
+	deps.wait = func(context.Context, time.Duration) error { return nil }
+	deps.syncEventSequence = func(context.Context, pgxQueryExecer) error {
+		return fmt.Errorf("sync event id sequence: unexpected EOF")
+	}
+
+	_, err := migrateSQLiteToPostgresWithDeps(context.Background(), source, destination, MigrationOptions{}, deps)
+	if err == nil || !strings.Contains(err.Error(), "unexpected EOF") {
+		t.Fatalf("migrateSQLiteToPostgresWithDeps() error = %v, want unexpected EOF", err)
+	}
+
+	for table, want := range wantCounts {
+		got, countErr := postgresTableCount(context.Background(), destination.pool, table)
+		if countErr != nil {
+			t.Fatalf("postgresTableCount(%s) after failed sequence sync error = %v", table, countErr)
+		}
+		if got != want {
+			t.Fatalf("%s rows after failed sequence sync = %d, want %d", table, got, want)
+		}
+	}
+}
+
+func TestRetryPostgresTableCountRetriesEOF(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	queryer := &retryCountQueryerStub{
+		scanErrs: []error{
+			fmt.Errorf("count postgres events rows: unexpected EOF"),
+			fmt.Errorf("count postgres events rows: unexpected EOF"),
+		},
+		count: 7,
+	}
+
+	var progress []MigrationProgress
+	ctx = WithMigrationProgress(ctx, func(event MigrationProgress) {
+		progress = append(progress, event)
+	})
+
+	count, err := retryPostgresTableCount(ctx, queryer, "events", func(context.Context, time.Duration) error { return nil })
+	if err != nil {
+		t.Fatalf("retryPostgresTableCount() error = %v", err)
+	}
+	if got, want := count, int64(7); got != want {
+		t.Fatalf("retryPostgresTableCount() = %d, want %d", got, want)
+	}
+	if got, want := queryer.calls, 3; got != want {
+		t.Fatalf("retryPostgresTableCount() calls = %d, want %d", got, want)
+	}
+	if got, want := len(progress), 3; got != want {
+		t.Fatalf("progress events = %d, want %d", got, want)
+	}
+	for i, event := range progress {
+		if got, want := event.Phase, MigrationProgressVerifyTable; got != want {
+			t.Fatalf("progress[%d].Phase = %q, want %q", i, got, want)
+		}
+		if got, want := event.Table, "events"; got != want {
+			t.Fatalf("progress[%d].Table = %q, want %q", i, got, want)
+		}
+		if got, want := event.Attempt, i+1; got != want {
+			t.Fatalf("progress[%d].Attempt = %d, want %d", i, got, want)
+		}
+		if got, want := event.MaxAttempts, postCopyRetryMaxAttempts; got != want {
+			t.Fatalf("progress[%d].MaxAttempts = %d, want %d", i, got, want)
+		}
+	}
+}
+
+func TestIsRetryablePostCopyError(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "io EOF", err: io.EOF, want: true},
+		{name: "wrapped unexpected EOF", err: fmt.Errorf("scan failed: %w", io.ErrUnexpectedEOF), want: true},
+		{name: "text unexpected EOF", err: errors.New("sync event id sequence: unexpected EOF"), want: true},
+		{name: "context canceled", err: context.Canceled, want: false},
+		{name: "other error", err: errors.New("boom"), want: false},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := isRetryablePostCopyError(tt.err); got != tt.want {
+				t.Fatalf("isRetryablePostCopyError(%v) = %t, want %t", tt.err, got, tt.want)
+			}
+		})
+	}
 }
 
 func seedSQLiteMigrationFixture(t *testing.T, store *SQLiteStore) map[string]int64 {
@@ -523,6 +671,44 @@ func canonicalMigrationTime(t *testing.T, column string, value any) string {
 		t.Fatalf("unsupported time value type for %s: %T", column, value)
 		return ""
 	}
+}
+
+type retryCountQueryerStub struct {
+	scanErrs []error
+	count    int64
+	calls    int
+}
+
+func (s *retryCountQueryerStub) QueryRow(context.Context, string, ...any) pgx.Row {
+	index := s.calls
+	s.calls++
+
+	row := retryCountRowStub{count: s.count}
+	if index < len(s.scanErrs) {
+		row.err = s.scanErrs[index]
+	}
+	return row
+}
+
+type retryCountRowStub struct {
+	count int64
+	err   error
+}
+
+func (r retryCountRowStub) Scan(dest ...any) error {
+	if r.err != nil {
+		return r.err
+	}
+	if len(dest) != 1 {
+		return fmt.Errorf("scan dest len = %d, want 1", len(dest))
+	}
+
+	target, ok := dest[0].(*int64)
+	if !ok {
+		return fmt.Errorf("scan dest type = %T, want *int64", dest[0])
+	}
+	*target = r.count
+	return nil
 }
 
 func parseCanonicalMigrationTime(t *testing.T, column, value string) string {
