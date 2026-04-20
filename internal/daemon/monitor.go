@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"time"
+
+	"github.com/weill-labs/orca/internal/amux"
 )
 
 const (
@@ -177,7 +179,7 @@ func (d *Daemon) reconcileTrackedPanes(ctx context.Context, assignments []Active
 			continue
 		}
 
-		exists, err := d.amux.PaneExists(ctx, paneID)
+		exists, notFound, err := d.paneExists(ctx, paneID)
 		if err != nil {
 			d.emitPRPollTaskTrace(ctx, active.Task, active.Worker, "pane_exists_error", err)
 			reconciled = append(reconciled, active)
@@ -186,6 +188,9 @@ func (d *Daemon) reconcileTrackedPanes(ctx context.Context, assignments []Active
 		if exists {
 			reconciled = append(reconciled, active)
 			continue
+		}
+		if notFound && active.Worker.Health != WorkerHealthEscalated {
+			d.emitPRPollTaskTrace(ctx, active.Task, active.Worker, "pane_exists_error", amux.ErrPaneNotFound)
 		}
 
 		d.escalateAssignmentError(ctx, active, "worker pane missing during monitor reconciliation")

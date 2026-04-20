@@ -577,14 +577,12 @@ func TestCLIClientPaneExists(t *testing.T) {
 
 	for _, tt := range tests {
 		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
 
-			runner := &fakeRunner{}
-			if tt.runErr != nil {
-				runner.err = tt.runErr
-			} else {
-				runner.output = []byte(tt.output)
+			runner := &fakeRunner{
+				output: []byte(tt.output),
+				err:    tt.runErr,
 			}
 			client := newTestClient(Config{Session: "orca-dev"}, runner)
 
@@ -593,7 +591,7 @@ func TestCLIClientPaneExists(t *testing.T) {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 					t.Fatalf("PaneExists() error = %v, want substring %q", err, tt.wantErr)
 				}
-			} else if err != nil {
+			} else if tt.wantErrIs == nil && err != nil {
 				t.Fatalf("PaneExists() error = %v", err)
 			}
 			if tt.wantErrIs != nil && !errors.Is(err, tt.wantErrIs) {

@@ -499,6 +499,9 @@ func TestResumeHandlesWorkerLookupAndPaneErrors(t *testing.T) {
 		seedActiveAssignment(t, deps, "LAB-757", "pane-1")
 		deps.amux.paneExistsErr = amux.ErrPaneNotFound
 		deps.amux.spawnPane = Pane{ID: "pane-2", Name: "w-LAB-757"}
+		deps.amux.spawnHook = func(SpawnRequest) {
+			deps.amux.paneExistsErr = nil
+		}
 
 		d := deps.newDaemon(t)
 		if err := d.Start(context.Background()); err != nil {

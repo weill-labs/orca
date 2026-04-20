@@ -45,7 +45,7 @@ func (d *Daemon) resume(ctx context.Context, projectPath, issue, prompt string) 
 
 	paneID := strings.TrimSpace(task.PaneID)
 	if paneID != "" {
-		exists, err := d.amux.PaneExists(ctx, paneID)
+		exists, _, err := d.paneExists(ctx, paneID)
 		if err != nil {
 			return fmt.Errorf("check pane %s: %w", paneID, err)
 		}

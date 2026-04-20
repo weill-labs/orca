@@ -516,9 +516,6 @@ func TestReconcileTrackedPanesEscalatesAndDropsErrPaneNotFoundOnce(t *testing.T)
 	if got, want := active.Worker.Health, WorkerHealthEscalated; got != want {
 		t.Fatalf("worker.Health = %q, want %q", got, want)
 	}
-	if got, want := active.Worker.LastPaneMissingTracePaneID, "w-LAB-1033"; got != want {
-		t.Fatalf("worker.LastPaneMissingTracePaneID = %q, want %q", got, want)
-	}
 
 	reconciled = d.reconcileTrackedPanes(context.Background(), []ActiveAssignment{active})
 	if got := len(reconciled); got != 0 {

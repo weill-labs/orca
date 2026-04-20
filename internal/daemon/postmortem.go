@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/weill-labs/orca/internal/amux"
 )
 
 const (
@@ -243,6 +245,9 @@ func completionWrapUpPrompt(merged bool, prompt string) string {
 func paneAlreadyGone(err error) bool {
 	if err == nil {
 		return false
+	}
+	if errors.Is(err, amux.ErrPaneNotFound) {
+		return true
 	}
 
 	message := strings.ToLower(strings.TrimSpace(err.Error()))

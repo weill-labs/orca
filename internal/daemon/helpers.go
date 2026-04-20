@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/weill-labs/orca/internal/amux"
 	"github.com/weill-labs/orca/internal/linear"
 )
 
@@ -664,7 +665,7 @@ func (d *Daemon) clearStaleWorkerPaneRef(ctx context.Context, worker *Worker) er
 		return nil
 	}
 
-	exists, err := d.amux.PaneExists(ctx, paneID)
+	exists, _, err := d.paneExists(ctx, paneID)
 	if err != nil {
 		return fmt.Errorf("check pane %s: %w", paneID, err)
 	}
@@ -685,13 +686,24 @@ func (d *Daemon) clearStaleWorkerPaneRef(ctx context.Context, worker *Worker) er
 	return nil
 }
 
+func (d *Daemon) paneExists(ctx context.Context, paneID string) (bool, bool, error) {
+	exists, err := d.amuxClient(ctx).PaneExists(ctx, paneID)
+	if errors.Is(err, amux.ErrPaneNotFound) {
+		return false, true, nil
+	}
+	if err != nil {
+		return false, false, err
+	}
+	return exists, false, nil
+}
+
 func (d *Daemon) ensureLivePane(ctx context.Context, paneID string) error {
 	trimmed := strings.TrimSpace(paneID)
 	if trimmed == "" {
 		return ErrPaneGone
 	}
 
-	exists, err := d.amuxClient(ctx).PaneExists(ctx, trimmed)
+	exists, _, err := d.paneExists(ctx, trimmed)
 	if err != nil {
 		return fmt.Errorf("check pane %s: %w", trimmed, err)
 	}
