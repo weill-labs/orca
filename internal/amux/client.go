@@ -22,6 +22,10 @@ type paneNotFoundError struct {
 	err error
 }
 
+func newPaneNotFoundError(err error) error {
+	return paneNotFoundError{err: err}
+}
+
 func (e paneNotFoundError) Error() string {
 	if e.err != nil {
 		return e.err.Error()
@@ -354,7 +358,7 @@ func (c *CLIClient) rawCapturePane(ctx context.Context, paneID string, history b
 	output, err := c.run(ctx, c.session, "capture", args...)
 	if err != nil {
 		if paneNotFoundMessage(err.Error()) {
-			return capturePane{}, paneNotFoundError{err: err}
+			return capturePane{}, newPaneNotFoundError(err)
 		}
 		return capturePane{}, err
 	}
@@ -439,19 +443,24 @@ func commandError(binary string, args []string, output []byte, err error) error 
 }
 
 func paneCaptureError(errInfo *captureCommandError) error {
-	base := fmt.Errorf("capture failed")
-	if errInfo == nil {
-		return base
-	}
-	if errInfo.Message != "" {
-		base = fmt.Errorf("capture failed: %s", errInfo.Message)
-	} else if errInfo.Code != "" {
-		base = fmt.Errorf("capture failed: %s", errInfo.Code)
-	}
+	base := formatCaptureCommandError(errInfo)
 	if paneMissing(errInfo) {
-		return paneNotFoundError{err: base}
+		return newPaneNotFoundError(base)
 	}
 	return base
+}
+
+func formatCaptureCommandError(errInfo *captureCommandError) error {
+	if errInfo == nil {
+		return fmt.Errorf("capture failed")
+	}
+	if errInfo.Message != "" {
+		return fmt.Errorf("capture failed: %s", errInfo.Message)
+	}
+	if errInfo.Code != "" {
+		return fmt.Errorf("capture failed: %s", errInfo.Code)
+	}
+	return fmt.Errorf("capture failed")
 }
 
 func captureUnavailable(err error) bool {
