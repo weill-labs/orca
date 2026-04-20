@@ -313,6 +313,19 @@ func TestOpenDefaultStateStoreUsesExplicitSQLiteOverride(t *testing.T) {
 	}
 }
 
+func TestOpenDefaultStateStoreReturnsBackendResolutionError(t *testing.T) {
+	t.Setenv("ORCA_STATE_DB", "")
+	t.Setenv("ORCA_STATE_DSN", "")
+
+	_, err := openDefaultStateStore(filepath.Join(t.TempDir(), "state.db"))
+	if err == nil {
+		t.Fatal("openDefaultStateStore() error = nil, want non-nil")
+	}
+	if !strings.Contains(err.Error(), "make dev-postgres") {
+		t.Fatalf("openDefaultStateStore() error = %v, want setup hint", err)
+	}
+}
+
 func TestBootstrapLegacySQLiteStateMigratesIntoEmptyPostgresOnStart(t *testing.T) {
 	t.Parallel()
 
@@ -628,6 +641,20 @@ func TestBootstrapLegacySQLiteStateReturnsErrors(t *testing.T) {
 	}
 }
 
+func TestBootstrapLegacySQLiteStateReturnsBackendResolutionError(t *testing.T) {
+	t.Parallel()
+
+	wantErr := errors.New("resolve backend failed")
+	err := bootstrapLegacySQLiteState(context.Background(), "start", daemon.Paths{StateDB: "/tmp/orca/state.db"}, stateBootstrapDeps{
+		resolveStateBackend: func(string) (config.StateBackend, error) {
+			return config.StateBackend{}, wantErr
+		},
+	})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("bootstrapLegacySQLiteState() error = %v, want wrapped %v", err, wantErr)
+	}
+}
+
 func TestRunWithDepsCoversProcessSetupBranches(t *testing.T) {
 	t.Parallel()
 
@@ -693,6 +720,20 @@ func TestRunWithDepsCoversProcessSetupBranches(t *testing.T) {
 			},
 			wantExitCode: 1,
 			wantStderr:   "resolve failed\n",
+		},
+		{
+			name: "nil bootstrap state skips bootstrap",
+			args: []string{"status"},
+			deps: runDependencies{
+				resolvePaths: func() (daemon.Paths, error) {
+					return daemon.Paths{StateDB: "/tmp/orca.db"}, nil
+				},
+				bootstrapState: nil,
+				newController: func(daemon.ControllerOptions) (daemon.Controller, error) {
+					return &stubController{}, nil
+				},
+			},
+			wantExitCode: 0,
 		},
 		{
 			name: "bootstrap state failure",
@@ -929,9 +970,6 @@ func fillRunDependencies(overrides runDependencies, store *stubStateStore, app *
 	deps := runDependencies{
 		resolvePaths: func() (daemon.Paths, error) {
 			return daemon.Paths{StateDB: "/tmp/orca.db"}, nil
-		},
-		bootstrapState: func(context.Context, string, daemon.Paths) error {
-			return nil
 		},
 		openStateStore: func(string) (stateStore, error) {
 			return store, nil

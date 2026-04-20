@@ -196,6 +196,19 @@ func TestOpenDaemonStoreUsesExplicitSQLiteOverride(t *testing.T) {
 	}
 }
 
+func TestOpenDaemonStoreReturnsBackendResolutionError(t *testing.T) {
+	t.Setenv("ORCA_STATE_DB", "")
+	t.Setenv("ORCA_STATE_DSN", "")
+
+	_, err := openDaemonStore(filepath.Join(t.TempDir(), "state.db"))
+	if err == nil {
+		t.Fatal("openDaemonStore() error = nil, want non-nil")
+	}
+	if !strings.Contains(err.Error(), "make dev-postgres") {
+		t.Fatalf("openDaemonStore() error = %v, want setup hint", err)
+	}
+}
+
 type fakeDaemonLifecycle struct {
 	start func(context.Context) error
 	stop  func(context.Context) error

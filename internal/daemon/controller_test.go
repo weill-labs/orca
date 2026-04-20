@@ -128,6 +128,18 @@ func TestResolvePathsAcceptsSQLiteURIOverride(t *testing.T) {
 	}
 }
 
+func TestResolvePathsRejectsInvalidSQLiteURIOverride(t *testing.T) {
+	t.Setenv("ORCA_STATE_DB", "sqlite://tmp/orca-state.db")
+
+	_, err := ResolvePaths()
+	if err == nil {
+		t.Fatal("ResolvePaths() error = nil, want non-nil")
+	}
+	if !strings.Contains(err.Error(), "sqlite:///absolute/path") {
+		t.Fatalf("ResolvePaths() error = %v, want sqlite path guidance", err)
+	}
+}
+
 func TestPreparePIDStateExistingPIDFile(t *testing.T) {
 	t.Parallel()
 
