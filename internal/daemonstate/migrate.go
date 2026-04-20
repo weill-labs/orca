@@ -3,9 +3,7 @@ package state
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
-	"io"
 	"strings"
 	"time"
 
@@ -20,45 +18,6 @@ var migrationTableOrder = []string{
 	"events",
 	"merge_queue",
 	"daemon_status",
-}
-
-type MigrationProgressPhase string
-
-const (
-	MigrationProgressDryRun       MigrationProgressPhase = "dry_run"
-	MigrationProgressTruncate     MigrationProgressPhase = "truncate"
-	MigrationProgressCopyTable    MigrationProgressPhase = "copy_table"
-	MigrationProgressCommit       MigrationProgressPhase = "commit"
-	MigrationProgressSyncSequence MigrationProgressPhase = "sync_sequence"
-	MigrationProgressVerifyTable  MigrationProgressPhase = "verify_table"
-)
-
-type MigrationProgress struct {
-	Phase       MigrationProgressPhase `json:"phase"`
-	Table       string                 `json:"table,omitempty"`
-	SourceRows  int64                  `json:"source_rows,omitempty"`
-	Attempt     int                    `json:"attempt,omitempty"`
-	MaxAttempts int                    `json:"max_attempts,omitempty"`
-}
-
-type migrationProgressContextKey struct{}
-
-func WithMigrationProgress(ctx context.Context, reporter func(MigrationProgress)) context.Context {
-	if reporter == nil {
-		return ctx
-	}
-	return context.WithValue(ctx, migrationProgressContextKey{}, reporter)
-}
-
-func EmitMigrationProgress(ctx context.Context, progress MigrationProgress) {
-	if ctx == nil {
-		return
-	}
-	reporter, ok := ctx.Value(migrationProgressContextKey{}).(func(MigrationProgress))
-	if !ok || reporter == nil {
-		return
-	}
-	reporter(progress)
 }
 
 type MigrationOptions struct {
@@ -105,11 +64,6 @@ func defaultMigrationDeps() migrationDeps {
 		wait:              waitForPostCopyRetry,
 	}
 }
-
-const (
-	postCopyRetryMaxAttempts = 3
-	postCopyRetryDelay       = 2 * time.Second
-)
 
 func (s MigrationSummary) TotalSourceRows() int64 {
 	var total int64
@@ -322,107 +276,6 @@ func postgresTableCount(ctx context.Context, queryer pgxCountQueryer, table stri
 		return 0, fmt.Errorf("count postgres %s rows: %w", table, err)
 	}
 	return count, nil
-}
-
-func retrySyncPostgresEventSequence(
-	ctx context.Context,
-	queryer pgxQueryExecer,
-	syncEventSequence func(context.Context, pgxQueryExecer) error,
-	wait func(context.Context, time.Duration) error,
-) error {
-	return retryPostCopyStep(ctx, MigrationProgressSyncSequence, "", wait, func() error {
-		return syncEventSequence(ctx, queryer)
-	})
-}
-
-func retryPostgresTableCount(ctx context.Context, queryer pgxCountQueryer, table string, wait func(context.Context, time.Duration) error) (int64, error) {
-	return retryPostgresTableCountWithFunc(ctx, queryer, table, postgresTableCount, wait)
-}
-
-func retryPostgresTableCountWithFunc(
-	ctx context.Context,
-	queryer pgxCountQueryer,
-	table string,
-	tableCount func(context.Context, pgxCountQueryer, string) (int64, error),
-	wait func(context.Context, time.Duration) error,
-) (int64, error) {
-	var count int64
-	err := retryPostCopyStep(ctx, MigrationProgressVerifyTable, table, wait, func() error {
-		nextCount, err := tableCount(ctx, queryer, table)
-		if err != nil {
-			return err
-		}
-		count = nextCount
-		return nil
-	})
-	if err != nil {
-		return 0, err
-	}
-	return count, nil
-}
-
-func retryPostCopyStep(
-	ctx context.Context,
-	phase MigrationProgressPhase,
-	table string,
-	wait func(context.Context, time.Duration) error,
-	fn func() error,
-) error {
-	if wait == nil {
-		wait = waitForPostCopyRetry
-	}
-
-	for attempt := 1; attempt <= postCopyRetryMaxAttempts; attempt++ {
-		EmitMigrationProgress(ctx, MigrationProgress{
-			Phase:       phase,
-			Table:       table,
-			Attempt:     attempt,
-			MaxAttempts: postCopyRetryMaxAttempts,
-		})
-
-		err := fn()
-		if err == nil {
-			return nil
-		}
-		if !isRetryablePostCopyError(err) || attempt == postCopyRetryMaxAttempts {
-			return err
-		}
-		if err := wait(ctx, postCopyRetryDelay); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func isRetryablePostCopyError(err error) bool {
-	if err == nil {
-		return false
-	}
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return false
-	}
-	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-		return true
-	}
-
-	return strings.Contains(strings.ToLower(err.Error()), "unexpected eof")
-}
-
-func waitForPostCopyRetry(ctx context.Context, delay time.Duration) error {
-	if delay <= 0 {
-		return nil
-	}
-
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
-
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
-	}
 }
 
 func sourceRowsForMigrationTable(summary MigrationSummary, table string) int64 {
