@@ -3,10 +3,10 @@
 BUILD_COMMIT ?= $(shell git rev-parse --short=7 HEAD 2>/dev/null || echo dev)
 GO_LDFLAGS := -ldflags "-X main.BuildCommit=$(BUILD_COMMIT)"
 
-setup: ## Configure git hooks and start local Postgres
+setup: ## Configure git hooks
 	git config core.hooksPath .githooks
 	@echo "Hooks activated from .githooks/"
-	@$(MAKE) dev-postgres
+	@echo "Run 'make dev-postgres' to start a local Postgres container."
 
 dev-postgres: ## Start local Postgres and write ~/.config/orca/config.toml
 	scripts/dev-postgres.sh

@@ -33,10 +33,10 @@ make install  # builds to ~/.local/bin/orca
 Orca uses Postgres by default. For local development, run:
 
 ```bash
-make setup
+make dev-postgres
 ```
 
-That activates git hooks, starts a local Postgres container, and writes
+That starts a local Postgres container and writes
 `~/.config/orca/config.toml`:
 
 ```toml
@@ -54,10 +54,13 @@ Need SQLite for a one-off? Set `ORCA_STATE_DB=/absolute/path/to/state.db` or
 ## Quick start
 
 ```bash
-# 1. Start local Postgres and write ~/.config/orca/config.toml
+# 1. Activate git hooks
 make setup
 
-# 2. Configure clone pool and agent profiles
+# 2. Start local Postgres and write ~/.config/orca/config.toml
+make dev-postgres
+
+# 3. Configure clone pool and agent profiles
 mkdir -p ~/sync/github/myproject/myproject/.orca
 cat > ~/sync/github/myproject/myproject/.orca/config.toml << 'EOF'
 [pool]
@@ -72,20 +75,20 @@ nudge_command = "Enter"
 max_nudge_retries = 3
 EOF
 
-# 3. Create clones with pool markers
+# 4. Create clones with pool markers
 for i in 1 2 3; do
   git clone ~/sync/github/myproject/myproject ~/sync/github/myproject/myproject-${i}
   touch ~/sync/github/myproject/myproject-${i}/.orca-pool
 done
 
-# 4. Start the daemon
+# 5. Start the daemon
 export AMUX_SESSION=my-session
 orca start --project ~/sync/github/myproject/myproject
 
-# 5. Assign work
+# 6. Assign work
 orca assign LAB-123 --prompt "Fix the auth bug. TDD. Open a PR when done."
 
-# 5b. Or batch multiple assignments with a default 5s delay between dispatches
+# 6b. Or batch multiple assignments with a default 5s delay between dispatches
 cat > tasks.json <<'EOF'
 [
   {"issue":"LAB-123","agent":"codex","prompt":"Fix the auth bug. TDD. Open a PR when done."},
@@ -94,16 +97,16 @@ cat > tasks.json <<'EOF'
 EOF
 orca batch tasks.json --delay 10s
 
-# 6. Monitor
+# 7. Monitor
 orca status
 orca workers
 orca pool
 orca events        # NDJSON event stream
 
-# 6b. Queue a ready PR for serialized landing
+# 7b. Queue a ready PR for serialized landing
 orca enqueue 123
 
-# 7. Cancel or stop
+# 8. Cancel or stop
 orca cancel LAB-123
 orca stop
 ```

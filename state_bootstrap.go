@@ -89,9 +89,11 @@ func bootstrapLegacySQLiteState(ctx context.Context, command string, paths daemo
 		return nil
 	}
 
+	fmt.Fprintf(os.Stderr, "Migrating legacy SQLite state from %s into Postgres...\n", paths.StateDB)
 	if _, err := migrate(ctx, sourceStore, destinationStore, state.MigrationOptions{}); err != nil {
 		return fmt.Errorf("auto-migrate legacy sqlite state: %w", err)
 	}
+	fmt.Fprintln(os.Stderr, "Legacy SQLite state migrated successfully.")
 
 	return nil
 }

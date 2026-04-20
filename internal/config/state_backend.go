@@ -34,6 +34,12 @@ func ResolveStateBackend(defaultSQLitePath string) (StateBackend, error) {
 	return resolveStateBackend(defaultSQLitePath, os.LookupEnv, os.ReadFile)
 }
 
+func ResolveConfiguredStateBackend(defaultSQLitePath string) (StateBackend, error) {
+	return resolveStateBackend(defaultSQLitePath, func(string) (string, bool) {
+		return "", false
+	}, os.ReadFile)
+}
+
 func ResolveSQLitePath(raw string) (string, error) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {

@@ -22,7 +22,8 @@ Linear project: https://linear.app/weill-labs/project/orca-0582da3ac28f — file
 ### Build and Test
 
 ```bash
-make setup    # activate git hooks and start local Postgres
+make setup    # activate git hooks
+make dev-postgres # start local Postgres and write state config
 make install  # install to ~/.local/bin/orca
 make test     # run all tests
 make coverage # test coverage report

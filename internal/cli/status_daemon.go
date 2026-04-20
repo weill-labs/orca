@@ -73,13 +73,47 @@ func backendMismatchWarningForPID(pid int, readProcessEnviron func(int) ([]strin
 		return ""
 	}
 
-	daemonBackend := stateBackendFromEnv(env)
+	daemonBackend := daemonStateBackend(env)
 	shellBackend := currentStateBackend(resolvePaths)
 	if daemonBackend == stateBackendUnknown || shellBackend == stateBackendUnknown || daemonBackend == shellBackend {
 		return ""
 	}
 
 	return fmt.Sprintf("Warning: daemon is running on %s but this shell reads %s. Update ~/.config/orca/config.toml or ORCA_STATE_* overrides so they match.", daemonBackend, shellBackend)
+}
+
+func daemonStateBackend(env []string) string {
+	if backend := stateBackendFromEnv(env); backend != stateBackendUnknown {
+		return backend
+	}
+
+	stateDBPath, ok := daemonConfigStateDBPath(env)
+	if !ok {
+		return stateBackendUnknown
+	}
+
+	backend, err := config.ResolveConfiguredStateBackend(stateDBPath)
+	if err != nil {
+		return stateBackendUnknown
+	}
+	return backend.Kind
+}
+
+func daemonConfigStateDBPath(env []string) (string, bool) {
+	if configDir := envValue(env, "ORCA_CONFIG_DIR"); configDir != "" {
+		return filepath.Join(configDir, "state.db"), true
+	}
+
+	homeDir := envValue(env, "HOME")
+	if homeDir == "" {
+		var err error
+		homeDir, err = os.UserHomeDir()
+		if err != nil {
+			return "", false
+		}
+	}
+
+	return filepath.Join(homeDir, ".config", "orca", "state.db"), true
 }
 
 func currentStateBackend(resolvePaths func() (daemon.Paths, error)) string {
@@ -116,7 +150,7 @@ func stateBackendFromEnv(env []string) string {
 		}
 		dsn := strings.TrimSpace(strings.TrimPrefix(entry, "ORCA_STATE_DSN="))
 		if dsn == "" {
-			break
+			return stateBackendUnknown
 		}
 		if strings.HasPrefix(strings.ToLower(dsn), "sqlite:") {
 			return stateBackendSQLite
@@ -124,6 +158,17 @@ func stateBackendFromEnv(env []string) string {
 		return stateBackendPostgres
 	}
 	return stateBackendUnknown
+}
+
+func envValue(env []string, key string) string {
+	prefix := key + "="
+	for _, entry := range env {
+		if !strings.HasPrefix(entry, prefix) {
+			continue
+		}
+		return strings.TrimSpace(strings.TrimPrefix(entry, prefix))
+	}
+	return ""
 }
 
 func pidFilePath(paths daemon.Paths) string {

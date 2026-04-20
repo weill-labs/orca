@@ -17,6 +17,22 @@ CONFIG_DIR="${ORCA_CONFIG_DIR:-$HOME/.config/orca}"
 CONFIG_PATH="${CONFIG_DIR}/config.toml"
 DSN="postgres://${DB_USER}:${DB_PASSWORD}@${HOST}:${PORT}/${DB_NAME}?sslmode=disable"
 
+configured_state_dsn() {
+  awk '
+    /^[[:space:]]*\[/ {
+      in_state = ($0 ~ /^[[:space:]]*\[state\][[:space:]]*$/)
+    }
+    in_state && /^[[:space:]]*dsn[[:space:]]*=/ {
+      line = $0
+      sub(/^[^=]*=[[:space:]]*/, "", line)
+      gsub(/^[[:space:]]*"/, "", line)
+      gsub(/"[[:space:]]*$/, "", line)
+      print line
+      exit
+    }
+  ' "$1"
+}
+
 if docker container inspect "${CONTAINER_NAME}" >/dev/null 2>&1; then
   if [ "$(docker container inspect -f '{{.State.Running}}' "${CONTAINER_NAME}")" != "true" ]; then
     docker start "${CONTAINER_NAME}" >/dev/null
@@ -44,11 +60,34 @@ if ! docker exec "${CONTAINER_NAME}" pg_isready -U "${DB_USER}" -d "${DB_NAME}" 
 fi
 
 mkdir -p "${CONFIG_DIR}"
-cat >"${CONFIG_PATH}" <<EOF
+configured_for_local_postgres=false
+wrote_config=false
+
+if [ -f "${CONFIG_PATH}" ]; then
+  CURRENT_DSN="$(configured_state_dsn "${CONFIG_PATH}")"
+  if [ -z "${CURRENT_DSN}" ]; then
+    echo "Config already exists at ${CONFIG_PATH} without [state].dsn; leaving it unchanged." >&2
+  elif [ "${CURRENT_DSN}" != "${DSN}" ]; then
+    echo "Config already exists at ${CONFIG_PATH} with a different [state].dsn; leaving it unchanged." >&2
+  else
+    configured_for_local_postgres=true
+    echo "Orca state backend already points at ${CONFIG_PATH}." >&2
+  fi
+else
+  cat >"${CONFIG_PATH}" <<EOF
 [state]
 dsn = "${DSN}"
 EOF
+  wrote_config=true
+  configured_for_local_postgres=true
+fi
 
 echo "Postgres ready in container ${CONTAINER_NAME}."
-echo "Wrote Orca state backend config to ${CONFIG_PATH}."
-echo "Legacy SQLite state at ${CONFIG_DIR}/state.db will auto-migrate on the next 'orca start'."
+if [ "${wrote_config}" = true ]; then
+  echo "Wrote Orca state backend config to ${CONFIG_PATH}."
+fi
+if [ "${configured_for_local_postgres}" = true ]; then
+  echo "Legacy SQLite state at ${CONFIG_DIR}/state.db will auto-migrate on the next 'orca start'."
+else
+  echo "Set [state].dsn in ${CONFIG_PATH} to ${DSN} if you want Orca to use this local Postgres instance."
+fi

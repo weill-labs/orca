@@ -537,6 +537,97 @@ func TestBootstrapLegacySQLiteStateSkipsSQLiteBackendsAndMissingLegacyState(t *t
 	}
 }
 
+func TestBootstrapLegacySQLiteStateReturnsErrors(t *testing.T) {
+	t.Parallel()
+
+	paths := daemon.Paths{StateDB: "/tmp/orca/state.db"}
+	postgresBackend := config.StateBackend{
+		Kind: config.StateBackendPostgres,
+		DSN:  "postgres://orca:orca@127.0.0.1:55432/orca?sslmode=disable",
+	}
+
+	tests := []struct {
+		name    string
+		deps    stateBootstrapDeps
+		wantErr string
+	}{
+		{
+			name: "stat failure",
+			deps: stateBootstrapDeps{
+				resolveStateBackend: func(string) (config.StateBackend, error) { return postgresBackend, nil },
+				stat:                func(string) (os.FileInfo, error) { return nil, errors.New("stat failed") },
+			},
+			wantErr: "stat legacy sqlite state /tmp/orca/state.db: stat failed",
+		},
+		{
+			name: "open sqlite failure",
+			deps: stateBootstrapDeps{
+				resolveStateBackend: func(string) (config.StateBackend, error) { return postgresBackend, nil },
+				stat:                func(string) (os.FileInfo, error) { return stubFileInfo{}, nil },
+				openSQLiteStore:     func(string) (stateStore, error) { return nil, errors.New("sqlite open failed") },
+			},
+			wantErr: "open legacy sqlite state /tmp/orca/state.db: sqlite open failed",
+		},
+		{
+			name: "open postgres failure",
+			deps: stateBootstrapDeps{
+				resolveStateBackend: func(string) (config.StateBackend, error) { return postgresBackend, nil },
+				stat:                func(string) (os.FileInfo, error) { return stubFileInfo{}, nil },
+				openSQLiteStore:     func(string) (stateStore, error) { return &stubStateStore{}, nil },
+				openPostgresStore:   func(string) (stateStore, error) { return nil, errors.New("postgres open failed") },
+			},
+			wantErr: "open configured postgres state: postgres open failed",
+		},
+		{
+			name: "dry run migration failure",
+			deps: stateBootstrapDeps{
+				resolveStateBackend: func(string) (config.StateBackend, error) { return postgresBackend, nil },
+				stat:                func(string) (os.FileInfo, error) { return stubFileInfo{}, nil },
+				openSQLiteStore:     func(string) (stateStore, error) { return &stubStateStore{}, nil },
+				openPostgresStore:   func(string) (stateStore, error) { return &stubStateStore{}, nil },
+				migrate: func(context.Context, state.Store, state.Store, state.MigrationOptions) (state.MigrationSummary, error) {
+					return state.MigrationSummary{}, errors.New("dry run failed")
+				},
+			},
+			wantErr: "check legacy sqlite migration: dry run failed",
+		},
+		{
+			name: "live migration failure",
+			deps: stateBootstrapDeps{
+				resolveStateBackend: func(string) (config.StateBackend, error) { return postgresBackend, nil },
+				stat:                func(string) (os.FileInfo, error) { return stubFileInfo{}, nil },
+				openSQLiteStore:     func(string) (stateStore, error) { return &stubStateStore{}, nil },
+				openPostgresStore:   func(string) (stateStore, error) { return &stubStateStore{}, nil },
+				migrate: func(_ context.Context, _ state.Store, _ state.Store, options state.MigrationOptions) (state.MigrationSummary, error) {
+					if options.DryRun {
+						return state.MigrationSummary{
+							DryRun: true,
+							Tables: []state.TableMigrationSummary{{Table: "tasks", DestinationRowsBefore: 0}},
+						}, nil
+					}
+					return state.MigrationSummary{}, errors.New("live migrate failed")
+				},
+			},
+			wantErr: "auto-migrate legacy sqlite state: live migrate failed",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := bootstrapLegacySQLiteState(context.Background(), "start", paths, tt.deps)
+			if err == nil {
+				t.Fatal("bootstrapLegacySQLiteState() error = nil, want non-nil")
+			}
+			if got := err.Error(); got != tt.wantErr {
+				t.Fatalf("bootstrapLegacySQLiteState() error = %q, want %q", got, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestRunWithDepsCoversProcessSetupBranches(t *testing.T) {
 	t.Parallel()
 
@@ -602,6 +693,20 @@ func TestRunWithDepsCoversProcessSetupBranches(t *testing.T) {
 			},
 			wantExitCode: 1,
 			wantStderr:   "resolve failed\n",
+		},
+		{
+			name: "bootstrap state failure",
+			args: []string{"status"},
+			deps: runDependencies{
+				resolvePaths: func() (daemon.Paths, error) {
+					return daemon.Paths{StateDB: "/tmp/orca.db"}, nil
+				},
+				bootstrapState: func(context.Context, string, daemon.Paths) error {
+					return errors.New("bootstrap failed")
+				},
+			},
+			wantExitCode: 1,
+			wantStderr:   "bootstrap failed\n",
 		},
 		{
 			name: "open state store failure",
@@ -825,6 +930,9 @@ func fillRunDependencies(overrides runDependencies, store *stubStateStore, app *
 		resolvePaths: func() (daemon.Paths, error) {
 			return daemon.Paths{StateDB: "/tmp/orca.db"}, nil
 		},
+		bootstrapState: func(context.Context, string, daemon.Paths) error {
+			return nil
+		},
 		openStateStore: func(string) (stateStore, error) {
 			return store, nil
 		},
@@ -847,6 +955,9 @@ func fillRunDependencies(overrides runDependencies, store *stubStateStore, app *
 	}
 	if overrides.openStateStore != nil {
 		deps.openStateStore = overrides.openStateStore
+	}
+	if overrides.bootstrapState != nil {
+		deps.bootstrapState = overrides.bootstrapState
 	}
 	if overrides.newController != nil {
 		deps.newController = overrides.newController
