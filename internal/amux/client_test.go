@@ -529,11 +529,12 @@ func TestCLIClientPaneExists(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name    string
-		output  string
-		runErr  error
-		want    bool
-		wantErr string
+		name      string
+		output    string
+		runErr    error
+		want      bool
+		wantErr   string
+		wantErrIs error
 	}{
 		{
 			name:   "returns true for live pane",
@@ -541,12 +542,14 @@ func TestCLIClientPaneExists(t *testing.T) {
 			want:   true,
 		},
 		{
-			name:   "returns false for not_found code",
-			output: `{"error":{"code":"not_found","message":"pane missing"}}`,
+			name:      "returns ErrPaneNotFound for not_found code",
+			output:    `{"error":{"code":"not_found","message":"pane missing"}}`,
+			wantErrIs: ErrPaneNotFound,
 		},
 		{
-			name:   "returns false for missing message",
-			output: `{"error":{"message":"pane not found"}}`,
+			name:      "returns ErrPaneNotFound for missing message",
+			output:    `{"error":{"message":"pane not found"}}`,
+			wantErrIs: ErrPaneNotFound,
 		},
 		{
 			name:    "returns capture error for other error payloads",
@@ -557,6 +560,13 @@ func TestCLIClientPaneExists(t *testing.T) {
 			name:    "returns parse errors",
 			output:  `{`,
 			wantErr: "parse capture json",
+		},
+		{
+			name:      "returns ErrPaneNotFound for pane missing command errors",
+			output:    `amux capture: pane "pane-1" not found`,
+			runErr:    errors.New("exit status 1"),
+			wantErr:   "pane \"pane-1\" not found",
+			wantErrIs: ErrPaneNotFound,
 		},
 		{
 			name:    "returns command errors",
@@ -583,10 +593,11 @@ func TestCLIClientPaneExists(t *testing.T) {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 					t.Fatalf("PaneExists() error = %v, want substring %q", err, tt.wantErr)
 				}
-				return
-			}
-			if err != nil {
+			} else if err != nil {
 				t.Fatalf("PaneExists() error = %v", err)
+			}
+			if tt.wantErrIs != nil && !errors.Is(err, tt.wantErrIs) {
+				t.Fatalf("PaneExists() error = %v, want errors.Is(_, %v)", err, tt.wantErrIs)
 			}
 			if got != tt.want {
 				t.Fatalf("PaneExists() = %t, want %t", got, tt.want)

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/weill-labs/orca/internal/amux"
 )
 
 func TestStableWorkerRef(t *testing.T) {
@@ -315,6 +317,20 @@ func TestSendPromptAndCommandReturnsErrPaneGone(t *testing.T) {
 		if got := len(deps.amux.waitIdleCalls); got != 0 {
 			t.Fatalf("waitIdle calls = %d, want 0", got)
 		}
+	})
+
+	t.Run("when pane exists returns ErrPaneNotFound", func(t *testing.T) {
+		t.Parallel()
+
+		deps := newTestDeps(t)
+		d := deps.newDaemon(t)
+		deps.amux.paneExistsErr = amux.ErrPaneNotFound
+
+		err := d.sendPromptAndCommand(context.Background(), "pane-1", "Continue work", "Enter")
+		if err == nil || !strings.Contains(err.Error(), "pane gone") {
+			t.Fatalf("sendPromptAndCommand() error = %v, want pane-gone error", err)
+		}
+		deps.amux.requireSentKeys(t, "pane-1", nil)
 	})
 }
 

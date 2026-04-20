@@ -6,6 +6,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/weill-labs/orca/internal/amux"
 )
 
 func TestDaemonSkipsBufferedPollTickWhilePollCycleIsRunning(t *testing.T) {
@@ -462,11 +464,74 @@ func TestReconcileTrackedPanesEmitsTraceOnPaneExistsError(t *testing.T) {
 	if got, want := len(reconciled), 1; got != want {
 		t.Fatalf("len(reconciled) = %d, want %d", got, want)
 	}
+
+	assignments, err := deps.state.ActiveAssignments(context.Background(), "/tmp/project")
+	if err != nil {
+		t.Fatalf("ActiveAssignments() error = %v", err)
+	}
+	if got, want := len(assignments), 1; got != want {
+		t.Fatalf("len(assignments) = %d, want %d", got, want)
+	}
+	reconciled = d.reconcileTrackedPanes(context.Background(), assignments)
+	if got, want := len(reconciled), 1; got != want {
+		t.Fatalf("len(reconciled) after repeat = %d, want %d", got, want)
+	}
+	if got, want := deps.events.countType(EventPRPollTrace), 2; got != want {
+		t.Fatalf("pr poll trace event count = %d, want %d", got, want)
+	}
 	event, ok := deps.events.lastEventOfType(EventPRPollTrace)
 	if !ok {
 		t.Fatal("pr poll trace event missing")
 	}
 	if got, want := event.Message, `pr poll trace: issue=LAB-1415 pr_number=0 action=pane_exists_error error="amux unavailable"`; got != want {
+		t.Fatalf("event.Message = %q, want %q", got, want)
+	}
+}
+
+func TestReconcileTrackedPanesEscalatesAndDropsErrPaneNotFoundOnce(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	seedTaskMonitorAssignment(t, deps, "LAB-1420", "w-LAB-1033", 0)
+	deps.amux.paneExistsErr = amux.ErrPaneNotFound
+
+	d := deps.newDaemon(t)
+	assignments := []ActiveAssignment{activeTaskMonitorAssignment(t, deps, "LAB-1420")}
+
+	reconciled := d.reconcileTrackedPanes(context.Background(), assignments)
+	if got := len(reconciled); got != 0 {
+		t.Fatalf("len(reconciled) = %d, want 0", got)
+	}
+	if got, want := deps.events.countType(EventPRPollTrace), 1; got != want {
+		t.Fatalf("pr poll trace event count = %d, want %d", got, want)
+	}
+	if got, want := deps.events.countType(EventWorkerEscalated), 1; got != want {
+		t.Fatalf("worker escalated event count = %d, want %d", got, want)
+	}
+
+	active, err := deps.state.ActiveAssignmentByIssue(context.Background(), "/tmp/project", "LAB-1420")
+	if err != nil {
+		t.Fatalf("ActiveAssignmentByIssue() error = %v", err)
+	}
+	if got, want := active.Worker.Health, WorkerHealthEscalated; got != want {
+		t.Fatalf("worker.Health = %q, want %q", got, want)
+	}
+	if got, want := active.Worker.LastPaneMissingTracePaneID, "w-LAB-1033"; got != want {
+		t.Fatalf("worker.LastPaneMissingTracePaneID = %q, want %q", got, want)
+	}
+
+	reconciled = d.reconcileTrackedPanes(context.Background(), []ActiveAssignment{active})
+	if got := len(reconciled); got != 0 {
+		t.Fatalf("len(reconciled) after repeat = %d, want 0", got)
+	}
+	if got, want := deps.events.countType(EventPRPollTrace), 1; got != want {
+		t.Fatalf("pr poll trace event count after repeat = %d, want %d", got, want)
+	}
+	event, ok := deps.events.lastEventOfType(EventPRPollTrace)
+	if !ok {
+		t.Fatal("pr poll trace event missing")
+	}
+	if got, want := event.Message, `pr poll trace: issue=LAB-1420 pr_number=0 action=pane_exists_error error="amux pane not found"`; got != want {
 		t.Fatalf("event.Message = %q, want %q", got, want)
 	}
 }
