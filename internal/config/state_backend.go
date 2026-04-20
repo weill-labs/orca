@@ -65,11 +65,11 @@ func resolveStateBackend(defaultSQLitePath string, lookupEnv func(string) (strin
 		return parseStateBackend(rawDSN, "ORCA_STATE_DSN")
 	}
 
-	configPath := filepath.Join(filepath.Dir(defaultSQLitePath), "config.toml")
+	configPath := stateConfigPath(defaultSQLitePath)
 	data, err := readFile(configPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return StateBackend{}, fmt.Errorf("state backend is not configured; run `make dev-postgres` or set [state].dsn in %s", configPath)
+			return StateBackend{}, missingStateBackendConfigError(configPath)
 		}
 		return StateBackend{}, fmt.Errorf("read state config %s: %w", configPath, err)
 	}
@@ -79,7 +79,7 @@ func resolveStateBackend(defaultSQLitePath string, lookupEnv func(string) (strin
 		return StateBackend{}, fmt.Errorf("decode state config %s: %w", configPath, err)
 	}
 	if strings.TrimSpace(rawConfig.State.DSN) == "" {
-		return StateBackend{}, fmt.Errorf("state backend is not configured; run `make dev-postgres` or set [state].dsn in %s", configPath)
+		return StateBackend{}, missingStateBackendConfigError(configPath)
 	}
 
 	return parseStateBackend(rawConfig.State.DSN, configPath)
@@ -127,4 +127,12 @@ func sqlitePathFromURI(parsed *url.URL) (string, error) {
 		return "", fmt.Errorf("sqlite uri %q must include an absolute path", parsed.String())
 	}
 	return filepath.Clean(parsed.Path), nil
+}
+
+func stateConfigPath(defaultSQLitePath string) string {
+	return filepath.Join(filepath.Dir(defaultSQLitePath), "config.toml")
+}
+
+func missingStateBackendConfigError(configPath string) error {
+	return fmt.Errorf("state backend is not configured; run `make dev-postgres` or set [state].dsn in %s", configPath)
 }
