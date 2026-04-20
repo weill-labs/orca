@@ -10,12 +10,12 @@ Linear project: https://linear.app/weill-labs/project/orca-0582da3ac28f — file
 
 ## Architecture
 
-- **Daemon**: long-lived background process per project, SQLite state at `~/.config/orca/state.db`
-- **Stateless binary**: the daemon holds zero state in memory. All state lives in SQLite. The daemon is a pure poll loop that reads active tasks from the DB, runs monitoring checks, and writes results back. This means `orca stop && orca start` is seamless — the new daemon picks up exactly where the old one left off. Never store per-task state in Go structs, maps, or goroutines.
+- **Daemon**: long-lived background process per project, Postgres state by default via `~/.config/orca/config.toml`
+- **Stateless binary**: the daemon holds zero state in memory. All state lives in the configured store. The daemon is a pure poll loop that reads active tasks from the DB, runs monitoring checks, and writes results back. This means `orca stop && orca start` is seamless — the new daemon picks up exactly where the old one left off. Never store per-task state in Go structs, maps, or goroutines.
 - **Clone pool**: auto-created under `.orca/pool/` on demand — independent git clones (not worktrees)
 - **Agent profiles**: built-in defaults for claude, codex — no config file needed
 - **amux consumer**: orca calls amux CLI commands and subscribes to amux events — amux knows nothing about orca
-- **Zero config**: orca auto-detects everything from the git repo. No `.orca/config.toml` required. Origin detected from `git remote get-url origin` (override with `ORCA_CLONE_ORIGIN` env var).
+- **State config without shell sourcing**: `make dev-postgres` writes `~/.config/orca/config.toml`, so users do not need to `source ~/.env`. Legacy `~/.config/orca/state.db` auto-migrates on the next `orca start`. Origin is still detected from `git remote get-url origin` (override with `ORCA_CLONE_ORIGIN` env var).
 
 ## Development
 
@@ -23,6 +23,7 @@ Linear project: https://linear.app/weill-labs/project/orca-0582da3ac28f — file
 
 ```bash
 make setup    # activate git hooks
+make dev-postgres # start local Postgres and write state config
 make install  # install to ~/.local/bin/orca
 make test     # run all tests
 make coverage # test coverage report
@@ -118,6 +119,7 @@ Before any irreversible action on worker panes, state what information will be l
 ## Configuration
 
 ```
-~/.config/orca/state.db       # global: tasks, workers, clones, event log
+~/.config/orca/config.toml    # global state backend config
+~/.config/orca/state.db       # legacy SQLite state and explicit SQLite override path
 .orca/pool/                   # auto-created clone pool (gitignored)
 ```

@@ -110,6 +110,36 @@ func TestStartLaunchesDaemonInOwnProcessGroup(t *testing.T) {
 	waitForProcessExit(t, pid)
 }
 
+func TestResolvePathsAcceptsSQLiteURIOverride(t *testing.T) {
+	t.Setenv("ORCA_STATE_DB", "sqlite:///tmp/orca-state.db")
+
+	paths, err := ResolvePaths()
+	if err != nil {
+		t.Fatalf("ResolvePaths() error = %v", err)
+	}
+	if got, want := paths.StateDB, "/tmp/orca-state.db"; got != want {
+		t.Fatalf("paths.StateDB = %q, want %q", got, want)
+	}
+	if got, want := paths.ConfigDir, "/tmp"; got != want {
+		t.Fatalf("paths.ConfigDir = %q, want %q", got, want)
+	}
+	if got, want := paths.PIDDir, filepath.Join("/tmp", "pids"); got != want {
+		t.Fatalf("paths.PIDDir = %q, want %q", got, want)
+	}
+}
+
+func TestResolvePathsRejectsInvalidSQLiteURIOverride(t *testing.T) {
+	t.Setenv("ORCA_STATE_DB", "sqlite://tmp/orca-state.db")
+
+	_, err := ResolvePaths()
+	if err == nil {
+		t.Fatal("ResolvePaths() error = nil, want non-nil")
+	}
+	if !strings.Contains(err.Error(), "sqlite:///absolute/path") {
+		t.Fatalf("ResolvePaths() error = %v, want sqlite path guidance", err)
+	}
+}
+
 func TestPreparePIDStateExistingPIDFile(t *testing.T) {
 	t.Parallel()
 

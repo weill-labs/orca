@@ -80,11 +80,13 @@ pane name is display-only metadata.
 
 ### State
 
-All state lives in a global SQLite database at `~/.config/orca/state.db`.
-One orca daemon runs per project. All tables are scoped by a `project` column
-(the canonical git repo root for the supplied `--project` path or current
-working directory). Running two projects simultaneously means
-two daemon instances sharing the same DB file, each seeing only its own rows.
+All state lives in a global database configured in `~/.config/orca/config.toml`.
+Postgres is the default backend. Legacy SQLite state remains at
+`~/.config/orca/state.db` as an explicit escape hatch and as the first-run
+auto-migration source. One orca daemon runs per project. All tables are scoped
+by a `project` column (the canonical git repo root for the supplied `--project`
+path or current working directory). Running two projects simultaneously means
+two daemon instances sharing the same database, each seeing only its own rows.
 
 - **Tasks** — project, issue ID, status (queued/active/done/cancelled), assigned
   worker, assigned clone, PR number, timestamps.
@@ -96,7 +98,7 @@ two daemon instances sharing the same DB file, each seeing only its own rows.
 - **Event log** — timestamped record of state transitions for debugging and
   `orca logs`.
 
-SQLite is global (not per-clone) because clones are at known filesystem paths
+The global store is not per-clone because clones are at known filesystem paths
 and task state doesn't belong to any single clone.
 
 ### Clone Pool
@@ -324,11 +326,23 @@ POOL: 34 free / 36 total    QUEUE: 1    STUCK: 0    MERGED: 12
 ## Configuration
 
 ```
-~/.config/orca/state.db       # global: tasks, workers, clones, event log
+~/.config/orca/config.toml    # global state backend config
+~/.config/orca/state.db       # legacy SQLite state / explicit SQLite override
 .orca/config.toml             # required repo-local config
 ```
 
-### Example `config.toml`
+### Global state config
+
+```toml
+[state]
+dsn = "postgres://orca:orca@127.0.0.1:55432/orca?sslmode=disable"
+```
+
+`make dev-postgres` writes this file automatically. If `~/.config/orca/state.db`
+already exists, the next `orca start` migrates it into the configured Postgres
+database before the daemon starts.
+
+### Example repo `config.toml`
 
 ```toml
 [daemon]
@@ -356,7 +370,8 @@ nudge_command = "Enter"
 max_nudge_retries = 3
 
 # Fleet uses a single-coordinator topology: one orca daemon (on the local
-# machine) owns all state in SQLite and drives remote amux sessions over SSH.
+# machine) owns all state in the configured database and drives remote amux
+# sessions over SSH.
 # Remote hosts run amux but not orca.
 [fleet]
 hosts = ["localhost", "devbox-1", "devbox-2"]

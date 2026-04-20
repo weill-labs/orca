@@ -543,10 +543,14 @@ func taskActionResultForIssue(ctx context.Context, store daemonStateStore, proje
 }
 
 func openDaemonStore(stateDBPath string) (daemonStateStore, error) {
-	if dsn := strings.TrimSpace(os.Getenv("ORCA_STATE_DSN")); dsn != "" {
-		return openPostgresDaemonStore(dsn)
+	backend, err := config.ResolveStateBackend(stateDBPath)
+	if err != nil {
+		return nil, err
 	}
-	return openSQLiteDaemonStore(stateDBPath)
+	if backend.Kind == config.StateBackendSQLite {
+		return openSQLiteDaemonStore(backend.SQLitePath)
+	}
+	return openPostgresDaemonStore(backend.DSN)
 }
 
 func resolveRPCProject(id json.RawMessage, rawProject string, defaultProject ...string) (string, rpcResponse) {

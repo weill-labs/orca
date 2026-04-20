@@ -10,6 +10,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/weill-labs/orca/internal/config"
 	"github.com/weill-labs/orca/internal/daemon"
 	state "github.com/weill-labs/orca/internal/daemonstate"
 )
@@ -17,6 +18,7 @@ import (
 const (
 	stateBackendSQLite   = "sqlite"
 	stateBackendPostgres = "postgres"
+	stateBackendUnknown  = "unknown"
 )
 
 type projectStatusResult struct {
@@ -65,36 +67,108 @@ func (a *App) daemonPIDStatus() (int, bool, string) {
 	return probe.pid, probe.alive, probe.warning
 }
 
-func backendMismatchWarningForPID(pid int, readProcessEnviron func(int) ([]string, error)) string {
+func backendMismatchWarningForPID(pid int, readProcessEnviron func(int) ([]string, error), resolvePaths func() (daemon.Paths, error)) string {
 	env, err := readProcessEnviron(pid)
 	if err != nil {
 		return ""
 	}
 
-	daemonBackend := stateBackendFromEnv(env)
-	shellBackend := currentStateBackend()
-	if daemonBackend == shellBackend {
+	daemonBackend := daemonStateBackend(env)
+	shellBackend := currentStateBackend(resolvePaths)
+	if daemonBackend == stateBackendUnknown || shellBackend == stateBackendUnknown || daemonBackend == shellBackend {
 		return ""
 	}
 
-	return fmt.Sprintf("Warning: daemon is running on %s but this shell reads %s. Consider sourcing ~/.env.", daemonBackend, shellBackend)
+	return fmt.Sprintf("Warning: daemon is running on %s but this shell reads %s. Update ~/.config/orca/config.toml or ORCA_STATE_* overrides so they match.", daemonBackend, shellBackend)
 }
 
-func currentStateBackend() string {
-	return stateBackendFromEnv(os.Environ())
+func daemonStateBackend(env []string) string {
+	if backend := stateBackendFromEnv(env); backend != stateBackendUnknown {
+		return backend
+	}
+
+	stateDBPath, ok := daemonConfigStateDBPath(env)
+	if !ok {
+		return stateBackendUnknown
+	}
+
+	backend, err := config.ResolveConfiguredStateBackend(stateDBPath)
+	if err != nil {
+		return stateBackendUnknown
+	}
+	return backend.Kind
+}
+
+func daemonConfigStateDBPath(env []string) (string, bool) {
+	if configDir := envValue(env, "ORCA_CONFIG_DIR"); configDir != "" {
+		return filepath.Join(configDir, "state.db"), true
+	}
+
+	homeDir := envValue(env, "HOME")
+	if homeDir == "" {
+		var err error
+		homeDir, err = os.UserHomeDir()
+		if err != nil {
+			return "", false
+		}
+	}
+
+	return filepath.Join(homeDir, ".config", "orca", "state.db"), true
+}
+
+func currentStateBackend(resolvePaths func() (daemon.Paths, error)) string {
+	if backend := stateBackendFromEnv(os.Environ()); backend != stateBackendUnknown {
+		return backend
+	}
+	if resolvePaths == nil {
+		resolvePaths = daemon.ResolvePaths
+	}
+	paths, err := resolvePaths()
+	if err != nil {
+		return stateBackendUnknown
+	}
+	backend, err := config.ResolveStateBackend(paths.StateDB)
+	if err != nil {
+		return stateBackendUnknown
+	}
+	return backend.Kind
 }
 
 func stateBackendFromEnv(env []string) string {
 	for _, entry := range env {
+		if !strings.HasPrefix(entry, "ORCA_STATE_DB=") {
+			continue
+		}
+		if strings.TrimSpace(strings.TrimPrefix(entry, "ORCA_STATE_DB=")) != "" {
+			return stateBackendSQLite
+		}
+	}
+
+	for _, entry := range env {
 		if !strings.HasPrefix(entry, "ORCA_STATE_DSN=") {
 			continue
 		}
-		if strings.TrimSpace(strings.TrimPrefix(entry, "ORCA_STATE_DSN=")) != "" {
-			return stateBackendPostgres
+		dsn := strings.TrimSpace(strings.TrimPrefix(entry, "ORCA_STATE_DSN="))
+		if dsn == "" {
+			return stateBackendUnknown
 		}
-		break
+		if strings.HasPrefix(strings.ToLower(dsn), "sqlite:") {
+			return stateBackendSQLite
+		}
+		return stateBackendPostgres
 	}
-	return stateBackendSQLite
+	return stateBackendUnknown
+}
+
+func envValue(env []string, key string) string {
+	prefix := key + "="
+	for _, entry := range env {
+		if !strings.HasPrefix(entry, prefix) {
+			continue
+		}
+		return strings.TrimSpace(strings.TrimPrefix(entry, prefix))
+	}
+	return ""
 }
 
 func pidFilePath(paths daemon.Paths) string {

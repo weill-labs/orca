@@ -1,11 +1,15 @@
-.PHONY: setup install vet test test-hooks test-race test-flakes bench coverage release-dry-run verify
+.PHONY: setup dev-postgres install vet test test-hooks test-race test-flakes bench coverage release-dry-run verify
 
 BUILD_COMMIT ?= $(shell git rev-parse --short=7 HEAD 2>/dev/null || echo dev)
 GO_LDFLAGS := -ldflags "-X main.BuildCommit=$(BUILD_COMMIT)"
 
-setup: ## Configure git hooks and install tools
+setup: ## Configure git hooks
 	git config core.hooksPath .githooks
 	@echo "Hooks activated from .githooks/"
+	@echo "Run 'make dev-postgres' to start a local Postgres container."
+
+dev-postgres: ## Start local Postgres and write ~/.config/orca/config.toml
+	scripts/dev-postgres.sh
 
 install: ## Install orca
 	go build -trimpath $(GO_LDFLAGS) -o ~/.local/bin/orca .
