@@ -347,3 +347,32 @@ func TestStartAgentInPaneReturnsErrPaneGone(t *testing.T) {
 	}
 	deps.amux.requireSentKeys(t, "pane-1", nil)
 }
+
+func TestClearStaleWorkerPaneRefClearsErrPaneNotFound(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	d := deps.newDaemon(t)
+	worker := Worker{
+		Project:      "/tmp/project",
+		WorkerID:     "worker-01",
+		PaneID:       "pane-1",
+		PaneName:     "w-LAB-854",
+		AgentProfile: "codex",
+		LastCapture:  "stale output",
+	}
+	deps.amux.paneExistsErr = amux.ErrPaneNotFound
+
+	if err := d.clearStaleWorkerPaneRef(context.Background(), &worker); err != nil {
+		t.Fatalf("clearStaleWorkerPaneRef() error = %v", err)
+	}
+	if got := worker.PaneID; got != "" {
+		t.Fatalf("worker.PaneID = %q, want empty", got)
+	}
+	if got, want := worker.PaneName, "worker-01"; got != want {
+		t.Fatalf("worker.PaneName = %q, want %q", got, want)
+	}
+	if got := worker.LastCapture; got != "" {
+		t.Fatalf("worker.LastCapture = %q, want empty", got)
+	}
+}

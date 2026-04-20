@@ -505,6 +505,7 @@ func TestCaptureUnavailable(t *testing.T) {
 		want bool
 	}{
 		{name: "nil", want: false},
+		{name: "typed pane not found", err: ErrPaneNotFound, want: true},
 		{name: "not found code", err: errors.New("capture failed: not_found"), want: true},
 		{name: "pane not found", err: errors.New("capture failed: pane not found"), want: true},
 		{name: "pane missing", err: errors.New("capture failed: pane missing"), want: true},
