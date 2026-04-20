@@ -110,6 +110,8 @@ func (d *Daemon) checkTaskPRPoll(ctx context.Context, active ActiveAssignment) (
 		if prNumber > 0 {
 			metadata, err := d.prPaneMetadata(ctx, update.Active, prNumber)
 			if err != nil {
+				traceAction = "pr_metadata_error"
+				traceErr = err
 				return update
 			}
 			update.PaneMetadata = mergeMetadata(update.PaneMetadata, metadata)

@@ -18,9 +18,6 @@ func (d *Daemon) tracePRPoll(update *TaskStateUpdate, profile AgentProfile, acti
 }
 
 func (d *Daemon) emitPRPollTaskTrace(ctx context.Context, task Task, worker Worker, action string, err error) {
-	if strings.TrimSpace(task.Issue) == "" {
-		return
-	}
 	active := ActiveAssignment{Task: task, Worker: worker}
 	profile := AgentProfile{Name: task.AgentProfile}
 	if loaded, loadErr := d.profileForTask(ctx, task); loadErr == nil {

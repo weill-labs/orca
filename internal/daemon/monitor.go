@@ -143,28 +143,21 @@ func (d *Daemon) prPollAssignments(ctx context.Context) ([]ActiveAssignment, err
 	assignments := make([]ActiveAssignment, 0, len(tasks))
 	for _, task := range tasks {
 		worker, hasWorker, err := d.resumeWorker(ctx, task)
+		taskWorker := Worker{
+			Project:      task.Project,
+			WorkerID:     task.WorkerID,
+			PaneID:       task.PaneID,
+			PaneName:     task.PaneName,
+			Issue:        task.Issue,
+			ClonePath:    task.ClonePath,
+			AgentProfile: task.AgentProfile,
+		}
 		if err != nil {
-			d.emitPRPollTaskTrace(ctx, task, Worker{
-				Project:      task.Project,
-				WorkerID:     task.WorkerID,
-				PaneID:       task.PaneID,
-				PaneName:     task.PaneName,
-				Issue:        task.Issue,
-				ClonePath:    task.ClonePath,
-				AgentProfile: task.AgentProfile,
-			}, "resume_worker_error", err)
+			d.emitPRPollTaskTrace(ctx, task, taskWorker, "resume_worker_error", err)
 			continue
 		}
 		if !hasWorker {
-			d.emitPRPollTaskTrace(ctx, task, Worker{
-				Project:      task.Project,
-				WorkerID:     task.WorkerID,
-				PaneID:       task.PaneID,
-				PaneName:     task.PaneName,
-				Issue:        task.Issue,
-				ClonePath:    task.ClonePath,
-				AgentProfile: task.AgentProfile,
-			}, "resume_worker_missing", nil)
+			d.emitPRPollTaskTrace(ctx, task, taskWorker, "resume_worker_missing", nil)
 			continue
 		}
 		assignments = append(assignments, ActiveAssignment{
