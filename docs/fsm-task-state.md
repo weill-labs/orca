@@ -64,18 +64,84 @@ Today there is no single authority for task state.
    needs an explicit legacy hydration layer while those call sites are being
    moved.
 
-## Proposed Package
+## Preferred Architecture
 
-Introduce a pure package at `internal/daemon/taskfsm`.
+The preferred design is not "many daemon call sites import a shared FSM helper."
+It is "each active task owns a lifecycle actor, and that actor owns the FSM."
 
-The package is intentionally deterministic and side-effect free. It should not
-know about amux, GitHub, Linear, or `TaskStateUpdate`. It only consumes a typed
-snapshot and returns a transition result plus named hook invocations.
+This should build on patterns orca already uses:
+
+- `internal/daemon/task_monitor_actor.go` already provides one goroutine plus
+  mailbox per active task.
+- `internal/daemon/merge_queue_actor.go` already provides actor-style serialized
+  ownership of one workflow with an update channel back into the daemon.
+
+The design for LAB-1408 should evolve the current `TaskMonitor` into a
+`TaskLifecycleActor` rather than introducing a second competing per-task
+concurrency model.
+
+### Actor model
+
+- One actor per active task.
+- One goroutine plus one inbox channel per actor.
+- Pollers and external commands become event producers only.
+- The actor is the sole caller of `fsm.Apply(...)`.
+- On-enter hooks run inside the actor while it has exclusive access to the
+  task's working snapshot.
+- The persisted task/worker rows remain authoritative. The actor keeps only an
+  ephemeral working copy rebuilt from the store on bootstrap or restart.
+
+This keeps transitions atomic per task without changing the larger daemon model:
+the daemon still reconstructs runtime orchestration from persisted rows on
+startup instead of depending on long-lived in-memory state.
+
+### Event producers
+
+| Producer | Emits |
+| --- | --- |
+| `prpoll.go`, `relay.go`, `reconcile_pr.go` | `PRDiscovered`, `PRMergedObserved`, `PRClosedObserved` |
+| `ci.go` | `CIObserved` |
+| `review.go` | `ReviewObserved`, `ReviewApprovedObserved`, `WorkerRecovered` |
+| `conflict.go` | `MergeConflictObserved` |
+| `task_state.go`, `recovery.go`, exited-pane paths | `WorkerEscalated`, `FatalErrorObserved`, `WorkerRecovered` |
+| `daemon.go` cancel path | `UserCancelled` |
+| `postmortem.go` / completion path | `LifecycleCompleted` |
+
+### Why actor-owned FSM is the preferred shape
+
+1. It eliminates the race class this issue exists to remove: multiple poll paths
+   producing concurrent state writes for the same task.
+2. It gives `onEnter` hooks a natural home with exclusive access to the
+   task-local snapshot.
+3. It aligns with existing orca code. This is an evolution of current actor
+   patterns, not a novel concurrency subsystem.
+4. Goroutine overhead is negligible at orca's current scale. Roughly 20 active
+   tasks means 20 mailbox goroutines, which is operationally trivial.
+5. Actor bootstrap is already conceptually present: `reconcileNonTerminalAssignments`
+   plus per-row actor creation. Completion/cancel tears the actor down.
+6. Cross-cutting concerns such as circuit breaking and retry budgets can live in
+   the producer/supervisor layer instead of being smeared into transition code.
+
+### Relationship to the stateless-daemon rule
+
+Orca's source of truth must remain the DB row, not the goroutine. The actor owns
+serialization, not authority.
+
+- The actor's `task` and `worker` snapshot is a disposable cache of the current
+  persisted row.
+- The actor must durably persist task/worker changes before acknowledging an
+  event as applied.
+- If an actor dies, the daemon rebuilds it by rereading the row from the store.
+- Startup reconciliation remains the mechanism that recreates actors after
+  daemon restart.
+
+This is how the actor model fits the repo's recoverability goals without turning
+the in-memory goroutine into a hidden source of truth.
 
 ## Type Signatures
 
 ```go
-package taskfsm
+package daemon
 
 type State uint8
 
@@ -110,6 +176,24 @@ const (
 
 type Event interface {
 	Kind() EventKind
+}
+
+type TaskLifecycleActor struct {
+	key    string
+	daemon *Daemon
+	inbox  chan TaskEventEnvelope
+	done   chan struct{}
+
+	// Ephemeral working copy. The persisted row is authoritative.
+	task   Task
+	worker Worker
+	fsm    *Machine
+}
+
+type TaskEventEnvelope struct {
+	Ctx   context.Context
+	Event Event
+	Ack   chan TaskActorResult
 }
 
 type Snapshot struct {
@@ -173,57 +257,77 @@ type FatalErrorObserved struct {
 	Reason  string
 }
 
+type Machine struct {
+	state State
+	table map[State]map[EventKind]Transition
+}
+
 type Guard func(Snapshot, Event) error
 
-type HookID string
+type OnEnterHook func(context.Context, *TaskLifecycleActor, Event, *ActorEffects) error
 
-const (
-	HookSyncPRMetadata             HookID = "sync_pr_metadata"
-	HookEmitPRDetected             HookID = "emit_pr_detected"
-	HookPersistCIObservation       HookID = "persist_ci_observation"
-	HookMaybeQueueCINudge          HookID = "maybe_queue_ci_nudge"
-	HookMaybeEmitCIEscalation      HookID = "maybe_emit_ci_escalation"
-	HookPersistReviewObservation   HookID = "persist_review_observation"
-	HookMaybeQueueReviewNudge      HookID = "maybe_queue_review_nudge"
-	HookMaybeEmitReviewApproved    HookID = "maybe_emit_review_approved"
-	HookMaybeEmitReviewEscalation  HookID = "maybe_emit_review_escalation"
-	HookMaybeQueueConflictNudge    HookID = "maybe_queue_conflict_nudge"
-	HookMarkWorkerEscalated        HookID = "mark_worker_escalated"
-	HookEmitWorkerEscalated        HookID = "emit_worker_escalated"
-	HookClearWorkerEscalation      HookID = "clear_worker_escalation"
-	HookEmitWorkerRecovered        HookID = "emit_worker_recovered"
-	HookEmitPRClosed               HookID = "emit_pr_closed"
-	HookEmitPRMerged               HookID = "emit_pr_merged"
-	HookRequestCompletion          HookID = "request_completion"
-)
-
-type HookInvocation struct {
-	ID   HookID
-	Args map[string]string
-}
+type NextState func(Snapshot, Event) (State, error)
 
 type Transition struct {
 	From   State
 	On     EventKind
 	Guard  Guard
-	To     func(Snapshot, Event) (State, error)
-	Enter  []HookID
+	To     NextState
+	Enter  []OnEnterHook
 }
 
-type Result struct {
+type ActorEffects struct {
+	TaskChanged            bool
+	WorkerChanged          bool
+	PaneMetadata           map[string]string
+	PaneMetadataRemovals   []string
+	Events                 []Event
+	CompletionStatus       string
+	CompletionEventType    string
+	CompletionMerged       bool
+	CompletionWrapUpPrompt string
+	CompletionMessage      string
+	nudges                 []taskMonitorNudge
+}
+
+type TaskActorResult struct {
 	From           State
 	To             State
 	Changed        bool
 	PersistedState string
 	TerminalStatus string // "", "done", "cancelled", "failed"
-	Hooks          []HookInvocation
+	Effects        ActorEffects
 }
 
+func (m *Machine) Apply(snapshot Snapshot, event Event) (TaskActorResult, error)
+
 type FSM interface {
-	Apply(current State, snapshot Snapshot, event Event) (Result, error)
+	Apply(snapshot Snapshot, event Event) (TaskActorResult, error)
 	HydrateLegacy(snapshot Snapshot) State
 }
 ```
+
+### Actor loop sketch
+
+```go
+func (a *TaskLifecycleActor) run() {
+	for msg := range a.inbox {
+		snapshot := snapshotFromRows(a.task, a.worker)
+		result, err := a.fsm.Apply(snapshot, msg.Event)
+		if err == nil {
+			a.task.State = result.PersistedState
+			if result.TerminalStatus != "" {
+				a.task.Status = result.TerminalStatus
+			}
+			flushActorEffects(msg.Ctx, a, result.Effects)
+		}
+		msg.Ack <- result
+	}
+}
+```
+
+The critical property is that `fsm.Apply(...)` and every `onEnter` hook run on
+the actor goroutine. Producers never mutate `task.State` directly.
 
 ## Persistence Contract
 
@@ -247,7 +351,7 @@ func PersistedTaskState(state State) string {
 	case StateDone, StateCancelled, StateFailed:
 		return "done"
 	default:
-		panic("unknown taskfsm.State")
+		panic("unknown State")
 	}
 }
 ```
@@ -368,94 +472,87 @@ explicit because they currently write task state directly.
 
 ### Hook rules
 
-- Hooks are named in the transition table by `HookID`.
-- The FSM returns hook invocations; it does not run them.
-- The daemon owns the hook dispatcher. That dispatcher translates hook IDs into
-  existing `TaskStateUpdate` mutations, emitted events, queued nudges, pane
-  metadata changes, and completion requests.
-- Hooks may inspect the event payload, but only after the transition has been
-  validated and the next state chosen.
+- Hooks are attached directly to transitions, but they should still have stable,
+  reviewable names in the transition table and tests.
+- Hooks run inside the actor after the transition has been validated and the
+  next state chosen.
+- Hooks have exclusive access to the actor's working copy of `task` and
+  `worker`, so they are the natural home for stateful side effects like CI
+  counters, review watermarks, queued nudges, and completion requests.
+- Hooks do not call `fsm.Apply(...)` recursively. They mutate actor-local
+  effects and rows only.
 
-This split keeps the FSM table reviewable while still letting the daemon reuse
-its current side-effect machinery.
+This keeps the transition table reviewable while giving side effects a single
+serialized execution site.
 
-### Suggested daemon-side dispatcher shape
+### Suggested actor hook shape
 
 ```go
-type HookContext struct {
-	Now      time.Time
-	From     taskfsm.State
-	To       taskfsm.State
-	Snapshot taskfsm.Snapshot
-	Event    taskfsm.Event
-}
+type OnEnterHook func(
+	ctx context.Context,
+	actor *TaskLifecycleActor,
+	event Event,
+	effects *ActorEffects,
+) error
 
-type HookRunner interface {
-	Run(ctx context.Context, hook taskfsm.HookInvocation, hc HookContext, update *TaskStateUpdate) error
-}
+func onEnterPersistCIObservation(ctx context.Context, actor *TaskLifecycleActor, event Event, effects *ActorEffects) error
+func onEnterMaybeQueueCINudge(ctx context.Context, actor *TaskLifecycleActor, event Event, effects *ActorEffects) error
+func onEnterEmitWorkerEscalated(ctx context.Context, actor *TaskLifecycleActor, event Event, effects *ActorEffects) error
 ```
 
-`TaskStateUpdate` remains the integration boundary for the existing daemon. The
-FSM package just decides state and hook IDs.
+`ActorEffects` is the migration bridge to the existing daemon plumbing. It plays
+the role `TaskStateUpdate` plays today, but it is assembled inside the actor
+instead of being built by many concurrent call sites.
 
 ### Concrete example: `PRDetected + CIObserved(fail) -> CIPending`
 
 Input:
 
 ```go
-current := taskfsm.StatePRDetected
-event := taskfsm.CIObserved{Bucket: "fail"}
+actor.fsm.state = StatePRDetected
+event := CIObserved{Bucket: "fail"}
 ```
 
-Result:
+Actor-owned result:
 
 ```go
-taskfsm.Result{
-	From:           taskfsm.StatePRDetected,
-	To:             taskfsm.StateCIPending,
+TaskActorResult{
+	From:           StatePRDetected,
+	To:             StateCIPending,
 	Changed:        true,
 	PersistedState: "ci_pending",
-	Hooks: []taskfsm.HookInvocation{
-		{ID: taskfsm.HookPersistCIObservation},
-		{ID: taskfsm.HookMaybeQueueCINudge},
-		{ID: taskfsm.HookMaybeEmitCIEscalation},
-	},
 }
 ```
 
-Daemon-side behavior:
+Actor-side behavior:
 
-1. `persist_ci_observation` updates `Worker.LastCIState`, resets or increments
+1. `onEnterPersistCIObservation` updates `Worker.LastCIState`, resets or increments
    CI counters, and marks the worker dirty.
-2. `maybe_queue_ci_nudge` decides whether this `fail` bucket should send the
+2. `onEnterMaybeQueueCINudge` decides whether this `fail` bucket should send the
    existing "fix CI and push" prompt.
-3. `maybe_emit_ci_escalation` emits `worker.ci_escalated` only when the CI
+3. `onEnterMaybeEmitCIEscalation` emits `worker.ci_escalated` only when the CI
    nudge budget is exhausted.
 
 The current transition and its side effects become visible in one place instead
-of being split across `task_state.go` and `ci.go`.
+of being split across `task_state.go`, `ci.go`, and post-apply daemon code.
 
 ### Concrete example: `Escalated + WorkerRecovered(Target=ReviewPending) -> ReviewPending`
 
 Input:
 
 ```go
-current := taskfsm.StateEscalated
-event := taskfsm.WorkerRecovered{Target: taskfsm.ResumeReviewPending}
+actor.fsm.state = StateEscalated
+event := WorkerRecovered{Target: ResumeReviewPending}
 ```
 
-Result:
+Actor-owned result:
 
 ```go
-taskfsm.Result{
-	From:           taskfsm.StateEscalated,
-	To:             taskfsm.StateReviewPending,
+TaskActorResult{
+	From:           StateEscalated,
+	To:             StateReviewPending,
 	Changed:        true,
 	PersistedState: "review_pending",
-	Hooks: []taskfsm.HookInvocation{
-		{ID: taskfsm.HookClearWorkerEscalation},
-		{ID: taskfsm.HookEmitWorkerRecovered},
-	},
 }
 ```
 
@@ -463,22 +560,24 @@ This matches the real behavior better than hard-coding `Escalated -> PRDetected`
 
 ## Migration Plan
 
-### Phase 1: Introduce the FSM package beside the existing code
+### Phase 1: Evolve `TaskMonitor` into a lifecycle actor that owns the FSM
 
-Ship `internal/daemon/taskfsm` with:
+Ship an actor-owned FSM alongside the existing logic:
 
 - typed `State` and `Event` definitions,
+- a `TaskLifecycleActor` that serializes per-task event handling,
 - the authoritative transition table,
 - `PersistedTaskState(...)`,
 - `HydrateLegacy(snapshot)`, and
 - table-driven tests that prove every row and every impossible transition.
 
-No behavior change in this phase. Existing call sites continue to mutate
-`TaskStateUpdate` as they do today.
+No behavior change in this phase. Existing producers can still route through the
+current `TaskMonitor` check kinds while the actor bootstraps from persisted
+rows.
 
 ### Phase 2: Add compare mode, but keep legacy writes authoritative
 
-Add a daemon helper that computes:
+Add actor-side compare mode that computes:
 
 1. `legacyState` from current code, and
 2. `fsmState` from `HydrateLegacy(snapshot)` or `Apply(...)`.
@@ -486,9 +585,9 @@ Add a daemon helper that computes:
 If they differ, emit a trace event or test failure. Do not write the FSM result
 yet. This catches mismatches before migration deletes the derivers.
 
-### Phase 3: Migrate writers by concern
+### Phase 3: Convert pollers and commands into event producers
 
-Migrate one concern at a time so each change stays reviewable:
+Migrate one producer family at a time so each change stays reviewable:
 
 1. `PR detection + PR terminal states`
    Files: `prpoll.go`, `relay.go`, `reconcile_pr.go`
@@ -504,15 +603,21 @@ Migrate one concern at a time so each change stays reviewable:
 6. `Completion`
    Files: `prpoll.go`, `postmortem.go`, `daemon.go`
 
-Each migrated caller should:
+Each migrated producer should:
 
-- construct a typed event,
+- construct a typed event only,
+- enqueue it to the task actor inbox, and
+- stop mutating `task.State` directly.
+
+The actor should:
+
 - call `fsm.Apply(...)`,
 - write `result.PersistedState` back to `task.State`,
-- copy `result.TerminalStatus` into `task.Status` when present, and
-- run the returned hooks through the daemon hook dispatcher.
+- copy `result.TerminalStatus` into `task.Status` when present,
+- run transition hooks on the actor goroutine, and
+- flush resulting task/worker/event updates to the store before ack.
 
-### Phase 4: Delete the legacy derivers
+### Phase 4: Delete legacy derivation and check-kind-specific state logic
 
 After all writers have moved:
 
@@ -520,14 +625,15 @@ After all writers have moved:
 - delete `taskStateForAssignment(...)`,
 - delete `taskStateForCIState(...)`,
 - delete `setTaskState(...)`, and
+- collapse `taskMonitorCheckKind` handlers into thin event producers,
 - collapse read-time normalization to `HydrateLegacy(...)` only for old rows, or
   delete it too if all persisted rows are guaranteed to be explicit.
 
 ## Child Issues To Open After Approval
 
-1. Introduce `internal/daemon/taskfsm` alongside existing derivers, with
-   exhaustive transition-table tests and no behavior change.
-2. Migrate daemon call sites to `fsm.Apply(event)`, delete
+1. Evolve `TaskMonitor` into a per-task lifecycle actor that owns the FSM,
+   with exhaustive transition-table tests and no behavior change.
+2. Convert daemon pollers and commands into typed event producers, delete
    `taskStateForAssignment(...)`, `normalizeTaskState(...)`, and
    `setTaskState(...)`.
 
