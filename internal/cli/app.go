@@ -58,7 +58,7 @@ Stop the orca daemon.`,
 	"reload": `usage: orca reload [--project PATH] [--global] [--json]
 
 Hot-reload the orca daemon.`,
-	"status": `usage: orca status [ISSUE] [--project PATH] [--global] [--json]
+	"status": `usage: orca status [ISSUE] [--project PATH] [--global] [--all-hosts] [--json]
 
 Show daemon and task status.`,
 	"migrate-state": `usage: orca migrate-state --from sqlite:///path/to/state.db --to postgres://... [--dry-run] [--truncate]
@@ -441,9 +441,11 @@ func (a *App) runStatus(ctx context.Context, args []string) error {
 	fs := newFlagSet("status")
 	var projectPath string
 	var global bool
+	var allHosts bool
 	var jsonOutput bool
 	fs.StringVar(&projectPath, "project", "", "project path")
 	fs.BoolVar(&global, "global", false, "show machine-wide daemon status")
+	fs.BoolVar(&allHosts, "all-hosts", false, "aggregate status across all hosts")
 	fs.BoolVar(&jsonOutput, "json", false, "emit JSON output")
 
 	issue, err := parseOptionalSinglePositional(fs, args)
@@ -464,6 +466,21 @@ func (a *App) runStatus(ctx context.Context, args []string) error {
 	}
 
 	if issue == "" {
+		if allHosts {
+			reader, ok := a.state.(state.AllHostsReader)
+			if !ok {
+				return fmt.Errorf("status --all-hosts is not supported by this state backend")
+			}
+			status, err := reader.ProjectStatusAllHosts(ctx, projectPath)
+			if err != nil {
+				return err
+			}
+			if jsonOutput {
+				return writeJSON(a.stdout, status)
+			}
+			return writeProjectStatus(a.stdout, status, "", a.version)
+		}
+
 		projectStatus, err := a.projectStatus(ctx, projectPath)
 		if err != nil {
 			return err
@@ -480,6 +497,24 @@ func (a *App) runStatus(ctx context.Context, args []string) error {
 	}
 
 	issue = daemon.NormalizeIssueIdentifier(issue)
+	if allHosts {
+		reader, ok := a.state.(state.AllHostsReader)
+		if !ok {
+			return fmt.Errorf("status --all-hosts is not supported by this state backend")
+		}
+		taskStatus, err := reader.TaskStatusAllHosts(ctx, projectPath, issue)
+		if err != nil {
+			if errors.Is(err, state.ErrNotFound) {
+				return fmt.Errorf("task %s not found", issue)
+			}
+			return err
+		}
+		if jsonOutput {
+			return writeJSON(a.stdout, taskStatus)
+		}
+		return writeTaskStatus(a.stdout, taskStatus)
+	}
+
 	taskStatus, err := a.state.TaskStatus(ctx, projectPath, issue)
 	if err != nil {
 		if errors.Is(err, state.ErrNotFound) {
@@ -1127,6 +1162,25 @@ func writeProjectStatusAt(w io.Writer, status state.ProjectStatus, daemonBuildCo
 	}
 	if _, err := fmt.Fprintf(w, "pool: %d total, %d free\n", status.Summary.Clones, status.Summary.FreeClones); err != nil {
 		return err
+	}
+
+	if len(status.Daemons) > 0 {
+		tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+		if _, err := fmt.Fprintln(tw, "\nHOST\tSTATUS\tSESSION\tPID\tUPDATED"); err != nil {
+			return err
+		}
+		for _, daemon := range status.Daemons {
+			pid := "-"
+			if daemon.PID > 0 {
+				pid = strconv.Itoa(daemon.PID)
+			}
+			if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", fallback(daemon.Host), daemon.Status, fallback(daemon.Session), pid, formatTimestamp(daemon.UpdatedAt)); err != nil {
+				return err
+			}
+		}
+		if err := tw.Flush(); err != nil {
+			return err
+		}
 	}
 
 	if len(status.Tasks) == 0 {
