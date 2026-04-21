@@ -432,7 +432,12 @@ func (d *Daemon) notifyCallerPaneReviewEscalation(ctx context.Context, active Ac
 		return
 	}
 
-	_ = d.amuxClient(ctx).SendKeys(ctx, targetPane, formatLeadReviewEscalation(active, feedback), "Enter")
+	prompt := formatLeadReviewEscalation(active, feedback)
+	if d.paneRunsCodex(ctx, targetPane) {
+		_ = d.submitToCodex(ctx, targetPane, prompt)
+		return
+	}
+	_ = d.amuxClient(ctx).SendKeys(ctx, targetPane, prompt, "Enter")
 }
 
 func formatLeadReviewEscalation(active ActiveAssignment, feedback []prFeedback) string {

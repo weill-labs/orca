@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"strings"
 	"sync"
@@ -431,6 +432,9 @@ func (a *fakeAmux) WaitIdle(ctx context.Context, paneID string, timeout time.Dur
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.waitIdleCalls = append(a.waitIdleCalls, waitIdleCall{PaneID: paneID, Timeout: timeout})
+	if timeout == codexPromptRetryIdleProbeTime && a.waitIdleHook == nil && a.waitIdleErr == nil && len(a.sentKeys[paneID]) > 0 {
+		return errors.New("idle timeout")
+	}
 	return a.waitIdleErr
 }
 

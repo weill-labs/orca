@@ -47,11 +47,8 @@ func simulateCodexSubmitPasteCollapse(deps *testDeps, idleBeforeActive int) *pas
 		deps.amux.waitIdleErr = nil
 	}
 	deps.amux.waitContentFunc = func(_ string, substring string, timeout time.Duration) (bool, error) {
-		if substring != codexWorkingText {
+		if substring != codexWorkingText || timeout != codexPromptRetryIdleProbeTime {
 			return false, nil
-		}
-		if timeout != codexPromptRetryIdleProbeTime {
-			return true, amuxapi.ErrWaitContentTimeout
 		}
 		if scenario.workingObserved {
 			return true, nil

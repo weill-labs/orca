@@ -241,6 +241,11 @@ func TestEnsurePostmortemEmitsFailedStatusWhenWorkingNeverAppears(t *testing.T) 
 	t.Parallel()
 
 	deps := newTestDeps(t)
+	deps.amux.waitIdleHook = func(_ string, timeout, _ time.Duration) {
+		if timeout == codexPromptRetryIdleProbeTime {
+			deps.amux.waitIdleErr = nil
+		}
+	}
 	d := deps.newDaemon(t)
 	active := newPostmortemAssignment(deps)
 
