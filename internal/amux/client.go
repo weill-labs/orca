@@ -496,11 +496,7 @@ func paneMissing(errInfo *captureCommandError) bool {
 	if strings.EqualFold(errInfo.Code, "not_found") {
 		return true
 	}
-	return paneNotFoundMessage(errInfo.Message)
-}
-
-func paneNotFoundMessage(message string) bool {
-	return captureNotFoundText(message)
+	return captureNotFoundText(errInfo.Message)
 }
 
 func captureNotFoundError(err error) bool {

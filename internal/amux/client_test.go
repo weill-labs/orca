@@ -577,6 +577,13 @@ func TestCLIClientPaneExists(t *testing.T) {
 			wantErrIs: ErrPaneNotFound,
 		},
 		{
+			name:      "returns ErrPaneNotFound for structured not_found command errors",
+			output:    `{"error":{"code":"not_found","message":"pane missing"}}`,
+			runErr:    errors.New("exit status 1"),
+			wantErr:   "pane missing",
+			wantErrIs: ErrPaneNotFound,
+		},
+		{
 			name:    "returns command errors",
 			runErr:  errors.New("exit status 1"),
 			wantErr: "exit status 1",
