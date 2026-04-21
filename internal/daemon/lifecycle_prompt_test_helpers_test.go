@@ -3,6 +3,8 @@ package daemon
 import (
 	"errors"
 	"time"
+
+	amuxapi "github.com/weill-labs/orca/internal/amux"
 )
 
 func setLifecyclePromptActiveAfterIdleProbes(deps *testDeps, idleProbes int) {
@@ -19,4 +21,42 @@ func setLifecyclePromptActiveAfterIdleProbes(deps *testDeps, idleProbes int) {
 		}
 		deps.amux.waitIdleErr = nil
 	}
+}
+
+type pasteCollapseSubmitScenario struct {
+	idleWaits       int
+	workingObserved bool
+}
+
+func simulateCodexSubmitPasteCollapse(deps *testDeps, idleBeforeActive int) *pasteCollapseSubmitScenario {
+	scenario := &pasteCollapseSubmitScenario{}
+	deps.amux.waitIdleHook = func(_ string, timeout, settle time.Duration) {
+		if timeout != codexPromptRetryIdleProbeTime {
+			return
+		}
+		if settle != 0 {
+			deps.amux.waitIdleErr = errors.New("unexpected settle during paste-collapse probe")
+			return
+		}
+		scenario.idleWaits++
+		if scenario.idleWaits > idleBeforeActive {
+			scenario.workingObserved = true
+			deps.amux.waitIdleErr = errors.New("idle timeout")
+			return
+		}
+		deps.amux.waitIdleErr = nil
+	}
+	deps.amux.waitContentFunc = func(_ string, substring string, timeout time.Duration) (bool, error) {
+		if substring != codexWorkingText {
+			return false, nil
+		}
+		if timeout != codexPromptRetryIdleProbeTime {
+			return true, amuxapi.ErrWaitContentTimeout
+		}
+		if scenario.workingObserved {
+			return true, nil
+		}
+		return true, amuxapi.ErrWaitContentTimeout
+	}
+	return scenario
 }

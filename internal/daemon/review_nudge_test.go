@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -323,6 +324,43 @@ func TestPRReviewPollingNotifiesCallerPaneWhenReviewNudgesAreExhausted(t *testin
 	})
 
 	deps.amux.requireSentKeys(t, "caller-pane-13", []string{leadNotification})
+}
+
+func TestNotifyCallerPaneReviewEscalationRetriesPasteCollapseUntilPaneTurnsActive(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	simulateCodexSubmitPasteCollapse(deps, 3)
+	d := deps.newDaemon(t)
+	active := newPostmortemAssignment(deps)
+	active.Task.CallerPane = "caller-pane-13"
+	active.Task.PRNumber = 42
+	feedback := []prFeedback{
+		{Author: "alice", Body: "Please add tests."},
+		{Author: "bob", Body: "Handle the nil case too."},
+	}
+
+	leadNotification := formatLeadReviewEscalation(active, feedback)
+	d.notifyCallerPaneReviewEscalation(context.Background(), active, feedback)
+
+	deps.amux.requireSentKeys(t, "caller-pane-13", []string{
+		leadNotification + "\n",
+		"\n",
+		"\n",
+	})
+	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
+		{PaneID: "caller-pane-13", Timeout: codexPromptRetryIdleProbeTime},
+		{PaneID: "caller-pane-13", Timeout: codexPromptRetryIdleProbeTime},
+		{PaneID: "caller-pane-13", Timeout: codexPromptRetryIdleProbeTime},
+		{PaneID: "caller-pane-13", Timeout: codexPromptRetryIdleProbeTime},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("waitIdle calls = %#v, want %#v", got, want)
+	}
+	if got, want := deps.amux.waitContentCalls, []waitContentCall{
+		{PaneID: "caller-pane-13", Substring: codexWorkingText, Timeout: codexPromptRetryIdleProbeTime},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("waitContent calls = %#v, want %#v", got, want)
+	}
 }
 
 func TestPRReviewPollingDefersReviewNudgeUntilWorkerAppearsIdle(t *testing.T) {
