@@ -791,8 +791,7 @@ func newOrigin(t *testing.T, baseBranch string) string {
 	root := t.TempDir()
 	source := filepath.Join(root, "source")
 	mustRun(t, "", "git", "init", "-b", baseBranch, source)
-	mustRun(t, source, "git", "config", "user.name", "Orca Tests")
-	mustRun(t, source, "git", "config", "user.email", "orca-tests@example.com")
+	configureTestGitIdentity(t, source)
 	mustWriteFile(t, filepath.Join(source, "README.md"), "hello")
 	mustRun(t, source, "git", "add", "README.md")
 	mustRun(t, source, "git", "commit", "-m", "initial commit")
@@ -825,8 +824,7 @@ func advanceOrigin(t *testing.T, clonePath, baseBranch, relativePath, contents s
 	origin := strings.TrimSpace(mustOutput(t, clonePath, "git", "remote", "get-url", "origin"))
 	worktree := filepath.Join(t.TempDir(), "origin-worktree")
 	mustRun(t, "", "git", "clone", origin, worktree)
-	mustRun(t, worktree, "git", "config", "user.name", "Orca Tests")
-	mustRun(t, worktree, "git", "config", "user.email", "orca-tests@example.com")
+	configureTestGitIdentity(t, worktree)
 	mustRun(t, worktree, "git", "checkout", baseBranch)
 	mustWriteFile(t, filepath.Join(worktree, relativePath), contents)
 	mustRun(t, worktree, "git", "add", relativePath)
@@ -839,6 +837,7 @@ func advanceOrigin(t *testing.T, clonePath, baseBranch, relativePath, contents s
 func divergeCloneBaseBranch(t *testing.T, clonePath, baseBranch string) string {
 	t.Helper()
 
+	configureTestGitIdentity(t, clonePath)
 	mustRun(t, clonePath, "git", "config", "pull.ff", "only")
 	expectedHead := advanceOrigin(t, clonePath, baseBranch, "remote-only.txt", "remote update")
 	mustRun(t, clonePath, "git", "checkout", baseBranch)
@@ -847,6 +846,13 @@ func divergeCloneBaseBranch(t *testing.T, clonePath, baseBranch string) string {
 	mustRun(t, clonePath, "git", "commit", "-m", "local divergent commit")
 
 	return expectedHead
+}
+
+func configureTestGitIdentity(t *testing.T, dir string) {
+	t.Helper()
+
+	mustRun(t, dir, "git", "config", "user.name", "Orca Tests")
+	mustRun(t, dir, "git", "config", "user.email", "orca-tests@example.com")
 }
 
 func lookupClone(t *testing.T, store *state.SQLiteStore, project, path string) state.CloneRecord {
