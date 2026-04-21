@@ -415,6 +415,48 @@ func TestAppRunDispatchesCommands(t *testing.T) {
 	}
 }
 
+func TestAppStatusAllHostsUsesAllHostReader(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	repoRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+	store := &fakeState{
+		allHostsProjectStatus: state.ProjectStatus{
+			Project: repoRoot,
+		},
+	}
+
+	app := New(Options{
+		Daemon: &fakeDaemon{},
+		State:  store,
+		Stdout: &stdout,
+		Stderr: &stderr,
+		Cwd: func() (string, error) {
+			return repoRoot, nil
+		},
+		ProjectStatusRPC: func(context.Context, string) (daemon.ProjectStatusRPCResult, error) {
+			return daemon.ProjectStatusRPCResult{}, daemon.ErrDaemonNotRunning
+		},
+	})
+
+	if err := app.Run(context.Background(), []string{"status", "--all-hosts"}); err != nil {
+		t.Fatalf("Run(status --all-hosts) error = %v", err)
+	}
+	if got, want := store.allHostsProjectStatusProject, repoRoot; got != want {
+		t.Fatalf("all-hosts project status lookup = %q, want %q", got, want)
+	}
+	if store.projectStatusCalls != 0 {
+		t.Fatalf("projectStatusCalls = %d, want 0 when --all-hosts is set", store.projectStatusCalls)
+	}
+	if !strings.Contains(stdout.String(), "project: "+repoRoot) {
+		t.Fatalf("stdout = %q, want all-host status output", stdout.String())
+	}
+}
+
 func TestRunCancelClientTimeoutBehavior(t *testing.T) {
 	t.Parallel()
 
@@ -2213,19 +2255,24 @@ func (f *fakeDaemon) Resume(_ context.Context, req daemon.ResumeRequest) (daemon
 }
 
 type fakeState struct {
-	projectStatusProject string
-	projectStatusCalls   int
-	taskStatusProject    string
-	taskStatusIssue      string
-	workersProject       string
-	clonesProject        string
-	eventsProject        string
+	projectStatusProject         string
+	projectStatusCalls           int
+	taskStatusProject            string
+	taskStatusIssue              string
+	workersProject               string
+	clonesProject                string
+	eventsProject                string
+	allHostsProjectStatusProject string
+	allHostsTaskStatusProject    string
+	allHostsTaskStatusIssue      string
 
-	projectStatus state.ProjectStatus
-	taskStatus    state.TaskStatus
-	workers       []state.Worker
-	clones        []state.Clone
-	events        []state.Event
+	projectStatus         state.ProjectStatus
+	taskStatus            state.TaskStatus
+	workers               []state.Worker
+	clones                []state.Clone
+	events                []state.Event
+	allHostsProjectStatus state.ProjectStatus
+	allHostsTaskStatus    state.TaskStatus
 
 	err error
 }
@@ -2249,6 +2296,26 @@ func (f *fakeState) TaskStatus(_ context.Context, project, issue string) (state.
 		return state.TaskStatus{}, state.ErrNotFound
 	}
 	return f.taskStatus, nil
+}
+
+func (f *fakeState) ProjectStatusAllHosts(_ context.Context, project string) (state.ProjectStatus, error) {
+	if f.err != nil {
+		return state.ProjectStatus{}, f.err
+	}
+	f.allHostsProjectStatusProject = project
+	return f.allHostsProjectStatus, nil
+}
+
+func (f *fakeState) TaskStatusAllHosts(_ context.Context, project, issue string) (state.TaskStatus, error) {
+	if f.err != nil {
+		return state.TaskStatus{}, f.err
+	}
+	f.allHostsTaskStatusProject = project
+	f.allHostsTaskStatusIssue = issue
+	if f.allHostsTaskStatus.Task.Issue == "" {
+		return state.TaskStatus{}, state.ErrNotFound
+	}
+	return f.allHostsTaskStatus, nil
 }
 
 func (f *fakeState) ListWorkers(_ context.Context, project string) ([]state.Worker, error) {

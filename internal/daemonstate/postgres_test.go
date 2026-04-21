@@ -90,6 +90,101 @@ func TestPostgresStoreSchemaIncludesHostColumns(t *testing.T) {
 	testStoreSchemaIncludesHostColumns(t, newPostgresContractHarness(t))
 }
 
+func TestPostgresStoreUpsertTaskWritesCurrentHost(t *testing.T) {
+	t.Parallel()
+
+	store := mustPostgresStore(t)
+	now := time.Date(2026, 4, 21, 12, 0, 0, 0, time.UTC)
+
+	if err := store.UpsertTask(context.Background(), "/repo", Task{
+		Issue:     "LAB-1422",
+		Status:    "active",
+		State:     "assigned",
+		Agent:     "codex",
+		CreatedAt: now,
+		UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("UpsertTask() error = %v", err)
+	}
+
+	var host string
+	if err := store.pool.QueryRow(context.Background(), `
+		SELECT host
+		FROM tasks
+		WHERE project = $1 AND issue = $2
+	`, "/repo", "LAB-1422").Scan(&host); err != nil {
+		t.Fatalf("query task host error = %v", err)
+	}
+
+	if got, want := host, currentStoreTestHostname(t); got != want {
+		t.Fatalf("tasks.host = %q, want %q", got, want)
+	}
+}
+
+func TestPostgresStoreNonTerminalTasksFiltersOtherHosts(t *testing.T) {
+	t.Parallel()
+
+	store := mustPostgresStore(t)
+	currentHost := currentStoreTestHostname(t)
+	otherHost := currentHost + "-other"
+
+	if _, err := store.pool.Exec(context.Background(), `
+		INSERT INTO tasks(project, issue, host, status, state, agent, prompt, caller_pane, worker_id, clone_path, branch, pr_number, created_at, updated_at)
+		VALUES
+			('/repo', 'LAB-2001', $1, 'active', 'assigned', 'codex', '', '', 'worker-01', '/clones/a', 'lab-2001', NULL, '2026-04-21T12:00:00Z', '2026-04-21T12:00:00Z'),
+			('/repo', 'LAB-2002', $2, 'active', 'assigned', 'codex', '', '', 'worker-02', '/clones/b', 'lab-2002', NULL, '2026-04-21T12:01:00Z', '2026-04-21T12:01:00Z')
+	`, currentHost, otherHost); err != nil {
+		t.Fatalf("insert tasks error = %v", err)
+	}
+	if _, err := store.pool.Exec(context.Background(), `
+		INSERT INTO workers(project, worker_id, host, agent_profile, current_pane_id, state, issue, clone_path, created_at, last_seen_at)
+		VALUES
+			('/repo', 'worker-01', $1, 'codex', 'pane-1', 'healthy', 'LAB-2001', '/clones/a', '2026-04-21T12:00:00Z', '2026-04-21T12:00:00Z'),
+			('/repo', 'worker-02', $2, 'codex', 'pane-2', 'healthy', 'LAB-2002', '/clones/b', '2026-04-21T12:01:00Z', '2026-04-21T12:01:00Z')
+	`, currentHost, otherHost); err != nil {
+		t.Fatalf("insert workers error = %v", err)
+	}
+
+	tasks, err := store.NonTerminalTasks(context.Background(), "/repo")
+	if err != nil {
+		t.Fatalf("NonTerminalTasks() error = %v", err)
+	}
+	if got, want := len(tasks), 1; got != want {
+		t.Fatalf("len(tasks) = %d, want %d", got, want)
+	}
+	if got, want := tasks[0].Issue, "LAB-2001"; got != want {
+		t.Fatalf("tasks[0].Issue = %q, want %q", got, want)
+	}
+}
+
+func TestPostgresStoreProjectStatusUsesHostScopedDaemonStatuses(t *testing.T) {
+	t.Parallel()
+
+	store := mustPostgresStore(t)
+	currentHost := currentStoreTestHostname(t)
+	otherHost := currentHost + "-other"
+
+	if _, err := store.pool.Exec(context.Background(), `
+		INSERT INTO daemon_statuses(host, project, session, pid, status, started_at, updated_at)
+		VALUES
+			($1, '/repo', 'current-session', 111, 'running', '2026-04-21T12:00:00Z', '2026-04-21T12:00:05Z'),
+			($2, '/repo', 'other-session', 222, 'running', '2026-04-21T12:00:00Z', '2026-04-21T12:00:06Z')
+	`, currentHost, otherHost); err != nil {
+		t.Fatalf("insert daemon statuses error = %v", err)
+	}
+
+	status, err := store.ProjectStatus(context.Background(), "/repo")
+	if err != nil {
+		t.Fatalf("ProjectStatus() error = %v", err)
+	}
+	if status.Daemon == nil {
+		t.Fatal("status.Daemon = nil, want current-host daemon")
+	}
+	if got, want := status.Daemon.Session, "current-session"; got != want {
+		t.Fatalf("status.Daemon.Session = %q, want %q", got, want)
+	}
+}
+
 func TestPostgresStoreMaterializedViews(t *testing.T) {
 	t.Parallel()
 
@@ -449,6 +544,7 @@ func newPostgresContractHarness(t *testing.T) storeContractHarness {
 			}{
 				{table: "tasks", column: "host"},
 				{table: "workers", column: "host"},
+				{table: "clones", column: "host"},
 			} {
 				var exists bool
 				if err := store.pool.QueryRow(context.Background(), `

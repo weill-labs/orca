@@ -3,7 +3,9 @@ package state
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -905,4 +907,17 @@ func testStoreSchemaIncludesHostColumns(t *testing.T, h storeContractHarness) {
 		t.Fatal("assertHostColumns is nil")
 	}
 	h.assertHostColumns(t)
+}
+
+func currentStoreTestHostname(t *testing.T) string {
+	t.Helper()
+
+	hostname, err := os.Hostname()
+	if err != nil {
+		t.Fatalf("Hostname() error = %v", err)
+	}
+	if strings.TrimSpace(hostname) == "" {
+		t.Fatal("Hostname() returned empty host")
+	}
+	return strings.TrimSpace(hostname)
 }
