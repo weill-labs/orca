@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -17,13 +18,15 @@ import (
 )
 
 const schemaSQL = `
-CREATE TABLE IF NOT EXISTS daemon_status (
-	project TEXT PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS daemon_statuses (
+	host TEXT NOT NULL DEFAULT '',
+	project TEXT NOT NULL,
 	session TEXT NOT NULL,
 	pid INTEGER NOT NULL DEFAULT 0,
 	status TEXT NOT NULL,
 	started_at TEXT NOT NULL,
-	updated_at TEXT NOT NULL
+	updated_at TEXT NOT NULL,
+	PRIMARY KEY (host, project)
 );
 
 CREATE TABLE IF NOT EXISTS tasks (
@@ -91,6 +94,7 @@ CREATE TABLE IF NOT EXISTS merge_queue (
 CREATE TABLE IF NOT EXISTS clones (
 	project TEXT NOT NULL,
 	path TEXT NOT NULL,
+	host TEXT NOT NULL DEFAULT '',
 	status TEXT NOT NULL,
 	issue TEXT NOT NULL DEFAULT '',
 	branch TEXT NOT NULL DEFAULT '',
@@ -120,13 +124,15 @@ CREATE INDEX IF NOT EXISTS idx_merge_queue_project_created ON merge_queue(projec
 `
 
 const schemaBootstrapSQL = `
-CREATE TABLE IF NOT EXISTS daemon_status (
-	project TEXT PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS daemon_statuses (
+	host TEXT NOT NULL DEFAULT '',
+	project TEXT NOT NULL,
 	session TEXT NOT NULL,
 	pid INTEGER NOT NULL DEFAULT 0,
 	status TEXT NOT NULL,
 	started_at TEXT NOT NULL,
-	updated_at TEXT NOT NULL
+	updated_at TEXT NOT NULL,
+	PRIMARY KEY (host, project)
 );
 
 CREATE TABLE IF NOT EXISTS tasks (
@@ -194,6 +200,7 @@ CREATE TABLE IF NOT EXISTS merge_queue (
 CREATE TABLE IF NOT EXISTS clones (
 	project TEXT NOT NULL,
 	path TEXT NOT NULL,
+	host TEXT NOT NULL DEFAULT '',
 	status TEXT NOT NULL,
 	issue TEXT NOT NULL DEFAULT '',
 	branch TEXT NOT NULL DEFAULT '',
@@ -220,8 +227,9 @@ CREATE INDEX IF NOT EXISTS idx_merge_queue_project_created ON merge_queue(projec
 `
 
 type SQLiteStore struct {
-	db  *sql.DB
-	now func() time.Time
+	db   *sql.DB
+	now  func() time.Time
+	host string
 }
 
 func isGlobalProject(project string) bool {
@@ -241,8 +249,9 @@ func OpenSQLite(path string) (*SQLiteStore, error) {
 	db.SetMaxOpenConns(1)
 
 	store := &SQLiteStore{
-		db:  db,
-		now: func() time.Time { return time.Now().UTC() },
+		db:   db,
+		now:  func() time.Time { return time.Now().UTC() },
+		host: defaultStoreHost(),
 	}
 
 	if err := store.execWithRetry(context.Background(), `PRAGMA busy_timeout = 5000`); err != nil {
@@ -283,6 +292,9 @@ func (s *SQLiteStore) EnsureSchema(ctx context.Context) error {
 	if err := s.ensureHostSchema(ctx); err != nil {
 		return err
 	}
+	if err := s.ensureDaemonStatusSchema(ctx); err != nil {
+		return err
+	}
 	if err := s.ensureTaskMonitorStateSchema(ctx); err != nil {
 		return err
 	}
@@ -294,6 +306,10 @@ func (s *SQLiteStore) EnsureSchema(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func (s *SQLiteStore) SetHost(host string) {
+	s.host = normalizeStoreHost(host)
 }
 
 func (s *SQLiteStore) ProjectStatus(ctx context.Context, project string) (ProjectStatus, error) {
@@ -364,6 +380,117 @@ func (s *SQLiteStore) ProjectStatus(ctx context.Context, project string) (Projec
 	return status, nil
 }
 
+func (s *SQLiteStore) ProjectStatusAllHosts(ctx context.Context, project string) (ProjectStatus, error) {
+	status, err := s.ProjectStatus(ctx, project)
+	if err != nil {
+		return ProjectStatus{}, err
+	}
+
+	daemons, err := s.lookupDaemonsAllHosts(ctx, project)
+	if err != nil {
+		return ProjectStatus{}, err
+	}
+	status.Daemons = daemons
+
+	if isGlobalProject(project) {
+		tasks, err := s.allTasks(ctx)
+		if err != nil {
+			return ProjectStatus{}, err
+		}
+		workers, err := s.allWorkers(ctx)
+		if err != nil {
+			return ProjectStatus{}, err
+		}
+		clones, err := s.allClones(ctx)
+		if err != nil {
+			return ProjectStatus{}, err
+		}
+
+		status.Tasks = tasks
+		status.Summary = Summary{}
+		for _, task := range tasks {
+			status.Summary.Tasks++
+			switch task.Status {
+			case "queued":
+				status.Summary.Queued++
+			case "active":
+				status.Summary.Active++
+			case "done":
+				status.Summary.Done++
+			case "cancelled":
+				status.Summary.Cancelled++
+			}
+		}
+		for _, worker := range workers {
+			status.Summary.Workers++
+			switch worker.State {
+			case "healthy":
+				status.Summary.HealthyWorkers++
+			case "stuck":
+				status.Summary.StuckWorkers++
+			}
+		}
+		for _, clone := range clones {
+			status.Summary.Clones++
+			if clone.Status == "free" {
+				status.Summary.FreeClones++
+			}
+		}
+		return status, nil
+	}
+
+	tasks, err := s.listTasksAllHostsForProject(ctx, project)
+	if err != nil {
+		return ProjectStatus{}, err
+	}
+	workers, err := s.allWorkers(ctx)
+	if err != nil {
+		return ProjectStatus{}, err
+	}
+	clones, err := s.listClonesAllHostsForProject(ctx, project)
+	if err != nil {
+		return ProjectStatus{}, err
+	}
+
+	status.Tasks = tasks
+	status.Summary = Summary{}
+	for _, task := range tasks {
+		if task.Project != project {
+			continue
+		}
+		status.Summary.Tasks++
+		switch task.Status {
+		case "queued":
+			status.Summary.Queued++
+		case "active":
+			status.Summary.Active++
+		case "done":
+			status.Summary.Done++
+		case "cancelled":
+			status.Summary.Cancelled++
+		}
+	}
+	for _, worker := range workers {
+		if worker.Project != project {
+			continue
+		}
+		status.Summary.Workers++
+		switch worker.State {
+		case "healthy":
+			status.Summary.HealthyWorkers++
+		case "stuck":
+			status.Summary.StuckWorkers++
+		}
+	}
+	for _, clone := range clones {
+		status.Summary.Clones++
+		if clone.Status == "free" {
+			status.Summary.FreeClones++
+		}
+	}
+	return status, nil
+}
+
 func (s *SQLiteStore) TaskStatus(ctx context.Context, project, issue string) (TaskStatus, error) {
 	task, err := s.lookupTask(ctx, project, issue)
 	if err != nil {
@@ -381,17 +508,34 @@ func (s *SQLiteStore) TaskStatus(ctx context.Context, project, issue string) (Ta
 	}, nil
 }
 
+func (s *SQLiteStore) TaskStatusAllHosts(ctx context.Context, project, issue string) (TaskStatus, error) {
+	task, err := s.lookupTaskAllHosts(ctx, project, issue)
+	if err != nil {
+		return TaskStatus{}, err
+	}
+
+	events, err := s.queryEvents(ctx, project, issue, 0)
+	if err != nil {
+		return TaskStatus{}, err
+	}
+
+	return TaskStatus{
+		Task:   task,
+		Events: events,
+	}, nil
+}
+
 func (s *SQLiteStore) ListWorkers(ctx context.Context, project string) ([]Worker, error) {
 	if isGlobalProject(project) {
-		return s.allWorkers(ctx)
+		return s.hostWorkers(ctx)
 	}
 
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT worker_id, current_pane_id, agent_profile, state, issue, clone_path, last_review_count, last_inline_review_comment_count, last_issue_comment_count, last_issue_comment_watermark, last_review_updated_at, review_nudge_count, review_approved, last_ci_state, ci_nudge_count, ci_failure_poll_count, ci_escalated, last_mergeable_state, nudge_count, last_capture, last_activity_at, last_pr_number, last_push_at, last_pr_poll_at, restart_count, first_crash_at, created_at, last_seen_at
 		FROM workers
-		WHERE project = ?
+		WHERE project = ? AND `+sqliteHostMatch("host")+`
 		ORDER BY last_seen_at DESC, worker_id ASC
-	`, project)
+	`, project, s.host)
 	if err != nil {
 		return nil, fmt.Errorf("list workers: %w", err)
 	}
@@ -418,8 +562,8 @@ func (s *SQLiteStore) WorkerByID(ctx context.Context, project, workerID string) 
 	row := s.db.QueryRowContext(ctx, `
 		SELECT worker_id, current_pane_id, agent_profile, state, issue, clone_path, last_review_count, last_inline_review_comment_count, last_issue_comment_count, last_issue_comment_watermark, last_review_updated_at, review_nudge_count, review_approved, last_ci_state, ci_nudge_count, ci_failure_poll_count, ci_escalated, last_mergeable_state, nudge_count, last_capture, last_activity_at, last_pr_number, last_push_at, last_pr_poll_at, restart_count, first_crash_at, created_at, last_seen_at
 		FROM workers
-		WHERE project = ? AND worker_id = ?
-	`, project, workerID)
+		WHERE project = ? AND worker_id = ? AND `+sqliteHostMatch("host")+`
+	`, project, workerID, s.host)
 
 	worker, err := scanWorker(row, false)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -436,9 +580,8 @@ func (s *SQLiteStore) WorkerByPane(ctx context.Context, project, paneID string) 
 	query := `
 		SELECT project, worker_id, current_pane_id, agent_profile, state, issue, clone_path, last_review_count, last_inline_review_comment_count, last_issue_comment_count, last_issue_comment_watermark, last_review_updated_at, review_nudge_count, review_approved, last_ci_state, ci_nudge_count, ci_failure_poll_count, ci_escalated, last_mergeable_state, nudge_count, last_capture, last_activity_at, last_pr_number, last_push_at, last_pr_poll_at, restart_count, first_crash_at, created_at, last_seen_at
 		FROM workers
-		WHERE current_pane_id = ?
-	`
-	args := []any{paneID}
+		WHERE current_pane_id = ? AND ` + sqliteHostMatch("host")
+	args := []any{paneID, s.host}
 	if !isGlobalProject(project) {
 		query += ` AND project = ?`
 		args = append(args, project)
@@ -457,15 +600,15 @@ func (s *SQLiteStore) WorkerByPane(ctx context.Context, project, paneID string) 
 
 func (s *SQLiteStore) ListClones(ctx context.Context, project string) ([]Clone, error) {
 	if isGlobalProject(project) {
-		return s.allClones(ctx)
+		return s.hostClones(ctx)
 	}
 
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT path, status, issue, branch, updated_at
 		FROM clones
-		WHERE project = ?
+		WHERE project = ? AND `+sqliteHostMatch("host")+`
 		ORDER BY updated_at DESC, path ASC
-	`, project)
+	`, project, s.host)
 	if err != nil {
 		return nil, fmt.Errorf("list clones: %w", err)
 	}
@@ -491,7 +634,7 @@ func (s *SQLiteStore) ListClones(ctx context.Context, project string) ([]Clone, 
 
 func (s *SQLiteStore) NonTerminalTasks(ctx context.Context, project string) ([]Task, error) {
 	if isGlobalProject(project) {
-		return s.AllNonTerminalTasks(ctx)
+		return s.hostNonTerminalTasks(ctx)
 	}
 
 	rows, err := s.db.QueryContext(ctx, `
@@ -500,9 +643,10 @@ func (s *SQLiteStore) NonTerminalTasks(ctx context.Context, project string) ([]T
 		LEFT JOIN workers w
 			ON w.project = t.project
 			AND w.worker_id = t.worker_id
-		WHERE t.project = ? AND t.status IN ('starting', 'active')
+			AND `+sqliteHostMatch("w.host")+`
+		WHERE t.project = ? AND `+sqliteHostMatch("t.host")+` AND t.status IN ('starting', 'active')
 		ORDER BY t.updated_at DESC, t.issue ASC
-	`, project)
+	`, s.host, project, s.host)
 	if err != nil {
 		return nil, fmt.Errorf("list non-terminal tasks: %w", err)
 	}
@@ -532,9 +676,10 @@ func (s *SQLiteStore) StaleCloneOccupancies(ctx context.Context, project string)
 			AND t.issue = c.issue
 			AND t.status IN ('starting', 'active')
 		WHERE c.status = 'occupied'
+			AND ` + sqliteHostMatch("c.host") + `
 			AND (c.issue = '' OR t.issue IS NULL)
 	`
-	args := make([]any, 0, 1)
+	args := []any{s.host}
 	if !isGlobalProject(project) {
 		query += ` AND c.project = ?`
 		args = append(args, project)
@@ -615,17 +760,18 @@ func (s *SQLiteStore) UpsertDaemon(ctx context.Context, project string, daemon D
 	if daemon.UpdatedAt.IsZero() {
 		daemon.UpdatedAt = daemon.StartedAt
 	}
+	daemon.Host = s.host
 
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO daemon_status(project, session, pid, status, started_at, updated_at)
-		VALUES(?, ?, ?, ?, ?, ?)
-		ON CONFLICT(project) DO UPDATE SET
+		INSERT INTO daemon_statuses(host, project, session, pid, status, started_at, updated_at)
+		VALUES(?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(host, project) DO UPDATE SET
 			session = excluded.session,
 			pid = excluded.pid,
 			status = excluded.status,
 			started_at = excluded.started_at,
 			updated_at = excluded.updated_at
-	`, project, daemon.Session, daemon.PID, daemon.Status, formatTime(daemon.StartedAt), formatTime(daemon.UpdatedAt))
+	`, daemon.Host, project, daemon.Session, daemon.PID, daemon.Status, formatTime(daemon.StartedAt), formatTime(daemon.UpdatedAt))
 	if err != nil {
 		return fmt.Errorf("upsert daemon: %w", err)
 	}
@@ -639,13 +785,13 @@ func (s *SQLiteStore) MarkDaemonStopped(ctx context.Context, project string, upd
 	}
 
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO daemon_status(project, session, pid, status, started_at, updated_at)
-		VALUES(?, '', 0, 'stopped', ?, ?)
-		ON CONFLICT(project) DO UPDATE SET
+		INSERT INTO daemon_statuses(host, project, session, pid, status, started_at, updated_at)
+		VALUES(?, ?, '', 0, 'stopped', ?, ?)
+		ON CONFLICT(host, project) DO UPDATE SET
 			pid = 0,
 			status = 'stopped',
 			updated_at = excluded.updated_at
-	`, project, formatTime(updatedAt), formatTime(updatedAt))
+	`, s.host, project, formatTime(updatedAt), formatTime(updatedAt))
 	if err != nil {
 		return fmt.Errorf("mark daemon stopped: %w", err)
 	}
@@ -670,9 +816,10 @@ func (s *SQLiteStore) UpsertTask(ctx context.Context, project string, task Task)
 	}
 
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO tasks(project, issue, status, state, agent, prompt, caller_pane, worker_id, clone_path, branch, pr_number, created_at, updated_at)
-		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO tasks(project, issue, host, status, state, agent, prompt, caller_pane, worker_id, clone_path, branch, pr_number, created_at, updated_at)
+		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(project, issue) DO UPDATE SET
+			host = excluded.host,
 			status = excluded.status,
 			state = excluded.state,
 			agent = excluded.agent,
@@ -683,7 +830,7 @@ func (s *SQLiteStore) UpsertTask(ctx context.Context, project string, task Task)
 			branch = excluded.branch,
 			pr_number = excluded.pr_number,
 			updated_at = excluded.updated_at
-	`, project, task.Issue, task.Status, task.State, task.Agent, task.Prompt, task.CallerPane, task.WorkerID, task.ClonePath, task.Branch, prNumber, formatTime(task.CreatedAt), formatTime(task.UpdatedAt))
+	`, project, task.Issue, s.host, task.Status, task.State, task.Agent, task.Prompt, task.CallerPane, task.WorkerID, task.ClonePath, task.Branch, prNumber, formatTime(task.CreatedAt), formatTime(task.UpdatedAt))
 	if err != nil {
 		return fmt.Errorf("upsert task: %w", err)
 	}
@@ -701,9 +848,10 @@ func (s *SQLiteStore) UpsertWorker(ctx context.Context, project string, worker W
 	}
 
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO workers(project, worker_id, agent_profile, current_pane_id, state, issue, clone_path, last_review_count, last_inline_review_comment_count, last_issue_comment_count, last_issue_comment_watermark, last_review_updated_at, review_nudge_count, review_approved, last_ci_state, ci_nudge_count, ci_failure_poll_count, ci_escalated, last_mergeable_state, nudge_count, last_capture, last_activity_at, last_pr_number, last_push_at, last_pr_poll_at, restart_count, first_crash_at, created_at, last_seen_at)
-		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO workers(project, worker_id, host, agent_profile, current_pane_id, state, issue, clone_path, last_review_count, last_inline_review_comment_count, last_issue_comment_count, last_issue_comment_watermark, last_review_updated_at, review_nudge_count, review_approved, last_ci_state, ci_nudge_count, ci_failure_poll_count, ci_escalated, last_mergeable_state, nudge_count, last_capture, last_activity_at, last_pr_number, last_push_at, last_pr_poll_at, restart_count, first_crash_at, created_at, last_seen_at)
+		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(project, worker_id) DO UPDATE SET
+			host = excluded.host,
 			agent_profile = excluded.agent_profile,
 			current_pane_id = excluded.current_pane_id,
 			state = excluded.state,
@@ -730,7 +878,7 @@ func (s *SQLiteStore) UpsertWorker(ctx context.Context, project string, worker W
 			restart_count = excluded.restart_count,
 			first_crash_at = excluded.first_crash_at,
 			last_seen_at = excluded.last_seen_at
-	`, project, worker.WorkerID, worker.Agent, worker.CurrentPaneID, worker.State, worker.Issue, worker.ClonePath, worker.LastReviewCount, worker.LastInlineReviewCommentCount, worker.LastIssueCommentCount, worker.LastIssueCommentWatermark, formatTime(worker.LastReviewUpdatedAt), worker.ReviewNudgeCount, boolToInt(worker.ReviewApproved), worker.LastCIState, worker.CINudgeCount, worker.CIFailurePollCount, boolToInt(worker.CIEscalated), worker.LastMergeableState, worker.NudgeCount, worker.LastCapture, formatTime(worker.LastActivityAt), worker.LastPRNumber, formatTime(worker.LastPushAt), formatTime(worker.LastPRPollAt), worker.RestartCount, formatTime(worker.FirstCrashAt), formatTime(worker.CreatedAt), formatTime(worker.LastSeenAt))
+	`, project, worker.WorkerID, s.host, worker.Agent, worker.CurrentPaneID, worker.State, worker.Issue, worker.ClonePath, worker.LastReviewCount, worker.LastInlineReviewCommentCount, worker.LastIssueCommentCount, worker.LastIssueCommentWatermark, formatTime(worker.LastReviewUpdatedAt), worker.ReviewNudgeCount, boolToInt(worker.ReviewApproved), worker.LastCIState, worker.CINudgeCount, worker.CIFailurePollCount, boolToInt(worker.CIEscalated), worker.LastMergeableState, worker.NudgeCount, worker.LastCapture, formatTime(worker.LastActivityAt), worker.LastPRNumber, formatTime(worker.LastPushAt), formatTime(worker.LastPRPollAt), worker.RestartCount, formatTime(worker.FirstCrashAt), formatTime(worker.CreatedAt), formatTime(worker.LastSeenAt))
 	if err != nil {
 		return fmt.Errorf("upsert worker: %w", err)
 	}
@@ -758,10 +906,10 @@ func (s *SQLiteStore) ClaimWorker(ctx context.Context, project string, worker Wo
 	row := tx.QueryRowContext(ctx, `
 		SELECT worker_id, current_pane_id, agent_profile, state, issue, clone_path, last_review_count, last_inline_review_comment_count, last_issue_comment_count, last_issue_comment_watermark, last_review_updated_at, review_nudge_count, review_approved, last_ci_state, ci_nudge_count, ci_failure_poll_count, ci_escalated, last_mergeable_state, nudge_count, last_capture, last_activity_at, last_pr_number, last_push_at, last_pr_poll_at, restart_count, first_crash_at, created_at, last_seen_at
 		FROM workers
-		WHERE project = ? AND agent_profile = ? AND issue = ''
+		WHERE project = ? AND agent_profile = ? AND issue = '' AND `+sqliteHostMatch("host")+`
 		ORDER BY created_at ASC, worker_id ASC
 		LIMIT 1
-	`, project, worker.Agent)
+	`, project, worker.Agent, s.host)
 
 	claimed, scanErr := scanWorker(row, false)
 	switch {
@@ -771,9 +919,9 @@ func (s *SQLiteStore) ClaimWorker(ctx context.Context, project string, worker Wo
 		claimed.LastSeenAt = worker.LastSeenAt
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE workers
-			SET issue = ?, state = ?, last_seen_at = ?
+			SET host = ?, issue = ?, state = ?, last_seen_at = ?
 			WHERE project = ? AND worker_id = ?
-		`, claimed.Issue, claimed.State, formatTime(claimed.LastSeenAt), project, claimed.WorkerID); err != nil {
+		`, s.host, claimed.Issue, claimed.State, formatTime(claimed.LastSeenAt), project, claimed.WorkerID); err != nil {
 			return Worker{}, fmt.Errorf("claim existing worker: %w", err)
 		}
 	case errors.Is(scanErr, sql.ErrNoRows):
@@ -782,9 +930,9 @@ func (s *SQLiteStore) ClaimWorker(ctx context.Context, project string, worker Wo
 			return Worker{}, err
 		}
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO workers(project, worker_id, agent_profile, current_pane_id, state, issue, clone_path, last_review_count, last_inline_review_comment_count, last_issue_comment_count, last_issue_comment_watermark, last_review_updated_at, review_nudge_count, review_approved, last_ci_state, ci_nudge_count, ci_failure_poll_count, ci_escalated, last_mergeable_state, nudge_count, last_capture, last_activity_at, last_pr_number, last_push_at, last_pr_poll_at, restart_count, first_crash_at, created_at, last_seen_at)
-			VALUES(?, ?, ?, '', ?, ?, '', 0, 0, 0, '', '', 0, 0, '', 0, 0, 0, '', 0, '', '', 0, '', '', 0, '', ?, ?)
-		`, project, worker.WorkerID, worker.Agent, worker.State, worker.Issue, formatTime(worker.CreatedAt), formatTime(worker.LastSeenAt)); err != nil {
+			INSERT INTO workers(project, worker_id, host, agent_profile, current_pane_id, state, issue, clone_path, last_review_count, last_inline_review_comment_count, last_issue_comment_count, last_issue_comment_watermark, last_review_updated_at, review_nudge_count, review_approved, last_ci_state, ci_nudge_count, ci_failure_poll_count, ci_escalated, last_mergeable_state, nudge_count, last_capture, last_activity_at, last_pr_number, last_push_at, last_pr_poll_at, restart_count, first_crash_at, created_at, last_seen_at)
+			VALUES(?, ?, ?, ?, '', ?, ?, '', 0, 0, 0, '', '', 0, 0, '', 0, 0, 0, '', 0, '', '', 0, '', '', 0, '', ?, ?)
+		`, project, worker.WorkerID, s.host, worker.Agent, worker.State, worker.Issue, formatTime(worker.CreatedAt), formatTime(worker.LastSeenAt)); err != nil {
 			return Worker{}, fmt.Errorf("insert claimed worker: %w", err)
 		}
 		claimed = worker
@@ -801,8 +949,8 @@ func (s *SQLiteStore) ClaimWorker(ctx context.Context, project string, worker Wo
 func (s *SQLiteStore) DeleteWorker(ctx context.Context, project, workerID string) error {
 	result, err := s.db.ExecContext(ctx, `
 		DELETE FROM workers
-		WHERE project = ? AND worker_id = ?
-	`, project, workerID)
+		WHERE project = ? AND worker_id = ? AND `+sqliteHostMatch("host")+`
+	`, project, workerID, s.host)
 	if err != nil {
 		return fmt.Errorf("delete worker: %w", err)
 	}
@@ -821,8 +969,8 @@ func (s *SQLiteStore) DeleteWorker(ctx context.Context, project, workerID string
 func (s *SQLiteStore) DeleteTask(ctx context.Context, project, issue string) error {
 	result, err := s.db.ExecContext(ctx, `
 		DELETE FROM tasks
-		WHERE project = ? AND issue = ?
-	`, project, issue)
+		WHERE project = ? AND issue = ? AND `+sqliteHostMatch("host")+`
+	`, project, issue, s.host)
 	if err != nil {
 		return fmt.Errorf("delete task: %w", err)
 	}
@@ -870,9 +1018,9 @@ func (s *SQLiteStore) ClaimTask(ctx context.Context, project string, task Task) 
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		_, err = tx.ExecContext(ctx, `
-			INSERT INTO tasks(project, issue, status, state, agent, prompt, caller_pane, worker_id, clone_path, branch, pr_number, created_at, updated_at)
-			VALUES(?, ?, ?, ?, ?, ?, ?, '', '', ?, NULL, ?, ?)
-		`, project, task.Issue, task.Status, task.State, task.Agent, task.Prompt, task.CallerPane, task.Branch, formatTime(task.CreatedAt), formatTime(task.UpdatedAt))
+			INSERT INTO tasks(project, issue, host, status, state, agent, prompt, caller_pane, worker_id, clone_path, branch, pr_number, created_at, updated_at)
+			VALUES(?, ?, ?, ?, ?, ?, ?, ?, '', '', ?, NULL, ?, ?)
+		`, project, task.Issue, s.host, task.Status, task.State, task.Agent, task.Prompt, task.CallerPane, task.Branch, formatTime(task.CreatedAt), formatTime(task.UpdatedAt))
 		if err != nil {
 			return nil, fmt.Errorf("insert claimed task: %w", err)
 		}
@@ -890,9 +1038,9 @@ func (s *SQLiteStore) ClaimTask(ctx context.Context, project string, task Task) 
 
 	_, err = tx.ExecContext(ctx, `
 		UPDATE tasks
-		SET status = ?, state = ?, agent = ?, prompt = ?, caller_pane = ?, worker_id = '', clone_path = '', branch = ?, pr_number = NULL, updated_at = ?
+		SET host = ?, status = ?, state = ?, agent = ?, prompt = ?, caller_pane = ?, worker_id = '', clone_path = '', branch = ?, pr_number = NULL, updated_at = ?
 		WHERE project = ? AND issue = ?
-	`, task.Status, task.State, task.Agent, task.Prompt, task.CallerPane, task.Branch, formatTime(task.UpdatedAt), project, task.Issue)
+	`, s.host, task.Status, task.State, task.Agent, task.Prompt, task.CallerPane, task.Branch, formatTime(task.UpdatedAt), project, task.Issue)
 	if err != nil {
 		return nil, fmt.Errorf("update claimed task: %w", err)
 	}
@@ -905,7 +1053,7 @@ func (s *SQLiteStore) ClaimTask(ctx context.Context, project string, task Task) 
 
 func (s *SQLiteStore) ActiveAssignments(ctx context.Context, project string) ([]Assignment, error) {
 	if isGlobalProject(project) {
-		return s.AllActiveAssignments(ctx)
+		return s.hostActiveAssignments(ctx)
 	}
 
 	rows, err := s.db.QueryContext(ctx, `
@@ -916,9 +1064,10 @@ func (s *SQLiteStore) ActiveAssignments(ctx context.Context, project string) ([]
 		INNER JOIN workers w
 			ON w.project = t.project
 			AND w.worker_id = t.worker_id
-		WHERE t.project = ? AND t.status = 'active'
+			AND `+sqliteHostMatch("w.host")+`
+		WHERE t.project = ? AND `+sqliteHostMatch("t.host")+` AND t.status = 'active'
 		ORDER BY t.updated_at DESC, t.issue ASC
-	`, project)
+	`, s.host, project, s.host)
 	if err != nil {
 		return nil, fmt.Errorf("list active assignments: %w", err)
 	}
@@ -950,9 +1099,10 @@ func (s *SQLiteStore) ActiveAssignmentByIssue(ctx context.Context, project, issu
 		INNER JOIN workers w
 			ON w.project = t.project
 			AND w.worker_id = t.worker_id
-		WHERE t.issue = ? AND t.status = 'active'
+			AND ` + sqliteHostMatch("w.host") + `
+		WHERE t.issue = ? AND ` + sqliteHostMatch("t.host") + ` AND t.status = 'active'
 	`
-	args := []any{issue}
+	args := []any{s.host, issue, s.host}
 	if !isGlobalProject(project) {
 		query += ` AND t.project = ?`
 		args = append(args, project)
@@ -979,9 +1129,10 @@ func (s *SQLiteStore) ActiveAssignmentByBranch(ctx context.Context, project, bra
 		INNER JOIN workers w
 			ON w.project = t.project
 			AND w.worker_id = t.worker_id
-		WHERE t.branch = ? AND t.status = 'active'
+			AND ` + sqliteHostMatch("w.host") + `
+		WHERE t.branch = ? AND ` + sqliteHostMatch("t.host") + ` AND t.status = 'active'
 	`
-	args := []any{branch}
+	args := []any{s.host, branch, s.host}
 	if !isGlobalProject(project) {
 		query += ` AND t.project = ?`
 		args = append(args, project)
@@ -1009,9 +1160,10 @@ func (s *SQLiteStore) ActiveAssignmentByPRNumber(ctx context.Context, project st
 		INNER JOIN workers w
 			ON w.project = t.project
 			AND w.worker_id = t.worker_id
-		WHERE t.pr_number = ? AND t.status = 'active'
+			AND ` + sqliteHostMatch("w.host") + `
+		WHERE t.pr_number = ? AND ` + sqliteHostMatch("t.host") + ` AND t.status = 'active'
 	`
-	args := []any{prNumber}
+	args := []any{s.host, prNumber, s.host}
 	if !isGlobalProject(project) {
 		query += ` AND t.project = ?`
 		args = append(args, project)
@@ -1165,10 +1317,11 @@ func (s *SQLiteStore) DeleteMergeEntry(ctx context.Context, project string, prNu
 func (s *SQLiteStore) EnsureClone(ctx context.Context, project, path string) (legacy.CloneRecord, error) {
 	now := s.now()
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO clones(project, path, status, issue, branch, updated_at)
-		VALUES(?, ?, 'free', '', '', ?)
-		ON CONFLICT(project, path) DO NOTHING
-	`, project, path, formatTime(now))
+		INSERT INTO clones(project, path, host, status, issue, branch, updated_at)
+		VALUES(?, ?, ?, 'free', '', '', ?)
+		ON CONFLICT(project, path) DO UPDATE SET
+			host = CASE WHEN clones.host = '' THEN excluded.host ELSE clones.host END
+	`, project, path, s.host, formatTime(now))
 	if err != nil {
 		return legacy.CloneRecord{}, fmt.Errorf("ensure clone: %w", err)
 	}
@@ -1183,9 +1336,9 @@ func (s *SQLiteStore) EnsureClone(ctx context.Context, project, path string) (le
 func (s *SQLiteStore) TryOccupyClone(ctx context.Context, project, path, branch, task string) (bool, error) {
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE clones
-		SET status = 'occupied', issue = ?, branch = ?, updated_at = ?
-		WHERE project = ? AND path = ? AND status = 'free'
-	`, task, branch, formatTime(s.now()), project, path)
+		SET host = ?, status = 'occupied', issue = ?, branch = ?, updated_at = ?
+		WHERE project = ? AND path = ? AND status = 'free' AND `+sqliteHostMatch("host")+`
+	`, s.host, task, branch, formatTime(s.now()), project, path, s.host)
 	if err != nil {
 		return false, fmt.Errorf("occupy clone: %w", err)
 	}
@@ -1200,9 +1353,9 @@ func (s *SQLiteStore) TryOccupyClone(ctx context.Context, project, path, branch,
 func (s *SQLiteStore) MarkCloneFree(ctx context.Context, project, path string) error {
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE clones
-		SET status = 'free', issue = '', branch = '', updated_at = ?
-		WHERE project = ? AND path = ?
-	`, formatTime(s.now()), project, path)
+		SET host = ?, status = 'free', issue = '', branch = '', updated_at = ?
+		WHERE project = ? AND path = ? AND `+sqliteHostMatch("host")+`
+	`, s.host, formatTime(s.now()), project, path, s.host)
 	if err != nil {
 		return fmt.Errorf("mark clone free: %w", err)
 	}
@@ -1225,9 +1378,9 @@ func (s *SQLiteStore) UpdateTaskStatus(ctx context.Context, project, issue, stat
 
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE tasks
-		SET status = ?, state = CASE WHEN ? IN ('done', 'cancelled', 'failed') THEN 'done' ELSE state END, updated_at = ?
-		WHERE project = ? AND issue = ?
-	`, status, status, formatTime(updatedAt), project, issue)
+		SET host = ?, status = ?, state = CASE WHEN ? IN ('done', 'cancelled', 'failed') THEN 'done' ELSE state END, updated_at = ?
+		WHERE project = ? AND issue = ? AND `+sqliteHostMatch("host")+`
+	`, s.host, status, status, formatTime(updatedAt), project, issue, s.host)
 	if err != nil {
 		return Task{}, fmt.Errorf("update task status: %w", err)
 	}
@@ -1257,9 +1410,10 @@ func (s *SQLiteStore) TasksByPane(ctx context.Context, project, paneID string) (
 		INNER JOIN workers w
 			ON w.project = t.project
 			AND w.worker_id = t.worker_id
-		WHERE w.current_pane_id = ?
+			AND ` + sqliteHostMatch("w.host") + `
+		WHERE w.current_pane_id = ? AND ` + sqliteHostMatch("t.host") + `
 	`
-	args := []any{paneID}
+	args := []any{s.host, paneID, s.host}
 	if !includeProject {
 		query += ` AND t.project = ?`
 		args = append(args, project)
@@ -1322,6 +1476,38 @@ func (s *SQLiteStore) AllNonTerminalTasks(ctx context.Context) ([]Task, error) {
 	return tasks, nil
 }
 
+func (s *SQLiteStore) hostNonTerminalTasks(ctx context.Context) ([]Task, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT
+			t.project,
+			t.issue, t.status, t.state, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.created_at, t.updated_at
+		FROM tasks t
+		LEFT JOIN workers w
+			ON w.project = t.project
+			AND w.worker_id = t.worker_id
+			AND `+sqliteHostMatch("w.host")+`
+		WHERE `+sqliteHostMatch("t.host")+` AND t.status IN ('starting', 'active')
+		ORDER BY t.updated_at DESC, t.project ASC, t.issue ASC
+	`, s.host, s.host)
+	if err != nil {
+		return nil, fmt.Errorf("list host non-terminal tasks: %w", err)
+	}
+	defer rows.Close()
+
+	tasks := make([]Task, 0)
+	for rows.Next() {
+		task, err := scanTask(rows, true)
+		if err != nil {
+			return nil, fmt.Errorf("scan host non-terminal task: %w", err)
+		}
+		tasks = append(tasks, task)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate host non-terminal tasks: %w", err)
+	}
+	return tasks, nil
+}
+
 func (s *SQLiteStore) allWorkers(ctx context.Context) ([]Worker, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT project, worker_id, current_pane_id, agent_profile, state, issue, clone_path, last_review_count, last_inline_review_comment_count, last_issue_comment_count, last_issue_comment_watermark, last_review_updated_at, review_nudge_count, review_approved, last_ci_state, ci_nudge_count, ci_failure_poll_count, ci_escalated, last_mergeable_state, nudge_count, last_capture, last_activity_at, last_pr_number, last_push_at, last_pr_poll_at, restart_count, first_crash_at, created_at, last_seen_at
@@ -1343,6 +1529,32 @@ func (s *SQLiteStore) allWorkers(ctx context.Context) ([]Worker, error) {
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate all workers: %w", err)
+	}
+	return workers, nil
+}
+
+func (s *SQLiteStore) hostWorkers(ctx context.Context) ([]Worker, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT project, worker_id, current_pane_id, agent_profile, state, issue, clone_path, last_review_count, last_inline_review_comment_count, last_issue_comment_count, last_issue_comment_watermark, last_review_updated_at, review_nudge_count, review_approved, last_ci_state, ci_nudge_count, ci_failure_poll_count, ci_escalated, last_mergeable_state, nudge_count, last_capture, last_activity_at, last_pr_number, last_push_at, last_pr_poll_at, restart_count, first_crash_at, created_at, last_seen_at
+		FROM workers
+		WHERE `+sqliteHostMatch("host")+`
+		ORDER BY last_seen_at DESC, project ASC, worker_id ASC
+	`, s.host)
+	if err != nil {
+		return nil, fmt.Errorf("list host workers: %w", err)
+	}
+	defer rows.Close()
+
+	workers := make([]Worker, 0)
+	for rows.Next() {
+		worker, err := scanWorker(rows, true)
+		if err != nil {
+			return nil, fmt.Errorf("scan host worker: %w", err)
+		}
+		workers = append(workers, worker)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate host workers: %w", err)
 	}
 	return workers, nil
 }
@@ -1370,6 +1582,62 @@ func (s *SQLiteStore) allClones(ctx context.Context) ([]Clone, error) {
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate all clones: %w", err)
+	}
+	return clones, nil
+}
+
+func (s *SQLiteStore) hostClones(ctx context.Context) ([]Clone, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT path, status, issue, branch, updated_at
+		FROM clones
+		WHERE `+sqliteHostMatch("host")+`
+		ORDER BY updated_at DESC, path ASC
+	`, s.host)
+	if err != nil {
+		return nil, fmt.Errorf("list host clones: %w", err)
+	}
+	defer rows.Close()
+
+	clones := make([]Clone, 0)
+	for rows.Next() {
+		var clone Clone
+		var updatedAt string
+		if err := rows.Scan(&clone.Path, &clone.Status, &clone.Issue, &clone.Branch, &updatedAt); err != nil {
+			return nil, fmt.Errorf("scan host clone: %w", err)
+		}
+		clone.UpdatedAt = parseTime(updatedAt)
+		clones = append(clones, clone)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate host clones: %w", err)
+	}
+	return clones, nil
+}
+
+func (s *SQLiteStore) listClonesAllHostsForProject(ctx context.Context, project string) ([]Clone, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT path, status, issue, branch, updated_at
+		FROM clones
+		WHERE project = ?
+		ORDER BY updated_at DESC, path ASC
+	`, project)
+	if err != nil {
+		return nil, fmt.Errorf("list all-host clones: %w", err)
+	}
+	defer rows.Close()
+
+	clones := make([]Clone, 0)
+	for rows.Next() {
+		var clone Clone
+		var updatedAt string
+		if err := rows.Scan(&clone.Path, &clone.Status, &clone.Issue, &clone.Branch, &updatedAt); err != nil {
+			return nil, fmt.Errorf("scan all-host clone: %w", err)
+		}
+		clone.UpdatedAt = parseTime(updatedAt)
+		clones = append(clones, clone)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate all-host clones: %w", err)
 	}
 	return clones, nil
 }
@@ -1402,6 +1670,39 @@ func (s *SQLiteStore) AllActiveAssignments(ctx context.Context) ([]Assignment, e
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate all active assignments: %w", err)
+	}
+	return assignments, nil
+}
+
+func (s *SQLiteStore) hostActiveAssignments(ctx context.Context) ([]Assignment, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT
+			t.project,
+			t.issue, t.status, t.state, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.created_at, t.updated_at,
+			w.worker_id, w.current_pane_id, w.agent_profile, w.state, w.issue, w.clone_path, w.last_review_count, w.last_inline_review_comment_count, w.last_issue_comment_count, w.last_issue_comment_watermark, w.last_review_updated_at, w.review_nudge_count, w.review_approved, w.last_ci_state, w.ci_nudge_count, w.ci_failure_poll_count, w.ci_escalated, w.last_mergeable_state, w.nudge_count, w.last_capture, w.last_activity_at, w.last_pr_number, w.last_push_at, w.last_pr_poll_at, w.restart_count, w.first_crash_at, w.created_at, w.last_seen_at
+		FROM tasks t
+		INNER JOIN workers w
+			ON w.project = t.project
+			AND w.worker_id = t.worker_id
+			AND `+sqliteHostMatch("w.host")+`
+		WHERE `+sqliteHostMatch("t.host")+` AND t.status = 'active'
+		ORDER BY t.updated_at DESC, t.project ASC, t.issue ASC
+	`, s.host, s.host)
+	if err != nil {
+		return nil, fmt.Errorf("list host active assignments: %w", err)
+	}
+	defer rows.Close()
+
+	assignments := make([]Assignment, 0)
+	for rows.Next() {
+		assignment, err := scanAssignment(rows, true)
+		if err != nil {
+			return nil, fmt.Errorf("scan host active assignment: %w", err)
+		}
+		assignments = append(assignments, assignment)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate host active assignments: %w", err)
 	}
 	return assignments, nil
 }
@@ -1460,15 +1761,15 @@ func (s *SQLiteStore) AppendEvent(ctx context.Context, event Event) (Event, erro
 
 func (s *SQLiteStore) lookupDaemon(ctx context.Context, project string) (*DaemonStatus, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT session, pid, status, started_at, updated_at
-		FROM daemon_status
-		WHERE project = ?
-	`, project)
+		SELECT host, session, pid, status, started_at, updated_at
+		FROM daemon_statuses
+		WHERE project = ? AND `+sqliteHostMatch("host")+`
+	`, project, s.host)
 
 	var daemon DaemonStatus
 	var startedAt string
 	var updatedAt string
-	if err := row.Scan(&daemon.Session, &daemon.PID, &daemon.Status, &startedAt, &updatedAt); err != nil {
+	if err := row.Scan(&daemon.Host, &daemon.Session, &daemon.PID, &daemon.Status, &startedAt, &updatedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
@@ -1494,9 +1795,10 @@ func (s *SQLiteStore) lookupTask(ctx context.Context, project, issue string) (Ta
 		LEFT JOIN workers w
 			ON w.project = t.project
 			AND w.worker_id = t.worker_id
-		WHERE t.issue = ?
+			AND ` + sqliteHostMatch("w.host") + `
+		WHERE t.issue = ? AND ` + sqliteHostMatch("t.host") + `
 	`
-	args := []any{issue}
+	args := []any{s.host, issue, s.host}
 	if !includeProject {
 		query += ` AND t.project = ?`
 		args = append(args, project)
@@ -1519,7 +1821,7 @@ func (s *SQLiteStore) lookupTask(ctx context.Context, project, issue string) (Ta
 
 func (s *SQLiteStore) listTasks(ctx context.Context, project string) ([]Task, error) {
 	if isGlobalProject(project) {
-		return s.allTasks(ctx)
+		return s.hostTasks(ctx)
 	}
 
 	rows, err := s.db.QueryContext(ctx, `
@@ -1528,9 +1830,10 @@ func (s *SQLiteStore) listTasks(ctx context.Context, project string) ([]Task, er
 		LEFT JOIN workers w
 			ON w.project = t.project
 			AND w.worker_id = t.worker_id
-		WHERE t.project = ?
+			AND `+sqliteHostMatch("w.host")+`
+		WHERE t.project = ? AND `+sqliteHostMatch("t.host")+`
 		ORDER BY t.updated_at DESC, t.issue ASC
-	`, project)
+	`, s.host, project, s.host)
 	if err != nil {
 		return nil, fmt.Errorf("list tasks: %w", err)
 	}
@@ -1585,6 +1888,166 @@ func (s *SQLiteStore) allTasks(ctx context.Context) ([]Task, error) {
 	return tasks, nil
 }
 
+func (s *SQLiteStore) lookupTaskAllHosts(ctx context.Context, project, issue string) (Task, error) {
+	includeProject := isGlobalProject(project)
+	query := `
+		SELECT
+	`
+	if includeProject {
+		query += `		t.project,`
+	}
+	query += `
+			t.issue, t.status, t.state, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.created_at, t.updated_at
+		FROM tasks t
+		LEFT JOIN workers w
+			ON w.project = t.project
+			AND w.worker_id = t.worker_id
+		WHERE t.issue = ?
+	`
+	args := []any{issue}
+	if !includeProject {
+		query += ` AND t.project = ?`
+		args = append(args, project)
+	}
+
+	row := s.db.QueryRowContext(ctx, query, args...)
+	task, err := scanTask(row, includeProject)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Task{}, ErrNotFound
+		}
+		return Task{}, fmt.Errorf("lookup task all hosts: %w", err)
+	}
+	if !includeProject {
+		task.Project = project
+	}
+	return task, nil
+}
+
+func (s *SQLiteStore) listTasksAllHostsForProject(ctx context.Context, project string) ([]Task, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT t.issue, t.status, t.state, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.created_at, t.updated_at
+		FROM tasks t
+		LEFT JOIN workers w
+			ON w.project = t.project
+			AND w.worker_id = t.worker_id
+		WHERE t.project = ?
+		ORDER BY t.updated_at DESC, t.issue ASC
+	`, project)
+	if err != nil {
+		return nil, fmt.Errorf("list tasks all hosts: %w", err)
+	}
+	defer rows.Close()
+
+	tasks := make([]Task, 0)
+	for rows.Next() {
+		task, err := scanTask(rows, false)
+		if err != nil {
+			return nil, fmt.Errorf("scan all-host task: %w", err)
+		}
+		task.Project = project
+		tasks = append(tasks, task)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate all-host tasks: %w", err)
+	}
+	return tasks, nil
+}
+
+func (s *SQLiteStore) hostTasks(ctx context.Context) ([]Task, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT
+			t.project,
+			t.issue, t.status, t.state, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.created_at, t.updated_at
+		FROM tasks t
+		LEFT JOIN workers w
+			ON w.project = t.project
+			AND w.worker_id = t.worker_id
+			AND `+sqliteHostMatch("w.host")+`
+		WHERE `+sqliteHostMatch("t.host")+`
+		ORDER BY t.updated_at DESC, t.project ASC, t.issue ASC
+	`, s.host, s.host)
+	if err != nil {
+		return nil, fmt.Errorf("list host tasks: %w", err)
+	}
+	defer rows.Close()
+
+	tasks := make([]Task, 0)
+	for rows.Next() {
+		task, err := scanTask(rows, true)
+		if err != nil {
+			return nil, fmt.Errorf("scan host task: %w", err)
+		}
+		tasks = append(tasks, task)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate host tasks: %w", err)
+	}
+	return tasks, nil
+}
+
+func (s *SQLiteStore) lookupDaemonsAllHosts(ctx context.Context, project string) ([]DaemonStatus, error) {
+	if isGlobalProject(project) {
+		return s.lookupDaemonRowsAllHosts(ctx, "")
+	}
+
+	specific, err := s.lookupDaemonRowsAllHosts(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	fallback, err := s.lookupDaemonRowsAllHosts(ctx, "")
+	if err != nil {
+		return nil, err
+	}
+
+	daemons := make([]DaemonStatus, 0, len(specific)+len(fallback))
+	seen := make(map[string]struct{}, len(specific))
+	for _, daemon := range specific {
+		seen[daemon.Host] = struct{}{}
+		daemons = append(daemons, daemon)
+	}
+	for _, daemon := range fallback {
+		if _, ok := seen[daemon.Host]; ok {
+			continue
+		}
+		daemons = append(daemons, daemon)
+	}
+	sort.Slice(daemons, func(i, j int) bool {
+		return daemons[i].Host < daemons[j].Host
+	})
+	return daemons, nil
+}
+
+func (s *SQLiteStore) lookupDaemonRowsAllHosts(ctx context.Context, project string) ([]DaemonStatus, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT host, session, pid, status, started_at, updated_at
+		FROM daemon_statuses
+		WHERE project = ?
+		ORDER BY host ASC
+	`, project)
+	if err != nil {
+		return nil, fmt.Errorf("list daemon statuses: %w", err)
+	}
+	defer rows.Close()
+
+	daemons := make([]DaemonStatus, 0)
+	for rows.Next() {
+		var daemon DaemonStatus
+		var startedAt string
+		var updatedAt string
+		if err := rows.Scan(&daemon.Host, &daemon.Session, &daemon.PID, &daemon.Status, &startedAt, &updatedAt); err != nil {
+			return nil, fmt.Errorf("scan daemon status: %w", err)
+		}
+		daemon.StartedAt = parseTime(startedAt)
+		daemon.UpdatedAt = parseTime(updatedAt)
+		daemons = append(daemons, daemon)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate daemon statuses: %w", err)
+	}
+	return daemons, nil
+}
+
 func (s *SQLiteStore) queryEvents(ctx context.Context, project, issue string, afterID int64) ([]Event, error) {
 	const baseQuery = `
 		SELECT id, project, kind, issue, worker_id, message, payload, created_at
@@ -1632,8 +2095,8 @@ func (s *SQLiteStore) lookupCloneRecord(ctx context.Context, project, path strin
 	row := s.db.QueryRowContext(ctx, `
 		SELECT project, path, status, branch, issue
 		FROM clones
-		WHERE project = ? AND path = ?
-	`, project, path)
+		WHERE project = ? AND path = ? AND `+sqliteHostMatch("host")+`
+	`, project, path, s.host)
 
 	var record legacy.CloneRecord
 	if err := row.Scan(&record.Project, &record.Path, &record.Status, &record.CurrentBranch, &record.AssignedTask); err != nil {
@@ -1970,7 +2433,44 @@ func (s *SQLiteStore) ensureHostSchema(ctx context.Context) error {
 	if err := s.addColumnIfMissing(ctx, "tasks", "host", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
-	return s.addColumnIfMissing(ctx, "workers", "host", "TEXT NOT NULL DEFAULT ''")
+	if err := s.addColumnIfMissing(ctx, "workers", "host", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	return s.addColumnIfMissing(ctx, "clones", "host", "TEXT NOT NULL DEFAULT ''")
+}
+
+func (s *SQLiteStore) ensureDaemonStatusSchema(ctx context.Context) error {
+	if err := s.execWithRetry(ctx, `
+		CREATE TABLE IF NOT EXISTS daemon_statuses (
+			host TEXT NOT NULL DEFAULT '',
+			project TEXT NOT NULL,
+			session TEXT NOT NULL,
+			pid INTEGER NOT NULL DEFAULT 0,
+			status TEXT NOT NULL,
+			started_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			PRIMARY KEY (host, project)
+		)
+	`); err != nil {
+		return fmt.Errorf("create daemon_statuses table: %w", err)
+	}
+
+	hasLegacyTable, err := s.tableExists(ctx, "daemon_status")
+	if err != nil {
+		return err
+	}
+	if !hasLegacyTable {
+		return nil
+	}
+
+	if err := s.execWithRetry(ctx, `
+		INSERT OR IGNORE INTO daemon_statuses(host, project, session, pid, status, started_at, updated_at)
+		SELECT ?, project, session, pid, status, started_at, updated_at
+		FROM daemon_status
+	`, s.host); err != nil {
+		return fmt.Errorf("migrate legacy daemon_status rows: %w", err)
+	}
+	return nil
 }
 
 func (s *SQLiteStore) ensureTaskMonitorStateSchema(ctx context.Context) error {
@@ -2347,6 +2847,23 @@ func (s *SQLiteStore) tableHasColumn(ctx context.Context, table, column string) 
 		return false, fmt.Errorf("iterate table info for %s: %w", table, err)
 	}
 	return false, nil
+}
+
+func (s *SQLiteStore) tableExists(ctx context.Context, table string) (bool, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT 1
+		FROM sqlite_master
+		WHERE type = 'table' AND name = ?
+	`, table)
+
+	var exists int
+	if err := row.Scan(&exists); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, fmt.Errorf("lookup sqlite table %s: %w", table, err)
+	}
+	return exists == 1, nil
 }
 
 func (s *SQLiteStore) addColumnIfMissing(ctx context.Context, table, column, definition string) error {

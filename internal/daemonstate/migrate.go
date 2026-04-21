@@ -17,7 +17,7 @@ var migrationTableOrder = []string{
 	"clones",
 	"events",
 	"merge_queue",
-	"daemon_status",
+	"daemon_statuses",
 }
 
 type MigrationOptions struct {
@@ -214,7 +214,7 @@ func migrationCountsWithDeps(
 }
 
 func truncateMigrationTables(ctx context.Context, tx pgx.Tx) error {
-	if _, err := tx.Exec(ctx, `TRUNCATE TABLE daemon_status, tasks, workers, clones, events, merge_queue RESTART IDENTITY`); err != nil {
+	if _, err := tx.Exec(ctx, `TRUNCATE TABLE daemon_statuses, tasks, workers, clones, events, merge_queue RESTART IDENTITY`); err != nil {
 		return fmt.Errorf("truncate destination tables: %w", err)
 	}
 	return nil
@@ -232,7 +232,7 @@ func copyMigrationTable(ctx context.Context, source *SQLiteStore, destination pg
 		return copyEvents(ctx, source, destination)
 	case "merge_queue":
 		return copyMergeQueue(ctx, source, destination)
-	case "daemon_status":
+	case "daemon_statuses":
 		return copyDaemonStatus(ctx, source, destination)
 	default:
 		return fmt.Errorf("unsupported migration table %q", table)

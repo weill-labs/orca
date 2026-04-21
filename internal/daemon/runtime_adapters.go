@@ -76,6 +76,10 @@ type sqliteStateAdapter struct {
 	store daemonStateStore
 }
 
+type adapterHostSetter interface {
+	SetHost(host string)
+}
+
 type sqliteDaemonStatusWriter struct {
 	store     daemonStateStore
 	project   string
@@ -86,6 +90,12 @@ type sqliteDaemonStatusWriter struct {
 
 func newSQLiteStateAdapter(store daemonStateStore) *sqliteStateAdapter {
 	return &sqliteStateAdapter{store: store}
+}
+
+func (a *sqliteStateAdapter) SetHost(host string) {
+	if setter, ok := a.store.(adapterHostSetter); ok {
+		setter.SetHost(host)
+	}
 }
 
 func newSQLiteDaemonStatusWriter(store daemonStateStore, project, session string, pid int, startedAt time.Time) *sqliteDaemonStatusWriter {
@@ -167,6 +177,23 @@ func (a *sqliteStateAdapter) PutTask(ctx context.Context, task Task) error {
 
 func (a *sqliteStateAdapter) TaskByIssue(ctx context.Context, project, issue string) (Task, error) {
 	status, err := a.store.TaskStatus(ctx, project, issue)
+	if err != nil {
+		if errors.Is(err, state.ErrNotFound) {
+			return Task{}, ErrTaskNotFound
+		}
+		return Task{}, err
+	}
+
+	return convertStateTask(project, status.Task), nil
+}
+
+func (a *sqliteStateAdapter) TaskByIssueAllHosts(ctx context.Context, project, issue string) (Task, error) {
+	reader, ok := a.store.(state.AllHostsReader)
+	if !ok {
+		return Task{}, ErrTaskNotFound
+	}
+
+	status, err := reader.TaskStatusAllHosts(ctx, project, issue)
 	if err != nil {
 		if errors.Is(err, state.ErrNotFound) {
 			return Task{}, ErrTaskNotFound

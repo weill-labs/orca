@@ -10,13 +10,15 @@ import (
 
 var postgresSchemaStatements = []string{
 	`
-CREATE TABLE IF NOT EXISTS daemon_status (
-	project TEXT PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS daemon_statuses (
+	host TEXT NOT NULL DEFAULT '',
+	project TEXT NOT NULL,
 	session TEXT NOT NULL,
 	pid INTEGER NOT NULL DEFAULT 0,
 	status TEXT NOT NULL,
 	started_at TIMESTAMPTZ NOT NULL,
-	updated_at TIMESTAMPTZ NOT NULL
+	updated_at TIMESTAMPTZ NOT NULL,
+	PRIMARY KEY (host, project)
 )`,
 	`
 CREATE TABLE IF NOT EXISTS tasks (
@@ -84,6 +86,7 @@ CREATE TABLE IF NOT EXISTS merge_queue (
 CREATE TABLE IF NOT EXISTS clones (
 	project TEXT NOT NULL,
 	path TEXT NOT NULL,
+	host TEXT NOT NULL DEFAULT '',
 	status TEXT NOT NULL,
 	issue TEXT NOT NULL DEFAULT '',
 	branch TEXT NOT NULL DEFAULT '',
@@ -105,13 +108,17 @@ CREATE TABLE IF NOT EXISTS events (
 	`ALTER TABLE IF EXISTS tasks ADD COLUMN IF NOT EXISTS branch TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE IF EXISTS tasks ADD COLUMN IF NOT EXISTS state TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE IF EXISTS workers ADD COLUMN IF NOT EXISTS host TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE IF EXISTS clones ADD COLUMN IF NOT EXISTS host TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE IF EXISTS workers ADD COLUMN IF NOT EXISTS last_issue_comment_watermark TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE IF EXISTS workers ADD COLUMN IF NOT EXISTS last_review_updated_at TIMESTAMPTZ`,
 	`ALTER TABLE IF EXISTS workers ADD COLUMN IF NOT EXISTS review_approved BOOLEAN NOT NULL DEFAULT FALSE`,
 	`CREATE INDEX IF NOT EXISTS idx_tasks_project_updated ON tasks(project, updated_at DESC)`,
+	`CREATE INDEX IF NOT EXISTS idx_tasks_project_host_updated ON tasks(project, host, updated_at DESC)`,
 	`CREATE INDEX IF NOT EXISTS idx_tasks_project_branch_status ON tasks(project, branch, status, updated_at DESC)`,
 	`CREATE INDEX IF NOT EXISTS idx_workers_project_last_seen ON workers(project, last_seen_at DESC, worker_id ASC)`,
+	`CREATE INDEX IF NOT EXISTS idx_workers_project_host_last_seen ON workers(project, host, last_seen_at DESC, worker_id ASC)`,
 	`CREATE INDEX IF NOT EXISTS idx_clones_project_updated ON clones(project, updated_at DESC)`,
+	`CREATE INDEX IF NOT EXISTS idx_clones_project_host_updated ON clones(project, host, updated_at DESC)`,
 	`CREATE INDEX IF NOT EXISTS idx_events_project_id ON events(project, id)`,
 	`CREATE INDEX IF NOT EXISTS idx_events_project_issue_id ON events(project, issue, id)`,
 	`CREATE INDEX IF NOT EXISTS idx_events_project_worker_id ON events(project, worker_id, id)`,
@@ -255,6 +262,7 @@ GROUP BY 1, 2, 3
 type PostgresStore struct {
 	pool *pgxpool.Pool
 	now  func() time.Time
+	host string
 }
 
 func OpenPostgres(dsn string) (*PostgresStore, error) {
@@ -271,6 +279,7 @@ func OpenPostgres(dsn string) (*PostgresStore, error) {
 	store := &PostgresStore{
 		pool: pool,
 		now:  func() time.Time { return time.Now().UTC() },
+		host: defaultStoreHost(),
 	}
 
 	if err := store.EnsureSchema(context.Background()); err != nil {
@@ -291,6 +300,40 @@ func (s *PostgresStore) EnsureSchema(ctx context.Context) error {
 		if _, err := s.pool.Exec(ctx, statement); err != nil {
 			return fmt.Errorf("ensure postgres schema: %w", err)
 		}
+	}
+	if err := s.migrateLegacyDaemonStatus(ctx); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *PostgresStore) SetHost(host string) {
+	s.host = normalizeStoreHost(host)
+}
+
+func (s *PostgresStore) migrateLegacyDaemonStatus(ctx context.Context) error {
+	var exists bool
+	if err := s.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM information_schema.tables
+			WHERE table_schema = current_schema()
+				AND table_name = 'daemon_status'
+		)
+	`).Scan(&exists); err != nil {
+		return fmt.Errorf("check legacy daemon_status table: %w", err)
+	}
+	if !exists {
+		return nil
+	}
+
+	if _, err := s.pool.Exec(ctx, `
+		INSERT INTO daemon_statuses(host, project, session, pid, status, started_at, updated_at)
+		SELECT $1, project, session, pid, status, started_at, updated_at
+		FROM daemon_status
+		ON CONFLICT(host, project) DO NOTHING
+	`, s.host); err != nil {
+		return fmt.Errorf("migrate legacy daemon_status rows: %w", err)
 	}
 	return nil
 }

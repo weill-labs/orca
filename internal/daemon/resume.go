@@ -9,6 +9,10 @@ import (
 	"time"
 )
 
+type allHostsTaskLookup interface {
+	TaskByIssueAllHosts(ctx context.Context, project, issue string) (Task, error)
+}
+
 func (d *Daemon) Resume(ctx context.Context, issue, prompt string) error {
 	return d.resume(ctx, d.project, issue, prompt)
 }
@@ -19,6 +23,11 @@ func (d *Daemon) resume(ctx context.Context, projectPath, issue, prompt string) 
 	}
 
 	task, err := d.state.TaskByIssue(ctx, projectPath, issue)
+	if errors.Is(err, ErrTaskNotFound) {
+		if lookup, ok := d.state.(allHostsTaskLookup); ok {
+			task, err = lookup.TaskByIssueAllHosts(ctx, projectPath, issue)
+		}
+	}
 	if err != nil {
 		return err
 	}

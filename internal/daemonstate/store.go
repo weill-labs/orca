@@ -17,6 +17,11 @@ type Reader interface {
 	Events(ctx context.Context, project string, afterID int64) (<-chan Event, <-chan error)
 }
 
+type AllHostsReader interface {
+	ProjectStatusAllHosts(ctx context.Context, project string) (ProjectStatus, error)
+	TaskStatusAllHosts(ctx context.Context, project, issue string) (TaskStatus, error)
+}
+
 type Writer interface {
 	EnsureSchema(ctx context.Context) error
 	UpsertDaemon(ctx context.Context, project string, daemon DaemonStatus) error
@@ -33,6 +38,7 @@ type Store interface {
 }
 
 type DaemonStatus struct {
+	Host      string    `json:"host,omitempty"`
 	Session   string    `json:"session"`
 	PID       int       `json:"pid"`
 	Status    string    `json:"status"`
@@ -55,10 +61,11 @@ type Summary struct {
 }
 
 type ProjectStatus struct {
-	Project string        `json:"project"`
-	Daemon  *DaemonStatus `json:"daemon,omitempty"`
-	Summary Summary       `json:"summary"`
-	Tasks   []Task        `json:"tasks"`
+	Project string         `json:"project"`
+	Daemon  *DaemonStatus  `json:"daemon,omitempty"`
+	Daemons []DaemonStatus `json:"daemons,omitempty"`
+	Summary Summary        `json:"summary"`
+	Tasks   []Task         `json:"tasks"`
 }
 
 type Task struct {

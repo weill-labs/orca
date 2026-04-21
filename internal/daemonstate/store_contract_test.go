@@ -3,7 +3,9 @@ package state
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,28 +14,38 @@ import (
 
 type storeContract interface {
 	ProjectStatus(context.Context, string) (ProjectStatus, error)
+	ProjectStatusAllHosts(context.Context, string) (ProjectStatus, error)
 	UpsertDaemon(context.Context, string, DaemonStatus) error
 	EnsureClone(context.Context, string, string) (legacy.CloneRecord, error)
 	TryOccupyClone(context.Context, string, string, string, string) (bool, error)
 	UpsertTask(context.Context, string, Task) error
 	UpsertWorker(context.Context, string, Worker) error
+	ClaimWorker(context.Context, string, Worker) (Worker, error)
 	AppendEvent(context.Context, Event) (Event, error)
 	TaskStatus(context.Context, string, string) (TaskStatus, error)
+	TaskStatusAllHosts(context.Context, string, string) (TaskStatus, error)
 	ListWorkers(context.Context, string) ([]Worker, error)
 	ListClones(context.Context, string) ([]Clone, error)
 	Events(context.Context, string, int64) (<-chan Event, <-chan error)
 	UpdateTaskStatus(context.Context, string, string, string, time.Time) (Task, error)
 	DeleteWorker(context.Context, string, string) error
+	DeleteTask(context.Context, string, string) error
 	MarkCloneFree(context.Context, string, string) error
 	MarkDaemonStopped(context.Context, string, time.Time) error
 	lookupCloneRecord(context.Context, string, string) (legacy.CloneRecord, error)
 	AllNonTerminalTasks(context.Context) ([]Task, error)
+	ActiveAssignments(context.Context, string) ([]Assignment, error)
 	AllActiveAssignments(context.Context) ([]Assignment, error)
+	ActiveAssignmentByIssue(context.Context, string, string) (Assignment, error)
+	ActiveAssignmentByBranch(context.Context, string, string) (Assignment, error)
+	ActiveAssignmentByPRNumber(context.Context, string, int) (Assignment, error)
 	AllMergeEntries(context.Context) ([]MergeQueueEntry, error)
 	EnqueueMergeEntry(context.Context, MergeQueueEntry) (int, error)
+	ClaimTask(context.Context, string, Task) (*Task, error)
 	listTasks(context.Context, string) ([]Task, error)
 	NonTerminalTasks(context.Context, string) ([]Task, error)
 	TasksByPane(context.Context, string, string) ([]Task, error)
+	WorkerByID(context.Context, string, string) (Worker, error)
 	WorkerByPane(context.Context, string, string) (Worker, error)
 	StaleCloneOccupancies(context.Context, string) ([]CloneOccupancy, error)
 	MergeEntry(context.Context, string, int) (*MergeQueueEntry, error)
@@ -45,6 +57,7 @@ type storeContract interface {
 type storeContractHarness struct {
 	store             storeContract
 	setNow            func(time.Time)
+	setHost           func(string)
 	assertHostColumns func(*testing.T)
 }
 
@@ -905,4 +918,751 @@ func testStoreSchemaIncludesHostColumns(t *testing.T, h storeContractHarness) {
 		t.Fatal("assertHostColumns is nil")
 	}
 	h.assertHostColumns(t)
+}
+
+func testStoreProjectStatusAllHostsAcrossHosts(t *testing.T, h storeContractHarness) {
+	t.Helper()
+	if h.setHost == nil {
+		t.Fatal("setHost is nil")
+	}
+
+	ctx := context.Background()
+	project := "/repo"
+	hostA := "host-a"
+	hostB := "host-b"
+	hostC := "host-c"
+	base := time.Date(2026, 4, 9, 9, 0, 0, 0, time.UTC)
+	activePR := 101
+
+	h.setHost(hostA)
+	h.setNow(base)
+	if err := h.store.UpsertDaemon(ctx, "", DaemonStatus{
+		Session:   "global-a",
+		PID:       11,
+		Status:    "running",
+		StartedAt: base,
+		UpdatedAt: base,
+	}); err != nil {
+		t.Fatalf("UpsertDaemon(global host-a) error = %v", err)
+	}
+	if err := h.store.UpsertTask(ctx, project, Task{
+		Issue:     "LAB-2401",
+		Status:    "active",
+		State:     "assigned",
+		Agent:     "codex",
+		WorkerID:  "worker-a",
+		ClonePath: "/clones/a",
+		Branch:    "branch-a",
+		PRNumber:  &activePR,
+		CreatedAt: base,
+		UpdatedAt: base,
+	}); err != nil {
+		t.Fatalf("UpsertTask(active host-a) error = %v", err)
+	}
+	if err := h.store.UpsertTask(ctx, project, Task{
+		Issue:     "LAB-2402",
+		Status:    "queued",
+		State:     "queued",
+		Agent:     "codex",
+		CreatedAt: base.Add(time.Minute),
+		UpdatedAt: base.Add(time.Minute),
+	}); err != nil {
+		t.Fatalf("UpsertTask(queued host-a) error = %v", err)
+	}
+	if err := h.store.UpsertWorker(ctx, project, Worker{
+		WorkerID:      "worker-a",
+		CurrentPaneID: "pane-a",
+		Agent:         "codex",
+		State:         "healthy",
+		Issue:         "LAB-2401",
+		ClonePath:     "/clones/a",
+		CreatedAt:     base,
+		LastSeenAt:    base,
+	}); err != nil {
+		t.Fatalf("UpsertWorker(host-a) error = %v", err)
+	}
+	if _, err := h.store.EnsureClone(ctx, project, "/clones/a"); err != nil {
+		t.Fatalf("EnsureClone(/clones/a) error = %v", err)
+	}
+	if ok, err := h.store.TryOccupyClone(ctx, project, "/clones/a", "branch-a", "LAB-2401"); err != nil {
+		t.Fatalf("TryOccupyClone(/clones/a) error = %v", err)
+	} else if !ok {
+		t.Fatal("TryOccupyClone(/clones/a) = false, want true")
+	}
+	if _, err := h.store.EnsureClone(ctx, project, "/clones/free-a"); err != nil {
+		t.Fatalf("EnsureClone(/clones/free-a) error = %v", err)
+	}
+
+	h.setHost(hostB)
+	h.setNow(base.Add(2 * time.Minute))
+	if err := h.store.UpsertDaemon(ctx, project, DaemonStatus{
+		Session:   "repo-b",
+		PID:       22,
+		Status:    "running",
+		StartedAt: base.Add(2 * time.Minute),
+		UpdatedAt: base.Add(2 * time.Minute),
+	}); err != nil {
+		t.Fatalf("UpsertDaemon(project host-b) error = %v", err)
+	}
+	if err := h.store.UpsertTask(ctx, project, Task{
+		Issue:     "LAB-2403",
+		Status:    "done",
+		State:     "done",
+		Agent:     "codex",
+		WorkerID:  "worker-b",
+		ClonePath: "/clones/b",
+		CreatedAt: base.Add(2 * time.Minute),
+		UpdatedAt: base.Add(2 * time.Minute),
+	}); err != nil {
+		t.Fatalf("UpsertTask(done host-b) error = %v", err)
+	}
+	if err := h.store.UpsertWorker(ctx, project, Worker{
+		WorkerID:      "worker-b",
+		CurrentPaneID: "pane-b",
+		Agent:         "codex",
+		State:         "stuck",
+		Issue:         "LAB-2403",
+		ClonePath:     "/clones/b",
+		CreatedAt:     base.Add(2 * time.Minute),
+		LastSeenAt:    base.Add(2 * time.Minute),
+	}); err != nil {
+		t.Fatalf("UpsertWorker(host-b) error = %v", err)
+	}
+	if _, err := h.store.EnsureClone(ctx, project, "/clones/b"); err != nil {
+		t.Fatalf("EnsureClone(/clones/b) error = %v", err)
+	}
+
+	h.setHost(hostC)
+	h.setNow(base.Add(3 * time.Minute))
+	if err := h.store.UpsertDaemon(ctx, project, DaemonStatus{
+		Session:   "repo-c",
+		PID:       33,
+		Status:    "running",
+		StartedAt: base.Add(3 * time.Minute),
+		UpdatedAt: base.Add(3 * time.Minute),
+	}); err != nil {
+		t.Fatalf("UpsertDaemon(project host-c) error = %v", err)
+	}
+	if err := h.store.UpsertDaemon(ctx, "", DaemonStatus{
+		Session:   "global-c",
+		PID:       44,
+		Status:    "running",
+		StartedAt: base.Add(3 * time.Minute),
+		UpdatedAt: base.Add(3 * time.Minute),
+	}); err != nil {
+		t.Fatalf("UpsertDaemon(global host-c) error = %v", err)
+	}
+	if err := h.store.UpsertTask(ctx, project, Task{
+		Issue:     "LAB-2404",
+		Status:    "cancelled",
+		State:     "done",
+		Agent:     "claude",
+		WorkerID:  "worker-c",
+		ClonePath: "/clones/c",
+		CreatedAt: base.Add(3 * time.Minute),
+		UpdatedAt: base.Add(3 * time.Minute),
+	}); err != nil {
+		t.Fatalf("UpsertTask(cancelled host-c) error = %v", err)
+	}
+	if err := h.store.UpsertWorker(ctx, project, Worker{
+		WorkerID:      "worker-c",
+		CurrentPaneID: "pane-c",
+		Agent:         "claude",
+		State:         "healthy",
+		Issue:         "LAB-2404",
+		ClonePath:     "/clones/c",
+		CreatedAt:     base.Add(3 * time.Minute),
+		LastSeenAt:    base.Add(3 * time.Minute),
+	}); err != nil {
+		t.Fatalf("UpsertWorker(host-c) error = %v", err)
+	}
+	if _, err := h.store.EnsureClone(ctx, project, "/clones/c"); err != nil {
+		t.Fatalf("EnsureClone(/clones/c) error = %v", err)
+	}
+
+	h.setHost(hostA)
+	status, err := h.store.ProjectStatus(ctx, project)
+	if err != nil {
+		t.Fatalf("ProjectStatus() error = %v", err)
+	}
+	if status.Daemon == nil || status.Daemon.Session != "global-a" {
+		t.Fatalf("ProjectStatus().Daemon = %#v, want global-a fallback", status.Daemon)
+	}
+	if got, want := status.Summary.Tasks, 2; got != want {
+		t.Fatalf("host-scoped tasks = %d, want %d", got, want)
+	}
+	if got, want := status.Summary.Active, 1; got != want {
+		t.Fatalf("host-scoped active = %d, want %d", got, want)
+	}
+	if got, want := status.Summary.Queued, 1; got != want {
+		t.Fatalf("host-scoped queued = %d, want %d", got, want)
+	}
+	if got, want := status.Summary.Workers, 1; got != want {
+		t.Fatalf("host-scoped workers = %d, want %d", got, want)
+	}
+	if got, want := status.Summary.HealthyWorkers, 1; got != want {
+		t.Fatalf("host-scoped healthy workers = %d, want %d", got, want)
+	}
+	if got, want := status.Summary.Clones, 2; got != want {
+		t.Fatalf("host-scoped clones = %d, want %d", got, want)
+	}
+	if got, want := status.Summary.FreeClones, 1; got != want {
+		t.Fatalf("host-scoped free clones = %d, want %d", got, want)
+	}
+
+	worker, err := h.store.WorkerByID(ctx, project, "worker-a")
+	if err != nil {
+		t.Fatalf("WorkerByID(worker-a) error = %v", err)
+	}
+	if got, want := worker.Issue, "LAB-2401"; got != want {
+		t.Fatalf("WorkerByID(worker-a).Issue = %q, want %q", got, want)
+	}
+
+	assignments, err := h.store.ActiveAssignments(ctx, project)
+	if err != nil {
+		t.Fatalf("ActiveAssignments(project) error = %v", err)
+	}
+	if got, want := len(assignments), 1; got != want {
+		t.Fatalf("len(ActiveAssignments(project)) = %d, want %d", got, want)
+	}
+	assignment, err := h.store.ActiveAssignmentByIssue(ctx, project, "LAB-2401")
+	if err != nil {
+		t.Fatalf("ActiveAssignmentByIssue() error = %v", err)
+	}
+	if got, want := assignment.Task.Issue, "LAB-2401"; got != want {
+		t.Fatalf("ActiveAssignmentByIssue().Task.Issue = %q, want %q", got, want)
+	}
+	assignment, err = h.store.ActiveAssignmentByBranch(ctx, project, "branch-a")
+	if err != nil {
+		t.Fatalf("ActiveAssignmentByBranch() error = %v", err)
+	}
+	if got, want := assignment.Worker.WorkerID, "worker-a"; got != want {
+		t.Fatalf("ActiveAssignmentByBranch().Worker.WorkerID = %q, want %q", got, want)
+	}
+	assignment, err = h.store.ActiveAssignmentByPRNumber(ctx, project, activePR)
+	if err != nil {
+		t.Fatalf("ActiveAssignmentByPRNumber() error = %v", err)
+	}
+	if got, want := assignment.Task.Issue, "LAB-2401"; got != want {
+		t.Fatalf("ActiveAssignmentByPRNumber().Task.Issue = %q, want %q", got, want)
+	}
+
+	taskStatus, err := h.store.TaskStatusAllHosts(ctx, project, "LAB-2403")
+	if err != nil {
+		t.Fatalf("TaskStatusAllHosts(project) error = %v", err)
+	}
+	if got, want := taskStatus.Task.Issue, "LAB-2403"; got != want {
+		t.Fatalf("TaskStatusAllHosts(project).Task.Issue = %q, want %q", got, want)
+	}
+
+	allHosts, err := h.store.ProjectStatusAllHosts(ctx, project)
+	if err != nil {
+		t.Fatalf("ProjectStatusAllHosts(project) error = %v", err)
+	}
+	if got, want := allHosts.Summary.Tasks, 4; got != want {
+		t.Fatalf("all-host tasks = %d, want %d", got, want)
+	}
+	if got, want := allHosts.Summary.Active, 1; got != want {
+		t.Fatalf("all-host active = %d, want %d", got, want)
+	}
+	if got, want := allHosts.Summary.Queued, 1; got != want {
+		t.Fatalf("all-host queued = %d, want %d", got, want)
+	}
+	if got, want := allHosts.Summary.Done, 1; got != want {
+		t.Fatalf("all-host done = %d, want %d", got, want)
+	}
+	if got, want := allHosts.Summary.Cancelled, 1; got != want {
+		t.Fatalf("all-host cancelled = %d, want %d", got, want)
+	}
+	if got, want := allHosts.Summary.Workers, 3; got != want {
+		t.Fatalf("all-host workers = %d, want %d", got, want)
+	}
+	if got, want := allHosts.Summary.HealthyWorkers, 2; got != want {
+		t.Fatalf("all-host healthy workers = %d, want %d", got, want)
+	}
+	if got, want := allHosts.Summary.StuckWorkers, 1; got != want {
+		t.Fatalf("all-host stuck workers = %d, want %d", got, want)
+	}
+	if got, want := allHosts.Summary.Clones, 4; got != want {
+		t.Fatalf("all-host clones = %d, want %d", got, want)
+	}
+	if got, want := allHosts.Summary.FreeClones, 3; got != want {
+		t.Fatalf("all-host free clones = %d, want %d", got, want)
+	}
+	if got, want := len(allHosts.Daemons), 3; got != want {
+		t.Fatalf("len(allHosts.Daemons) = %d, want %d", got, want)
+	}
+	gotSessions := map[string]string{}
+	for _, daemon := range allHosts.Daemons {
+		gotSessions[daemon.Host] = daemon.Session
+	}
+	if got, want := gotSessions[hostA], "global-a"; got != want {
+		t.Fatalf("daemon session for %s = %q, want %q", hostA, got, want)
+	}
+	if got, want := gotSessions[hostB], "repo-b"; got != want {
+		t.Fatalf("daemon session for %s = %q, want %q", hostB, got, want)
+	}
+	if got, want := gotSessions[hostC], "repo-c"; got != want {
+		t.Fatalf("daemon session for %s = %q, want %q", hostC, got, want)
+	}
+}
+
+func testStoreGlobalHostScopedQueriesAcrossHosts(t *testing.T, h storeContractHarness) {
+	t.Helper()
+	if h.setHost == nil {
+		t.Fatal("setHost is nil")
+	}
+
+	ctx := context.Background()
+	hostA := "host-a"
+	hostB := "host-b"
+	base := time.Date(2026, 4, 10, 9, 0, 0, 0, time.UTC)
+	activePR := 201
+
+	h.setHost(hostA)
+	h.setNow(base)
+	if err := h.store.UpsertDaemon(ctx, "", DaemonStatus{
+		Session:   "global-a",
+		PID:       51,
+		Status:    "running",
+		StartedAt: base,
+		UpdatedAt: base,
+	}); err != nil {
+		t.Fatalf("UpsertDaemon(global host-a) error = %v", err)
+	}
+	if err := h.store.UpsertTask(ctx, "/repo-a", Task{
+		Issue:     "LAB-2501",
+		Status:    "active",
+		State:     "assigned",
+		Agent:     "codex",
+		WorkerID:  "worker-a",
+		ClonePath: "/clones/a",
+		Branch:    "branch-a",
+		PRNumber:  &activePR,
+		CreatedAt: base,
+		UpdatedAt: base,
+	}); err != nil {
+		t.Fatalf("UpsertTask(active host-a) error = %v", err)
+	}
+	if err := h.store.UpsertTask(ctx, "/repo-b", Task{
+		Issue:     "LAB-2502",
+		Status:    "starting",
+		State:     "assigned",
+		Agent:     "codex",
+		WorkerID:  "worker-b",
+		ClonePath: "/clones/b",
+		CreatedAt: base.Add(time.Minute),
+		UpdatedAt: base.Add(time.Minute),
+	}); err != nil {
+		t.Fatalf("UpsertTask(starting host-a) error = %v", err)
+	}
+	if err := h.store.UpsertTask(ctx, "/repo-b", Task{
+		Issue:     "LAB-2503",
+		Status:    "queued",
+		State:     "queued",
+		Agent:     "codex",
+		CreatedAt: base.Add(2 * time.Minute),
+		UpdatedAt: base.Add(2 * time.Minute),
+	}); err != nil {
+		t.Fatalf("UpsertTask(queued host-a) error = %v", err)
+	}
+	if err := h.store.UpsertWorker(ctx, "/repo-a", Worker{
+		WorkerID:      "worker-a",
+		CurrentPaneID: "pane-a",
+		Agent:         "codex",
+		State:         "healthy",
+		Issue:         "LAB-2501",
+		ClonePath:     "/clones/a",
+		CreatedAt:     base,
+		LastSeenAt:    base,
+	}); err != nil {
+		t.Fatalf("UpsertWorker(worker-a) error = %v", err)
+	}
+	if err := h.store.UpsertWorker(ctx, "/repo-b", Worker{
+		WorkerID:      "worker-b",
+		CurrentPaneID: "pane-b",
+		Agent:         "codex",
+		State:         "stuck",
+		Issue:         "LAB-2502",
+		ClonePath:     "/clones/b",
+		CreatedAt:     base.Add(time.Minute),
+		LastSeenAt:    base.Add(time.Minute),
+	}); err != nil {
+		t.Fatalf("UpsertWorker(worker-b) error = %v", err)
+	}
+	if _, err := h.store.EnsureClone(ctx, "/repo-a", "/clones/a"); err != nil {
+		t.Fatalf("EnsureClone(/repo-a,/clones/a) error = %v", err)
+	}
+	if ok, err := h.store.TryOccupyClone(ctx, "/repo-a", "/clones/a", "branch-a", "LAB-2501"); err != nil {
+		t.Fatalf("TryOccupyClone(/repo-a,/clones/a) error = %v", err)
+	} else if !ok {
+		t.Fatal("TryOccupyClone(/repo-a,/clones/a) = false, want true")
+	}
+	if _, err := h.store.EnsureClone(ctx, "/repo-b", "/clones/free-b"); err != nil {
+		t.Fatalf("EnsureClone(/repo-b,/clones/free-b) error = %v", err)
+	}
+
+	h.setHost(hostB)
+	h.setNow(base.Add(3 * time.Minute))
+	if err := h.store.UpsertDaemon(ctx, "", DaemonStatus{
+		Session:   "global-b",
+		PID:       52,
+		Status:    "running",
+		StartedAt: base.Add(3 * time.Minute),
+		UpdatedAt: base.Add(3 * time.Minute),
+	}); err != nil {
+		t.Fatalf("UpsertDaemon(global host-b) error = %v", err)
+	}
+	if err := h.store.UpsertTask(ctx, "/repo-a", Task{
+		Issue:     "LAB-2504",
+		Status:    "done",
+		State:     "done",
+		Agent:     "claude",
+		WorkerID:  "worker-c",
+		ClonePath: "/clones/c",
+		CreatedAt: base.Add(3 * time.Minute),
+		UpdatedAt: base.Add(3 * time.Minute),
+	}); err != nil {
+		t.Fatalf("UpsertTask(done host-b) error = %v", err)
+	}
+	if err := h.store.UpsertTask(ctx, "/repo-b", Task{
+		Issue:     "LAB-2505",
+		Status:    "cancelled",
+		State:     "done",
+		Agent:     "claude",
+		WorkerID:  "worker-d",
+		ClonePath: "/clones/d",
+		CreatedAt: base.Add(4 * time.Minute),
+		UpdatedAt: base.Add(4 * time.Minute),
+	}); err != nil {
+		t.Fatalf("UpsertTask(cancelled host-b) error = %v", err)
+	}
+	if err := h.store.UpsertWorker(ctx, "/repo-a", Worker{
+		WorkerID:      "worker-c",
+		CurrentPaneID: "pane-c",
+		Agent:         "claude",
+		State:         "healthy",
+		Issue:         "LAB-2504",
+		ClonePath:     "/clones/c",
+		CreatedAt:     base.Add(3 * time.Minute),
+		LastSeenAt:    base.Add(3 * time.Minute),
+	}); err != nil {
+		t.Fatalf("UpsertWorker(worker-c) error = %v", err)
+	}
+	if err := h.store.UpsertWorker(ctx, "/repo-b", Worker{
+		WorkerID:      "worker-d",
+		CurrentPaneID: "pane-d",
+		Agent:         "claude",
+		State:         "stuck",
+		Issue:         "LAB-2505",
+		ClonePath:     "/clones/d",
+		CreatedAt:     base.Add(4 * time.Minute),
+		LastSeenAt:    base.Add(4 * time.Minute),
+	}); err != nil {
+		t.Fatalf("UpsertWorker(worker-d) error = %v", err)
+	}
+	if _, err := h.store.EnsureClone(ctx, "/repo-a", "/clones/c"); err != nil {
+		t.Fatalf("EnsureClone(/repo-a,/clones/c) error = %v", err)
+	}
+	if _, err := h.store.EnsureClone(ctx, "/repo-b", "/clones/d"); err != nil {
+		t.Fatalf("EnsureClone(/repo-b,/clones/d) error = %v", err)
+	}
+
+	h.setHost(hostA)
+	status, err := h.store.ProjectStatus(ctx, "")
+	if err != nil {
+		t.Fatalf("ProjectStatus(global) error = %v", err)
+	}
+	if got, want := status.Summary.Tasks, 3; got != want {
+		t.Fatalf("host-scoped global tasks = %d, want %d", got, want)
+	}
+	if got, want := status.Summary.Active, 1; got != want {
+		t.Fatalf("host-scoped global active = %d, want %d", got, want)
+	}
+	if got, want := status.Summary.Queued, 1; got != want {
+		t.Fatalf("host-scoped global queued = %d, want %d", got, want)
+	}
+	if got, want := status.Summary.Workers, 2; got != want {
+		t.Fatalf("host-scoped global workers = %d, want %d", got, want)
+	}
+	if got, want := status.Summary.HealthyWorkers, 1; got != want {
+		t.Fatalf("host-scoped global healthy workers = %d, want %d", got, want)
+	}
+	if got, want := status.Summary.StuckWorkers, 1; got != want {
+		t.Fatalf("host-scoped global stuck workers = %d, want %d", got, want)
+	}
+	if got, want := status.Summary.Clones, 2; got != want {
+		t.Fatalf("host-scoped global clones = %d, want %d", got, want)
+	}
+	if got, want := status.Summary.FreeClones, 1; got != want {
+		t.Fatalf("host-scoped global free clones = %d, want %d", got, want)
+	}
+
+	tasks, err := h.store.listTasks(ctx, "")
+	if err != nil {
+		t.Fatalf("listTasks(global host-scoped) error = %v", err)
+	}
+	if got, want := len(tasks), 3; got != want {
+		t.Fatalf("len(listTasks(global host-scoped)) = %d, want %d", got, want)
+	}
+	workers, err := h.store.ListWorkers(ctx, "")
+	if err != nil {
+		t.Fatalf("ListWorkers(global host-scoped) error = %v", err)
+	}
+	if got, want := len(workers), 2; got != want {
+		t.Fatalf("len(ListWorkers(global host-scoped)) = %d, want %d", got, want)
+	}
+	clones, err := h.store.ListClones(ctx, "")
+	if err != nil {
+		t.Fatalf("ListClones(global host-scoped) error = %v", err)
+	}
+	if got, want := len(clones), 2; got != want {
+		t.Fatalf("len(ListClones(global host-scoped)) = %d, want %d", got, want)
+	}
+	nonTerminal, err := h.store.NonTerminalTasks(ctx, "")
+	if err != nil {
+		t.Fatalf("NonTerminalTasks(global host-scoped) error = %v", err)
+	}
+	if got, want := len(nonTerminal), 2; got != want {
+		t.Fatalf("len(NonTerminalTasks(global host-scoped)) = %d, want %d", got, want)
+	}
+	if got, want := nonTerminal[0].Project, "/repo-b"; got != want {
+		t.Fatalf("NonTerminalTasks(global host-scoped)[0].Project = %q, want %q", got, want)
+	}
+
+	paneTasks, err := h.store.TasksByPane(ctx, "", "pane-a")
+	if err != nil {
+		t.Fatalf("TasksByPane(global) error = %v", err)
+	}
+	if got, want := len(paneTasks), 1; got != want {
+		t.Fatalf("len(TasksByPane(global)) = %d, want %d", got, want)
+	}
+	if got, want := paneTasks[0].Project, "/repo-a"; got != want {
+		t.Fatalf("TasksByPane(global)[0].Project = %q, want %q", got, want)
+	}
+	worker, err := h.store.WorkerByPane(ctx, "", "pane-a")
+	if err != nil {
+		t.Fatalf("WorkerByPane(global) error = %v", err)
+	}
+	if got, want := worker.Project, "/repo-a"; got != want {
+		t.Fatalf("WorkerByPane(global).Project = %q, want %q", got, want)
+	}
+
+	taskStatus, err := h.store.TaskStatusAllHosts(ctx, "", "LAB-2504")
+	if err != nil {
+		t.Fatalf("TaskStatusAllHosts(global) error = %v", err)
+	}
+	if got, want := taskStatus.Task.Project, "/repo-a"; got != want {
+		t.Fatalf("TaskStatusAllHosts(global).Task.Project = %q, want %q", got, want)
+	}
+
+	allHosts, err := h.store.ProjectStatusAllHosts(ctx, "")
+	if err != nil {
+		t.Fatalf("ProjectStatusAllHosts(global) error = %v", err)
+	}
+	if got, want := allHosts.Summary.Tasks, 5; got != want {
+		t.Fatalf("all-host global tasks = %d, want %d", got, want)
+	}
+	if got, want := allHosts.Summary.Active, 1; got != want {
+		t.Fatalf("all-host global active = %d, want %d", got, want)
+	}
+	if got, want := allHosts.Summary.Queued, 1; got != want {
+		t.Fatalf("all-host global queued = %d, want %d", got, want)
+	}
+	if got, want := allHosts.Summary.Done, 1; got != want {
+		t.Fatalf("all-host global done = %d, want %d", got, want)
+	}
+	if got, want := allHosts.Summary.Cancelled, 1; got != want {
+		t.Fatalf("all-host global cancelled = %d, want %d", got, want)
+	}
+	if got, want := allHosts.Summary.Workers, 4; got != want {
+		t.Fatalf("all-host global workers = %d, want %d", got, want)
+	}
+	if got, want := allHosts.Summary.HealthyWorkers, 2; got != want {
+		t.Fatalf("all-host global healthy workers = %d, want %d", got, want)
+	}
+	if got, want := allHosts.Summary.StuckWorkers, 2; got != want {
+		t.Fatalf("all-host global stuck workers = %d, want %d", got, want)
+	}
+	if got, want := allHosts.Summary.Clones, 4; got != want {
+		t.Fatalf("all-host global clones = %d, want %d", got, want)
+	}
+	if got, want := allHosts.Summary.FreeClones, 3; got != want {
+		t.Fatalf("all-host global free clones = %d, want %d", got, want)
+	}
+	if got, want := len(allHosts.Daemons), 2; got != want {
+		t.Fatalf("len(allHosts.Daemons) = %d, want %d", got, want)
+	}
+}
+
+func testStoreHostScopedMutationPaths(t *testing.T, h storeContractHarness) {
+	t.Helper()
+	if h.setHost == nil {
+		t.Fatal("setHost is nil")
+	}
+
+	ctx := context.Background()
+	project := "/repo"
+	hostA := "host-a"
+	hostB := "host-b"
+	base := time.Date(2026, 4, 11, 9, 0, 0, 0, time.UTC)
+
+	h.setHost(hostA)
+	h.setNow(base)
+	if err := h.store.UpsertWorker(ctx, project, Worker{
+		WorkerID:   "worker-free-a",
+		Agent:      "codex",
+		State:      "healthy",
+		CreatedAt:  base,
+		LastSeenAt: base,
+	}); err != nil {
+		t.Fatalf("UpsertWorker(worker-free-a) error = %v", err)
+	}
+
+	h.setHost(hostB)
+	h.setNow(base.Add(time.Minute))
+	if err := h.store.UpsertWorker(ctx, project, Worker{
+		WorkerID:   "worker-free-b",
+		Agent:      "codex",
+		State:      "healthy",
+		CreatedAt:  base.Add(time.Minute),
+		LastSeenAt: base.Add(time.Minute),
+	}); err != nil {
+		t.Fatalf("UpsertWorker(worker-free-b) error = %v", err)
+	}
+	if err := h.store.UpsertTask(ctx, project, Task{
+		Issue:     "LAB-2601",
+		Status:    "done",
+		State:     "done",
+		Agent:     "codex",
+		CreatedAt: base.Add(time.Minute),
+		UpdatedAt: base.Add(time.Minute),
+	}); err != nil {
+		t.Fatalf("UpsertTask(host-b claimable) error = %v", err)
+	}
+	if err := h.store.UpsertTask(ctx, project, Task{
+		Issue:     "LAB-2602",
+		Status:    "active",
+		State:     "assigned",
+		Agent:     "codex",
+		CreatedAt: base.Add(time.Minute),
+		UpdatedAt: base.Add(time.Minute),
+	}); err != nil {
+		t.Fatalf("UpsertTask(host-b protected) error = %v", err)
+	}
+	if _, err := h.store.EnsureClone(ctx, project, "/clones/shared"); err != nil {
+		t.Fatalf("EnsureClone(host-b /clones/shared) error = %v", err)
+	}
+
+	h.setHost(hostA)
+	h.setNow(base.Add(2 * time.Minute))
+	claimedExisting, err := h.store.ClaimWorker(ctx, project, Worker{
+		Agent:      "codex",
+		State:      "healthy",
+		Issue:      "LAB-2603",
+		LastSeenAt: base.Add(2 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("ClaimWorker(existing) error = %v", err)
+	}
+	if got, want := claimedExisting.WorkerID, "worker-free-a"; got != want {
+		t.Fatalf("ClaimWorker(existing).WorkerID = %q, want %q", got, want)
+	}
+	if got, want := claimedExisting.Issue, "LAB-2603"; got != want {
+		t.Fatalf("ClaimWorker(existing).Issue = %q, want %q", got, want)
+	}
+
+	if _, err := h.store.ClaimTask(ctx, project, Task{
+		Issue:     "LAB-2604",
+		Status:    "queued",
+		State:     "queued",
+		Agent:     "codex",
+		Prompt:    "create fresh task",
+		CreatedAt: base.Add(2 * time.Minute),
+		UpdatedAt: base.Add(2 * time.Minute),
+	}); err != nil {
+		t.Fatalf("ClaimTask(insert) error = %v", err)
+	}
+	reclaimedTask, err := h.store.ClaimTask(ctx, project, Task{
+		Issue:      "LAB-2601",
+		Status:     "queued",
+		State:      "queued",
+		Agent:      "codex",
+		Prompt:     "reclaim finished task",
+		CallerPane: "pane-claim",
+		Branch:     "branch-claim",
+		CreatedAt:  base.Add(2 * time.Minute),
+		UpdatedAt:  base.Add(2 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("ClaimTask(update) error = %v", err)
+	}
+	if reclaimedTask == nil || reclaimedTask.Issue != "LAB-2601" {
+		t.Fatalf("ClaimTask(update) = %#v, want existing task", reclaimedTask)
+	}
+
+	if err := h.store.DeleteTask(ctx, project, "LAB-2602"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("DeleteTask(other host) error = %v, want ErrNotFound", err)
+	}
+	if err := h.store.DeleteWorker(ctx, project, "worker-free-b"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("DeleteWorker(other host) error = %v, want ErrNotFound", err)
+	}
+	if ok, err := h.store.TryOccupyClone(ctx, project, "/clones/shared", "branch-a", "LAB-2605"); err != nil {
+		t.Fatalf("TryOccupyClone(other host) error = %v", err)
+	} else if ok {
+		t.Fatal("TryOccupyClone(other host) = true, want false")
+	}
+	if err := h.store.MarkCloneFree(ctx, project, "/clones/shared"); !errors.Is(err, legacy.ErrCloneNotFound) {
+		t.Fatalf("MarkCloneFree(other host) error = %v, want ErrCloneNotFound", err)
+	}
+
+	insertedWorker, err := h.store.ClaimWorker(ctx, project, Worker{
+		Agent:      "claude",
+		State:      "healthy",
+		Issue:      "LAB-2606",
+		LastSeenAt: base.Add(2 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("ClaimWorker(insert) error = %v", err)
+	}
+	if insertedWorker.WorkerID == "" {
+		t.Fatal("ClaimWorker(insert).WorkerID = empty, want generated worker id")
+	}
+
+	if _, err := h.store.TaskStatus(ctx, project, "LAB-2604"); err != nil {
+		t.Fatalf("TaskStatus(LAB-2604) error = %v", err)
+	}
+	if _, err := h.store.TaskStatus(ctx, project, "LAB-2601"); err != nil {
+		t.Fatalf("TaskStatus(LAB-2601) error = %v", err)
+	}
+}
+
+func currentStoreTestHostname(t *testing.T) string {
+	t.Helper()
+
+	hostname, err := os.Hostname()
+	if err != nil {
+		t.Fatalf("Hostname() error = %v", err)
+	}
+	if strings.TrimSpace(hostname) == "" {
+		t.Fatal("Hostname() returned empty host")
+	}
+	return strings.TrimSpace(hostname)
+}
+
+func TestStoreHostHelpers(t *testing.T) {
+	t.Parallel()
+
+	if got := defaultStoreHost(); got == "" {
+		t.Fatal("defaultStoreHost() returned empty host")
+	}
+	if got, want := normalizeStoreHost("  host-a  "), "host-a"; got != want {
+		t.Fatalf("normalizeStoreHost() = %q, want %q", got, want)
+	}
+	if got, want := postgresHostMatch("tasks.host", 3), "(tasks.host = $3 OR tasks.host = '')"; got != want {
+		t.Fatalf("postgresHostMatch() = %q, want %q", got, want)
+	}
+	if got, want := sqliteHostMatch("tasks.host"), "(tasks.host = ? OR tasks.host = '')"; got != want {
+		t.Fatalf("sqliteHostMatch() = %q, want %q", got, want)
+	}
 }

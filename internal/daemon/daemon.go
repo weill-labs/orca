@@ -78,6 +78,10 @@ type realTicker struct {
 	*time.Ticker
 }
 
+type stateHostSetter interface {
+	SetHost(host string)
+}
+
 func (t realTicker) C() <-chan time.Time {
 	return t.Ticker.C
 }
@@ -132,6 +136,9 @@ func New(opts Options) (*Daemon, error) {
 		if hostname, err := os.Hostname(); err == nil {
 			opts.Hostname = hostname
 		}
+	}
+	if setter, ok := opts.State.(stateHostSetter); ok {
+		setter.SetHost(strings.TrimSpace(opts.Hostname))
 	}
 
 	return &Daemon{
