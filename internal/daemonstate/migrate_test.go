@@ -469,12 +469,12 @@ func seedSQLiteMigrationFixture(t *testing.T, store *SQLiteStore) map[string]int
 	ctx := context.Background()
 
 	if _, err := store.db.ExecContext(ctx, `
-		INSERT INTO daemon_status(project, session, pid, status, started_at, updated_at)
+		INSERT INTO daemon_statuses(host, project, session, pid, status, started_at, updated_at)
 		VALUES
-			('', 'global-session', 77, 'running', '2026-04-15T08:00:00.123456Z', '2026-04-15T08:05:00.123456Z'),
-			('/repo-alpha', 'alpha-session', 88, 'running', '2026-04-15T09:00:00Z', '2026-04-15T09:30:00Z')
+			('host-global', '', 'global-session', 77, 'running', '2026-04-15T08:00:00.123456Z', '2026-04-15T08:05:00.123456Z'),
+			('host-alpha', '/repo-alpha', 'alpha-session', 88, 'running', '2026-04-15T09:00:00Z', '2026-04-15T09:30:00Z')
 	`); err != nil {
-		t.Fatalf("insert daemon_status fixture error = %v", err)
+		t.Fatalf("insert daemon_statuses fixture error = %v", err)
 	}
 
 	if _, err := store.db.ExecContext(ctx, `
@@ -496,10 +496,10 @@ func seedSQLiteMigrationFixture(t *testing.T, store *SQLiteStore) map[string]int
 	}
 
 	if _, err := store.db.ExecContext(ctx, `
-		INSERT INTO clones(project, path, status, issue, branch, updated_at)
+		INSERT INTO clones(project, path, host, status, issue, branch, updated_at)
 		VALUES
-			('/repo-alpha', '/clones/alpha-01', 'occupied', 'LAB-1304', 'lab-1304', '2026-04-15T09:21:00Z'),
-			('/repo-beta', '/clones/beta-01', 'free', '', '', '2026-04-15T10:03:00Z')
+			('/repo-alpha', '/clones/alpha-01', 'host-alpha', 'occupied', 'LAB-1304', 'lab-1304', '2026-04-15T09:21:00Z'),
+			('/repo-beta', '/clones/beta-01', 'host-beta', 'free', '', '', '2026-04-15T10:03:00Z')
 	`); err != nil {
 		t.Fatalf("insert clones fixture error = %v", err)
 	}
@@ -524,12 +524,12 @@ func seedSQLiteMigrationFixture(t *testing.T, store *SQLiteStore) map[string]int
 	}
 
 	return map[string]int64{
-		"tasks":         2,
-		"workers":       2,
-		"clones":        2,
-		"events":        3,
-		"merge_queue":   2,
-		"daemon_status": 2,
+		"tasks":           2,
+		"workers":         2,
+		"clones":          2,
+		"events":          3,
+		"merge_queue":     2,
+		"daemon_statuses": 2,
 	}
 }
 
@@ -670,6 +670,7 @@ func migrationEqualityTableSpecs() []migrationEqualityTableSpec {
 			columns: []migrationEqualityColumn{
 				{name: "project"},
 				{name: "path"},
+				{name: "host"},
 				{name: "status"},
 				{name: "issue"},
 				{name: "branch"},
@@ -703,9 +704,10 @@ func migrationEqualityTableSpecs() []migrationEqualityTableSpec {
 			},
 		},
 		{
-			name:    "daemon_status",
-			orderBy: "project ASC",
+			name:    "daemon_statuses",
+			orderBy: "host ASC, project ASC",
 			columns: []migrationEqualityColumn{
+				{name: "host"},
 				{name: "project"},
 				{name: "session"},
 				{name: "pid", kind: "int"},

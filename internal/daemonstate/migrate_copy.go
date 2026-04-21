@@ -247,20 +247,21 @@ func copyWorkers(ctx context.Context, source *SQLiteStore, destination pgx.Tx) e
 
 func copyClones(ctx context.Context, source *SQLiteStore, destination pgx.Tx) error {
 	return copySQLiteRows(ctx, source, destination, "clones", "clones",
-		[]string{"project", "path", "status", "issue", "branch", "updated_at"},
+		[]string{"project", "path", "host", "status", "issue", "branch", "updated_at"},
 		`
-		SELECT project, path, status, issue, branch, updated_at
+		SELECT project, path, host, status, issue, branch, updated_at
 		FROM clones
 		ORDER BY project ASC, path ASC
 	`, func(rows *sql.Rows) ([]any, error) {
 			var project string
 			var path string
+			var host string
 			var cloneStatus string
 			var issue string
 			var branch string
 			var updatedAtText string
 
-			if err := rows.Scan(&project, &path, &cloneStatus, &issue, &branch, &updatedAtText); err != nil {
+			if err := rows.Scan(&project, &path, &host, &cloneStatus, &issue, &branch, &updatedAtText); err != nil {
 				return nil, fmt.Errorf("scan sqlite clone: %w", err)
 			}
 
@@ -269,7 +270,7 @@ func copyClones(ctx context.Context, source *SQLiteStore, destination pgx.Tx) er
 				return nil, err
 			}
 
-			return []any{project, path, cloneStatus, issue, branch, updatedAt}, nil
+			return []any{project, path, host, cloneStatus, issue, branch, updatedAt}, nil
 		})
 }
 
@@ -341,13 +342,14 @@ func copyMergeQueue(ctx context.Context, source *SQLiteStore, destination pgx.Tx
 }
 
 func copyDaemonStatus(ctx context.Context, source *SQLiteStore, destination pgx.Tx) error {
-	return copySQLiteRows(ctx, source, destination, "daemon_status", "daemon status",
-		[]string{"project", "session", "pid", "status", "started_at", "updated_at"},
+	return copySQLiteRows(ctx, source, destination, "daemon_statuses", "daemon status",
+		[]string{"host", "project", "session", "pid", "status", "started_at", "updated_at"},
 		`
-		SELECT project, session, pid, status, started_at, updated_at
-		FROM daemon_status
-		ORDER BY project ASC
+		SELECT host, project, session, pid, status, started_at, updated_at
+		FROM daemon_statuses
+		ORDER BY host ASC, project ASC
 	`, func(rows *sql.Rows) ([]any, error) {
+			var host string
 			var project string
 			var session string
 			var pid int64
@@ -355,19 +357,19 @@ func copyDaemonStatus(ctx context.Context, source *SQLiteStore, destination pgx.
 			var startedAtText string
 			var updatedAtText string
 
-			if err := rows.Scan(&project, &session, &pid, &daemonState, &startedAtText, &updatedAtText); err != nil {
+			if err := rows.Scan(&host, &project, &session, &pid, &daemonState, &startedAtText, &updatedAtText); err != nil {
 				return nil, fmt.Errorf("scan sqlite daemon status: %w", err)
 			}
 
-			startedAt, err := parseRequiredMigrationTime("daemon_status", "started_at", startedAtText)
+			startedAt, err := parseRequiredMigrationTime("daemon_statuses", "started_at", startedAtText)
 			if err != nil {
 				return nil, err
 			}
-			updatedAt, err := parseRequiredMigrationTime("daemon_status", "updated_at", updatedAtText)
+			updatedAt, err := parseRequiredMigrationTime("daemon_statuses", "updated_at", updatedAtText)
 			if err != nil {
 				return nil, err
 			}
 
-			return []any{project, session, pid, daemonState, startedAt, updatedAt}, nil
+			return []any{host, project, session, pid, daemonState, startedAt, updatedAt}, nil
 		})
 }

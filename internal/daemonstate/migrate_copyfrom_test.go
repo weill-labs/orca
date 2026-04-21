@@ -65,14 +65,15 @@ func TestCopyMigrationTablesUseCopyFrom(t *testing.T) {
 		{
 			name:     "clones",
 			table:    "clones",
-			columns:  []string{"project", "path", "status", "issue", "branch", "updated_at"},
+			columns:  []string{"project", "path", "host", "status", "issue", "branch", "updated_at"},
 			wantRows: 2,
 			copyFn:   copyClones,
 			assertRow: func(t *testing.T, rows [][]any) {
 				t.Helper()
 
 				assertCopyString(t, rows[0], 1, "/clones/alpha-01")
-				assertCopyTime(t, rows[0], 5, time.Date(2026, 4, 15, 9, 21, 0, 0, time.UTC))
+				assertCopyString(t, rows[0], 2, "host-alpha")
+				assertCopyTime(t, rows[0], 6, time.Date(2026, 4, 15, 9, 21, 0, 0, time.UTC))
 			},
 		},
 		{
@@ -106,17 +107,18 @@ func TestCopyMigrationTablesUseCopyFrom(t *testing.T) {
 		},
 		{
 			name:     "daemon status",
-			table:    "daemon_status",
-			columns:  []string{"project", "session", "pid", "status", "started_at", "updated_at"},
+			table:    "daemon_statuses",
+			columns:  []string{"host", "project", "session", "pid", "status", "started_at", "updated_at"},
 			wantRows: 2,
 			copyFn:   copyDaemonStatus,
 			assertRow: func(t *testing.T, rows [][]any) {
 				t.Helper()
 
-				assertCopyString(t, rows[0], 0, "")
-				assertCopyInt64(t, rows[0], 2, 77)
-				assertCopyTime(t, rows[0], 4, time.Date(2026, 4, 15, 8, 0, 0, 123456000, time.UTC))
-				assertCopyTime(t, rows[1], 5, time.Date(2026, 4, 15, 9, 30, 0, 0, time.UTC))
+				assertCopyString(t, rows[0], 0, "host-alpha")
+				assertCopyString(t, rows[0], 1, "/repo-alpha")
+				assertCopyInt64(t, rows[0], 3, 88)
+				assertCopyTime(t, rows[0], 5, time.Date(2026, 4, 15, 9, 0, 0, 0, time.UTC))
+				assertCopyTime(t, rows[1], 6, time.Date(2026, 4, 15, 8, 5, 0, 123456000, time.UTC))
 			},
 		},
 	}
