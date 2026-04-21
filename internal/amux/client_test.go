@@ -570,6 +570,13 @@ func TestCLIClientPaneExists(t *testing.T) {
 			wantErrIs: ErrPaneNotFound,
 		},
 		{
+			name:      "returns ErrPaneNotFound for not_found command errors",
+			output:    `capture failed: not_found`,
+			runErr:    errors.New("exit status 1"),
+			wantErr:   "capture failed: not_found",
+			wantErrIs: ErrPaneNotFound,
+		},
+		{
 			name:    "returns command errors",
 			runErr:  errors.New("exit status 1"),
 			wantErr: "exit status 1",
@@ -720,6 +727,7 @@ func TestCLIClientCapture(t *testing.T) {
 		wantCmd    recordedCommand
 		wantOutput string
 		wantErr    string
+		wantErrIs  error
 	}{
 		{
 			name: "parses pane json into screen output",
@@ -793,6 +801,26 @@ func TestCLIClientCapture(t *testing.T) {
 			},
 			wantErr: "exit status 1",
 		},
+		{
+			name: "returns ErrPaneNotFound for not_found command errors",
+			config: Config{
+				Session: "orca-dev",
+			},
+			paneID: "13",
+			output: `capture failed: not_found`,
+			runErr: errors.New("exit status 1"),
+			wantCmd: recordedCommand{
+				name: "amux",
+				args: []string{
+					"-s", "orca-dev",
+					"capture",
+					"--format", "json",
+					"13",
+				},
+			},
+			wantErr:   "capture failed: not_found",
+			wantErrIs: ErrPaneNotFound,
+		},
 	}
 
 	for _, tt := range tests {
@@ -813,6 +841,9 @@ func TestCLIClientCapture(t *testing.T) {
 				}
 			} else if err != nil {
 				t.Fatalf("Capture() error = %v", err)
+			}
+			if tt.wantErrIs != nil && !errors.Is(err, tt.wantErrIs) {
+				t.Fatalf("Capture() error = %v, want errors.Is(_, %v)", err, tt.wantErrIs)
 			}
 
 			if !reflect.DeepEqual(runner.calls, []recordedCommand{tt.wantCmd}) {
