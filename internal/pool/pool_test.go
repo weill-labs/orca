@@ -502,7 +502,7 @@ func TestManagerHealthCheck(t *testing.T) {
 
 				for _, want := range []string{
 					"git ls-remote --exit-code origin HEAD",
-					"git pull",
+					"git fetch origin main",
 				} {
 					if !strings.Contains(err.Error(), want) {
 						t.Fatalf("HealthCheck() error = %v, want substring %q", err, want)
