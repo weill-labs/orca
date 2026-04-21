@@ -133,7 +133,7 @@ assignment through PR merge. On task completion or cancellation, orca resets the
 clone:
 
 ```
-git reset --hard && git checkout main && git pull && git clean -fdx --exclude=.orca-pool && git branch -D TASK_BRANCH
+git reset --hard && git checkout main && git fetch origin main && git reset --hard origin/main && git clean -fdx --exclude=.orca-pool && git branch -D TASK_BRANCH
 ```
 
 The clone returns to the free pool. Pool size equals max concurrency; there is no
@@ -228,7 +228,7 @@ Claude: orca assign LAB-123 --prompt "Implement the auth feature..."
 
   1. Fetch issue from Linear or GitHub
   2. Pick a free clone from the pool
-  3. In clone: git checkout main && git pull && git checkout -B LAB-123
+  3. In clone: git fetch origin main && git checkout main && git reset --hard origin/main && git checkout -B LAB-123
   4. Spawn amux pane with cwd = clone path
   5. Start agent per profile (e.g., codex -> codex --yolo)
   6. Send prompt (provided by Claude) to the pane
@@ -238,7 +238,7 @@ Claude: orca assign LAB-123 --prompt "Implement the auth feature..."
  10. Poll for PR merge
  11. On merge: notify agent "PR merged, wrap up"
  12. Wait for agent idle/exit (max 10m, force-kill if exceeded)
- 13. Clean clone: git reset --hard && git checkout main && git pull && git clean -fdx --exclude=.orca-pool && git branch -D TASK_BRANCH
+ 13. Clean clone: git reset --hard && git checkout main && git fetch origin main && git reset --hard origin/main && git clean -fdx --exclude=.orca-pool && git branch -D TASK_BRANCH
  14. Return clone to pool, mark task done
  15. Notify lead pane
 

@@ -404,8 +404,9 @@ func resolveClonePath(path string) (string, error) {
 
 func (m *Manager) prepareClone(ctx context.Context, path, issueBranch string) error {
 	commands := [][]string{
+		{"fetch", "origin", m.baseBranch},
 		{"checkout", m.baseBranch},
-		{"pull"},
+		{"reset", "--hard", m.originBaseBranchRef()},
 		{"checkout", "-B", issueBranch},
 	}
 
@@ -422,7 +423,8 @@ func (m *Manager) cleanupClone(ctx context.Context, path, taskBranch string) err
 	commands := [][]string{
 		{"reset", "--hard"},
 		{"checkout", m.baseBranch},
-		{"pull"},
+		{"fetch", "origin", m.baseBranch},
+		{"reset", "--hard", m.originBaseBranchRef()},
 		{"clean", "-fdx"},
 	}
 
@@ -453,6 +455,10 @@ func defaultBaseBranch(baseBranch string) string {
 	}
 
 	return baseBranch
+}
+
+func (m *Manager) originBaseBranchRef() string {
+	return "origin/" + m.baseBranch
 }
 
 func branchExists(ctx context.Context, path, branch string) (bool, error) {

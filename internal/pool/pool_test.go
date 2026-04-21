@@ -226,6 +226,32 @@ func TestManagerAllocate(t *testing.T) {
 			},
 		},
 		{
+			name: "repairs diverged base branch before creating issue branch",
+			run: func(t *testing.T, manager *pool.Manager, store *state.SQLiteStore, project string, clones []string) {
+				t.Helper()
+
+				expectedHead := divergeCloneBaseBranch(t, clones[0], "main")
+
+				clone, err := manager.Allocate(context.Background(), "LAB-687", "LAB-687")
+				if err != nil {
+					t.Fatalf("Allocate() error = %v", err)
+				}
+
+				if got, want := gitCurrentBranch(t, clone.Path), "LAB-687"; got != want {
+					t.Fatalf("current branch = %q, want %q", got, want)
+				}
+				if got, want := gitHeadCommit(t, clone.Path), expectedHead; got != want {
+					t.Fatalf("HEAD = %q, want %q", got, want)
+				}
+				if _, err := os.Stat(filepath.Join(clone.Path, "local-only.txt")); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("local-only.txt stat error = %v, want not exist", err)
+				}
+				if _, err := os.Stat(filepath.Join(clone.Path, "remote-only.txt")); err != nil {
+					t.Fatalf("remote-only.txt stat error = %v", err)
+				}
+			},
+		},
+		{
 			name: "skips unhealthy clone and allocates next healthy clone",
 			run: func(t *testing.T, manager *pool.Manager, store *state.SQLiteStore, project string, clones []string) {
 				t.Helper()
@@ -472,7 +498,7 @@ func TestManagerHealthCheck(t *testing.T) {
 
 				for _, want := range []string{
 					"git ls-remote --exit-code origin HEAD",
-					"git pull",
+					"git fetch origin main",
 				} {
 					if !strings.Contains(err.Error(), want) {
 						t.Fatalf("HealthCheck() error = %v, want substring %q", err, want)
@@ -594,6 +620,40 @@ func TestManagerRelease(t *testing.T) {
 				}
 				if record.AssignedTask != "" {
 					t.Fatalf("record.AssignedTask = %q, want empty", record.AssignedTask)
+				}
+			},
+		},
+		{
+			name: "repairs diverged base branch before marking clone free",
+			run: func(t *testing.T, manager *pool.Manager, store *state.SQLiteStore, project string, clones []string) {
+				t.Helper()
+
+				clone, err := manager.Allocate(context.Background(), "LAB-687", "LAB-687")
+				if err != nil {
+					t.Fatalf("Allocate() setup error = %v", err)
+				}
+
+				expectedHead := divergeCloneBaseBranch(t, clone.Path, "main")
+				mustRun(t, clone.Path, "git", "checkout", "LAB-687")
+
+				if err := manager.Release(context.Background(), clone.Path, "LAB-687"); err != nil {
+					t.Fatalf("Release() error = %v", err)
+				}
+
+				if got, want := gitCurrentBranch(t, clone.Path), "main"; got != want {
+					t.Fatalf("current branch = %q, want %q", got, want)
+				}
+				if got, want := gitHeadCommit(t, clone.Path), expectedHead; got != want {
+					t.Fatalf("HEAD = %q, want %q", got, want)
+				}
+				if _, err := os.Stat(filepath.Join(clone.Path, "local-only.txt")); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("local-only.txt stat error = %v, want not exist", err)
+				}
+				if _, err := os.Stat(filepath.Join(clone.Path, "remote-only.txt")); err != nil {
+					t.Fatalf("remote-only.txt stat error = %v", err)
+				}
+				if gitBranchExists(t, clone.Path, "LAB-687") {
+					t.Fatal("task branch still exists after Release()")
 				}
 			},
 		},
@@ -731,8 +791,7 @@ func newOrigin(t *testing.T, baseBranch string) string {
 	root := t.TempDir()
 	source := filepath.Join(root, "source")
 	mustRun(t, "", "git", "init", "-b", baseBranch, source)
-	mustRun(t, source, "git", "config", "user.name", "Orca Tests")
-	mustRun(t, source, "git", "config", "user.email", "orca-tests@example.com")
+	configureTestGitIdentity(t, source)
 	mustWriteFile(t, filepath.Join(source, "README.md"), "hello")
 	mustRun(t, source, "git", "add", "README.md")
 	mustRun(t, source, "git", "commit", "-m", "initial commit")
@@ -759,6 +818,43 @@ func newClone(t *testing.T, origin, dest string) string {
 	return dest
 }
 
+func advanceOrigin(t *testing.T, clonePath, baseBranch, relativePath, contents string) string {
+	t.Helper()
+
+	origin := strings.TrimSpace(mustOutput(t, clonePath, "git", "remote", "get-url", "origin"))
+	worktree := filepath.Join(t.TempDir(), "origin-worktree")
+	mustRun(t, "", "git", "clone", origin, worktree)
+	configureTestGitIdentity(t, worktree)
+	mustRun(t, worktree, "git", "checkout", baseBranch)
+	mustWriteFile(t, filepath.Join(worktree, relativePath), contents)
+	mustRun(t, worktree, "git", "add", relativePath)
+	mustRun(t, worktree, "git", "commit", "-m", "advance origin")
+	mustRun(t, worktree, "git", "push", "origin", baseBranch)
+
+	return gitHeadCommit(t, worktree)
+}
+
+func divergeCloneBaseBranch(t *testing.T, clonePath, baseBranch string) string {
+	t.Helper()
+
+	configureTestGitIdentity(t, clonePath)
+	mustRun(t, clonePath, "git", "config", "pull.ff", "only")
+	expectedHead := advanceOrigin(t, clonePath, baseBranch, "remote-only.txt", "remote update")
+	mustRun(t, clonePath, "git", "checkout", baseBranch)
+	mustWriteFile(t, filepath.Join(clonePath, "local-only.txt"), "local update")
+	mustRun(t, clonePath, "git", "add", "local-only.txt")
+	mustRun(t, clonePath, "git", "commit", "-m", "local divergent commit")
+
+	return expectedHead
+}
+
+func configureTestGitIdentity(t *testing.T, dir string) {
+	t.Helper()
+
+	mustRun(t, dir, "git", "config", "user.name", "Orca Tests")
+	mustRun(t, dir, "git", "config", "user.email", "orca-tests@example.com")
+}
+
 func lookupClone(t *testing.T, store *state.SQLiteStore, project, path string) state.CloneRecord {
 	t.Helper()
 
@@ -781,6 +877,12 @@ func gitCurrentBranch(t *testing.T, dir string) string {
 	t.Helper()
 
 	return strings.TrimSpace(mustOutput(t, dir, "git", "rev-parse", "--abbrev-ref", "HEAD"))
+}
+
+func gitHeadCommit(t *testing.T, dir string) string {
+	t.Helper()
+
+	return strings.TrimSpace(mustOutput(t, dir, "git", "rev-parse", "HEAD"))
 }
 
 func gitBranchExists(t *testing.T, dir, branch string) bool {
