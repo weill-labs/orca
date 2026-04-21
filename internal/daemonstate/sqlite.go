@@ -2464,10 +2464,9 @@ func (s *SQLiteStore) ensureDaemonStatusSchema(ctx context.Context) error {
 	}
 
 	if err := s.execWithRetry(ctx, `
-		INSERT INTO daemon_statuses(host, project, session, pid, status, started_at, updated_at)
+		INSERT OR IGNORE INTO daemon_statuses(host, project, session, pid, status, started_at, updated_at)
 		SELECT ?, project, session, pid, status, started_at, updated_at
 		FROM daemon_status
-		ON CONFLICT(host, project) DO NOTHING
 	`, s.host); err != nil {
 		return fmt.Errorf("migrate legacy daemon_status rows: %w", err)
 	}

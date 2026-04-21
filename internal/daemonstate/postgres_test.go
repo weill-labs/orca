@@ -3,6 +3,7 @@ package state
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"math"
 	"net/url"
@@ -88,6 +89,21 @@ func TestPostgresStoreMergeQueueOrderingAndNotFound(t *testing.T) {
 func TestPostgresStoreSchemaIncludesHostColumns(t *testing.T) {
 	t.Parallel()
 	testStoreSchemaIncludesHostColumns(t, newPostgresContractHarness(t))
+}
+
+func TestPostgresStoreProjectStatusAllHostsAcrossHosts(t *testing.T) {
+	t.Parallel()
+	testStoreProjectStatusAllHostsAcrossHosts(t, newPostgresContractHarness(t))
+}
+
+func TestPostgresStoreGlobalHostScopedQueriesAcrossHosts(t *testing.T) {
+	t.Parallel()
+	testStoreGlobalHostScopedQueriesAcrossHosts(t, newPostgresContractHarness(t))
+}
+
+func TestPostgresStoreHostScopedMutationPaths(t *testing.T) {
+	t.Parallel()
+	testStoreHostScopedMutationPaths(t, newPostgresContractHarness(t))
 }
 
 func TestPostgresStoreUpsertTaskWritesCurrentHost(t *testing.T) {
@@ -182,6 +198,205 @@ func TestPostgresStoreProjectStatusUsesHostScopedDaemonStatuses(t *testing.T) {
 	}
 	if got, want := status.Daemon.Session, "current-session"; got != want {
 		t.Fatalf("status.Daemon.Session = %q, want %q", got, want)
+	}
+}
+
+func TestPostgresStoreProjectStatusAllHostsAggregatesAcrossHosts(t *testing.T) {
+	t.Parallel()
+
+	store := mustPostgresStore(t)
+	store.SetHost("host-b")
+	ctx := context.Background()
+
+	if _, err := store.pool.Exec(ctx, `
+		INSERT INTO daemon_statuses(host, project, session, pid, status, started_at, updated_at)
+		VALUES
+			('host-a', '', 'global-a', 11, 'running', '2026-04-21T11:00:00Z', '2026-04-21T11:00:05Z'),
+			('host-b', '/repo', 'repo-b', 22, 'running', '2026-04-21T11:00:00Z', '2026-04-21T11:00:06Z')
+	`); err != nil {
+		t.Fatalf("insert daemon statuses error = %v", err)
+	}
+	if _, err := store.pool.Exec(ctx, `
+		INSERT INTO tasks(project, issue, host, status, state, agent, prompt, caller_pane, worker_id, clone_path, branch, pr_number, created_at, updated_at)
+		VALUES
+			('/repo', 'LAB-2101', 'host-a', 'active', 'assigned', 'codex', '', '', 'worker-a', '/clones/a', 'lab-2101', NULL, '2026-04-21T11:10:00Z', '2026-04-21T11:10:00Z'),
+			('/repo', 'LAB-2102', 'host-b', 'active', 'assigned', 'codex', '', '', 'worker-b', '/clones/b', 'lab-2102', NULL, '2026-04-21T11:11:00Z', '2026-04-21T11:11:00Z')
+	`); err != nil {
+		t.Fatalf("insert tasks error = %v", err)
+	}
+	if _, err := store.pool.Exec(ctx, `
+		INSERT INTO workers(project, worker_id, host, agent_profile, current_pane_id, state, issue, clone_path, created_at, last_seen_at)
+		VALUES
+			('/repo', 'worker-a', 'host-a', 'codex', 'pane-a', 'healthy', 'LAB-2101', '/clones/a', '2026-04-21T11:10:00Z', '2026-04-21T11:10:00Z'),
+			('/repo', 'worker-b', 'host-b', 'codex', 'pane-b', 'healthy', 'LAB-2102', '/clones/b', '2026-04-21T11:11:00Z', '2026-04-21T11:11:00Z')
+	`); err != nil {
+		t.Fatalf("insert workers error = %v", err)
+	}
+	if _, err := store.pool.Exec(ctx, `
+		INSERT INTO clones(project, path, host, status, issue, branch, updated_at)
+		VALUES
+			('/repo', '/clones/a', 'host-a', 'occupied', 'LAB-2101', 'lab-2101', '2026-04-21T11:10:00Z'),
+			('/repo', '/clones/b', 'host-b', 'free', '', '', '2026-04-21T11:11:00Z')
+	`); err != nil {
+		t.Fatalf("insert clones error = %v", err)
+	}
+
+	status, err := store.ProjectStatus(ctx, "/repo")
+	if err != nil {
+		t.Fatalf("ProjectStatus() error = %v", err)
+	}
+	if got, want := status.Summary.Tasks, 1; got != want {
+		t.Fatalf("host-scoped tasks = %d, want %d", got, want)
+	}
+	if got, want := status.Summary.Workers, 1; got != want {
+		t.Fatalf("host-scoped workers = %d, want %d", got, want)
+	}
+	if got, want := status.Summary.Clones, 1; got != want {
+		t.Fatalf("host-scoped clones = %d, want %d", got, want)
+	}
+	if status.Daemon == nil || status.Daemon.Session != "repo-b" {
+		t.Fatalf("host-scoped daemon = %#v, want repo-b", status.Daemon)
+	}
+
+	allHosts, err := store.ProjectStatusAllHosts(ctx, "/repo")
+	if err != nil {
+		t.Fatalf("ProjectStatusAllHosts() error = %v", err)
+	}
+	if got, want := allHosts.Summary.Tasks, 2; got != want {
+		t.Fatalf("all-host tasks = %d, want %d", got, want)
+	}
+	if got, want := allHosts.Summary.Workers, 2; got != want {
+		t.Fatalf("all-host workers = %d, want %d", got, want)
+	}
+	if got, want := allHosts.Summary.Clones, 2; got != want {
+		t.Fatalf("all-host clones = %d, want %d", got, want)
+	}
+	if got, want := len(allHosts.Daemons), 2; got != want {
+		t.Fatalf("len(allHosts.Daemons) = %d, want %d", got, want)
+	}
+}
+
+func TestPostgresStoreTaskStatusAllHostsReadsOtherHost(t *testing.T) {
+	t.Parallel()
+
+	store := mustPostgresStore(t)
+	store.SetHost("host-a")
+	ctx := context.Background()
+
+	if _, err := store.pool.Exec(ctx, `
+		INSERT INTO tasks(project, issue, host, status, state, agent, prompt, caller_pane, worker_id, clone_path, branch, pr_number, created_at, updated_at)
+		VALUES('/repo', 'LAB-2201', 'host-b', 'active', 'assigned', 'codex', '', '', 'worker-b', '/clones/b', 'lab-2201', NULL, '2026-04-21T12:00:00Z', '2026-04-21T12:00:00Z')
+	`); err != nil {
+		t.Fatalf("insert task error = %v", err)
+	}
+	if _, err := store.pool.Exec(ctx, `
+		INSERT INTO workers(project, worker_id, host, agent_profile, current_pane_id, state, issue, clone_path, created_at, last_seen_at)
+		VALUES('/repo', 'worker-b', 'host-b', 'codex', 'pane-b', 'healthy', 'LAB-2201', '/clones/b', '2026-04-21T12:00:00Z', '2026-04-21T12:00:00Z')
+	`); err != nil {
+		t.Fatalf("insert worker error = %v", err)
+	}
+
+	if _, err := store.TaskStatus(ctx, "/repo", "LAB-2201"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("TaskStatus() error = %v, want ErrNotFound", err)
+	}
+	status, err := store.TaskStatusAllHosts(ctx, "/repo", "LAB-2201")
+	if err != nil {
+		t.Fatalf("TaskStatusAllHosts() error = %v", err)
+	}
+	if got, want := status.Task.Issue, "LAB-2201"; got != want {
+		t.Fatalf("status.Task.Issue = %q, want %q", got, want)
+	}
+}
+
+func TestPostgresStoreGlobalActiveAssignmentsFilterOtherHosts(t *testing.T) {
+	t.Parallel()
+
+	store := mustPostgresStore(t)
+	store.SetHost("host-a")
+	ctx := context.Background()
+
+	if _, err := store.pool.Exec(ctx, `
+		INSERT INTO tasks(project, issue, host, status, state, agent, prompt, caller_pane, worker_id, clone_path, branch, pr_number, created_at, updated_at)
+		VALUES
+			('/repo-a', 'LAB-2301', 'host-a', 'active', 'assigned', 'codex', '', '', 'worker-a', '/clones/a', 'branch-a', 301, '2026-04-21T13:00:00Z', '2026-04-21T13:00:00Z'),
+			('/repo-b', 'LAB-2302', 'host-b', 'active', 'assigned', 'codex', '', '', 'worker-b', '/clones/b', 'branch-b', 302, '2026-04-21T13:01:00Z', '2026-04-21T13:01:00Z')
+	`); err != nil {
+		t.Fatalf("insert tasks error = %v", err)
+	}
+	if _, err := store.pool.Exec(ctx, `
+		INSERT INTO workers(project, worker_id, host, agent_profile, current_pane_id, state, issue, clone_path, created_at, last_seen_at)
+		VALUES
+			('/repo-a', 'worker-a', 'host-a', 'codex', 'pane-a', 'healthy', 'LAB-2301', '/clones/a', '2026-04-21T13:00:00Z', '2026-04-21T13:00:00Z'),
+			('/repo-b', 'worker-b', 'host-b', 'codex', 'pane-b', 'healthy', 'LAB-2302', '/clones/b', '2026-04-21T13:01:00Z', '2026-04-21T13:01:00Z')
+	`); err != nil {
+		t.Fatalf("insert workers error = %v", err)
+	}
+
+	assignments, err := store.ActiveAssignments(ctx, "")
+	if err != nil {
+		t.Fatalf("ActiveAssignments() error = %v", err)
+	}
+	if got, want := len(assignments), 1; got != want {
+		t.Fatalf("len(assignments) = %d, want %d", got, want)
+	}
+	if got, want := assignments[0].Task.Issue, "LAB-2301"; got != want {
+		t.Fatalf("assignments[0].Task.Issue = %q, want %q", got, want)
+	}
+	if _, err := store.ActiveAssignmentByIssue(ctx, "", "LAB-2302"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("ActiveAssignmentByIssue(other host) error = %v, want ErrNotFound", err)
+	}
+	if _, err := store.ActiveAssignmentByBranch(ctx, "", "branch-a"); err != nil {
+		t.Fatalf("ActiveAssignmentByBranch(current host) error = %v", err)
+	}
+	if _, err := store.ActiveAssignmentByPRNumber(ctx, "", 302); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("ActiveAssignmentByPRNumber(other host) error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestPostgresStoreEnsureSchemaMigratesLegacyDaemonStatus(t *testing.T) {
+	t.Parallel()
+
+	store := mustPostgresStore(t)
+	store.SetHost("legacy-host")
+	ctx := context.Background()
+
+	if _, err := store.pool.Exec(ctx, `
+		CREATE TABLE IF NOT EXISTS daemon_status (
+			project TEXT PRIMARY KEY,
+			session TEXT NOT NULL,
+			pid INTEGER NOT NULL DEFAULT 0,
+			status TEXT NOT NULL,
+			started_at TIMESTAMPTZ NOT NULL,
+			updated_at TIMESTAMPTZ NOT NULL
+		)
+	`); err != nil {
+		t.Fatalf("create legacy daemon_status table error = %v", err)
+	}
+	if _, err := store.pool.Exec(ctx, `
+		INSERT INTO daemon_status(project, session, pid, status, started_at, updated_at)
+		VALUES('/repo', 'legacy-session', 123, 'running', '2026-04-21T14:00:00Z', '2026-04-21T14:00:01Z')
+		ON CONFLICT (project) DO UPDATE SET session = excluded.session
+	`); err != nil {
+		t.Fatalf("insert legacy daemon_status row error = %v", err)
+	}
+	if _, err := store.pool.Exec(ctx, `DELETE FROM daemon_statuses WHERE host = $1 AND project = $2`, "legacy-host", "/repo"); err != nil {
+		t.Fatalf("delete migrated daemon status error = %v", err)
+	}
+
+	if err := store.EnsureSchema(ctx); err != nil {
+		t.Fatalf("EnsureSchema() error = %v", err)
+	}
+
+	var session string
+	if err := store.pool.QueryRow(ctx, `
+		SELECT session
+		FROM daemon_statuses
+		WHERE host = $1 AND project = $2
+	`, "legacy-host", "/repo").Scan(&session); err != nil {
+		t.Fatalf("query migrated daemon status error = %v", err)
+	}
+	if got, want := session, "legacy-session"; got != want {
+		t.Fatalf("migrated session = %q, want %q", got, want)
 	}
 }
 
@@ -534,6 +749,9 @@ func newPostgresContractHarness(t *testing.T) storeContractHarness {
 		store: store,
 		setNow: func(now time.Time) {
 			store.now = func() time.Time { return now }
+		},
+		setHost: func(host string) {
+			store.SetHost(host)
 		},
 		assertHostColumns: func(t *testing.T) {
 			t.Helper()

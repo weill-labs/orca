@@ -208,6 +208,38 @@ func TestSQLiteStateAdapterRoundTrip(t *testing.T) {
 	}
 }
 
+func TestSQLiteStateAdapterTaskByIssueAllHosts(t *testing.T) {
+	t.Parallel()
+
+	store := openDaemonStateStore(t)
+	store.SetHost("host-b")
+	now := time.Date(2026, 4, 21, 16, 0, 0, 0, time.UTC)
+	if err := store.UpsertTask(context.Background(), "/repo", state.Task{
+		Issue:     "LAB-1422",
+		Status:    TaskStatusActive,
+		State:     TaskStateAssigned,
+		Agent:     "codex",
+		CreatedAt: now,
+		UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("UpsertTask() error = %v", err)
+	}
+
+	adapter := newSQLiteStateAdapter(store)
+	adapter.SetHost("host-a")
+
+	if _, err := adapter.TaskByIssue(context.Background(), "/repo", "LAB-1422"); !errors.Is(err, ErrTaskNotFound) {
+		t.Fatalf("TaskByIssue() error = %v, want ErrTaskNotFound", err)
+	}
+	task, err := adapter.TaskByIssueAllHosts(context.Background(), "/repo", "LAB-1422")
+	if err != nil {
+		t.Fatalf("TaskByIssueAllHosts() error = %v", err)
+	}
+	if got, want := task.Issue, "LAB-1422"; got != want {
+		t.Fatalf("task.Issue = %q, want %q", got, want)
+	}
+}
+
 func TestSQLiteStateAdapterNonTerminalTasksAndWorkerByPane(t *testing.T) {
 	t.Parallel()
 

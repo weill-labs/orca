@@ -457,6 +457,76 @@ func TestAppStatusAllHostsUsesAllHostReader(t *testing.T) {
 	}
 }
 
+func TestAppStatusIssueAllHostsUsesAllHostReader(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	repoRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+	store := &fakeState{
+		allHostsTaskStatus: state.TaskStatus{
+			Task: state.Task{
+				Issue: "LAB-1422",
+			},
+		},
+	}
+
+	app := New(Options{
+		Daemon: &fakeDaemon{},
+		State:  store,
+		Stdout: &stdout,
+		Stderr: &stderr,
+		Cwd: func() (string, error) {
+			return repoRoot, nil
+		},
+		ProjectStatusRPC: func(context.Context, string) (daemon.ProjectStatusRPCResult, error) {
+			return daemon.ProjectStatusRPCResult{}, daemon.ErrDaemonNotRunning
+		},
+	})
+
+	if err := app.Run(context.Background(), []string{"status", "LAB-1422", "--all-hosts"}); err != nil {
+		t.Fatalf("Run(status ISSUE --all-hosts) error = %v", err)
+	}
+	if got, want := store.allHostsTaskStatusProject, repoRoot; got != want {
+		t.Fatalf("all-hosts task status project = %q, want %q", got, want)
+	}
+	if got, want := store.allHostsTaskStatusIssue, "LAB-1422"; got != want {
+		t.Fatalf("all-hosts task status issue = %q, want %q", got, want)
+	}
+	if !strings.Contains(stdout.String(), "issue: LAB-1422") {
+		t.Fatalf("stdout = %q, want all-host task status output", stdout.String())
+	}
+}
+
+func TestWriteProjectStatusIncludesDaemonTable(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	now := time.Date(2026, 4, 21, 15, 0, 0, 0, time.UTC)
+	status := state.ProjectStatus{
+		Project: "/repo",
+		Daemons: []state.DaemonStatus{
+			{Host: "host-a", Status: "running", Session: "sess-a", PID: 11, UpdatedAt: now},
+			{Host: "host-b", Status: "stopped", Session: "sess-b", PID: 0, UpdatedAt: now},
+		},
+	}
+
+	if err := writeProjectStatusAt(&stdout, status, "", "dev", now); err != nil {
+		t.Fatalf("writeProjectStatusAt() error = %v", err)
+	}
+
+	output := stdout.String()
+	if !strings.Contains(output, "HOST") || !strings.Contains(output, "UPDATED") {
+		t.Fatalf("output = %q, want daemon host table header", output)
+	}
+	if !strings.Contains(output, "host-a") || !strings.Contains(output, "host-b") {
+		t.Fatalf("output = %q, want daemon host rows", output)
+	}
+}
+
 func TestRunCancelClientTimeoutBehavior(t *testing.T) {
 	t.Parallel()
 

@@ -1020,11 +1020,36 @@ func TestStoreResumedTaskCoversFallbacksAndWriteErrors(t *testing.T) {
 			t.Fatalf("storeResumedTask() error = %v, want put task error", err)
 		}
 	})
+
+	t.Run("fallback to all-host task lookup", func(t *testing.T) {
+		t.Parallel()
+
+		deps := newTestDeps(t)
+		state := &resumeStateStub{
+			fakeState: deps.state,
+			allHostsTask: Task{
+				Project:      "/tmp/project",
+				Issue:        "LAB-1422",
+				Status:       TaskStatusDone,
+				ClonePath:    deps.pool.clone.Path,
+				AgentProfile: "codex",
+			},
+		}
+		d := newResumeCoverageDaemon(t, deps, state, deps.amux)
+		d.started.Store(true)
+
+		err := d.resume(context.Background(), "/tmp/project", "LAB-1422", "")
+		if err == nil || !strings.Contains(err.Error(), "cannot be resumed") {
+			t.Fatalf("resume() error = %v, want non-resumable task error", err)
+		}
+	})
 }
 
 type resumeStateStub struct {
 	*fakeState
 	taskByIssueErr  error
+	allHostsTask    Task
+	allHostsTaskErr error
 	workerByIDErr   error
 	workerByPaneErr error
 	tasksByPaneErr  error
@@ -1038,6 +1063,16 @@ func (s *resumeStateStub) TaskByIssue(ctx context.Context, project, issue string
 		return Task{}, s.taskByIssueErr
 	}
 	return s.fakeState.TaskByIssue(ctx, project, issue)
+}
+
+func (s *resumeStateStub) TaskByIssueAllHosts(_ context.Context, project, issue string) (Task, error) {
+	if s.allHostsTaskErr != nil {
+		return Task{}, s.allHostsTaskErr
+	}
+	if s.allHostsTask.Issue == "" || s.allHostsTask.Issue != issue {
+		return Task{}, ErrTaskNotFound
+	}
+	return s.allHostsTask, nil
 }
 
 func (s *resumeStateStub) WorkerByID(ctx context.Context, project, workerID string) (Worker, error) {
