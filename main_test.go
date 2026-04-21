@@ -946,10 +946,6 @@ func (*stubController) Assign(context.Context, daemon.AssignRequest) (daemon.Tas
 	return daemon.TaskActionResult{}, nil
 }
 
-func (*stubController) Batch(context.Context, daemon.BatchRequest) (daemon.BatchResult, error) {
-	return daemon.BatchResult{}, nil
-}
-
 func (*stubController) Spawn(context.Context, daemon.SpawnPaneRequest) (daemon.SpawnPaneResult, error) {
 	return daemon.SpawnPaneResult{}, nil
 }

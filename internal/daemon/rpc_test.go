@@ -202,58 +202,6 @@ func TestResumeTypesIncludePromptField(t *testing.T) {
 	}
 }
 
-func TestBatchTypesIncludeCallerPaneEntriesAndDelayFields(t *testing.T) {
-	t.Parallel()
-
-	batchRequestCallerPaneField, ok := reflect.TypeOf(BatchRequest{}).FieldByName("CallerPane")
-	if !ok {
-		t.Fatal("BatchRequest missing CallerPane field")
-	}
-	if got, want := batchRequestCallerPaneField.Type.Kind(), reflect.String; got != want {
-		t.Fatalf("BatchRequest.CallerPane kind = %v, want %v", got, want)
-	}
-
-	batchRPCCallerPaneField, ok := reflect.TypeOf(batchRPCParams{}).FieldByName("CallerPane")
-	if !ok {
-		t.Fatal("batchRPCParams missing CallerPane field")
-	}
-	if got, want := batchRPCCallerPaneField.Tag.Get("json"), "caller_pane"; got != want {
-		t.Fatalf("batchRPCParams.CallerPane json tag = %q, want %q", got, want)
-	}
-
-	if got, want := (BatchRequest{}).CallerPane, ""; got != want {
-		t.Fatalf("BatchRequest{}.CallerPane = %q, want %q", got, want)
-	}
-
-	if got, want := (batchRPCParams{}).CallerPane, ""; got != want {
-		t.Fatalf("batchRPCParams{}.CallerPane = %q, want %q", got, want)
-	}
-
-	batchRequestField, ok := reflect.TypeOf(BatchRequest{}).FieldByName("Entries")
-	if !ok {
-		t.Fatal("BatchRequest missing Entries field")
-	}
-	if got, want := batchRequestField.Type.Kind(), reflect.Slice; got != want {
-		t.Fatalf("BatchRequest.Entries kind = %v, want %v", got, want)
-	}
-
-	batchRPCEntriesField, ok := reflect.TypeOf(batchRPCParams{}).FieldByName("Entries")
-	if !ok {
-		t.Fatal("batchRPCParams missing Entries field")
-	}
-	if got, want := batchRPCEntriesField.Tag.Get("json"), "entries"; got != want {
-		t.Fatalf("batchRPCParams.Entries json tag = %q, want %q", got, want)
-	}
-
-	batchRPCDelayField, ok := reflect.TypeOf(batchRPCParams{}).FieldByName("Delay")
-	if !ok {
-		t.Fatal("batchRPCParams missing Delay field")
-	}
-	if got, want := batchRPCDelayField.Tag.Get("json"), "delay"; got != want {
-		t.Fatalf("batchRPCParams.Delay json tag = %q, want %q", got, want)
-	}
-}
-
 func TestRPCParamsIncludeProjectField(t *testing.T) {
 	t.Parallel()
 
@@ -263,7 +211,6 @@ func TestRPCParamsIncludeProjectField(t *testing.T) {
 		typeName string
 	}{
 		{name: "assign", value: assignRPCParams{}, typeName: "assignRPCParams"},
-		{name: "batch", value: batchRPCParams{}, typeName: "batchRPCParams"},
 		{name: "cancel", value: cancelRPCParams{}, typeName: "cancelRPCParams"},
 		{name: "resume", value: resumeRPCParams{}, typeName: "resumeRPCParams"},
 		{name: "enqueue", value: enqueueRPCParams{}, typeName: "enqueueRPCParams"},
@@ -381,18 +328,6 @@ func TestHandleRPCConnAndDispatchStatusBranches(t *testing.T) {
 		t.Fatalf("dispatch assign error response = %#v, want error", assignErr)
 	}
 
-	batchErr := dispatchRPCRequest(context.Background(), rpcRequest{
-		ID:     json.RawMessage(`1`),
-		Method: "batch",
-		Params: mustJSON(t, batchRPCParams{
-			Entries: []BatchEntry{{Issue: "LAB-718", Agent: "codex", Prompt: "Implement batch IPC."}},
-			Delay:   "5s",
-		}),
-	}, &Daemon{}, store, "build-804", project)
-	if batchErr.Error == nil {
-		t.Fatalf("dispatch batch error response = %#v, want error", batchErr)
-	}
-
 	badParams := dispatchRPCRequest(context.Background(), rpcRequest{
 		ID:     json.RawMessage(`1`),
 		Method: "assign",
@@ -400,27 +335,6 @@ func TestHandleRPCConnAndDispatchStatusBranches(t *testing.T) {
 	}, &Daemon{}, store, "build-804", project)
 	if badParams.Error == nil || badParams.Error.Code != -32602 {
 		t.Fatalf("dispatch bad params response = %#v", badParams)
-	}
-
-	badBatchParams := dispatchRPCRequest(context.Background(), rpcRequest{
-		ID:     json.RawMessage(`1`),
-		Method: "batch",
-		Params: json.RawMessage(`{"entries":`),
-	}, &Daemon{}, store, "build-804", project)
-	if badBatchParams.Error == nil || badBatchParams.Error.Code != -32602 {
-		t.Fatalf("dispatch bad batch params response = %#v", badBatchParams)
-	}
-
-	badBatchDelay := dispatchRPCRequest(context.Background(), rpcRequest{
-		ID:     json.RawMessage(`1`),
-		Method: "batch",
-		Params: mustJSON(t, batchRPCParams{
-			Entries: []BatchEntry{{Issue: "LAB-718", Agent: "codex", Prompt: "Implement batch IPC."}},
-			Delay:   "not-a-duration",
-		}),
-	}, &Daemon{}, store, "build-804", project)
-	if badBatchDelay.Error == nil || badBatchDelay.Error.Code != -32602 {
-		t.Fatalf("dispatch bad batch delay response = %#v", badBatchDelay)
 	}
 
 	enqueueErr := dispatchRPCRequest(context.Background(), rpcRequest{
