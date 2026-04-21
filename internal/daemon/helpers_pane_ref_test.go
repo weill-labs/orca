@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -374,5 +375,24 @@ func TestClearStaleWorkerPaneRefClearsErrPaneNotFound(t *testing.T) {
 	}
 	if got := worker.LastCapture; got != "" {
 		t.Fatalf("worker.LastCapture = %q, want empty", got)
+	}
+}
+
+func TestPaneExistsTreatsWrappedErrPaneNotFoundAsMissing(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	d := deps.newDaemon(t)
+	deps.amux.paneExistsErr = fmt.Errorf("raw capture: %w", amux.ErrPaneNotFound)
+
+	exists, missing, err := d.paneExists(context.Background(), "pane-1")
+	if err != nil {
+		t.Fatalf("paneExists() error = %v", err)
+	}
+	if exists {
+		t.Fatal("paneExists() exists = true, want false")
+	}
+	if !missing {
+		t.Fatal("paneExists() missing = false, want true")
 	}
 }

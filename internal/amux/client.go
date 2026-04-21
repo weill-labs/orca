@@ -357,10 +357,7 @@ func (c *CLIClient) rawCapturePane(ctx context.Context, paneID string, history b
 
 	output, err := c.run(ctx, c.session, "capture", args...)
 	if err != nil {
-		if paneNotFoundMessage(err.Error()) {
-			return capturePane{}, newPaneNotFoundError(err)
-		}
-		return capturePane{}, err
+		return capturePane{}, classifyCaptureCommandError(output, err)
 	}
 
 	var pane capturePane
@@ -450,6 +447,16 @@ func paneCaptureError(errInfo *captureCommandError) error {
 	return base
 }
 
+func classifyCaptureCommandError(output []byte, err error) error {
+	if err == nil {
+		return nil
+	}
+	if captureNotFoundOutput(output) || captureNotFoundError(err) {
+		return newPaneNotFoundError(err)
+	}
+	return err
+}
+
 func formatCaptureCommandError(errInfo *captureCommandError) error {
 	if errInfo == nil {
 		return fmt.Errorf("capture failed")
@@ -467,22 +474,12 @@ func captureUnavailable(err error) bool {
 	if err == nil {
 		return false
 	}
-	if errors.Is(err, ErrPaneNotFound) {
+	if captureNotFoundError(err) {
 		return true
 	}
 
-	// Keep this in sync with paneCaptureError/paneMissing so ListPanes can
-	// degrade to "no CWD enrichment" when a pane disappeared mid-scan.
 	message := strings.ToLower(strings.TrimSpace(err.Error()))
 	switch {
-	case strings.Contains(message, "capture failed: not_found"):
-		return true
-	case strings.Contains(message, "pane not found"):
-		return true
-	case strings.Contains(message, "pane missing"):
-		return true
-	case strings.Contains(message, "no such pane"):
-		return true
 	case strings.Contains(message, "amux capture: eof"):
 		return true
 	case strings.HasSuffix(message, ": eof"):
@@ -499,12 +496,35 @@ func paneMissing(errInfo *captureCommandError) bool {
 	if strings.EqualFold(errInfo.Code, "not_found") {
 		return true
 	}
-	return paneNotFoundMessage(errInfo.Message)
+	return captureNotFoundText(errInfo.Message)
 }
 
-func paneNotFoundMessage(message string) bool {
+func captureNotFoundError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ErrPaneNotFound) {
+		return true
+	}
+	return captureNotFoundText(err.Error())
+}
+
+func captureNotFoundOutput(output []byte) bool {
+	if len(output) == 0 {
+		return false
+	}
+
+	var pane capturePane
+	if err := json.Unmarshal(output, &pane); err == nil {
+		return paneMissing(pane.Error)
+	}
+	return captureNotFoundText(string(output))
+}
+
+func captureNotFoundText(message string) bool {
 	message = strings.ToLower(strings.TrimSpace(message))
-	return strings.Contains(message, "not found") ||
+	return strings.Contains(message, "capture failed: not_found") ||
+		strings.Contains(message, "not found") ||
 		strings.Contains(message, "missing") ||
 		strings.Contains(message, "no such pane")
 }
