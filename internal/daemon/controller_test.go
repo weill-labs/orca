@@ -472,7 +472,7 @@ func TestLocalControllerCancelHonorsCallerDeadline(t *testing.T) {
 	}
 }
 
-func TestLocalControllerAssignAndBatchRPC(t *testing.T) {
+func TestLocalControllerAssignCancelResumeRPC(t *testing.T) {
 	projectPath := testProjectPath(t)
 	tempDir := t.TempDir()
 	paths := Paths{
@@ -504,9 +504,9 @@ func TestLocalControllerAssignAndBatchRPC(t *testing.T) {
 	}
 	defer listener.Close()
 
-	requests := make(chan rpcRequest, 4)
+	requests := make(chan rpcRequest, 3)
 	go func() {
-		for i := 0; i < 4; i++ {
+		for i := 0; i < 3; i++ {
 			conn, err := listener.Accept()
 			if err != nil {
 				return
@@ -517,8 +517,6 @@ func TestLocalControllerAssignAndBatchRPC(t *testing.T) {
 				switch req.Method {
 				case "assign":
 					_ = json.NewEncoder(conn).Encode(rpcSuccess(req.ID, TaskActionResult{Project: projectPath, Issue: "GH-718", Status: TaskStatusActive, Agent: "claude"}))
-				case "batch":
-					_ = json.NewEncoder(conn).Encode(rpcSuccess(req.ID, BatchResult{Project: projectPath, Results: []TaskActionResult{{Project: projectPath, Issue: "GH-719", Status: TaskStatusActive, Agent: "codex"}}}))
 				case "cancel":
 					_ = json.NewEncoder(conn).Encode(rpcSuccess(req.ID, TaskActionResult{Project: projectPath, Issue: "GH-720", Status: TaskStatusCancelled, Agent: "codex"}))
 				case "resume":
@@ -550,21 +548,6 @@ func TestLocalControllerAssignAndBatchRPC(t *testing.T) {
 	}
 	if got, want := assignResult.Issue, "GH-718"; got != want {
 		t.Fatalf("assign issue = %q, want %q", got, want)
-	}
-
-	batchReq := BatchRequest{
-		Project:    projectPath,
-		Entries:    []BatchEntry{{Issue: "  #719  ", Agent: "  codex  ", Prompt: "Implement controller batch.", Title: "  Batch title  "}},
-		Delay:      7 * time.Second,
-		CallerPane: "  pane-13  ",
-	}
-
-	batchResult, err := controller.Batch(context.Background(), batchReq)
-	if err != nil {
-		t.Fatalf("Batch() error = %v", err)
-	}
-	if got, want := len(batchResult.Results), 1; got != want {
-		t.Fatalf("batch result count = %d, want %d", got, want)
 	}
 
 	cancelResult, err := controller.Cancel(context.Background(), CancelRequest{
@@ -609,27 +592,6 @@ func TestLocalControllerAssignAndBatchRPC(t *testing.T) {
 		t.Fatalf("assign params = %#v, want %#v", got, want)
 	}
 
-	batchRPCRequest := <-requests
-	if got, want := batchRPCRequest.Method, "batch"; got != want {
-		t.Fatalf("batch method = %q, want %q", got, want)
-	}
-	var batchParams batchRPCParams
-	if err := json.Unmarshal(batchRPCRequest.Params, &batchParams); err != nil {
-		t.Fatalf("json.Unmarshal(batch params) error = %v", err)
-	}
-	if got, want := batchParams.Entries, []BatchEntry{{Issue: "GH-719", Agent: "codex", Prompt: "Implement controller batch.", Title: "Batch title"}}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("batch entries = %#v, want %#v", got, want)
-	}
-	if got, want := batchParams.Project, projectPath; got != want {
-		t.Fatalf("batch project = %q, want %q", got, want)
-	}
-	if got, want := batchParams.Delay, "7s"; got != want {
-		t.Fatalf("batch delay = %q, want %q", got, want)
-	}
-	if got, want := batchParams.CallerPane, "pane-13"; got != want {
-		t.Fatalf("batch caller pane = %q, want %q", got, want)
-	}
-
 	cancelReq := <-requests
 	if got, want := cancelReq.Method, "cancel"; got != want {
 		t.Fatalf("cancel method = %q, want %q", got, want)
@@ -660,104 +622,6 @@ func TestLocalControllerAssignAndBatchRPC(t *testing.T) {
 	}); !reflect.DeepEqual(got, want) {
 		t.Fatalf("resume params = %#v, want %#v", got, want)
 	}
-}
-
-func TestLocalControllerBatchErrorBranches(t *testing.T) {
-	projectPath := testProjectPath(t)
-	tempDir := t.TempDir()
-	paths := Paths{
-		ConfigDir: tempDir,
-		StateDB:   filepath.Join(tempDir, "state.db"),
-		PIDDir:    filepath.Join(tempDir, "pids"),
-	}
-	validEntries := []BatchEntry{{Issue: "LAB-719", Agent: "codex", Prompt: "Implement controller batch."}}
-
-	t.Run("invalid project", func(t *testing.T) {
-		controller, err := NewLocalController(ControllerOptions{Store: &fakeStore{}, Paths: paths})
-		if err != nil {
-			t.Fatalf("NewLocalController() error = %v", err)
-		}
-		_, err = controller.Batch(context.Background(), BatchRequest{
-			Project: t.TempDir(),
-			Entries: validEntries,
-		})
-		if err == nil || !strings.Contains(err.Error(), "not inside a git repository") {
-			t.Fatalf("Batch() error = %v, want canonical path error", err)
-		}
-	})
-
-	t.Run("invalid entries", func(t *testing.T) {
-		controller, err := NewLocalController(ControllerOptions{Store: &fakeStore{}, Paths: paths})
-		if err != nil {
-			t.Fatalf("NewLocalController() error = %v", err)
-		}
-		_, err = controller.Batch(context.Background(), BatchRequest{
-			Project: projectPath,
-			Entries: []BatchEntry{{Issue: "LAB-719", Prompt: "Implement controller batch."}},
-		})
-		if err == nil || !strings.Contains(err.Error(), "batch manifest entry 1 requires agent") {
-			t.Fatalf("Batch() error = %v, want validation error", err)
-		}
-	})
-
-	t.Run("negative delay", func(t *testing.T) {
-		controller, err := NewLocalController(ControllerOptions{Store: &fakeStore{}, Paths: paths})
-		if err != nil {
-			t.Fatalf("NewLocalController() error = %v", err)
-		}
-		_, err = controller.Batch(context.Background(), BatchRequest{
-			Project: projectPath,
-			Entries: validEntries,
-			Delay:   -time.Second,
-		})
-		if err == nil || !strings.Contains(err.Error(), "batch delay must be non-negative") {
-			t.Fatalf("Batch() error = %v, want delay error", err)
-		}
-	})
-
-	t.Run("daemon not running", func(t *testing.T) {
-		controller, err := NewLocalController(ControllerOptions{Store: &fakeStore{}, Paths: paths})
-		if err != nil {
-			t.Fatalf("NewLocalController() error = %v", err)
-		}
-		_, err = controller.Batch(context.Background(), BatchRequest{
-			Project: projectPath,
-			Entries: validEntries,
-		})
-		if !errors.Is(err, ErrDaemonNotRunning) {
-			t.Fatalf("Batch() error = %v, want %v", err, ErrDaemonNotRunning)
-		}
-	})
-
-	t.Run("rpc error", func(t *testing.T) {
-		store := &fakeStore{
-			projectStatus: state.ProjectStatus{
-				Project: projectPath,
-				Daemon: &state.DaemonStatus{
-					PID:    os.Getpid(),
-					Status: "running",
-				},
-			},
-		}
-		controller, err := NewLocalController(ControllerOptions{Store: store, Paths: paths})
-		if err != nil {
-			t.Fatalf("NewLocalController() error = %v", err)
-		}
-		if err := os.MkdirAll(paths.PIDDir, 0o755); err != nil {
-			t.Fatalf("MkdirAll(%q) error = %v", paths.PIDDir, err)
-		}
-		if err := os.WriteFile(paths.pidFile(), []byte(fmt.Sprintf("%d", os.Getpid())), 0o644); err != nil {
-			t.Fatalf("WriteFile(pidFile) error = %v", err)
-		}
-		_, err = controller.Batch(context.Background(), BatchRequest{
-			Project: projectPath,
-			Entries: validEntries,
-			Delay:   time.Second,
-		})
-		if !errors.Is(err, ErrDaemonNotRunning) {
-			t.Fatalf("Batch() error = %v, want %v", err, ErrDaemonNotRunning)
-		}
-	})
 }
 
 type scriptOptions struct {

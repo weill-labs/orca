@@ -18,7 +18,7 @@ User
             └─ clone pool  (filesystem)
 ```
 
-The lead agent calls `orca assign` with an issue and prompt, or `orca batch` with a JSON manifest of multiple assignments. Orca allocates git clones, spawns amux panes, starts coding agents, sends prompts, and monitors progress. When a PR is ready to land, the lead agent can queue it with `orca enqueue PR_NUMBER` so Orca rebases, waits for required checks, and squash-merges one PR at a time. When the PR merges, Orca cleans up the clone and returns it to the pool.
+The lead agent calls `orca assign` with an issue and prompt. Orca allocates git clones, spawns amux panes, starts coding agents, sends prompts, and monitors progress. When a PR is ready to land, the lead agent can queue it with `orca enqueue PR_NUMBER` so Orca rebases, waits for required checks, and squash-merges one PR at a time. When the PR merges, Orca cleans up the clone and returns it to the pool.
 
 ## Install
 
@@ -87,15 +87,6 @@ orca start --project ~/sync/github/myproject/myproject
 
 # 6. Assign work
 orca assign LAB-123 --prompt "Fix the auth bug. TDD. Open a PR when done."
-
-# 6b. Or batch multiple assignments with a default 5s delay between dispatches
-cat > tasks.json <<'EOF'
-[
-  {"issue":"LAB-123","agent":"codex","prompt":"Fix the auth bug. TDD. Open a PR when done."},
-  {"issue":"LAB-124","agent":"claude","prompt":"Add regression coverage and open a PR.","title":"LAB-124 tests"}
-]
-EOF
-orca batch tasks.json --delay 10s
 
 # 7. Monitor
 orca status

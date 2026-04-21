@@ -23,7 +23,6 @@ const defaultAgent = "codex"
 const amuxSessionEnvVar = "AMUX_SESSION"
 const amuxPaneEnvVar = "AMUX_PANE"
 const cancelClientTimeout = 10 * time.Second
-const batchClientTimeoutBuffer = 30 * time.Second
 
 const usageText = `orca: agent orchestration daemon
 usage: orca <command>
@@ -36,7 +35,6 @@ commands:
   migrate-state  Copy state from SQLite to Postgres
   metrics  Show latency metrics from orchestration events
   assign   Assign an issue to a worker
-  batch    Assign multiple issues from a manifest
   spawn    Open a clone in a new amux pane
   enqueue  Queue a PR for serialized landing
   cancel   Cancel a task
@@ -87,9 +85,6 @@ Flags:
   --agent   Agent profile
   --project Project path
   --json    Emit JSON output`,
-	"batch": `usage: orca batch MANIFEST [--project PATH] [--delay DURATION]
-
-Assign multiple issues from a manifest.`,
 	"spawn": `usage: orca spawn [--project PATH] [--session SESSION] [--lead-pane PANE] [--title TITLE] [--json]
 
 Open a clone in a new amux pane.`,
@@ -260,8 +255,6 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.runMetrics(ctx, args[1:])
 	case "assign":
 		return a.runAssign(ctx, args[1:])
-	case "batch":
-		return a.runBatch(ctx, args[1:])
 	case "spawn":
 		return a.runSpawn(ctx, args[1:])
 	case "enqueue":
@@ -577,64 +570,6 @@ func (a *App) runAssign(ctx context.Context, args []string) error {
 	return err
 }
 
-func (a *App) runBatch(ctx context.Context, args []string) error {
-	if handled, err := a.writeCommandHelp("batch", args); handled {
-		return err
-	}
-
-	fs := newFlagSet("batch")
-	var projectPath string
-	var delay time.Duration
-	var callerPane string
-	fs.StringVar(&projectPath, "project", "", "project path")
-	fs.DurationVar(&delay, "delay", 5*time.Second, "delay between assigns")
-
-	manifestPath, err := parseRequiredSinglePositional(fs, args, "batch requires MANIFEST")
-	if err != nil {
-		return err
-	}
-	if delay < 0 {
-		return fmt.Errorf("batch delay must be non-negative")
-	}
-
-	entries, err := readBatchManifest(manifestPath)
-	if err != nil {
-		return err
-	}
-	if err := daemon.ValidateBatchEntries(entries); err != nil {
-		return err
-	}
-
-	projectPath, err = a.resolveProject(projectPath)
-	if err != nil {
-		return err
-	}
-	callerPane = strings.TrimSpace(os.Getenv(amuxPaneEnvVar))
-
-	batchCtx, cancel := context.WithTimeout(ctx, batchClientTimeout(len(entries), delay))
-	defer cancel()
-
-	result, err := a.daemon.Batch(batchCtx, daemon.BatchRequest{
-		Project:    projectPath,
-		Entries:    entries,
-		Delay:      delay,
-		CallerPane: callerPane,
-	})
-	if err != nil {
-		return err
-	}
-
-	return a.writeBatchResult(result)
-}
-
-func batchClientTimeout(entryCount int, delay time.Duration) time.Duration {
-	timeout := batchClientTimeoutBuffer
-	if entryCount <= 0 || delay <= 0 {
-		return timeout
-	}
-	return timeout + time.Duration(entryCount)*delay
-}
-
 func (a *App) runSpawn(ctx context.Context, args []string) error {
 	if handled, err := a.writeCommandHelp("spawn", args); handled {
 		return err
@@ -726,43 +661,6 @@ func (a *App) runEnqueue(ctx context.Context, args []string) error {
 
 	_, err = fmt.Fprintf(a.stdout, "queued PR #%d for landing at position %d\n", result.PRNumber, result.Position)
 	return err
-}
-
-func readBatchManifest(path string) ([]daemon.BatchEntry, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read batch manifest: %w", err)
-	}
-
-	var entries []daemon.BatchEntry
-	if err := json.Unmarshal(data, &entries); err != nil {
-		return nil, fmt.Errorf("decode batch manifest: %w", err)
-	}
-	return entries, nil
-}
-
-func (a *App) writeBatchResult(result daemon.BatchResult) error {
-	for _, task := range result.Results {
-		if _, err := fmt.Fprintf(a.stdout, "%s assigned to %s\n", task.Issue, task.Agent); err != nil {
-			return err
-		}
-	}
-	for _, failure := range result.Failures {
-		if _, err := fmt.Fprintf(a.stderr, "%s failed: %s\n", failure.Issue, failure.Error); err != nil {
-			return err
-		}
-	}
-	if failures := len(result.Failures); failures > 0 {
-		return fmt.Errorf("batch failed for %d %s", failures, pluralize("assignment", failures))
-	}
-	return nil
-}
-
-func pluralize(word string, count int) string {
-	if count == 1 {
-		return word
-	}
-	return word + "s"
 }
 
 func (a *App) runCancel(ctx context.Context, args []string) error {

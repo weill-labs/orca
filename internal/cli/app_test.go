@@ -1331,7 +1331,6 @@ func allSubcommandHelpCases() []subcommandHelpCase {
 		{command: "migrate-state", wantUsage: "usage: orca migrate-state"},
 		{command: "metrics", wantUsage: "usage: orca metrics"},
 		{command: "assign", wantUsage: "usage: orca assign ISSUE"},
-		{command: "batch", wantUsage: "usage: orca batch MANIFEST"},
 		{command: "spawn", wantUsage: "usage: orca spawn"},
 		{command: "enqueue", wantUsage: "usage: orca enqueue PR_NUMBER"},
 		{command: "cancel", wantUsage: "usage: orca cancel ISSUE"},
@@ -1428,7 +1427,7 @@ func TestAppRunParseErrors(t *testing.T) {
 		{name: "status too many args", args: []string{"status", "LAB-690", "extra"}, wantErr: "status accepts at most one issue"},
 		{name: "assign missing issue", args: []string{"assign", "--prompt", "x"}, wantErr: "assign requires ISSUE"},
 		{name: "assign missing prompt", args: []string{"assign", "LAB-690"}, wantErr: "assign requires --prompt"},
-		{name: "batch missing manifest", args: []string{"batch"}, wantErr: "batch requires MANIFEST"},
+		{name: "batch unknown command", args: []string{"batch"}, wantErr: "unknown command \"batch\""},
 		{name: "spawn extra arg", args: []string{"spawn", "extra"}, wantErr: "spawn does not accept positional arguments"},
 		{name: "enqueue missing pr number", args: []string{"enqueue"}, wantErr: "enqueue requires PR_NUMBER"},
 		{name: "cancel missing issue", args: []string{"cancel"}, wantErr: "cancel requires ISSUE"},
@@ -1462,6 +1461,34 @@ func TestAppRunParseErrors(t *testing.T) {
 				t.Fatalf("expected error containing %q, got %v", tt.wantErr, err)
 			}
 		})
+	}
+}
+
+func TestAppRunBatchReportsUnknownCommandUsage(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	app := New(Options{
+		Daemon:  &fakeDaemon{},
+		State:   &fakeState{},
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		Version: "build-123",
+		Cwd: func() (string, error) {
+			return newRepoRoot(t), nil
+		},
+	})
+
+	err := app.Run(context.Background(), []string{"batch", "tasks.json"})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), `unknown command "batch"`) {
+		t.Fatalf("Run() error = %v, want unknown command", err)
+	}
+	if !strings.Contains(err.Error(), "usage: orca <command>") {
+		t.Fatalf("Run() error = %v, want usage text", err)
 	}
 }
 
@@ -1748,15 +1775,6 @@ func TestAppCommandsAcceptProjectFlag(t *testing.T) {
 			},
 		},
 		{
-			name: "batch",
-			args: []string{"batch", "--project", targetSubdir, filepath.Join(targetRepo, "tasks.json")},
-			assert: func(t *testing.T, d *fakeDaemon, _ *fakeState) {
-				if d.batchRequest == nil || d.batchRequest.Project != targetRepo {
-					t.Fatalf("batch project = %#v, want %q", d.batchRequest, targetRepo)
-				}
-			},
-		},
-		{
 			name: "spawn",
 			args: []string{"spawn", "--project", targetSubdir},
 			assert: func(t *testing.T, d *fakeDaemon, _ *fakeState) {
@@ -1829,7 +1847,6 @@ func TestAppCommandsAcceptProjectFlag(t *testing.T) {
 			d := &fakeDaemon{
 				stopResult:    daemon.StopResult{Project: targetRepo, PID: 1, StoppedAt: time.Now().UTC()},
 				assignResult:  daemon.TaskActionResult{Project: targetRepo, Issue: "LAB-690", Status: "queued", UpdatedAt: time.Now().UTC()},
-				batchResult:   daemon.BatchResult{Project: targetRepo, Results: []daemon.TaskActionResult{{Project: targetRepo, Issue: "LAB-690", Status: "queued", UpdatedAt: time.Now().UTC()}}},
 				enqueueResult: daemon.MergeQueueActionResult{Project: targetRepo, PRNumber: 42, Status: "queued", Position: 1, UpdatedAt: time.Now().UTC()},
 				cancelResult:  daemon.TaskActionResult{Project: targetRepo, Issue: "LAB-690", Status: "cancelled", UpdatedAt: time.Now().UTC()},
 				resumeResult:  daemon.TaskActionResult{Project: targetRepo, Issue: "LAB-690", Status: "active", UpdatedAt: time.Now().UTC()},
@@ -1853,13 +1870,6 @@ func TestAppCommandsAcceptProjectFlag(t *testing.T) {
 					return daemon.ProjectStatusRPCResult{ProjectStatus: s.projectStatus}, nil
 				},
 			})
-
-			if tt.name == "batch" {
-				manifestPath := filepath.Join(targetRepo, "tasks.json")
-				if err := os.WriteFile(manifestPath, []byte(`[{"issue":"LAB-690","agent":"claude","prompt":"Implement CLI wiring"}]`), 0o644); err != nil {
-					t.Fatalf("WriteFile(%q) error = %v", manifestPath, err)
-				}
-			}
 
 			if err := app.Run(context.Background(), tt.args); err != nil {
 				t.Fatalf("Run() error = %v", err)
@@ -2225,7 +2235,6 @@ type fakeDaemon struct {
 	stopRequest    *daemon.StopRequest
 	reloadRequest  *daemon.ReloadRequest
 	assignRequest  *daemon.AssignRequest
-	batchRequest   *daemon.BatchRequest
 	spawnRequest   *daemon.SpawnPaneRequest
 	enqueueRequest *daemon.EnqueueRequest
 	cancelRequest  *daemon.CancelRequest
@@ -2235,13 +2244,11 @@ type fakeDaemon struct {
 	stopResult    daemon.StopResult
 	reloadResult  daemon.ReloadResult
 	assignResult  daemon.TaskActionResult
-	batchResult   daemon.BatchResult
 	spawnResult   daemon.SpawnPaneResult
 	enqueueResult daemon.MergeQueueActionResult
 	cancelResult  daemon.TaskActionResult
 	resumeResult  daemon.TaskActionResult
 
-	batchHook  func(context.Context, daemon.BatchRequest) (daemon.BatchResult, error)
 	cancelHook func(context.Context, daemon.CancelRequest) (daemon.TaskActionResult, error)
 	err        error
 }
@@ -2276,17 +2283,6 @@ func (f *fakeDaemon) Assign(_ context.Context, req daemon.AssignRequest) (daemon
 	}
 	f.assignRequest = &req
 	return f.assignResult, nil
-}
-
-func (f *fakeDaemon) Batch(ctx context.Context, req daemon.BatchRequest) (daemon.BatchResult, error) {
-	if f.err != nil {
-		return daemon.BatchResult{}, f.err
-	}
-	f.batchRequest = &req
-	if f.batchHook != nil {
-		return f.batchHook(ctx, req)
-	}
-	return f.batchResult, nil
 }
 
 func (f *fakeDaemon) Spawn(_ context.Context, req daemon.SpawnPaneRequest) (daemon.SpawnPaneResult, error) {
@@ -2436,8 +2432,8 @@ func TestUsageTextIncludesResumeCommand(t *testing.T) {
 	if !strings.Contains(UsageText(), "spawn") {
 		t.Fatalf("UsageText() = %q, want spawn command", UsageText())
 	}
-	if !strings.Contains(UsageText(), "batch") {
-		t.Fatalf("UsageText() = %q, want batch command", UsageText())
+	if strings.Contains(UsageText(), "batch") {
+		t.Fatalf("UsageText() = %q, want batch command removed", UsageText())
 	}
 	if !strings.Contains(UsageText(), "metrics") {
 		t.Fatalf("UsageText() = %q, want metrics command", UsageText())
@@ -2445,6 +2441,12 @@ func TestUsageTextIncludesResumeCommand(t *testing.T) {
 	if !strings.Contains(UsageText(), "help") {
 		t.Fatalf("UsageText() = %q, want help command", UsageText())
 	}
+}
+
+type errWriter struct{}
+
+func (errWriter) Write([]byte) (int, error) {
+	return 0, errors.New("write failed")
 }
 
 func TestNewRejectsNilDependencies(t *testing.T) {

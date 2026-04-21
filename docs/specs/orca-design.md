@@ -5,7 +5,7 @@ Date: 2026-04-02. Related: [agent-orchestration-roadmap.md](2026-03-23-agent-orc
 ## Motivation
 
 Today, multi-agent orchestration in amux is driven by shell scripts
-(`spawn-worker.sh`, `delegate-task.sh`, `batch-delegate.sh`, `worker-status.sh`)
+(`spawn-worker.sh`, `delegate-task.sh`, `worker-status.sh`)
 and a human or AI "lieutenant" in the lead pane making decisions. This works but
 has real problems:
 
@@ -266,7 +266,6 @@ orca status [ISSUE] [--project PATH]            # daemon or task status
 orca assign ISSUE [--prompt "..."] [--agent PROFILE] [--project PATH]
                                                  # assign issue to a worker
 orca enqueue PR_NUMBER [--project PATH]          # queue a PR for landing
-orca batch tasks.json                           # queue multiple tasks
 orca cancel ISSUE [--project PATH]              # abort task, clean clone
 orca complete ISSUE                             # manual completion trigger
 orca status ISSUE [--project PATH]              # task status + history
@@ -424,7 +423,6 @@ First milestone — enough to replace the shell scripts:
 
 **Deferred to post-MVP:**
 - `orca dash` TUI
-- `orca batch` multi-task queuing
 - `orca clone` creation
 - Multi-machine fleet support
 - Multiple agent profiles

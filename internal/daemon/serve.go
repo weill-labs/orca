@@ -415,34 +415,6 @@ func dispatchRPCRequest(ctx context.Context, request rpcRequest, instance *Daemo
 			return rpcFailure(request.ID, -32000, err)
 		}
 		return rpcSuccess(request.ID, result)
-	case "batch":
-		var params batchRPCParams
-		if err := decodeRPCParams(request.Params, &params); err != nil {
-			return rpcFailure(request.ID, -32602, fmt.Errorf("decode batch params: %w", err))
-		}
-		projectPath, ok, failure := requireRPCProject(request.ID, params.Project, defaultProject...)
-		if !ok {
-			return failure
-		}
-		delay := time.Duration(0)
-		if raw := strings.TrimSpace(params.Delay); raw != "" {
-			parsedDelay, err := time.ParseDuration(raw)
-			if err != nil {
-				return rpcFailure(request.ID, -32602, fmt.Errorf("parse batch delay: %w", err))
-			}
-			delay = parsedDelay
-		}
-
-		result, err := instance.Batch(ctx, BatchRequest{
-			Project:    projectPath,
-			Entries:    params.Entries,
-			Delay:      delay,
-			CallerPane: params.CallerPane,
-		})
-		if err != nil {
-			return rpcFailure(request.ID, -32000, err)
-		}
-		return rpcSuccess(request.ID, result)
 	case "cancel":
 		var params cancelRPCParams
 		if err := decodeRPCParams(request.Params, &params); err != nil {
