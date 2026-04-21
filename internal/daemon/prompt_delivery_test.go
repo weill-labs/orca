@@ -302,6 +302,67 @@ func TestSendAndConfirmWorkingRetriesWhenFreshWorkingAppearsAfterStaleScrollback
 	}
 }
 
+func TestSendAndConfirmWorkingRetriesPasteCollapseUntilPaneTurnsActive(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	idleWaits := 0
+	workingObserved := false
+	deps.amux.waitIdleHook = func(_ string, timeout, settle time.Duration) {
+		if timeout != codexPromptRetryIdleProbeTime {
+			return
+		}
+		if settle != 0 {
+			t.Fatalf("wait idle settle = %s, want 0", settle)
+		}
+		idleWaits++
+		if idleWaits >= 4 {
+			workingObserved = true
+			deps.amux.waitIdleErr = errors.New("idle timeout")
+			return
+		}
+		deps.amux.waitIdleErr = nil
+	}
+	deps.amux.waitContentFunc = func(_ string, substring string, timeout time.Duration) (bool, error) {
+		if substring != codexWorkingText {
+			return false, nil
+		}
+		if timeout != codexPromptRetryIdleProbeTime {
+			return true, amuxapi.ErrWaitContentTimeout
+		}
+		if workingObserved {
+			return true, nil
+		}
+		return true, amuxapi.ErrWaitContentTimeout
+	}
+	d := deps.newDaemon(t)
+
+	prompt := strings.Repeat("Address the blocking review comments and push an update. ", 20)
+	if err := d.sendAndConfirmWorking(context.Background(), "pane-1", prompt); err != nil {
+		t.Fatalf("sendAndConfirmWorking() error = %v", err)
+	}
+
+	deps.amux.requireSentKeys(t, "pane-1", []string{
+		prompt + "\n",
+		"\n",
+		"\n",
+		"\n",
+	})
+	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
+		{PaneID: "pane-1", Timeout: codexPromptRetryIdleProbeTime},
+		{PaneID: "pane-1", Timeout: codexPromptRetryIdleProbeTime},
+		{PaneID: "pane-1", Timeout: codexPromptRetryIdleProbeTime},
+		{PaneID: "pane-1", Timeout: codexPromptRetryIdleProbeTime},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("waitIdle calls = %#v, want %#v", got, want)
+	}
+	if got, want := deps.amux.waitContentCalls, []waitContentCall{
+		{PaneID: "pane-1", Substring: codexWorkingText, Timeout: codexPromptRetryIdleProbeTime},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("waitContent calls = %#v, want %#v", got, want)
+	}
+}
+
 func TestSendAndConfirmWorkingReturnsIdleProbeErrorWhenStaleWorkingPresent(t *testing.T) {
 	t.Parallel()
 
