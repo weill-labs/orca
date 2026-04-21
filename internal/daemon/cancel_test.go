@@ -11,6 +11,7 @@ import (
 func TestCancelKillsAgentCleansCloneAndFreesResources(t *testing.T) {
 	deps := newTestDeps(t)
 	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	setLifecyclePromptActiveAfterIdleProbes(deps, 0)
 	d := deps.newDaemon(t)
 	ctx := context.Background()
 
@@ -69,6 +70,7 @@ func TestCancelKillsAgentCleansCloneAndFreesResources(t *testing.T) {
 func TestCancelSendsPostmortemBeforeCleanup(t *testing.T) {
 	deps := newTestDeps(t)
 	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	setLifecyclePromptActiveAfterIdleProbes(deps, 0)
 
 	d := deps.newDaemon(t)
 	ctx := context.Background()
@@ -99,6 +101,7 @@ func TestCancelSendsPostmortemBeforeCleanup(t *testing.T) {
 
 	deps.amux.requireSentKeys(t, "pane-1", []string{wrappedCodexPrompt("LAB-689", "Implement daemon core"), "Enter", "$postmortem", "Enter"})
 	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
+		{PaneID: "pane-1", Timeout: codexPromptRetryIdleProbeTime},
 		{PaneID: "pane-1", Timeout: 2 * time.Minute},
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("waitIdle calls = %#v, want %#v", got, want)

@@ -55,6 +55,7 @@ func TestReconcileMissingPRNumbersBackfillsMergedPRNumberAndCompletes(t *testing
 	t.Parallel()
 
 	deps := newTestDeps(t)
+	setLifecyclePromptActiveAfterIdleProbes(deps, 0)
 	seedReconcileAssignment(t, deps, "LAB-1260", "pane-1", "worker-01", 0)
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-1260", "--state", "all", "--json", "number,state"}, `[{"number":77,"state":"MERGED"}]`, nil)
 

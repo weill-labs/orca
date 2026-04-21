@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"testing"
 )
 
@@ -9,6 +10,7 @@ func TestSendAndConfirmWorkingFlattensMultilinePromptBeforeSubmit(t *testing.T) 
 	t.Parallel()
 
 	deps := newTestDeps(t)
+	deps.amux.waitIdleErr = errors.New("idle timeout")
 	d := deps.newDaemon(t)
 
 	prompt := "Wrap up the merged PR.\n\nRun postmortem and leave the clone clean."

@@ -85,7 +85,7 @@ func TestPostmortemStatusSendsOrSkips(t *testing.T) {
 			wantStatus:      "sent",
 			wantMessagePart: "command sent",
 			wantSendCount:   1,
-			wantWaitCount:   1,
+			wantWaitCount:   2,
 		},
 		{
 			name: "skips when profile disables postmortem",
@@ -118,6 +118,7 @@ func TestPostmortemStatusSendsOrSkips(t *testing.T) {
 			t.Parallel()
 
 			deps := newTestDeps(t)
+			setLifecyclePromptActiveAfterIdleProbes(deps, 0)
 			if tt.configure != nil {
 				tt.configure(deps)
 			}
@@ -153,6 +154,13 @@ func TestSendPostmortemWaitsForWorkingBeforeIdle(t *testing.T) {
 	t.Parallel()
 
 	deps := newTestDeps(t)
+	deps.amux.waitIdleHook = func(_ string, timeout, _ time.Duration) {
+		if timeout == codexPromptRetryIdleProbeTime {
+			deps.amux.waitIdleErr = errors.New("idle timeout")
+			return
+		}
+		deps.amux.waitIdleErr = nil
+	}
 	d := deps.newDaemon(t)
 	active := newPostmortemAssignment(deps)
 
@@ -164,14 +172,14 @@ func TestSendPostmortemWaitsForWorkingBeforeIdle(t *testing.T) {
 	if got, want := deps.amux.waitContentCalls, []waitContentCall{{
 		PaneID:    active.Task.PaneID,
 		Substring: codexWorkingText,
-		Timeout:   defaultAgentHandshakeTimeout,
+		Timeout:   codexPromptRetryIdleProbeTime,
 	}}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("waitContent calls = %#v, want %#v", got, want)
 	}
-	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{{
-		PaneID:  active.Task.PaneID,
-		Timeout: postmortemWaitTimeout,
-	}}; !reflect.DeepEqual(got, want) {
+	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
+		{PaneID: active.Task.PaneID, Timeout: codexPromptRetryIdleProbeTime},
+		{PaneID: active.Task.PaneID, Timeout: postmortemWaitTimeout},
+	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("waitIdle calls = %#v, want %#v", got, want)
 	}
 }
@@ -180,15 +188,19 @@ func TestSendPostmortemRetriesEnterUntilWorkingAppears(t *testing.T) {
 	t.Parallel()
 
 	deps := newTestDeps(t)
-	deps.amux.waitContentResults = []error{
-		amuxapi.ErrWaitContentTimeout,
-		amuxapi.ErrWaitContentTimeout,
-		nil,
+	probeCalls := 0
+	deps.amux.waitIdleHook = func(_ string, timeout, _ time.Duration) {
+		if timeout != codexPromptRetryIdleProbeTime {
+			deps.amux.waitIdleErr = nil
+			return
+		}
+		probeCalls++
+		if probeCalls == 3 {
+			deps.amux.waitIdleErr = errors.New("idle timeout")
+			return
+		}
+		deps.amux.waitIdleErr = nil
 	}
-	deps.amux.capturePaneSequence("pane-1", []PaneCapture{
-		{Content: []string{"OpenAI Codex", "›", postmortemCommand}, CurrentCommand: "codex"},
-		{Content: []string{"OpenAI Codex", "›", postmortemCommand}, CurrentCommand: "codex"},
-	})
 	d := deps.newDaemon(t)
 	active := newPostmortemAssignment(deps)
 
@@ -201,7 +213,7 @@ func TestSendPostmortemRetriesEnterUntilWorkingAppears(t *testing.T) {
 		"\n",
 		"\n",
 	})
-	if got, want := len(deps.amux.waitContentCalls), 3; got != want {
+	if got, want := len(deps.amux.waitContentCalls), 1; got != want {
 		t.Fatalf("waitContent call count = %d, want %d", got, want)
 	}
 	for i, call := range deps.amux.waitContentCalls {
@@ -211,14 +223,16 @@ func TestSendPostmortemRetriesEnterUntilWorkingAppears(t *testing.T) {
 		if got, want := call.Substring, codexWorkingText; got != want {
 			t.Fatalf("waitContentCalls[%d].Substring = %q, want %q", i, got, want)
 		}
-		if got, want := call.Timeout, defaultAgentHandshakeTimeout; got != want {
+		if got, want := call.Timeout, codexPromptRetryIdleProbeTime; got != want {
 			t.Fatalf("waitContentCalls[%d].Timeout = %s, want %s", i, got, want)
 		}
 	}
-	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{{
-		PaneID:  active.Task.PaneID,
-		Timeout: postmortemWaitTimeout,
-	}}; !reflect.DeepEqual(got, want) {
+	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
+		{PaneID: active.Task.PaneID, Timeout: codexPromptRetryIdleProbeTime},
+		{PaneID: active.Task.PaneID, Timeout: codexPromptRetryIdleProbeTime},
+		{PaneID: active.Task.PaneID, Timeout: codexPromptRetryIdleProbeTime},
+		{PaneID: active.Task.PaneID, Timeout: postmortemWaitTimeout},
+	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("waitIdle calls = %#v, want %#v", got, want)
 	}
 }
@@ -227,16 +241,6 @@ func TestEnsurePostmortemEmitsFailedStatusWhenWorkingNeverAppears(t *testing.T) 
 	t.Parallel()
 
 	deps := newTestDeps(t)
-	deps.amux.waitContentResults = []error{
-		amuxapi.ErrWaitContentTimeout,
-		amuxapi.ErrWaitContentTimeout,
-		amuxapi.ErrWaitContentTimeout,
-	}
-	deps.amux.capturePaneSequence("pane-1", []PaneCapture{
-		{Content: []string{"OpenAI Codex", "›", postmortemCommand}, CurrentCommand: "codex"},
-		{Content: []string{"OpenAI Codex", "›", postmortemCommand}, CurrentCommand: "codex"},
-		{Content: []string{"OpenAI Codex", "›", postmortemCommand}, CurrentCommand: "codex"},
-	})
 	d := deps.newDaemon(t)
 	active := newPostmortemAssignment(deps)
 
@@ -255,11 +259,18 @@ func TestEnsurePostmortemEmitsFailedStatusWhenWorkingNeverAppears(t *testing.T) 
 	if got := event.Message; !strings.Contains(got, "prompt delivery not confirmed") {
 		t.Fatalf("event.Message = %q, want prompt confirmation context", got)
 	}
-	if got, want := deps.amux.countKey(active.Task.PaneID, "\n"), 2; got != want {
+	if got, want := deps.amux.countKey(active.Task.PaneID, "\n"), 5; got != want {
 		t.Fatalf("retry enter count = %d, want %d", got, want)
 	}
-	if got := deps.amux.waitIdleCalls; len(got) != 0 {
-		t.Fatalf("waitIdle calls = %#v, want none after failed confirmation", got)
+	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
+		{PaneID: active.Task.PaneID, Timeout: codexPromptRetryIdleProbeTime},
+		{PaneID: active.Task.PaneID, Timeout: codexPromptRetryIdleProbeTime},
+		{PaneID: active.Task.PaneID, Timeout: codexPromptRetryIdleProbeTime},
+		{PaneID: active.Task.PaneID, Timeout: codexPromptRetryIdleProbeTime},
+		{PaneID: active.Task.PaneID, Timeout: codexPromptRetryIdleProbeTime},
+		{PaneID: active.Task.PaneID, Timeout: codexPromptRetryIdleProbeTime},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("waitIdle calls = %#v, want %#v", got, want)
 	}
 }
 
@@ -267,14 +278,19 @@ func TestFinishAssignmentMergedCleanupRetriesWrapUpEnterUntilWorkingAppears(t *t
 	t.Parallel()
 
 	deps := newTestDeps(t)
-	deps.amux.waitContentResults = []error{
-		amuxapi.ErrWaitContentTimeout,
-		nil,
-		nil,
+	probeCalls := 0
+	deps.amux.waitIdleHook = func(_ string, timeout, _ time.Duration) {
+		if timeout != codexPromptRetryIdleProbeTime {
+			deps.amux.waitIdleErr = nil
+			return
+		}
+		probeCalls++
+		if probeCalls >= 2 {
+			deps.amux.waitIdleErr = errors.New("idle timeout")
+			return
+		}
+		deps.amux.waitIdleErr = nil
 	}
-	deps.amux.capturePaneSequence("pane-1", []PaneCapture{
-		{Content: []string{"OpenAI Codex", "›", mergedWrapUpPrompt}, CurrentCommand: "codex"},
-	})
 	d := deps.newDaemon(t)
 	active := newPostmortemAssignment(deps)
 	active.Task.Status = TaskStatusActive
@@ -289,11 +305,14 @@ func TestFinishAssignmentMergedCleanupRetriesWrapUpEnterUntilWorkingAppears(t *t
 		"\n",
 		postmortemCommand + "\n",
 	})
-	if got, want := len(deps.amux.waitContentCalls), 3; got != want {
+	if got, want := len(deps.amux.waitContentCalls), 2; got != want {
 		t.Fatalf("waitContent call count = %d, want %d", got, want)
 	}
 	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
+		{PaneID: active.Task.PaneID, Timeout: codexPromptRetryIdleProbeTime},
+		{PaneID: active.Task.PaneID, Timeout: codexPromptRetryIdleProbeTime},
 		{PaneID: active.Task.PaneID, Timeout: d.mergeGracePeriod},
+		{PaneID: active.Task.PaneID, Timeout: codexPromptRetryIdleProbeTime},
 		{PaneID: active.Task.PaneID, Timeout: postmortemWaitTimeout},
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("waitIdle calls = %#v, want %#v", got, want)
@@ -359,6 +378,7 @@ func TestFinishAssignmentMergedCleanupSendsWrapUpThenPostmortem(t *testing.T) {
 	t.Parallel()
 
 	deps := newTestDeps(t)
+	setLifecyclePromptActiveAfterIdleProbes(deps, 0)
 	d := deps.newDaemon(t)
 	active := newPostmortemAssignment(deps)
 	active.Task.Status = TaskStatusActive
@@ -372,6 +392,11 @@ func TestFinishAssignmentMergedCleanupSendsWrapUpThenPostmortem(t *testing.T) {
 		operations = append(operations, "send:"+strings.Join(keys, "|"))
 	}
 	deps.amux.waitIdleHook = func(_ string, timeout, _ time.Duration) {
+		if timeout == codexPromptRetryIdleProbeTime {
+			deps.amux.waitIdleErr = errors.New("idle timeout")
+		} else {
+			deps.amux.waitIdleErr = nil
+		}
 		operations = append(operations, "wait:"+timeout.String())
 	}
 
@@ -381,8 +406,10 @@ func TestFinishAssignmentMergedCleanupSendsWrapUpThenPostmortem(t *testing.T) {
 
 	if got, want := operations, []string{
 		"send:PR merged, wrap up.|Enter",
+		"wait:5s",
 		"wait:2m0s",
 		"send:$postmortem|Enter",
+		"wait:5s",
 		"wait:2m0s",
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("operations = %#v, want %#v", got, want)
@@ -403,6 +430,11 @@ func TestFinishAssignmentMergedCleanupSetsDoneMetadataAfterPostmortem(t *testing
 		operations = append(operations, "send:"+strings.Join(keys, "|"))
 	}
 	deps.amux.waitIdleHook = func(_ string, timeout, _ time.Duration) {
+		if timeout == codexPromptRetryIdleProbeTime {
+			deps.amux.waitIdleErr = errors.New("idle timeout")
+		} else {
+			deps.amux.waitIdleErr = nil
+		}
 		operations = append(operations, "wait:"+timeout.String())
 	}
 	deps.amux.setMetadataHook = func(_ string, metadata map[string]string) {
@@ -415,8 +447,10 @@ func TestFinishAssignmentMergedCleanupSetsDoneMetadataAfterPostmortem(t *testing
 
 	if got, want := operations, []string{
 		"send:PR merged, wrap up.|Enter",
+		"wait:5s",
 		"wait:2m0s",
 		"send:$postmortem|Enter",
+		"wait:5s",
 		"wait:2m0s",
 		"metadata:done",
 	}; !reflect.DeepEqual(got, want) {
@@ -454,14 +488,18 @@ func TestFinishAssignmentMergedCleanupMergeNotifyEvent(t *testing.T) {
 			name: "wait idle error emits event",
 			configure: func(deps *testDeps) {
 				waitIdleErr := errors.New("wait idle timed out")
-				waitIdleCalls := 0
-				deps.amux.waitIdleHook = func(_ string, _ time.Duration, _ time.Duration) {
-					if waitIdleCalls == 0 {
+				mergeWaitCalls := 0
+				deps.amux.waitIdleHook = func(_ string, timeout, _ time.Duration) {
+					if timeout == codexPromptRetryIdleProbeTime {
+						deps.amux.waitIdleErr = errors.New("idle timeout")
+						return
+					}
+					if mergeWaitCalls == 0 {
 						deps.amux.waitIdleErr = waitIdleErr
 					} else {
 						deps.amux.waitIdleErr = nil
 					}
-					waitIdleCalls++
+					mergeWaitCalls++
 				}
 			},
 			wantErrSubstring: "wait idle timed out",
@@ -480,6 +518,14 @@ func TestFinishAssignmentMergedCleanupMergeNotifyEvent(t *testing.T) {
 			t.Parallel()
 
 			deps := newTestDeps(t)
+			defaultProbeTimeout := errors.New("idle timeout")
+			deps.amux.waitIdleHook = func(_ string, timeout, _ time.Duration) {
+				if timeout == codexPromptRetryIdleProbeTime {
+					deps.amux.waitIdleErr = defaultProbeTimeout
+					return
+				}
+				deps.amux.waitIdleErr = nil
+			}
 			if tt.configure != nil {
 				tt.configure(deps)
 			}
@@ -578,6 +624,11 @@ func TestFinishAssignmentCancelledStrikesTaskTitleBeforeKill(t *testing.T) {
 		operations = append(operations, "send:"+strings.Join(keys, "|"))
 	}
 	deps.amux.waitIdleHook = func(_ string, timeout, _ time.Duration) {
+		if timeout == codexPromptRetryIdleProbeTime {
+			deps.amux.waitIdleErr = errors.New("idle timeout")
+		} else {
+			deps.amux.waitIdleErr = nil
+		}
 		operations = append(operations, "wait:"+timeout.String())
 	}
 	deps.amux.setMetadataHook = func(_ string, metadata map[string]string) {
@@ -593,6 +644,7 @@ func TestFinishAssignmentCancelledStrikesTaskTitleBeforeKill(t *testing.T) {
 
 	if got, want := operations, []string{
 		"send:$postmortem|Enter",
+		"wait:5s",
 		"wait:2m0s",
 		"metadata:done",
 		"kill:pane-1",
@@ -615,6 +667,7 @@ func TestFinishAssignmentCancelledIgnoresMissingPaneKill(t *testing.T) {
 	t.Parallel()
 
 	deps := newTestDeps(t)
+	setLifecyclePromptActiveAfterIdleProbes(deps, 0)
 	d := deps.newDaemon(t)
 	active := newPostmortemAssignment(deps)
 	active.Task.Status = TaskStatusActive
@@ -715,10 +768,16 @@ func TestFinishAssignmentCancelledIgnoresMissingPaneWaitIdleAfterPostmortemSend(
 	seedFinishAssignmentState(t, deps, active)
 
 	var operations []string
+	waitIdleErr := errors.New("amux wait idle pane-1: exit status 1: pane missing")
 	deps.amux.sendKeysHook = func(_ string, keys []string) {
 		operations = append(operations, "send:"+strings.Join(keys, "|"))
 	}
 	deps.amux.waitIdleHook = func(_ string, timeout, _ time.Duration) {
+		if timeout == codexPromptRetryIdleProbeTime {
+			deps.amux.waitIdleErr = errors.New("idle timeout")
+		} else {
+			deps.amux.waitIdleErr = waitIdleErr
+		}
 		operations = append(operations, "wait:"+timeout.String())
 	}
 	deps.amux.setMetadataHook = func(_ string, metadata map[string]string) {
@@ -727,7 +786,6 @@ func TestFinishAssignmentCancelledIgnoresMissingPaneWaitIdleAfterPostmortemSend(
 	deps.amux.killHook = func(paneID string) {
 		operations = append(operations, "kill:"+paneID)
 	}
-	deps.amux.waitIdleErr = errors.New("amux wait idle pane-1: exit status 1: pane missing")
 
 	if err := d.finishAssignmentWithMessage(context.Background(), active, TaskStatusCancelled, EventTaskCancelled, false, ""); err != nil {
 		t.Fatalf("finishAssignmentWithMessage() error = %v, want nil", err)
@@ -735,6 +793,7 @@ func TestFinishAssignmentCancelledIgnoresMissingPaneWaitIdleAfterPostmortemSend(
 
 	if got, want := operations, []string{
 		"send:$postmortem|Enter",
+		"wait:5s",
 		"wait:2m0s",
 		"metadata:done",
 		"kill:pane-1",
@@ -785,6 +844,7 @@ func TestFinishAssignmentPreservesHistoricalTrackedMetadata(t *testing.T) {
 	t.Parallel()
 
 	deps := newTestDeps(t)
+	setLifecyclePromptActiveAfterIdleProbes(deps, 0)
 	d := deps.newDaemon(t)
 	active := newPostmortemAssignment(deps)
 	active.Task.Status = TaskStatusActive

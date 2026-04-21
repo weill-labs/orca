@@ -249,7 +249,7 @@ func TestSendAndConfirmWorkingTreatsStaleWorkingAsUnconfirmed(t *testing.T) {
 	if !errors.Is(err, ErrPromptDeliveryNotConfirmed) {
 		t.Fatalf("sendAndConfirmWorking() error = %v, want ErrPromptDeliveryNotConfirmed", err)
 	}
-	deps.amux.requireSentKeys(t, "pane-1", []string{"$postmortem\n", "\n", "\n"})
+	deps.amux.requireSentKeys(t, "pane-1", []string{"$postmortem\n", "\n", "\n", "\n", "\n", "\n"})
 	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
 		{PaneID: "pane-1", Timeout: defaultAgentHandshakeTimeout},
 	}; !reflect.DeepEqual(got, want) {
@@ -360,6 +360,61 @@ func TestSendAndConfirmWorkingRetriesPasteCollapseUntilPaneTurnsActive(t *testin
 		{PaneID: "pane-1", Substring: codexWorkingText, Timeout: codexPromptRetryIdleProbeTime},
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("waitContent calls = %#v, want %#v", got, want)
+	}
+}
+
+func TestWaitForPromptDeliveryIdleOrWorkingReturnsTimedOutWhenPaneStaysIdle(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.amux.captureHistorySequence("pane-1", []PaneCapture{{
+		Content:        []string{"OpenAI Codex", "›"},
+		CurrentCommand: "codex",
+	}})
+	d := deps.newDaemon(t)
+
+	state, err := d.waitForPromptDeliveryIdleOrWorking(context.Background(), "pane-1", AgentProfile{Name: "codex"}, "after prompt")
+	if got, want := state, promptDeliveryWaitTimedOut; got != want {
+		t.Fatalf("waitForPromptDeliveryIdleOrWorking() state = %v, want %v", got, want)
+	}
+	if err == nil || !strings.Contains(err.Error(), "pane remained idle after prompt") {
+		t.Fatalf("waitForPromptDeliveryIdleOrWorking() error = %v, want idle timeout context", err)
+	}
+}
+
+func TestWaitForPromptDeliveryIdleOrWorkingReturnsPaneGoneError(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.amux.captureHistoryErrors("pane-1", []error{ErrPaneGone})
+	deps.amux.capturePaneErr = ErrPaneGone
+	d := deps.newDaemon(t)
+
+	state, err := d.waitForPromptDeliveryIdleOrWorking(context.Background(), "pane-1", AgentProfile{Name: "codex"}, "after prompt")
+	if got, want := state, promptDeliveryWaitAgentGone; got != want {
+		t.Fatalf("waitForPromptDeliveryIdleOrWorking() state = %v, want %v", got, want)
+	}
+	if err == nil || !strings.Contains(err.Error(), "pane disappeared while waiting for idle after prompt") {
+		t.Fatalf("waitForPromptDeliveryIdleOrWorking() error = %v, want pane-gone context", err)
+	}
+}
+
+func TestWaitForPromptDeliveryIdleOrWorkingReturnsShellError(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.amux.captureHistorySequence("pane-1", []PaneCapture{{
+		Content:        []string{"bash-5.2$", "codex exited"},
+		CurrentCommand: "bash",
+	}})
+	d := deps.newDaemon(t)
+
+	state, err := d.waitForPromptDeliveryIdleOrWorking(context.Background(), "pane-1", AgentProfile{Name: "codex"}, "after prompt")
+	if got, want := state, promptDeliveryWaitAgentGone; got != want {
+		t.Fatalf("waitForPromptDeliveryIdleOrWorking() state = %v, want %v", got, want)
+	}
+	if err == nil || !strings.Contains(err.Error(), "after prompt and codex returned to shell") {
+		t.Fatalf("waitForPromptDeliveryIdleOrWorking() error = %v, want shell-return context", err)
 	}
 }
 
