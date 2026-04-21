@@ -230,11 +230,7 @@ func TestManagerAllocate(t *testing.T) {
 			run: func(t *testing.T, manager *pool.Manager, store *state.SQLiteStore, project string, clones []string) {
 				t.Helper()
 
-				mustRun(t, clones[0], "git", "config", "pull.ff", "only")
-				expectedHead := advanceOrigin(t, clones[0], "main", "remote-only.txt", "remote update")
-				mustWriteFile(t, filepath.Join(clones[0], "local-only.txt"), "local update")
-				mustRun(t, clones[0], "git", "add", "local-only.txt")
-				mustRun(t, clones[0], "git", "commit", "-m", "local divergent commit")
+				expectedHead := divergeCloneBaseBranch(t, clones[0], "main")
 
 				clone, err := manager.Allocate(context.Background(), "LAB-687", "LAB-687")
 				if err != nil {
@@ -637,12 +633,7 @@ func TestManagerRelease(t *testing.T) {
 					t.Fatalf("Allocate() setup error = %v", err)
 				}
 
-				mustRun(t, clone.Path, "git", "config", "pull.ff", "only")
-				expectedHead := advanceOrigin(t, clone.Path, "main", "remote-only.txt", "remote update")
-				mustRun(t, clone.Path, "git", "checkout", "main")
-				mustWriteFile(t, filepath.Join(clone.Path, "local-only.txt"), "local update")
-				mustRun(t, clone.Path, "git", "add", "local-only.txt")
-				mustRun(t, clone.Path, "git", "commit", "-m", "local divergent commit")
+				expectedHead := divergeCloneBaseBranch(t, clone.Path, "main")
 				mustRun(t, clone.Path, "git", "checkout", "LAB-687")
 
 				if err := manager.Release(context.Background(), clone.Path, "LAB-687"); err != nil {
@@ -843,6 +834,19 @@ func advanceOrigin(t *testing.T, clonePath, baseBranch, relativePath, contents s
 	mustRun(t, worktree, "git", "push", "origin", baseBranch)
 
 	return gitHeadCommit(t, worktree)
+}
+
+func divergeCloneBaseBranch(t *testing.T, clonePath, baseBranch string) string {
+	t.Helper()
+
+	mustRun(t, clonePath, "git", "config", "pull.ff", "only")
+	expectedHead := advanceOrigin(t, clonePath, baseBranch, "remote-only.txt", "remote update")
+	mustRun(t, clonePath, "git", "checkout", baseBranch)
+	mustWriteFile(t, filepath.Join(clonePath, "local-only.txt"), "local update")
+	mustRun(t, clonePath, "git", "add", "local-only.txt")
+	mustRun(t, clonePath, "git", "commit", "-m", "local divergent commit")
+
+	return expectedHead
 }
 
 func lookupClone(t *testing.T, store *state.SQLiteStore, project, path string) state.CloneRecord {
