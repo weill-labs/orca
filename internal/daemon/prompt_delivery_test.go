@@ -424,6 +424,48 @@ func TestWaitForPromptDeliveryIdleOrWorkingReturnsPaneGoneError(t *testing.T) {
 	}
 }
 
+func TestWaitForPromptDeliveryIdleOrWorkingReturnsCapturePaneError(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.amux.capturePaneErr = errors.New("capture failed")
+	d := deps.newDaemon(t)
+
+	state, err := d.waitForPromptDeliveryIdleOrWorking(context.Background(), "pane-1", AgentProfile{Name: "codex"}, "after prompt")
+	if got, want := state, promptDeliveryWaitError; got != want {
+		t.Fatalf("waitForPromptDeliveryIdleOrWorking() state = %v, want %v", got, want)
+	}
+	if err == nil || !strings.Contains(err.Error(), "capture prompt delivery state while waiting for idle after prompt: capture failed") {
+		t.Fatalf("waitForPromptDeliveryIdleOrWorking() error = %v, want capture-pane context", err)
+	}
+	if got := deps.amux.waitContentCalls; len(got) != 0 {
+		t.Fatalf("waitContent calls = %#v, want none", got)
+	}
+}
+
+func TestWaitForPromptDeliveryIdleOrWorkingReturnsExitedPaneError(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.amux.captureHistorySequence("pane-1", []PaneCapture{{
+		Content:        []string{"codex exited"},
+		CurrentCommand: "codex",
+		Exited:         true,
+	}})
+	d := deps.newDaemon(t)
+
+	state, err := d.waitForPromptDeliveryIdleOrWorking(context.Background(), "pane-1", AgentProfile{Name: "codex"}, "after prompt")
+	if got, want := state, promptDeliveryWaitAgentGone; got != want {
+		t.Fatalf("waitForPromptDeliveryIdleOrWorking() state = %v, want %v", got, want)
+	}
+	if err == nil || !strings.Contains(err.Error(), "after prompt and pane exited") {
+		t.Fatalf("waitForPromptDeliveryIdleOrWorking() error = %v, want exited-pane context", err)
+	}
+	if got := deps.amux.waitContentCalls; len(got) != 0 {
+		t.Fatalf("waitContent calls = %#v, want none", got)
+	}
+}
+
 func TestWaitForPromptDeliveryIdleOrWorkingReturnsShellError(t *testing.T) {
 	t.Parallel()
 

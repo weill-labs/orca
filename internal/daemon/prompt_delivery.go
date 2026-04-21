@@ -84,7 +84,7 @@ func (d *Daemon) submitToCodex(ctx context.Context, paneID, prompt string) error
 	profile := AgentProfile{Name: "codex"}
 	phase := "after prompt"
 	lastErr := fmt.Errorf("%w: working confirmation exhausted", ErrPromptDeliveryNotConfirmed)
-	for attempt := 1; attempt <= codexWorkingConfirmationAttempts; attempt++ {
+	for attempt := 1; ; attempt++ {
 		state, err := d.waitForPromptDeliveryConfirmation(ctx, paneID, profile, phase, baseline)
 		switch state {
 		case promptDeliveryWaitObserved:
@@ -102,8 +102,6 @@ func (d *Daemon) submitToCodex(ctx context.Context, paneID, prompt string) error
 		}
 		phase = "after retry enter"
 	}
-
-	return lastErr
 }
 
 func (d *Daemon) paneRunsCodex(ctx context.Context, paneID string) bool {
