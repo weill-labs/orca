@@ -3,10 +3,11 @@ name: orca
 description: >
   Use orca to delegate coding tasks to worker agents (Claude Code, Codex).
   Trigger when the user asks to delegate work, assign issues, spawn workers, check worker
-  status, cancel tasks, resume tasks, batch-assign issues, queue PRs for merge, or manage
-  the orca daemon. Also trigger when the user mentions orca commands, worker health, clone
-  pools, or agent orchestration. Use this skill even if you know orca basics — it contains
-  UX patterns and gotchas that prevent common mistakes.
+  status, cancel tasks, resume tasks, assign multiple issues with repeated `orca assign`
+  calls, queue PRs for merge, or manage the orca daemon. Also trigger when the user
+  mentions orca commands, worker health, clone pools, or agent orchestration. Use this
+  skill even if you know orca basics — it contains UX patterns and gotchas that prevent
+  common mistakes.
 ---
 
 # Orca — Agent Orchestration Daemon
@@ -104,24 +105,7 @@ Worker health states:
 - `stuck` — worker appears stuck (idle too long or stuck text pattern detected)
 - `escalated` — stuck detection has exhausted nudge retries; needs human attention
 
-### 5. Batch assign
-
-For multiple tasks, create a JSON manifest and use `orca batch`:
-
-```json
-[
-  {"issue": "LAB-123", "agent": "codex", "prompt": "Fix the auth bug. TDD."},
-  {"issue": "LAB-124", "agent": "claude", "prompt": "Add regression tests."}
-]
-```
-
-```bash
-orca batch manifest.json --delay 10s
-```
-
-The `--delay` flag (default 5s) spaces out assignments to avoid overwhelming the system.
-
-### 6. Queue PRs for merge
+### 5. Queue PRs for merge
 
 When a PR is ready to land:
 
@@ -131,7 +115,7 @@ orca enqueue PR_NUMBER
 
 Orca manages a merge queue — it rebases, waits for CI checks, and squash-merges one PR at a time.
 
-### 7. Resume a task
+### 6. Resume a task
 
 If a worker's pane was lost or the task needs to continue:
 
@@ -141,7 +125,7 @@ orca resume ISSUE
 
 Resume requires an existing task in the DB. It restarts the agent in the existing or a fresh pane.
 
-### 8. Cancel and cleanup
+### 7. Cancel and cleanup
 
 ```bash
 orca cancel ISSUE    # cancel a specific task, kill the worker pane
@@ -204,7 +188,6 @@ This shows the task's event log with timestamps — handshake steps, stuck detec
 | `stop` | `orca stop` | Stop the daemon |
 | `status` | `orca status [ISSUE] [--project P]` | Show status (overall or per-task) |
 | `assign` | `orca assign ISSUE --prompt P [--agent A] [--project P]` | Assign an issue to a worker |
-| `batch` | `orca batch MANIFEST [--delay D] [--project P]` | Batch assign from JSON manifest |
 | `enqueue` | `orca enqueue PR_NUMBER [--project P]` | Queue a PR for serialized landing |
 | `cancel` | `orca cancel ISSUE [--project P]` | Cancel a task |
 | `resume` | `orca resume ISSUE [--project P]` | Resume a task in its existing pane |
