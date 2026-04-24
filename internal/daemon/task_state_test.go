@@ -381,6 +381,7 @@ func TestApplyTaskStateUpdateFailsTaskWhenPRClosesWithoutMerge(t *testing.T) {
 	t.Parallel()
 
 	deps := newTestDeps(t)
+	setLifecyclePromptActiveAfterIdleProbes(deps, 0)
 	issue := "LAB-1315"
 	seedTaskMonitorAssignmentWithState(t, deps, issue, "pane-1", 42, TaskStateReviewPending)
 	setAssignmentWorkerID(t, deps, issue, "worker-01")

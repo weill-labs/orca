@@ -25,10 +25,75 @@ func TestConfirmPromptDeliverySkipsNonCodexProfiles(t *testing.T) {
 	}
 }
 
+func TestPaneRunsCodex(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		set  func(*testDeps)
+		want bool
+	}{
+		{
+			name: "history output identifies codex",
+			set: func(deps *testDeps) {
+				deps.amux.captureHistorySequence("pane-1", []PaneCapture{{
+					Content:        []string{"OpenAI Codex", "›"},
+					CurrentCommand: "bash",
+				}})
+			},
+			want: true,
+		},
+		{
+			name: "command basename identifies codex",
+			set: func(deps *testDeps) {
+				deps.amux.capturePaneSequence("pane-1", []PaneCapture{{
+					Content:        []string{"ready"},
+					CurrentCommand: "/usr/local/bin/codex --yolo",
+				}})
+			},
+			want: true,
+		},
+		{
+			name: "non codex pane returns false",
+			set: func(deps *testDeps) {
+				deps.amux.capturePaneSequence("pane-1", []PaneCapture{{
+					Content:        []string{"bash-5.2$"},
+					CurrentCommand: "bash",
+				}})
+			},
+			want: false,
+		},
+		{
+			name: "capture failure returns false",
+			set: func(deps *testDeps) {
+				deps.amux.captureHistoryErrors("pane-1", []error{ErrPaneGone})
+				deps.amux.capturePaneErr = ErrPaneGone
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			deps := newTestDeps(t)
+			tt.set(deps)
+			d := deps.newDaemon(t)
+
+			if got := d.paneRunsCodex(context.Background(), "pane-1"); got != tt.want {
+				t.Fatalf("paneRunsCodex() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestConfirmPromptDeliveryReturnsWaitContentError(t *testing.T) {
 	t.Parallel()
 
 	deps := newTestDeps(t)
+	setLifecyclePromptActiveAfterIdleProbes(deps, 0)
 	deps.amux.waitContentResults = []error{errors.New("wait failed")}
 	d := deps.newDaemon(t)
 
@@ -37,8 +102,8 @@ func TestConfirmPromptDeliveryReturnsWaitContentError(t *testing.T) {
 		t.Fatalf("confirmPromptDelivery() error = %v, want wrapped wait-content failure", err)
 	}
 	if got, want := deps.amux.waitContentCalls, []waitContentCall{
-		{PaneID: "pane-1", Substring: codexWorkingText, Timeout: defaultAgentHandshakeTimeout},
-	}; len(got) != len(want) || got[0] != want[0] {
+		{PaneID: "pane-1", Substring: codexWorkingText, Timeout: codexPromptRetryIdleProbeTime},
+	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("waitContent calls = %#v, want %#v", got, want)
 	}
 }
@@ -47,7 +112,7 @@ func TestConfirmPromptDeliveryReturnsSendKeysErrorOnRetry(t *testing.T) {
 	t.Parallel()
 
 	deps := newTestDeps(t)
-	deps.amux.waitContentResults = []error{amuxapi.ErrWaitContentTimeout}
+	deps.amux.captureHistorySequence("pane-1", []PaneCapture{{Content: []string{"OpenAI Codex", "›"}, CurrentCommand: "codex"}})
 	deps.amux.sendKeysErr = errors.New("send failed")
 	d := deps.newDaemon(t)
 
@@ -58,23 +123,18 @@ func TestConfirmPromptDeliveryReturnsSendKeysErrorOnRetry(t *testing.T) {
 	deps.amux.requireSentKeys(t, "pane-1", nil)
 }
 
-func TestConfirmPromptDeliverySucceedsWhenWorkingAppearsAfterRetryIdleError(t *testing.T) {
+func TestConfirmPromptDeliverySucceedsWhenWorkingAppearsAfterShortProbe(t *testing.T) {
 	t.Parallel()
 
 	deps := newTestDeps(t)
-	deps.amux.waitContentResults = []error{
-		amuxapi.ErrWaitContentTimeout,
-		nil,
-	}
-	deps.amux.waitIdleErr = errors.New("idle failed")
+	setLifecyclePromptActiveAfterIdleProbes(deps, 0)
 	d := deps.newDaemon(t)
 
 	if err := d.confirmPromptDelivery(context.Background(), "pane-1", AgentProfile{Name: "codex"}); err != nil {
 		t.Fatalf("confirmPromptDelivery() error = %v", err)
 	}
 	if got, want := deps.amux.waitContentCalls, []waitContentCall{
-		{PaneID: "pane-1", Substring: codexWorkingText, Timeout: defaultAgentHandshakeTimeout},
-		{PaneID: "pane-1", Substring: codexWorkingText, Timeout: 2 * defaultAgentHandshakeTimeout},
+		{PaneID: "pane-1", Substring: codexWorkingText, Timeout: codexPromptRetryIdleProbeTime},
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("waitContent calls = %#v, want %#v", got, want)
 	}
@@ -83,40 +143,14 @@ func TestConfirmPromptDeliverySucceedsWhenWorkingAppearsAfterRetryIdleError(t *t
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("waitIdle calls = %#v, want %#v", got, want)
 	}
-	deps.amux.requireSentKeys(t, "pane-1", []string{"Enter"})
-}
-
-func TestConfirmPromptDeliveryExtendsSecondWaitAfterRetryCommand(t *testing.T) {
-	t.Parallel()
-
-	deps := newTestDeps(t)
-	deps.amux.waitContentResults = []error{
-		amuxapi.ErrWaitContentTimeout,
-		nil,
-	}
-	d := deps.newDaemon(t)
-
-	if err := d.confirmPromptDelivery(context.Background(), "pane-1", AgentProfile{Name: "codex"}); err != nil {
-		t.Fatalf("confirmPromptDelivery() error = %v", err)
-	}
-	if got, want := deps.amux.waitContentCalls, []waitContentCall{
-		{PaneID: "pane-1", Substring: codexWorkingText, Timeout: defaultAgentHandshakeTimeout},
-		{PaneID: "pane-1", Substring: codexWorkingText, Timeout: 2 * defaultAgentHandshakeTimeout},
-	}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("waitContent calls = %#v, want %#v", got, want)
-	}
-	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
-		{PaneID: "pane-1", Timeout: codexPromptRetryIdleProbeTime},
-	}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("waitIdle calls = %#v, want %#v", got, want)
-	}
-	deps.amux.requireSentKeys(t, "pane-1", []string{"Enter"})
+	deps.amux.requireSentKeys(t, "pane-1", nil)
 }
 
 func TestConfirmPromptDeliveryFailsFastWhenCodexReturnsToShell(t *testing.T) {
 	t.Parallel()
 
 	deps := newTestDeps(t)
+	setLifecyclePromptActiveAfterIdleProbes(deps, 0)
 	deps.amux.waitContentResults = []error{amuxapi.ErrWaitContentTimeout}
 	deps.amux.capturePaneSequence("pane-1", []PaneCapture{{
 		Content:        []string{"bash-5.2$", "codex exited"},
@@ -135,12 +169,14 @@ func TestConfirmPromptDeliveryFailsFastWhenCodexReturnsToShell(t *testing.T) {
 		t.Fatalf("confirmPromptDelivery() error = %v, want capture context", err)
 	}
 	if got, want := deps.amux.waitContentCalls, []waitContentCall{
-		{PaneID: "pane-1", Substring: codexWorkingText, Timeout: defaultAgentHandshakeTimeout},
+		{PaneID: "pane-1", Substring: codexWorkingText, Timeout: codexPromptRetryIdleProbeTime},
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("waitContent calls = %#v, want %#v", got, want)
 	}
-	if got := deps.amux.waitIdleCalls; len(got) != 0 {
-		t.Fatalf("waitIdle calls = %#v, want none", got)
+	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
+		{PaneID: "pane-1", Timeout: codexPromptRetryIdleProbeTime},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("waitIdle calls = %#v, want %#v", got, want)
 	}
 	deps.amux.requireSentKeys(t, "pane-1", nil)
 }
@@ -149,6 +185,7 @@ func TestConfirmPromptDeliveryReturnsExitedPaneError(t *testing.T) {
 	t.Parallel()
 
 	deps := newTestDeps(t)
+	setLifecyclePromptActiveAfterIdleProbes(deps, 0)
 	deps.amux.waitContentResults = []error{amuxapi.ErrWaitContentTimeout}
 	deps.amux.capturePaneSequence("pane-1", []PaneCapture{{
 		Content:        []string{"codex exited"},
@@ -167,6 +204,7 @@ func TestConfirmPromptDeliveryReturnsPaneGoneError(t *testing.T) {
 	t.Parallel()
 
 	deps := newTestDeps(t)
+	setLifecyclePromptActiveAfterIdleProbes(deps, 0)
 	deps.amux.waitContentResults = []error{amuxapi.ErrWaitContentTimeout}
 	deps.amux.capturePaneErr = ErrPaneGone
 	d := deps.newDaemon(t)
@@ -181,6 +219,7 @@ func TestConfirmPromptDeliveryReturnsCapturePaneError(t *testing.T) {
 	t.Parallel()
 
 	deps := newTestDeps(t)
+	setLifecyclePromptActiveAfterIdleProbes(deps, 0)
 	deps.amux.waitContentResults = []error{amuxapi.ErrWaitContentTimeout}
 	deps.amux.capturePaneErr = errors.New("capture failed")
 	d := deps.newDaemon(t)
@@ -191,44 +230,52 @@ func TestConfirmPromptDeliveryReturnsCapturePaneError(t *testing.T) {
 	}
 }
 
-func TestConfirmPromptDeliveryReturnsRetryIdleFailurePhaseInTimeoutError(t *testing.T) {
+func TestConfirmPromptDeliveryReturnsPromptDeliveryErrorWhenPaneStaysIdle(t *testing.T) {
 	t.Parallel()
 
 	deps := newTestDeps(t)
-	deps.amux.waitContentResults = []error{
-		amuxapi.ErrWaitContentTimeout,
-		amuxapi.ErrWaitContentTimeout,
+	deps.amux.waitIdleHook = func(_ string, timeout, _ time.Duration) {
+		if timeout == codexPromptRetryIdleProbeTime {
+			deps.amux.waitIdleErr = nil
+		}
 	}
-	deps.amux.waitIdleErr = errors.New("idle failed")
-	deps.amux.capturePaneSequence("pane-1", []PaneCapture{
-		{Content: []string{"OpenAI Codex", "›"}, CurrentCommand: "codex"},
-		{Content: []string{"OpenAI Codex", "›"}, CurrentCommand: "codex"},
-	})
+	deps.amux.captureHistorySequence("pane-1", []PaneCapture{{Content: []string{"OpenAI Codex", "›"}, CurrentCommand: "codex"}})
 	d := deps.newDaemon(t)
 
 	err := d.confirmPromptDelivery(context.Background(), "pane-1", AgentProfile{Name: "codex"})
-	if err == nil || !strings.Contains(err.Error(), "after retry idle failure") {
-		t.Fatalf("confirmPromptDelivery() error = %v, want retry-idle phase", err)
+	if err == nil || !errors.Is(err, ErrPromptDeliveryNotConfirmed) {
+		t.Fatalf("confirmPromptDelivery() error = %v, want ErrPromptDeliveryNotConfirmed", err)
 	}
 }
 
-func TestConfirmPromptDeliveryReturnsRetryEnterPhaseInTimeoutError(t *testing.T) {
+func TestConfirmPromptDeliveryRetriesPasteCollapseUntilPaneTurnsActive(t *testing.T) {
 	t.Parallel()
 
 	deps := newTestDeps(t)
-	deps.amux.waitContentResults = []error{
-		amuxapi.ErrWaitContentTimeout,
-		amuxapi.ErrWaitContentTimeout,
-	}
-	deps.amux.capturePaneSequence("pane-1", []PaneCapture{
-		{Content: []string{"OpenAI Codex", "›"}, CurrentCommand: "codex"},
-		{Content: []string{"OpenAI Codex", "›"}, CurrentCommand: "codex"},
-	})
+	simulateCodexSubmitPasteCollapse(deps, 3)
 	d := deps.newDaemon(t)
 
-	err := d.confirmPromptDelivery(context.Background(), "pane-1", AgentProfile{Name: "codex"})
-	if err == nil || !strings.Contains(err.Error(), "after retry enter") {
-		t.Fatalf("confirmPromptDelivery() error = %v, want retry-enter phase", err)
+	if err := d.confirmPromptDelivery(context.Background(), "pane-1", AgentProfile{Name: "codex"}); err != nil {
+		t.Fatalf("confirmPromptDelivery() error = %v", err)
+	}
+
+	deps.amux.requireSentKeys(t, "pane-1", []string{
+		"\n",
+		"\n",
+		"\n",
+	})
+	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
+		{PaneID: "pane-1", Timeout: codexPromptRetryIdleProbeTime},
+		{PaneID: "pane-1", Timeout: codexPromptRetryIdleProbeTime},
+		{PaneID: "pane-1", Timeout: codexPromptRetryIdleProbeTime},
+		{PaneID: "pane-1", Timeout: codexPromptRetryIdleProbeTime},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("waitIdle calls = %#v, want %#v", got, want)
+	}
+	if got, want := deps.amux.waitContentCalls, []waitContentCall{
+		{PaneID: "pane-1", Substring: codexWorkingText, Timeout: codexPromptRetryIdleProbeTime},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("waitContent calls = %#v, want %#v", got, want)
 	}
 }
 
@@ -249,7 +296,7 @@ func TestSendAndConfirmWorkingTreatsStaleWorkingAsUnconfirmed(t *testing.T) {
 	if !errors.Is(err, ErrPromptDeliveryNotConfirmed) {
 		t.Fatalf("sendAndConfirmWorking() error = %v, want ErrPromptDeliveryNotConfirmed", err)
 	}
-	deps.amux.requireSentKeys(t, "pane-1", []string{"$postmortem\n", "\n", "\n"})
+	deps.amux.requireSentKeys(t, "pane-1", []string{"$postmortem\n", "\n", "\n", "\n", "\n", "\n"})
 	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
 		{PaneID: "pane-1", Timeout: defaultAgentHandshakeTimeout},
 	}; !reflect.DeepEqual(got, want) {
@@ -299,6 +346,145 @@ func TestSendAndConfirmWorkingRetriesWhenFreshWorkingAppearsAfterStaleScrollback
 	}
 	if len(sleeps) == 0 {
 		t.Fatal("sleep calls = 0, want freshness polling before retry")
+	}
+}
+
+func TestSendAndConfirmWorkingRetriesPasteCollapseUntilPaneTurnsActive(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	simulateCodexSubmitPasteCollapse(deps, 3)
+	d := deps.newDaemon(t)
+
+	prompt := strings.Repeat("Address the blocking review comments and push an update. ", 20)
+	if err := d.sendAndConfirmWorking(context.Background(), "pane-1", prompt); err != nil {
+		t.Fatalf("sendAndConfirmWorking() error = %v", err)
+	}
+
+	deps.amux.requireSentKeys(t, "pane-1", []string{
+		prompt + "\n",
+		"\n",
+		"\n",
+		"\n",
+	})
+	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
+		{PaneID: "pane-1", Timeout: codexPromptRetryIdleProbeTime},
+		{PaneID: "pane-1", Timeout: codexPromptRetryIdleProbeTime},
+		{PaneID: "pane-1", Timeout: codexPromptRetryIdleProbeTime},
+		{PaneID: "pane-1", Timeout: codexPromptRetryIdleProbeTime},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("waitIdle calls = %#v, want %#v", got, want)
+	}
+	if got, want := deps.amux.waitContentCalls, []waitContentCall{
+		{PaneID: "pane-1", Substring: codexWorkingText, Timeout: codexPromptRetryIdleProbeTime},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("waitContent calls = %#v, want %#v", got, want)
+	}
+}
+
+func TestWaitForPromptDeliveryIdleOrWorkingReturnsTimedOutWhenPaneStaysIdle(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.amux.captureHistorySequence("pane-1", []PaneCapture{{
+		Content:        []string{"OpenAI Codex", "›"},
+		CurrentCommand: "codex",
+	}})
+	d := deps.newDaemon(t)
+
+	state, err := d.waitForPromptDeliveryIdleOrWorking(context.Background(), "pane-1", AgentProfile{Name: "codex"}, "after prompt")
+	if got, want := state, promptDeliveryWaitTimedOut; got != want {
+		t.Fatalf("waitForPromptDeliveryIdleOrWorking() state = %v, want %v", got, want)
+	}
+	if err == nil || !strings.Contains(err.Error(), "pane remained idle after prompt") {
+		t.Fatalf("waitForPromptDeliveryIdleOrWorking() error = %v, want idle timeout context", err)
+	}
+	if got := deps.amux.waitContentCalls; len(got) != 0 {
+		t.Fatalf("waitContent calls = %#v, want none", got)
+	}
+}
+
+func TestWaitForPromptDeliveryIdleOrWorkingReturnsPaneGoneError(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.amux.captureHistoryErrors("pane-1", []error{ErrPaneGone})
+	deps.amux.capturePaneErr = ErrPaneGone
+	d := deps.newDaemon(t)
+
+	state, err := d.waitForPromptDeliveryIdleOrWorking(context.Background(), "pane-1", AgentProfile{Name: "codex"}, "after prompt")
+	if got, want := state, promptDeliveryWaitAgentGone; got != want {
+		t.Fatalf("waitForPromptDeliveryIdleOrWorking() state = %v, want %v", got, want)
+	}
+	if err == nil || !strings.Contains(err.Error(), "pane disappeared while waiting for idle after prompt") {
+		t.Fatalf("waitForPromptDeliveryIdleOrWorking() error = %v, want pane-gone context", err)
+	}
+	if got := deps.amux.waitContentCalls; len(got) != 0 {
+		t.Fatalf("waitContent calls = %#v, want none", got)
+	}
+}
+
+func TestWaitForPromptDeliveryIdleOrWorkingReturnsCapturePaneError(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.amux.capturePaneErr = errors.New("capture failed")
+	d := deps.newDaemon(t)
+
+	state, err := d.waitForPromptDeliveryIdleOrWorking(context.Background(), "pane-1", AgentProfile{Name: "codex"}, "after prompt")
+	if got, want := state, promptDeliveryWaitError; got != want {
+		t.Fatalf("waitForPromptDeliveryIdleOrWorking() state = %v, want %v", got, want)
+	}
+	if err == nil || !strings.Contains(err.Error(), "capture prompt delivery state while waiting for idle after prompt: capture failed") {
+		t.Fatalf("waitForPromptDeliveryIdleOrWorking() error = %v, want capture-pane context", err)
+	}
+	if got := deps.amux.waitContentCalls; len(got) != 0 {
+		t.Fatalf("waitContent calls = %#v, want none", got)
+	}
+}
+
+func TestWaitForPromptDeliveryIdleOrWorkingReturnsExitedPaneError(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.amux.captureHistorySequence("pane-1", []PaneCapture{{
+		Content:        []string{"codex exited"},
+		CurrentCommand: "codex",
+		Exited:         true,
+	}})
+	d := deps.newDaemon(t)
+
+	state, err := d.waitForPromptDeliveryIdleOrWorking(context.Background(), "pane-1", AgentProfile{Name: "codex"}, "after prompt")
+	if got, want := state, promptDeliveryWaitAgentGone; got != want {
+		t.Fatalf("waitForPromptDeliveryIdleOrWorking() state = %v, want %v", got, want)
+	}
+	if err == nil || !strings.Contains(err.Error(), "after prompt and pane exited") {
+		t.Fatalf("waitForPromptDeliveryIdleOrWorking() error = %v, want exited-pane context", err)
+	}
+	if got := deps.amux.waitContentCalls; len(got) != 0 {
+		t.Fatalf("waitContent calls = %#v, want none", got)
+	}
+}
+
+func TestWaitForPromptDeliveryIdleOrWorkingReturnsShellError(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.amux.captureHistorySequence("pane-1", []PaneCapture{{
+		Content:        []string{"bash-5.2$", "codex exited"},
+		CurrentCommand: "bash",
+	}})
+	d := deps.newDaemon(t)
+
+	state, err := d.waitForPromptDeliveryIdleOrWorking(context.Background(), "pane-1", AgentProfile{Name: "codex"}, "after prompt")
+	if got, want := state, promptDeliveryWaitAgentGone; got != want {
+		t.Fatalf("waitForPromptDeliveryIdleOrWorking() state = %v, want %v", got, want)
+	}
+	if err == nil || !strings.Contains(err.Error(), "after prompt and codex returned to shell") {
+		t.Fatalf("waitForPromptDeliveryIdleOrWorking() error = %v, want shell-return context", err)
+	}
+	if got := deps.amux.waitContentCalls; len(got) != 0 {
+		t.Fatalf("waitContent calls = %#v, want none", got)
 	}
 }
 

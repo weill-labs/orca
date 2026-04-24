@@ -13,8 +13,7 @@ import (
 
 const (
 	codexWorkingText                   = "Working"
-	codexWorkingConfirmationAttempts   = 3
-	codexPromptDeliveryExtendedTimeout = 2 * defaultAgentHandshakeTimeout
+	codexWorkingConfirmationAttempts   = 6
 	codexPromptRetryIdleProbeTime      = 5 * time.Second
 	codexWorkingFreshnessProbeTimeout  = 500 * time.Millisecond
 	codexWorkingFreshnessPollInterval  = 50 * time.Millisecond
@@ -44,83 +43,113 @@ func (d *Daemon) confirmPromptDelivery(ctx context.Context, paneID string, profi
 	if !strings.EqualFold(profile.Name, "codex") {
 		return nil
 	}
-
-	state, err := d.waitForPromptDeliveryMarker(ctx, paneID, profile, defaultAgentHandshakeTimeout, "after prompt")
-	switch state {
-	case promptDeliveryWaitObserved:
-		return nil
-	case promptDeliveryWaitError, promptDeliveryWaitAgentGone:
-		return err
-	}
-
-	if err := d.amux.SendKeys(ctx, paneID, "Enter"); err != nil {
-		return fmt.Errorf("retry prompt delivery: %w", err)
-	}
-	if err := d.amux.WaitIdle(ctx, paneID, codexPromptRetryIdleProbeTime); err != nil {
-		probeState, probeErr := d.waitForPromptDeliveryMarker(ctx, paneID, profile, codexPromptDeliveryExtendedTimeout, "after retry idle failure")
-		if probeState == promptDeliveryWaitObserved {
-			return nil
-		}
-		return probeErr
-	}
-
-	finalState, finalErr := d.waitForPromptDeliveryMarker(ctx, paneID, profile, codexPromptDeliveryExtendedTimeout, "after retry enter")
-	if finalState == promptDeliveryWaitObserved {
-		return nil
-	}
-	return finalErr
+	return d.submitToCodex(ctx, paneID, "")
 }
 
 // Post-start lifecycle prompts can race with Codex input buffering. Send the
 // prompt once, then retry only Enter until Codex transitions to Working or the
 // bounded retry budget is exhausted.
 func (d *Daemon) sendAndConfirmWorking(ctx context.Context, paneID, prompt string) error {
-	baseline, err := d.capturePromptDeliveryBaseline(ctx, paneID)
-	if err != nil {
-		return err
-	}
-	if baseline.hasWorking {
-		if err := d.amux.WaitIdle(ctx, paneID, defaultAgentHandshakeTimeout); err != nil {
-			return fmt.Errorf("wait for idle before prompt delivery: %w", err)
+	return d.submitToCodex(ctx, paneID, prompt)
+}
+
+// submitToCodex submits prompt+Enter to a codex pane and retries Enter while
+// the pane keeps returning to idle. An empty prompt means the caller already
+// sent the initial Enter and only needs confirmation/retries.
+func (d *Daemon) submitToCodex(ctx context.Context, paneID, prompt string) error {
+	baseline := promptDeliveryBaseline{}
+	if strings.TrimSpace(prompt) != "" {
+		var err error
+		baseline, err = d.capturePromptDeliveryBaseline(ctx, paneID)
+		if err != nil {
+			return err
+		}
+		if baseline.hasWorking {
+			if err := d.amux.WaitIdle(ctx, paneID, defaultAgentHandshakeTimeout); err != nil {
+				return fmt.Errorf("wait for idle before prompt delivery: %w", err)
+			}
 		}
 	}
 
-	deliveryPrompt, err := normalizePromptForDelivery(prompt)
-	if err != nil {
-		return err
-	}
-
-	if err := d.amux.SendKeys(ctx, paneID, deliveryPrompt, "Enter"); err != nil {
-		return err
+	if strings.TrimSpace(prompt) != "" {
+		deliveryPrompt, err := normalizePromptForDelivery(prompt)
+		if err != nil {
+			return err
+		}
+		if err := d.amux.SendKeys(ctx, paneID, deliveryPrompt, "Enter"); err != nil {
+			return err
+		}
 	}
 
 	profile := AgentProfile{Name: "codex"}
 	phase := "after prompt"
-	for attempt := 1; attempt <= codexWorkingConfirmationAttempts; attempt++ {
+	lastErr := fmt.Errorf("%w: working confirmation exhausted", ErrPromptDeliveryNotConfirmed)
+	for attempt := 1; ; attempt++ {
 		state, err := d.waitForPromptDeliveryConfirmation(ctx, paneID, profile, phase, baseline)
 		switch state {
 		case promptDeliveryWaitObserved:
 			return nil
 		case promptDeliveryWaitError, promptDeliveryWaitAgentGone:
 			return err
+		case promptDeliveryWaitTimedOut:
+			lastErr = err
 		}
 		if attempt == codexWorkingConfirmationAttempts {
-			return err
+			return lastErr
 		}
 		if err := d.amux.SendKeys(ctx, paneID, "Enter"); err != nil {
 			return fmt.Errorf("retry prompt delivery: %w", err)
 		}
 		phase = "after retry enter"
 	}
+}
 
-	return fmt.Errorf("%w: working confirmation exhausted", ErrPromptDeliveryNotConfirmed)
+func (d *Daemon) paneRunsCodex(ctx context.Context, paneID string) bool {
+	snapshot, err := d.capturePromptDeliverySnapshot(ctx, paneID)
+	if err != nil {
+		return false
+	}
+	if containsFold(snapshot.Output(), "OpenAI Codex") {
+		return true
+	}
+
+	command := strings.TrimSpace(snapshot.CurrentCommand)
+	if command == "" {
+		return false
+	}
+	fields := strings.Fields(command)
+	if len(fields) == 0 {
+		return false
+	}
+	return strings.EqualFold(filepath.Base(fields[0]), "codex")
 }
 
 func (d *Daemon) waitForPromptDeliveryConfirmation(ctx context.Context, paneID string, profile AgentProfile, phase string, baseline promptDeliveryBaseline) (promptDeliveryWaitState, error) {
 	if !baseline.hasWorking {
-		return d.waitForPromptDeliveryMarker(ctx, paneID, profile, defaultAgentHandshakeTimeout, phase)
+		return d.waitForPromptDeliveryIdleOrWorking(ctx, paneID, profile, phase)
 	}
 	return d.waitForFreshPromptDeliveryMarker(ctx, paneID, profile, codexWorkingFreshnessProbeTimeout, phase, baseline)
+}
+
+func (d *Daemon) waitForPromptDeliveryIdleOrWorking(ctx context.Context, paneID string, profile AgentProfile, phase string) (promptDeliveryWaitState, error) {
+	if err := d.amux.WaitIdle(ctx, paneID, codexPromptRetryIdleProbeTime); err != nil {
+		return d.waitForPromptDeliveryMarker(ctx, paneID, profile, codexPromptRetryIdleProbeTime, phase)
+	}
+
+	snapshot, err := d.capturePromptDeliverySnapshot(ctx, paneID)
+	if err != nil {
+		if isPaneGoneError(err) {
+			return promptDeliveryWaitAgentGone, fmt.Errorf("%w: pane disappeared while waiting for idle %s", ErrPromptDeliveryNotConfirmed, phase)
+		}
+		return promptDeliveryWaitError, fmt.Errorf("capture prompt delivery state while waiting for idle %s: %w", phase, err)
+	}
+	if promptDeliveryReturnedToShell(profile, snapshot) {
+		return promptDeliveryWaitAgentGone, promptDeliveryFailure(fmt.Sprintf("%s and codex returned to shell", phase), snapshot)
+	}
+	if snapshot.Exited {
+		return promptDeliveryWaitAgentGone, promptDeliveryFailure(fmt.Sprintf("%s and pane exited", phase), snapshot)
+	}
+	return promptDeliveryWaitTimedOut, promptDeliveryFailure(fmt.Sprintf("pane remained idle %s", phase), snapshot)
 }
 
 func (d *Daemon) waitForPromptDeliveryMarker(ctx context.Context, paneID string, profile AgentProfile, timeout time.Duration, phase string) (promptDeliveryWaitState, error) {

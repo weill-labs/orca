@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -296,7 +297,12 @@ func TestPRReviewPollingNotifiesCallerPaneWhenReviewNudgesAreExhausted(t *testin
 	aliceNudge := "New blocking PR review feedback on #42:\n- alice: Please add tests.\n\nAddress the feedback in the PR review and push an update.\n"
 	bobNudge := "New blocking PR review feedback on #42:\n- bob: Handle the nil case too.\n\nAddress the feedback in the PR review and push an update.\n"
 	carolNudge := "New blocking PR review feedback on #42:\n- carol: Cover the restart flow.\n\nAddress the feedback in the PR review and push an update.\n"
-	leadNotification := "Review nudges exhausted for LAB-689 in w-LAB-689 on PR #42.\nUnresolved review feedback:\n- alice: Please add tests.\n- bob: Handle the nil case too.\n- carol: Cover the restart flow.\n- dave: Persist the nudge counter.\n\nIntervene in w-LAB-689 to address the feedback or reassign the task.\n"
+	leadNotification := "Review nudges exhausted for LAB-689 in w-LAB-689 on PR #42.\nUnresolved review feedback:\n- alice: Please add tests.\n- bob: Handle the nil case too.\n- carol: Cover the restart flow.\n- dave: Persist the nudge counter.\n\nIntervene in w-LAB-689 to address the feedback or reassign the task."
+	leadNotificationSent, err := normalizePromptForDelivery(leadNotification)
+	if err != nil {
+		t.Fatalf("normalizePromptForDelivery() error = %v", err)
+	}
+	leadNotificationSent += "\n"
 
 	tickAndWaitForHeartbeat(t, d, deps, prTicker, adaptivePRFastPollInterval, "first review poll cycle completion")
 	waitFor(t, "first review nudge", func() bool {
@@ -318,11 +324,53 @@ func TestPRReviewPollingNotifiesCallerPaneWhenReviewNudgesAreExhausted(t *testin
 		worker, ok := deps.state.worker("pane-1")
 		return ok &&
 			worker.LastReviewCount == 4 &&
-			deps.amux.countKey("caller-pane-13", leadNotification) == 1 &&
+			deps.amux.countKey("caller-pane-13", leadNotificationSent) == 1 &&
 			deps.events.countType(EventWorkerReviewEscalated) == 1
 	})
 
-	deps.amux.requireSentKeys(t, "caller-pane-13", []string{leadNotification})
+	deps.amux.requireSentKeys(t, "caller-pane-13", []string{leadNotificationSent})
+}
+
+func TestNotifyCallerPaneReviewEscalationRetriesPasteCollapseUntilPaneTurnsActive(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	simulateCodexSubmitPasteCollapse(deps, 3)
+	d := deps.newDaemon(t)
+	active := newPostmortemAssignment(deps)
+	active.Task.CallerPane = "caller-pane-13"
+	active.Task.PRNumber = 42
+	feedback := []prFeedback{
+		{Author: "alice", Body: "Please add tests."},
+		{Author: "bob", Body: "Handle the nil case too."},
+	}
+
+	leadNotification := formatLeadReviewEscalation(active, feedback)
+	leadNotificationSent, err := normalizePromptForDelivery(leadNotification)
+	if err != nil {
+		t.Fatalf("normalizePromptForDelivery() error = %v", err)
+	}
+	d.notifyCallerPaneReviewEscalation(context.Background(), active, feedback)
+
+	deps.amux.requireSentKeys(t, "caller-pane-13", []string{
+		leadNotificationSent + "\n",
+		"\n",
+		"\n",
+		"\n",
+	})
+	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
+		{PaneID: "caller-pane-13", Timeout: codexPromptRetryIdleProbeTime},
+		{PaneID: "caller-pane-13", Timeout: codexPromptRetryIdleProbeTime},
+		{PaneID: "caller-pane-13", Timeout: codexPromptRetryIdleProbeTime},
+		{PaneID: "caller-pane-13", Timeout: codexPromptRetryIdleProbeTime},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("waitIdle calls = %#v, want %#v", got, want)
+	}
+	if got, want := deps.amux.waitContentCalls, []waitContentCall{
+		{PaneID: "caller-pane-13", Substring: codexWorkingText, Timeout: codexPromptRetryIdleProbeTime},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("waitContent calls = %#v, want %#v", got, want)
+	}
 }
 
 func TestPRReviewPollingDefersReviewNudgeUntilWorkerAppearsIdle(t *testing.T) {

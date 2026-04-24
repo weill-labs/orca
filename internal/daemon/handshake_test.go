@@ -50,7 +50,7 @@ func TestAssignConfirmsCodexTrustPromptBeforeSendingPrompt(t *testing.T) {
 	if got, want := deps.amux.waitContentCalls, []waitContentCall{
 		{PaneID: "pane-1", Substring: "do you trust", Timeout: defaultTrustPromptTimeout},
 		{PaneID: "pane-1", Substring: "do you trust", Timeout: defaultTrustPromptTimeout},
-		{PaneID: "pane-1", Substring: codexWorkingText, Timeout: defaultAgentHandshakeTimeout},
+		{PaneID: "pane-1", Substring: codexWorkingText, Timeout: codexPromptRetryIdleProbeTime},
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("waitContent calls = %#v, want %#v", got, want)
 	}
@@ -58,6 +58,7 @@ func TestAssignConfirmsCodexTrustPromptBeforeSendingPrompt(t *testing.T) {
 		{PaneID: "pane-1", Timeout: defaultAgentHandshakeTimeout},
 		{PaneID: "pane-1", Timeout: defaultAgentHandshakeTimeout},
 		{PaneID: "pane-1", Timeout: defaultAgentHandshakeTimeout, Settle: 2 * time.Second},
+		{PaneID: "pane-1", Timeout: codexPromptRetryIdleProbeTime},
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("waitIdle calls = %#v, want %#v", got, want)
 	}
@@ -92,13 +93,14 @@ func TestAssignDoesNotBlindlyConfirmWhenTrustPromptNotPresent(t *testing.T) {
 	deps.amux.requireSentKeys(t, "pane-1", []string{wrappedCodexPrompt("LAB-720", "Implement handshake") + "\n"})
 	if got, want := deps.amux.waitContentCalls, []waitContentCall{
 		{PaneID: "pane-1", Substring: "do you trust", Timeout: defaultTrustPromptTimeout},
-		{PaneID: "pane-1", Substring: codexWorkingText, Timeout: defaultAgentHandshakeTimeout},
+		{PaneID: "pane-1", Substring: codexWorkingText, Timeout: codexPromptRetryIdleProbeTime},
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("waitContent calls = %#v, want %#v", got, want)
 	}
 	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
 		{PaneID: "pane-1", Timeout: defaultAgentHandshakeTimeout},
 		{PaneID: "pane-1", Timeout: defaultAgentHandshakeTimeout, Settle: 2 * time.Second},
+		{PaneID: "pane-1", Timeout: codexPromptRetryIdleProbeTime},
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("waitIdle calls = %#v, want %#v", got, want)
 	}
@@ -146,7 +148,7 @@ func TestAssignResumesCodexBeforeSendingPrompt(t *testing.T) {
 		{PaneID: "pane-1", Substring: "do you trust", Timeout: defaultTrustPromptTimeout},
 		{PaneID: "pane-1", Substring: "›", Timeout: defaultAgentHandshakeTimeout},
 		{PaneID: "pane-1", Substring: "do you trust", Timeout: defaultTrustPromptTimeout},
-		{PaneID: "pane-1", Substring: codexWorkingText, Timeout: defaultAgentHandshakeTimeout},
+		{PaneID: "pane-1", Substring: codexWorkingText, Timeout: codexPromptRetryIdleProbeTime},
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("waitContent calls = %#v, want %#v", got, want)
 	}
@@ -154,6 +156,7 @@ func TestAssignResumesCodexBeforeSendingPrompt(t *testing.T) {
 		{PaneID: "pane-1", Timeout: defaultAgentHandshakeTimeout},
 		{PaneID: "pane-1", Timeout: defaultAgentHandshakeTimeout},
 		{PaneID: "pane-1", Timeout: defaultAgentHandshakeTimeout, Settle: 2 * time.Second},
+		{PaneID: "pane-1", Timeout: codexPromptRetryIdleProbeTime},
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("waitIdle calls = %#v, want %#v", got, want)
 	}
@@ -257,13 +260,14 @@ func TestAssignWaitsForCodexReadyPatternBeforeSendingPrompt(t *testing.T) {
 	if got, want := deps.amux.waitContentCalls, []waitContentCall{
 		{PaneID: "pane-1", Substring: "do you trust", Timeout: defaultTrustPromptTimeout},
 		{PaneID: "pane-1", Substring: codexReadyPattern, Timeout: defaultAgentHandshakeTimeout},
-		{PaneID: "pane-1", Substring: codexWorkingText, Timeout: defaultAgentHandshakeTimeout},
+		{PaneID: "pane-1", Substring: codexWorkingText, Timeout: codexPromptRetryIdleProbeTime},
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("waitContent calls = %#v, want %#v", got, want)
 	}
 	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
 		{PaneID: "pane-1", Timeout: defaultAgentHandshakeTimeout},
 		{PaneID: "pane-1", Timeout: defaultAgentHandshakeTimeout, Settle: defaultPromptSettleDuration},
+		{PaneID: "pane-1", Timeout: codexPromptRetryIdleProbeTime},
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("waitIdle calls = %#v, want %#v", got, want)
 	}
@@ -849,8 +853,8 @@ func TestAssignAllowsConcurrentTrustPromptWaitsAcrossPanes(t *testing.T) {
 				t.Errorf("wait content timeout = %v, want %v", timeout, defaultTrustPromptTimeout)
 			}
 		case codexWorkingText:
-			if timeout != defaultAgentHandshakeTimeout {
-				t.Errorf("wait content timeout = %v, want %v", timeout, defaultAgentHandshakeTimeout)
+			if timeout != codexPromptRetryIdleProbeTime {
+				t.Errorf("wait content timeout = %v, want %v", timeout, codexPromptRetryIdleProbeTime)
 			}
 			return
 		default:

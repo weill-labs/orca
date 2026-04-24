@@ -198,7 +198,7 @@ func normalizedProfileName(profile AgentProfile) string {
 }
 
 func containsFold(input, needle string) bool {
-	return strings.Contains(strings.ToLower(input), needle)
+	return strings.Contains(strings.ToLower(input), strings.ToLower(needle))
 }
 
 func trustPromptText(profile AgentProfile) (string, bool) {

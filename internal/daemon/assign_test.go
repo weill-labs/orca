@@ -460,14 +460,15 @@ func TestAssignRetriesCodexPromptUntilWorkingAppears(t *testing.T) {
 	})
 	if got, want := deps.amux.waitContentCalls, []waitContentCall{
 		{PaneID: "pane-1", Substring: "do you trust", Timeout: defaultTrustPromptTimeout},
-		{PaneID: "pane-1", Substring: "Working", Timeout: defaultAgentHandshakeTimeout},
-		{PaneID: "pane-1", Substring: "Working", Timeout: 2 * defaultAgentHandshakeTimeout},
+		{PaneID: "pane-1", Substring: "Working", Timeout: codexPromptRetryIdleProbeTime},
+		{PaneID: "pane-1", Substring: "Working", Timeout: codexPromptRetryIdleProbeTime},
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("waitContent calls = %#v, want %#v", got, want)
 	}
 	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
 		{PaneID: "pane-1", Timeout: defaultAgentHandshakeTimeout},
 		{PaneID: "pane-1", Timeout: defaultAgentHandshakeTimeout, Settle: defaultPromptSettleDuration},
+		{PaneID: "pane-1", Timeout: codexPromptRetryIdleProbeTime},
 		{PaneID: "pane-1", Timeout: codexPromptRetryIdleProbeTime},
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("waitIdle calls = %#v, want %#v", got, want)
@@ -653,11 +654,11 @@ func TestAssignRollsBackWhenCodexPromptNeverShowsWorking(t *testing.T) {
 	}
 	if got, want := deps.amux.waitContentCalls, []waitContentCall{
 		{PaneID: "pane-1", Substring: "do you trust", Timeout: defaultTrustPromptTimeout},
-		{PaneID: "pane-1", Substring: "Working", Timeout: defaultAgentHandshakeTimeout},
+		{PaneID: "pane-1", Substring: "Working", Timeout: codexPromptRetryIdleProbeTime},
 		{PaneID: "pane-2", Substring: "do you trust", Timeout: defaultTrustPromptTimeout},
-		{PaneID: "pane-2", Substring: "Working", Timeout: defaultAgentHandshakeTimeout},
+		{PaneID: "pane-2", Substring: "Working", Timeout: codexPromptRetryIdleProbeTime},
 		{PaneID: "pane-3", Substring: "do you trust", Timeout: defaultTrustPromptTimeout},
-		{PaneID: "pane-3", Substring: "Working", Timeout: defaultAgentHandshakeTimeout},
+		{PaneID: "pane-3", Substring: "Working", Timeout: codexPromptRetryIdleProbeTime},
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("waitContent calls = %#v, want %#v", got, want)
 	}
