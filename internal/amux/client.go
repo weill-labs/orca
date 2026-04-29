@@ -13,7 +13,13 @@ import (
 	"time"
 )
 
-var spawnPanePattern = regexp.MustCompile(`\bpane\s+(\S+)`)
+var (
+	spawnPanePattern         = regexp.MustCompile(`\bpane\s+(\S+)`)
+	paneListSeparatorPattern = regexp.MustCompile(` {2,}`)
+	paneListPaneIDPattern    = regexp.MustCompile(`^\*?\d+$`)
+	paneListRowPrefixPattern = regexp.MustCompile(`^(\*?\d+)\s+(\S+)\s+(\S+)\s+(.*)$`)
+	paneListTailPattern      = regexp.MustCompile(`^(?:(?:.+?)\s+)?(?:--|[0-9]+[A-Za-z]+(?:[0-9]+[A-Za-z]+)* ago)\s+(\S+)(.*)$`)
+)
 
 var ErrWaitContentTimeout = errors.New("amux wait content timeout")
 var ErrPaneNotFound = errors.New("amux pane not found")
@@ -569,13 +575,8 @@ func parsePaneList(output string) ([]Pane, error) {
 	}
 
 	header := lines[0]
-	nameColumn := strings.Index(header, "NAME")
-	hostColumn := strings.Index(header, "HOST")
-	windowColumn := strings.Index(header, "WINDOW")
-	taskColumn := strings.Index(header, "TASK")
-	metaColumn := strings.Index(header, "META")
-	if nameColumn <= 0 || hostColumn <= nameColumn || windowColumn <= hostColumn || taskColumn <= windowColumn || metaColumn <= taskColumn {
-		return nil, fmt.Errorf("parse pane list header: %q", strings.TrimSpace(header))
+	if err := parsePaneListHeader(header); err != nil {
+		return nil, fmt.Errorf("parse pane list header %q: %w", strings.TrimSpace(header), err)
 	}
 
 	panes := make([]Pane, 0, len(lines)-1)
@@ -584,23 +585,94 @@ func parsePaneList(output string) ([]Pane, error) {
 			continue
 		}
 
-		paneID := strings.TrimSpace(columnSlice(line, 0, nameColumn))
-		paneID = strings.TrimPrefix(paneID, "*")
-		paneID = strings.TrimSpace(paneID)
-		if paneID == "" {
-			return nil, fmt.Errorf("parse pane id from list row: %q", strings.TrimSpace(line))
+		pane, err := parsePaneListRow(line)
+		if err != nil {
+			return nil, err
 		}
-
-		meta := strings.TrimSpace(columnSlice(line, metaColumn, len(line)))
-		panes = append(panes, Pane{
-			ID:     paneID,
-			Name:   strings.TrimSpace(columnSlice(line, nameColumn, hostColumn)),
-			Window: strings.TrimSpace(columnSlice(line, windowColumn, taskColumn)),
-			Lead:   paneMetaHasFlag(meta, "lead"),
-		})
+		panes = append(panes, pane)
 	}
 
 	return panes, nil
+}
+
+func parsePaneListHeader(header string) error {
+	fields := splitPaneListFields(header)
+	want := []string{"PANE", "NAME", "HOST", "BRANCH", "IDLE", "WINDOW", "TASK", "META"}
+	if len(fields) != len(want) {
+		return fmt.Errorf("got %d columns, want %d", len(fields), len(want))
+	}
+	for i := range want {
+		if fields[i] != want[i] {
+			return fmt.Errorf("column %d = %q, want %q", i, fields[i], want[i])
+		}
+	}
+	return nil
+}
+
+func parsePaneListRow(line string) (Pane, error) {
+	trimmed := strings.TrimSpace(line)
+	fields := strings.Fields(trimmed)
+	if len(fields) == 0 {
+		return Pane{}, fmt.Errorf("parse pane list row: %q", strings.TrimSpace(line))
+	}
+	paneID := strings.TrimSpace(fields[0])
+	if !paneListPaneIDPattern.MatchString(paneID) {
+		return Pane{}, fmt.Errorf("parse pane id from list row: %q", strings.TrimSpace(line))
+	}
+
+	matches := paneListRowPrefixPattern.FindStringSubmatch(trimmed)
+	if matches == nil {
+		return Pane{}, fmt.Errorf("parse pane list row: %q", strings.TrimSpace(line))
+	}
+
+	window, meta, err := paneListWindowAndMeta(matches[4])
+	if err != nil {
+		return Pane{}, fmt.Errorf("%w: %q", err, strings.TrimSpace(line))
+	}
+	if window == "" {
+		return Pane{}, fmt.Errorf("parse pane window from list row: %q", strings.TrimSpace(line))
+	}
+
+	return Pane{
+		ID:     strings.TrimPrefix(matches[1], "*"),
+		Name:   matches[2],
+		Window: window,
+		Lead:   paneMetaHasFlag(meta, "lead"),
+	}, nil
+}
+
+func splitPaneListFields(line string) []string {
+	return paneListSeparatorPattern.Split(strings.TrimSpace(line), -1)
+}
+
+func paneListWindowAndMeta(tail string) (string, string, error) {
+	matches := paneListTailPattern.FindStringSubmatch(strings.TrimSpace(tail))
+	if matches == nil {
+		return "", "", errors.New("parse pane idle/window from list row")
+	}
+	return matches[1], paneListMetadataSuffix(matches[2]), nil
+}
+
+func paneListMetadataSuffix(text string) string {
+	tokens := strings.Fields(text)
+	if len(tokens) == 0 {
+		return ""
+	}
+	for i, token := range tokens {
+		if strings.Contains(token, "=") {
+			start := i
+			if i > 0 && tokens[i-1] == "lead" {
+				start = i - 1
+			}
+			return strings.Join(tokens[start:], " ")
+		}
+	}
+	for i, token := range tokens {
+		if token == "lead" && i == len(tokens)-1 {
+			return "lead"
+		}
+	}
+	return ""
 }
 
 func paneMetaHasFlag(meta, flag string) bool {
@@ -610,17 +682,4 @@ func paneMetaHasFlag(meta, flag string) bool {
 		}
 	}
 	return false
-}
-
-func columnSlice(line string, start, end int) string {
-	if start >= len(line) {
-		return ""
-	}
-	if end > len(line) {
-		end = len(line)
-	}
-	if end < start {
-		return ""
-	}
-	return line[start:end]
 }
