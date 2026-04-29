@@ -45,10 +45,20 @@ func withPollTickTiming(ctx context.Context, timing *pollTickTiming) context.Con
 }
 
 func pollTickTimingFromContext(ctx context.Context) *pollTickTiming {
+	if ctx == nil {
+		return nil
+	}
 	if timing, ok := ctx.Value(pollTickTimingContextKey{}).(*pollTickTiming); ok {
 		return timing
 	}
 	return nil
+}
+
+func pollTickGitHubCall(ctx context.Context) func() {
+	if timing := pollTickTimingFromContext(ctx); timing != nil {
+		return timing.githubCall()
+	}
+	return func() {}
 }
 
 func (t *pollTickTiming) stage(name string) func() {

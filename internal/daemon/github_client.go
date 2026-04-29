@@ -596,10 +596,7 @@ func reviewPayloadFromSnapshot(payload prSnapshotPayload) (prReviewPayload, bool
 }
 
 func (c *gitHubCLIClient) run(ctx context.Context, args ...string) ([]byte, error) {
-	done := func() {}
-	if timing := pollTickTimingFromContext(ctx); timing != nil {
-		done = timing.githubCall()
-	}
+	done := pollTickGitHubCall(ctx)
 	defer done()
 
 	backoff := c.initialBackoff
