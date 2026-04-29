@@ -35,6 +35,7 @@ type fakeAmux struct {
 	killHook                     func(paneID string)
 	waitIdleErr                  error
 	waitIdleHook                 func(paneID string, timeout, settle time.Duration)
+	waitIdleFunc                 func(ctx context.Context, paneID string, timeout, settle time.Duration) error
 	waitContentErr               error
 	waitContentResults           []error
 	waitContentHook              func(paneID, substring string, timeout time.Duration)
@@ -432,6 +433,9 @@ func (a *fakeAmux) WaitIdle(ctx context.Context, paneID string, timeout time.Dur
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.waitIdleCalls = append(a.waitIdleCalls, waitIdleCall{PaneID: paneID, Timeout: timeout})
+	if a.waitIdleFunc != nil {
+		return a.waitIdleFunc(ctx, paneID, timeout, 0)
+	}
 	if timeout == codexPromptRetryIdleProbeTime && a.waitIdleHook == nil && a.waitIdleErr == nil && len(a.sentKeys[paneID]) > 0 {
 		return errors.New("idle timeout")
 	}
@@ -448,6 +452,9 @@ func (a *fakeAmux) WaitIdleSettle(ctx context.Context, paneID string, timeout, s
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.waitIdleCalls = append(a.waitIdleCalls, waitIdleCall{PaneID: paneID, Timeout: timeout, Settle: settle})
+	if a.waitIdleFunc != nil {
+		return a.waitIdleFunc(ctx, paneID, timeout, settle)
+	}
 	return a.waitIdleErr
 }
 
