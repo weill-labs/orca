@@ -122,24 +122,52 @@ func TestLocalControllerSpawn(t *testing.T) {
 			},
 		},
 		{
-			name: "sends prompt to spawned agent",
+			name: "returns unknown agent profile before allocating clone",
+			amux: &fakeSpawnAmux{},
+			config: &fakeConfig{
+				profiles: map[string]AgentProfile{},
+			},
+			agent:   "missing",
+			wantErr: `load agent profile "missing"`,
+			assert: func(t *testing.T, store state.Store, _ SpawnPaneResult, amuxClient *fakeSpawnAmux, project string) {
+				t.Helper()
+				queryableStore, ok := store.(interface {
+					ListClones(context.Context, string) ([]state.Clone, error)
+				})
+				if !ok {
+					t.Fatal("store does not support clone assertions")
+				}
+				if got := len(amuxClient.spawnRequests); got != 0 {
+					t.Fatalf("len(spawnRequests) = %d, want 0", got)
+				}
+				clones, err := queryableStore.ListClones(context.Background(), project)
+				if err != nil {
+					t.Fatalf("ListClones() error = %v", err)
+				}
+				if got := len(clones); got != 0 {
+					t.Fatalf("len(clones) = %d, want 0", got)
+				}
+			},
+		},
+		{
+			name: "sends prompt to spawned codex agent with confirmation",
 			amux: &fakeSpawnAmux{
 				spawnPane:   amux.Pane{ID: "pane-7", Name: "Scratch pane"},
 				waitIdleErr: errors.New("still working"),
 			},
 			config: &fakeConfig{
 				profiles: map[string]AgentProfile{
-					"scratch": {Name: "scratch", StartCommand: "codex --profile scratch"},
+					"codex": {Name: "codex", StartCommand: "codex --yolo"},
 				},
 			},
-			agent:  "scratch",
+			agent:  "codex",
 			prompt: "explore the repo",
 			assert: func(t *testing.T, _ state.Store, _ SpawnPaneResult, amuxClient *fakeSpawnAmux, _ string) {
 				t.Helper()
 				if got, want := len(amuxClient.spawnRequests), 1; got != want {
 					t.Fatalf("len(spawnRequests) = %d, want %d", got, want)
 				}
-				if got, want := amuxClient.spawnRequests[0].Command, "codex --profile scratch"; got != want {
+				if got, want := amuxClient.spawnRequests[0].Command, "codex --yolo"; got != want {
 					t.Fatalf("spawn command = %q, want %q", got, want)
 				}
 				if got, want := amuxClient.sentKeys["pane-7"], []string{"explore the repo\n"}; !slices.Equal(got, want) {
@@ -150,6 +178,75 @@ func TestLocalControllerSpawn(t *testing.T) {
 				}
 				if got, want := amuxClient.waitContentCalls[0].Substring, codexWorkingText; got != want {
 					t.Fatalf("wait content substring = %q, want %q", got, want)
+				}
+			},
+		},
+		{
+			name: "sends prompt to non-codex agent without codex confirmation",
+			amux: &fakeSpawnAmux{
+				spawnPane: amux.Pane{ID: "pane-7", Name: "Scratch pane"},
+			},
+			config: &fakeConfig{
+				profiles: map[string]AgentProfile{
+					"claude": {Name: "claude", StartCommand: "claude"},
+				},
+			},
+			agent:  "claude",
+			prompt: "explore the repo",
+			assert: func(t *testing.T, _ state.Store, _ SpawnPaneResult, amuxClient *fakeSpawnAmux, _ string) {
+				t.Helper()
+				if got, want := len(amuxClient.spawnRequests), 1; got != want {
+					t.Fatalf("len(spawnRequests) = %d, want %d", got, want)
+				}
+				if got, want := amuxClient.spawnRequests[0].Command, "claude"; got != want {
+					t.Fatalf("spawn command = %q, want %q", got, want)
+				}
+				if got, want := amuxClient.sentKeys["pane-7"], []string{"explore the repo\n"}; !slices.Equal(got, want) {
+					t.Fatalf("sent keys = %#v, want %#v", got, want)
+				}
+				if got := len(amuxClient.waitContentCalls); got != 0 {
+					t.Fatalf("len(waitContentCalls) = %d, want 0", got)
+				}
+			},
+		},
+		{
+			name: "releases clone when prompt delivery fails",
+			amux: &fakeSpawnAmux{
+				spawnPane:      amux.Pane{ID: "pane-7", Name: "Scratch pane"},
+				waitIdleErr:    errors.New("still working"),
+				waitContentErr: amux.ErrWaitContentTimeout,
+			},
+			config: &fakeConfig{
+				profiles: map[string]AgentProfile{
+					"codex": {Name: "codex", StartCommand: "codex --yolo"},
+				},
+			},
+			agent:   "codex",
+			prompt:  "explore the repo",
+			wantErr: "send prompt: prompt delivery not confirmed",
+			assert: func(t *testing.T, store state.Store, _ SpawnPaneResult, amuxClient *fakeSpawnAmux, project string) {
+				t.Helper()
+				queryableStore, ok := store.(interface {
+					ListClones(context.Context, string) ([]state.Clone, error)
+				})
+				if !ok {
+					t.Fatal("store does not support clone assertions")
+				}
+				if got, want := len(amuxClient.spawnRequests), 1; got != want {
+					t.Fatalf("len(spawnRequests) = %d, want %d", got, want)
+				}
+				clones, err := queryableStore.ListClones(context.Background(), project)
+				if err != nil {
+					t.Fatalf("ListClones() error = %v", err)
+				}
+				if got, want := len(clones), 1; got != want {
+					t.Fatalf("len(clones) = %d, want %d", got, want)
+				}
+				if got, want := clones[0].Status, "free"; got != want {
+					t.Fatalf("clone status = %q, want %q", got, want)
+				}
+				if clones[0].Issue != "" || clones[0].Branch != "" {
+					t.Fatalf("clone occupancy = %#v, want released clone", clones[0])
 				}
 			},
 		},
@@ -481,6 +578,7 @@ type fakeSpawnAmux struct {
 	spawnErr         error
 	listPanes        []amux.Pane
 	waitIdleErr      error
+	waitContentErr   error
 	sentKeys         map[string][]string
 	waitContentCalls []waitContentCall
 }
@@ -530,7 +628,7 @@ func (f *fakeSpawnAmux) WaitIdleSettle(context.Context, string, time.Duration, t
 }
 func (f *fakeSpawnAmux) WaitContent(_ context.Context, paneID, substring string, timeout time.Duration) error {
 	f.waitContentCalls = append(f.waitContentCalls, waitContentCall{PaneID: paneID, Substring: substring, Timeout: timeout})
-	return nil
+	return f.waitContentErr
 }
 
 func newSpawnProject(t *testing.T) (string, string) {

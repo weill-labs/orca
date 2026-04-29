@@ -27,10 +27,14 @@ func (c *LocalController) Spawn(ctx context.Context, req SpawnPaneRequest) (Spaw
 	}
 
 	var command string
+	var profile AgentProfile
 	if agentName != "" {
-		profile, err := c.config.AgentProfile(ctx, agentName)
+		profile, err = c.config.AgentProfile(ctx, agentName)
 		if err != nil {
 			return SpawnPaneResult{}, fmt.Errorf("load agent profile %q: %w", agentName, err)
+		}
+		if profile.Name == "" {
+			profile.Name = agentName
 		}
 		command = profile.StartCommand
 	}
@@ -63,8 +67,10 @@ func (c *LocalController) Spawn(ctx context.Context, req SpawnPaneRequest) (Spaw
 	}
 
 	if strings.TrimSpace(req.Prompt) != "" {
-		promptSender := &Daemon{amux: amuxClient, now: c.now, sleep: sleepContext}
-		if err := promptSender.sendAndConfirmWorking(ctx, pane.ID, req.Prompt); err != nil {
+		if err := c.sendSpawnPrompt(ctx, amuxClient, pane.ID, profile, req.Prompt); err != nil {
+			if releaseErr := manager.Release(ctx, clone.Path, clone.CurrentBranch); releaseErr != nil {
+				err = errors.Join(err, fmt.Errorf("release clone after prompt failure: %w", releaseErr))
+			}
 			return SpawnPaneResult{}, fmt.Errorf("send prompt: %w", err)
 		}
 	}
@@ -75,6 +81,19 @@ func (c *LocalController) Spawn(ctx context.Context, req SpawnPaneRequest) (Spaw
 		PaneName:  pane.Name,
 		ClonePath: clone.Path,
 	}, nil
+}
+
+func (c *LocalController) sendSpawnPrompt(ctx context.Context, amuxClient amux.Client, paneID string, profile AgentProfile, prompt string) error {
+	promptSender := &Daemon{amux: amuxClient, now: c.now, sleep: sleepContext}
+	if strings.EqualFold(profile.Name, "codex") {
+		return promptSender.sendAndConfirmWorking(ctx, paneID, prompt)
+	}
+
+	deliveryPrompt, err := normalizePromptForDelivery(prompt)
+	if err != nil {
+		return err
+	}
+	return amuxClient.SendKeys(ctx, paneID, deliveryPrompt, "Enter")
 }
 
 func manualSpawnRef(at time.Time) string {
