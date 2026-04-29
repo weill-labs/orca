@@ -54,7 +54,8 @@ func (d *Daemon) runLoop(ctx context.Context, done chan struct{}) {
 				continue
 			}
 			captureInFlight = true
-			d.runCaptureTick(ctx)
+			timing := d.runCaptureTick(ctx)
+			timing.log(d.logf)
 			d.recordHeartbeat(ctx)
 			drainMonitorTicks(captureTickCh)
 			captureInFlight = false
@@ -72,12 +73,15 @@ func (d *Daemon) runLoop(ctx context.Context, done chan struct{}) {
 				continue
 			}
 			pollInFlight = true
-			d.runPollTick(ctx)
+			timing := d.runPollTick(ctx)
 			now := d.now()
 			if shouldRunMissingPRNumberReconciliation(lastMissingPRNumberReconcile, now) {
+				done := timing.stage("missing_pr_reconcile")
 				d.reconcileMissingPRNumbers(ctx)
+				done()
 				lastMissingPRNumberReconcile = now
 			}
+			timing.log(d.logf)
 			d.recordHeartbeat(ctx)
 			drainMonitorTicks(pollTickCh)
 			pollInFlight = false
@@ -108,40 +112,84 @@ func drainMonitorTicks(tickCh <-chan time.Time) {
 	}
 }
 
-func (d *Daemon) runCaptureTick(ctx context.Context) {
+func (d *Daemon) runCaptureTick(ctx context.Context) *pollTickTiming {
+	timing := newPollTickTiming("capture", d.now)
+	ctx = withPollTickTiming(ctx, timing)
 	ctx = d.withMonitorCircuits(ctx)
+	done := timing.stage("state_read")
 	assignments, err := d.state.ActiveAssignments(ctx, d.project)
+	done()
 	if err != nil {
-		return
+		return timing
 	}
+	done = timing.stage("pane_reconcile")
 	assignments = d.reconcileTrackedPanes(ctx, assignments)
+	done()
+	done = timing.stage("monitor_checks")
 	results := d.dispatchTaskMonitorChecks(ctx, assignments, taskMonitorCheckCapture)
+	done()
+	done = timing.stage("apply_results")
 	d.applyTaskMonitorResults(ctx, results)
+	done()
+	return timing
 }
 
-func (d *Daemon) runPollTick(ctx context.Context) {
+func (d *Daemon) runPollTick(ctx context.Context) *pollTickTiming {
+	timing := newPollTickTiming("poll", d.now)
+	ctx = withPollTickTiming(ctx, timing)
 	ctx = d.withMonitorCircuits(ctx)
+	done := timing.stage("merge_updates_initial")
 	d.applyMergeQueueUpdates(ctx)
+	done()
 
-	assignments, err := d.prPollAssignments(ctx)
+	done = timing.stage("state_read")
+	tasks, err := d.prPollTasks(ctx)
+	done()
 	if err == nil {
+		done = timing.stage("resume_workers")
+		assignments := d.prPollAssignmentsForTasks(ctx, tasks)
+		done()
+		done = timing.stage("pane_reconcile")
 		assignments = d.reconcileTrackedPanes(ctx, assignments)
+		done()
+		done = timing.stage("schedule_filter")
 		assignments = dueAssignmentsForPRPoll(d.now(), assignments, d.currentPRPollInterval())
+		done()
+		done = timing.stage("monitor_checks")
 		results := d.dispatchTaskMonitorChecks(ctx, assignments, taskMonitorCheckPRPoll)
+		done()
+		done = timing.stage("apply_results")
 		d.applyTaskMonitorResults(ctx, results)
+		done()
 	}
 
+	done = timing.stage("dispatch_merge_queue")
 	d.dispatchMergeQueue(ctx)
+	done()
+	done = timing.stage("merge_updates_final")
 	d.applyMergeQueueUpdates(ctx)
+	done()
+	return timing
 }
 
 func (d *Daemon) prPollAssignments(ctx context.Context) ([]ActiveAssignment, error) {
+	tasks, err := d.prPollTasks(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return d.prPollAssignmentsForTasks(ctx, tasks), nil
+}
+
+func (d *Daemon) prPollTasks(ctx context.Context) ([]Task, error) {
 	tasks, err := d.state.NonTerminalTasks(ctx, d.project)
 	if err != nil {
 		d.emitProjectPRPollTrace(ctx, d.project, "list_non_terminal_tasks_error", err)
 		return nil, err
 	}
+	return tasks, nil
+}
 
+func (d *Daemon) prPollAssignmentsForTasks(ctx context.Context, tasks []Task) []ActiveAssignment {
 	assignments := make([]ActiveAssignment, 0, len(tasks))
 	for _, task := range tasks {
 		worker, hasWorker, err := d.resumeWorker(ctx, task)
@@ -167,7 +215,7 @@ func (d *Daemon) prPollAssignments(ctx context.Context) ([]ActiveAssignment, err
 			Worker: worker,
 		})
 	}
-	return assignments, nil
+	return assignments
 }
 
 func (d *Daemon) reconcileTrackedPanes(ctx context.Context, assignments []ActiveAssignment) []ActiveAssignment {

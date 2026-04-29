@@ -6,6 +6,9 @@ import (
 )
 
 const (
+	// Warn after two missed capture intervals (10s by default): one interval is
+	// the expected heartbeat cadence, and the second gives normal tick jitter a
+	// full interval of slack while still logging diagnostics before unhealthy.
 	watchdogWarningMultiplier   = 2
 	watchdogUnhealthyMultiplier = 5
 )

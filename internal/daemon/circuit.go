@@ -198,7 +198,10 @@ type commandRunnerContextKey struct{}
 type gitHubClientFactoryContextKey struct{}
 
 func (d *Daemon) withMonitorCircuits(ctx context.Context) context.Context {
-	ctx = context.WithValue(ctx, commandRunnerContextKey{}, newCircuitCommandRunner(d.commands, d.monitorGitHubCircuit))
+	timing := pollTickTimingFromContext(ctx)
+	commandRunner := newCircuitCommandRunner(d.commands, d.monitorGitHubCircuit)
+	commandRunner = newTimingCommandRunner(commandRunner, timing)
+	ctx = context.WithValue(ctx, commandRunnerContextKey{}, commandRunner)
 	ctx = context.WithValue(ctx, gitHubClientFactoryContextKey{}, func(projectPath string) gitHubClient {
 		return newCircuitGitHubClient(d.githubForProject(projectPath), d.monitorGitHubCircuit)
 	})
