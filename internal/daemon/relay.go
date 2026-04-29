@@ -608,18 +608,19 @@ func (d *Daemon) enqueuePollIntervalUpdate(interval time.Duration) {
 
 func (d *Daemon) currentPRPollInterval() time.Duration {
 	interval := d.pollInterval
-	if d.relayHealthy.Load() {
+	tasks, tasksOK := d.pollScheduleTasks()
+	if d.relayHealthy.Load() && tasksOK && len(tasks) == 0 {
 		interval = relayHealthyPollInterval
 	}
-	if interval <= openPRPollIntervalCap || !d.hasTrackedPRTask() {
+	if interval <= openPRPollIntervalCap || !hasTrackedPRTask(tasks) {
 		return interval
 	}
 	return openPRPollIntervalCap
 }
 
-func (d *Daemon) hasTrackedPRTask() bool {
+func (d *Daemon) pollScheduleTasks() ([]Task, bool) {
 	if d.state == nil {
-		return false
+		return nil, false
 	}
 
 	ctx := d.stopContext
@@ -629,8 +630,12 @@ func (d *Daemon) hasTrackedPRTask() bool {
 
 	tasks, err := d.state.NonTerminalTasks(ctx, d.project)
 	if err != nil {
-		return false
+		return nil, false
 	}
+	return tasks, true
+}
+
+func hasTrackedPRTask(tasks []Task) bool {
 	for _, task := range tasks {
 		if task.PRNumber > 0 {
 			return true
