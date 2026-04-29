@@ -213,9 +213,6 @@ func markTaskPRMerged(update *TaskStateUpdate, now time.Time) {
 }
 
 func markAlreadyMergedCompletion(update *TaskStateUpdate) {
-	if update == nil {
-		return
-	}
 	update.PRMerged = true
 	update.CompletionStatus = TaskStatusDone
 	update.CompletionEventType = EventTaskCompleted
