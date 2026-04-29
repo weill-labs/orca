@@ -98,6 +98,69 @@ func TestPRMergePollingSendsWrapUpAndCleansClone(t *testing.T) {
 	}
 }
 
+func TestPRPollAlreadyMergedTaskSendsWrapUpAndCompletesAfterRestart(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	setLifecyclePromptActiveAfterIdleProbes(deps, 0)
+	deps.amux.rejectCanceledContext = true
+	deps.pool.rejectCanceledContext = true
+	deps.state.rejectCanceledContext = true
+
+	const issue = "LAB-1496"
+	seedTaskMonitorAssignmentWithState(t, deps, issue, "pane-1", 469, TaskStateMerged)
+	setAssignmentWorkerID(t, deps, issue, "worker-01")
+
+	d := deps.newDaemon(t)
+	t.Cleanup(func() {
+		d.stopAllTaskMonitors(true)
+	})
+
+	d.runPollTick(context.Background())
+
+	task, ok := deps.state.task(issue)
+	if !ok {
+		t.Fatal("task missing after already-merged restart cleanup")
+	}
+	if got, want := task.Status, TaskStatusDone; got != want {
+		t.Fatalf("task.Status = %q, want %q", got, want)
+	}
+	if got, want := task.State, TaskStateDone; got != want {
+		t.Fatalf("task.State = %q, want %q", got, want)
+	}
+	worker, ok := deps.state.worker("worker-01")
+	if !ok {
+		t.Fatal("worker missing after already-merged restart cleanup")
+	}
+	if worker.Issue != "" || worker.PaneID != "" {
+		t.Fatalf("worker claim = issue %q pane %q, want released", worker.Issue, worker.PaneID)
+	}
+	if got, want := deps.pool.releasedClones(), []Clone{{
+		Name:          "clone-" + issue,
+		Path:          "/tmp/" + issue,
+		CurrentBranch: issue,
+		AssignedTask:  issue,
+	}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("released clones = %#v, want %#v", got, want)
+	}
+	if got, want := deps.issueTracker.statuses(), []issueStatusUpdate{
+		{Issue: issue, State: IssueStateDone},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("issue tracker statuses = %#v, want %#v", got, want)
+	}
+	deps.amux.requireSentKeys(t, "pane-1", []string{
+		"PR merged, wrap up.\n",
+		"$postmortem\n",
+	})
+	deps.events.requireTypes(t, EventPRPollTrace, EventPRMerged, EventWorkerPostmortem, EventTaskCompleted)
+	if got := deps.events.lastMessage(EventPRPollTrace); !strings.Contains(got, "action=task_already_merged") {
+		t.Fatalf("last pr poll trace = %q, want task_already_merged", got)
+	}
+	if got, want := len(deps.commands.callsByName("gh")), 0; got != want {
+		t.Fatalf("gh command count = %d, want %d", got, want)
+	}
+}
+
 func TestQueuedPRMergePollingCompletesTaskWithoutExtraTick(t *testing.T) {
 	t.Parallel()
 
