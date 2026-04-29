@@ -209,7 +209,7 @@ func rotateDaemonLogIfOversized(path string, maxBytes int64, backups int) error 
 			continue
 		}
 		if err := removeDaemonLogFile(entry.temp); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("remove old daemon log backup: %w", err)
+			log.Printf("remove old daemon log backup %s: %v", entry.temp, err)
 		}
 	}
 	return nil

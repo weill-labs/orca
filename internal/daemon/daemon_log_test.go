@@ -80,6 +80,26 @@ func TestRotateDaemonLogRestoresCurrentFileWhenStagingBackupFails(t *testing.T) 
 	assertDaemonLogTestFile(t, numberedDaemonLogPath(logPath, 1), "generation-1")
 }
 
+func TestRotateDaemonLogContinuesWhenDroppedBackupCleanupFails(t *testing.T) {
+	restoreDaemonLogHooks(t)
+
+	logPath := filepath.Join(t.TempDir(), "daemon.log")
+	writeDaemonLogTestFile(t, logPath, "current")
+	writeDaemonLogTestFile(t, numberedDaemonLogPath(logPath, 4), "generation-4")
+	writeDaemonLogTestFile(t, numberedDaemonLogPath(logPath, 5), "generation-5")
+
+	removeDaemonLogFile = func(string) error {
+		return errors.New("remove failed")
+	}
+
+	if err := rotateDaemonLogIfOversized(logPath, 1, 5); err != nil {
+		t.Fatalf("rotateDaemonLogIfOversized() error = %v", err)
+	}
+
+	assertDaemonLogTestFile(t, numberedDaemonLogPath(logPath, 1), "current")
+	assertDaemonLogTestFile(t, numberedDaemonLogPath(logPath, 5), "generation-4")
+}
+
 func TestRotateDaemonLogSkipsWhenRotationIsNotNeeded(t *testing.T) {
 	t.Parallel()
 
