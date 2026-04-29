@@ -68,9 +68,10 @@ func (c *LocalController) Spawn(ctx context.Context, req SpawnPaneRequest) (Spaw
 
 	if strings.TrimSpace(req.Prompt) != "" {
 		if err := c.sendSpawnPrompt(ctx, amuxClient, pane.ID, profile, req.Prompt); err != nil {
-			if releaseErr := manager.Release(ctx, clone.Path, clone.CurrentBranch); releaseErr != nil {
-				err = errors.Join(err, fmt.Errorf("release clone after prompt failure: %w", releaseErr))
-			}
+			// Keep the clone occupied once a pane exists. Releasing it without
+			// killing the pane would allow another task to reuse a worktree that
+			// still has a live scratch pane in it, and spawn must not kill panes
+			// automatically.
 			return SpawnPaneResult{}, fmt.Errorf("send prompt: %w", err)
 		}
 	}

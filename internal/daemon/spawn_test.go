@@ -210,7 +210,7 @@ func TestLocalControllerSpawn(t *testing.T) {
 			},
 		},
 		{
-			name: "releases clone when prompt delivery fails",
+			name: "keeps clone occupied when codex prompt delivery fails after pane spawn",
 			amux: &fakeSpawnAmux{
 				spawnPane:      amux.Pane{ID: "pane-7", Name: "Scratch pane"},
 				waitIdleErr:    errors.New("still working"),
@@ -235,6 +235,9 @@ func TestLocalControllerSpawn(t *testing.T) {
 				if got, want := len(amuxClient.spawnRequests), 1; got != want {
 					t.Fatalf("len(spawnRequests) = %d, want %d", got, want)
 				}
+				if got := len(amuxClient.killCalls); got != 0 {
+					t.Fatalf("len(killCalls) = %d, want 0", got)
+				}
 				clones, err := queryableStore.ListClones(context.Background(), project)
 				if err != nil {
 					t.Fatalf("ListClones() error = %v", err)
@@ -242,11 +245,54 @@ func TestLocalControllerSpawn(t *testing.T) {
 				if got, want := len(clones), 1; got != want {
 					t.Fatalf("len(clones) = %d, want %d", got, want)
 				}
-				if got, want := clones[0].Status, "free"; got != want {
+				if got, want := clones[0].Status, "occupied"; got != want {
 					t.Fatalf("clone status = %q, want %q", got, want)
 				}
-				if clones[0].Issue != "" || clones[0].Branch != "" {
-					t.Fatalf("clone occupancy = %#v, want released clone", clones[0])
+				if clones[0].Issue == "" || clones[0].Branch == "" {
+					t.Fatalf("clone occupancy = %#v, want retained synthetic issue and branch", clones[0])
+				}
+			},
+		},
+		{
+			name: "keeps clone occupied when non-codex prompt send fails after pane spawn",
+			amux: &fakeSpawnAmux{
+				spawnPane:   amux.Pane{ID: "pane-7", Name: "Scratch pane"},
+				sendKeysErr: errors.New("pane input failed"),
+			},
+			config: &fakeConfig{
+				profiles: map[string]AgentProfile{
+					"claude": {Name: "claude", StartCommand: "claude"},
+				},
+			},
+			agent:   "claude",
+			prompt:  "explore the repo",
+			wantErr: "send prompt: pane input failed",
+			assert: func(t *testing.T, store state.Store, _ SpawnPaneResult, amuxClient *fakeSpawnAmux, project string) {
+				t.Helper()
+				queryableStore, ok := store.(interface {
+					ListClones(context.Context, string) ([]state.Clone, error)
+				})
+				if !ok {
+					t.Fatal("store does not support clone assertions")
+				}
+				if got, want := len(amuxClient.spawnRequests), 1; got != want {
+					t.Fatalf("len(spawnRequests) = %d, want %d", got, want)
+				}
+				if got := len(amuxClient.killCalls); got != 0 {
+					t.Fatalf("len(killCalls) = %d, want 0", got)
+				}
+				clones, err := queryableStore.ListClones(context.Background(), project)
+				if err != nil {
+					t.Fatalf("ListClones() error = %v", err)
+				}
+				if got, want := len(clones), 1; got != want {
+					t.Fatalf("len(clones) = %d, want %d", got, want)
+				}
+				if got, want := clones[0].Status, "occupied"; got != want {
+					t.Fatalf("clone status = %q, want %q", got, want)
+				}
+				if clones[0].Issue == "" || clones[0].Branch == "" {
+					t.Fatalf("clone occupancy = %#v, want retained synthetic issue and branch", clones[0])
 				}
 			},
 		},
@@ -577,8 +623,10 @@ type fakeSpawnAmux struct {
 	spawnPane        amux.Pane
 	spawnErr         error
 	listPanes        []amux.Pane
+	sendKeysErr      error
 	waitIdleErr      error
 	waitContentErr   error
+	killCalls        []string
 	sentKeys         map[string][]string
 	waitContentCalls []waitContentCall
 }
@@ -604,6 +652,9 @@ func (f *fakeSpawnAmux) Metadata(context.Context, string) (map[string]string, er
 	return nil, nil
 }
 func (f *fakeSpawnAmux) SendKeys(_ context.Context, paneID string, keys ...string) error {
+	if f.sendKeysErr != nil {
+		return f.sendKeysErr
+	}
 	if f.sentKeys == nil {
 		f.sentKeys = make(map[string][]string)
 	}
@@ -619,7 +670,10 @@ func (f *fakeSpawnAmux) CaptureHistory(context.Context, string) (amux.PaneCaptur
 }
 func (f *fakeSpawnAmux) SetMetadata(context.Context, string, map[string]string) error { return nil }
 func (f *fakeSpawnAmux) RemoveMetadata(context.Context, string, ...string) error      { return nil }
-func (f *fakeSpawnAmux) KillPane(context.Context, string) error                       { return nil }
+func (f *fakeSpawnAmux) KillPane(_ context.Context, paneID string) error {
+	f.killCalls = append(f.killCalls, paneID)
+	return nil
+}
 func (f *fakeSpawnAmux) WaitIdle(context.Context, string, time.Duration) error {
 	return f.waitIdleErr
 }
