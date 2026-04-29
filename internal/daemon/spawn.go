@@ -21,6 +21,24 @@ func (c *LocalController) Spawn(ctx context.Context, req SpawnPaneRequest) (Spaw
 		return SpawnPaneResult{}, err
 	}
 
+	agentName := strings.TrimSpace(req.Agent)
+	if strings.TrimSpace(req.Prompt) != "" && agentName == "" {
+		return SpawnPaneResult{}, fmt.Errorf("spawn requires --agent when --prompt is set")
+	}
+
+	var command string
+	var profile AgentProfile
+	if agentName != "" {
+		profile, err = c.config.AgentProfile(ctx, agentName)
+		if err != nil {
+			return SpawnPaneResult{}, fmt.Errorf("load agent profile %q: %w", agentName, err)
+		}
+		if profile.Name == "" {
+			profile.Name = agentName
+		}
+		command = profile.StartCommand
+	}
+
 	manager, amuxClient, err := c.spawnRuntime(projectPath, req.Session)
 	if err != nil {
 		return SpawnPaneResult{}, err
@@ -38,6 +56,7 @@ func (c *LocalController) Spawn(ctx context.Context, req SpawnPaneRequest) (Spaw
 		Window:  window,
 		Name:    req.Title,
 		CWD:     clone.Path,
+		Command: command,
 	})
 	if err != nil {
 		releaseErr := manager.Release(ctx, clone.Path, clone.CurrentBranch)
@@ -47,12 +66,35 @@ func (c *LocalController) Spawn(ctx context.Context, req SpawnPaneRequest) (Spaw
 		return SpawnPaneResult{}, fmt.Errorf("spawn pane: %w", err)
 	}
 
+	if strings.TrimSpace(req.Prompt) != "" {
+		if err := c.sendSpawnPrompt(ctx, amuxClient, pane.ID, profile, req.Prompt); err != nil {
+			// Keep the clone occupied once a pane exists. Releasing it without
+			// killing the pane would allow another task to reuse a worktree that
+			// still has a live scratch pane in it, and spawn must not kill panes
+			// automatically.
+			return SpawnPaneResult{}, fmt.Errorf("send prompt: %w", err)
+		}
+	}
+
 	return SpawnPaneResult{
 		Project:   projectPath,
 		PaneID:    pane.ID,
 		PaneName:  pane.Name,
 		ClonePath: clone.Path,
 	}, nil
+}
+
+func (c *LocalController) sendSpawnPrompt(ctx context.Context, amuxClient amux.Client, paneID string, profile AgentProfile, prompt string) error {
+	promptSender := &Daemon{amux: amuxClient, now: c.now, sleep: sleepContext}
+	if strings.EqualFold(profile.Name, "codex") {
+		return promptSender.sendAndConfirmWorking(ctx, paneID, prompt)
+	}
+
+	deliveryPrompt, err := normalizePromptForDelivery(prompt)
+	if err != nil {
+		return err
+	}
+	return amuxClient.SendKeys(ctx, paneID, deliveryPrompt, "Enter")
 }
 
 func manualSpawnRef(at time.Time) string {

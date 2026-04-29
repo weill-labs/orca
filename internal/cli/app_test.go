@@ -218,6 +218,30 @@ func TestAppRunDispatchesCommands(t *testing.T) {
 			},
 		},
 		{
+			name: "spawn agent prompt",
+			args: func(_, _ string) []string {
+				return []string{"spawn", "--title", "Scratch pane", "--agent", "codex", "--prompt", "explore the repo"}
+			},
+			assert: func(t *testing.T, d *fakeDaemon, _ *fakeState, stdout, _ string, repoRoot, _ string) {
+				t.Helper()
+				if d.spawnRequest == nil {
+					t.Fatal("expected spawn to be called")
+				}
+				if got, want := d.spawnRequest.Project, repoRoot; got != want {
+					t.Fatalf("spawn project = %q, want %q", got, want)
+				}
+				if got, want := d.spawnRequest.Agent, "codex"; got != want {
+					t.Fatalf("spawn agent = %q, want %q", got, want)
+				}
+				if got, want := d.spawnRequest.Prompt, "explore the repo"; got != want {
+					t.Fatalf("spawn prompt = %q, want %q", got, want)
+				}
+				if !strings.Contains(stdout, "pane-7") || !strings.Contains(stdout, "/clones/orca01") {
+					t.Fatalf("expected spawn output, got %q", stdout)
+				}
+			},
+		},
+		{
 			name: "enqueue",
 			args: func(_, _ string) []string { return []string{"enqueue", "42"} },
 			assert: func(t *testing.T, d *fakeDaemon, _ *fakeState, stdout, _ string, _, _ string) {
@@ -1255,6 +1279,48 @@ func TestAppRunSpawnDefaultsSessionFromAMUXSessionEnv(t *testing.T) {
 	}
 	if stderr.String() != "" {
 		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+}
+
+func TestAppRunSpawnRejectsPromptWithoutAgent(t *testing.T) {
+	repoRoot := newRepoRoot(t)
+	cwdPath := filepath.Join(repoRoot, "internal", "cli")
+	if err := os.MkdirAll(cwdPath, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", cwdPath, err)
+	}
+
+	d := &fakeDaemon{}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	app := New(Options{
+		Daemon:  d,
+		State:   &fakeState{},
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		Version: "build-123",
+		Cwd: func() (string, error) {
+			return cwdPath, nil
+		},
+	})
+
+	err := app.Run(context.Background(), []string{"spawn", "--prompt", "explore the repo"})
+	if err == nil || !strings.Contains(err.Error(), "spawn requires --agent when --prompt is set") {
+		t.Fatalf("Run() error = %v, want prompt without agent validation", err)
+	}
+	if d.spawnRequest != nil {
+		t.Fatalf("spawn request = %#v, want nil", d.spawnRequest)
+	}
+}
+
+func TestAppRunSpawnHelpMentionsAgentAndPrompt(t *testing.T) {
+	usage, ok := HelpText([]string{"help", "spawn"})
+	if !ok {
+		t.Fatal("HelpText(help spawn) not found")
+	}
+	for _, flag := range []string{"--agent", "--prompt"} {
+		if !strings.Contains(usage, flag) {
+			t.Fatalf("spawn help = %q, want %s", usage, flag)
+		}
 	}
 }
 

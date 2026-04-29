@@ -85,7 +85,7 @@ Flags:
   --agent   Agent profile
   --project Project path
   --json    Emit JSON output`,
-	"spawn": `usage: orca spawn [--project PATH] [--session SESSION] [--lead-pane PANE] [--title TITLE] [--json]
+	"spawn": `usage: orca spawn [--project PATH] [--session SESSION] [--lead-pane PANE] [--title TITLE] [--agent NAME] [--prompt TEXT] [--json]
 
 Open a clone in a new amux pane.`,
 	"enqueue": `usage: orca enqueue PR_NUMBER [--project PATH] [--json]
@@ -580,11 +580,15 @@ func (a *App) runSpawn(ctx context.Context, args []string) error {
 	var session string
 	var leadPane string
 	var title string
+	var agent string
+	var prompt string
 	var jsonOutput bool
 	fs.StringVar(&projectPath, "project", "", "project path")
 	fs.StringVar(&session, "session", "", "amux session name (defaults to AMUX_SESSION)")
 	fs.StringVar(&leadPane, "lead-pane", "", "pane to split from")
 	fs.StringVar(&title, "title", "", "pane title")
+	fs.StringVar(&agent, "agent", "", "agent profile to start in the pane")
+	fs.StringVar(&prompt, "prompt", "", "prompt to send after the agent starts")
 	fs.BoolVar(&jsonOutput, "json", false, "emit JSON output")
 
 	if err := parseFlags(fs, args); err != nil {
@@ -602,12 +606,17 @@ func (a *App) runSpawn(ctx context.Context, args []string) error {
 	if strings.TrimSpace(session) == "" {
 		session = strings.TrimSpace(os.Getenv(amuxSessionEnvVar))
 	}
+	if strings.TrimSpace(prompt) != "" && strings.TrimSpace(agent) == "" {
+		return fmt.Errorf("spawn requires --agent when --prompt is set")
+	}
 
 	result, err := a.daemon.Spawn(ctx, daemon.SpawnPaneRequest{
 		Project:  projectPath,
 		Session:  session,
 		LeadPane: leadPane,
 		Title:    title,
+		Agent:    agent,
+		Prompt:   prompt,
 	})
 	if err != nil {
 		return err

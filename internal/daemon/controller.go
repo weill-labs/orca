@@ -45,6 +45,7 @@ type ControllerOptions struct {
 	Store        state.Store
 	Paths        Paths
 	Executable   string
+	Config       ConfigProvider
 	Now          func() time.Time
 	StartTimeout time.Duration
 	StopTimeout  time.Duration
@@ -123,6 +124,8 @@ type SpawnPaneRequest struct {
 	Session  string
 	LeadPane string
 	Title    string
+	Agent    string
+	Prompt   string
 }
 
 type SpawnPaneResult struct {
@@ -144,6 +147,7 @@ type LocalController struct {
 	store        state.Store
 	paths        Paths
 	executable   string
+	config       ConfigProvider
 	now          func() time.Time
 	startTimeout time.Duration
 	stopTimeout  time.Duration
@@ -196,6 +200,11 @@ func NewLocalController(options ControllerOptions) (*LocalController, error) {
 		return nil, fmt.Errorf("daemon controller requires resolved paths")
 	}
 
+	configProvider := options.Config
+	if configProvider == nil {
+		configProvider = builtinConfigProvider{}
+	}
+
 	now := options.Now
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
@@ -215,6 +224,7 @@ func NewLocalController(options ControllerOptions) (*LocalController, error) {
 		store:        options.Store,
 		paths:        options.Paths,
 		executable:   options.Executable,
+		config:       configProvider,
 		now:          now,
 		startTimeout: startTimeout,
 		stopTimeout:  stopTimeout,
