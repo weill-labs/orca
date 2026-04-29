@@ -688,6 +688,36 @@ func TestManagerRelease(t *testing.T) {
 			},
 		},
 		{
+			name: "keeps base branch when task branch matches base branch",
+			run: func(t *testing.T, manager *pool.Manager, store *state.SQLiteStore, project string, clones []string) {
+				t.Helper()
+
+				clonePath := clones[0]
+				if _, err := store.EnsureClone(context.Background(), project, clonePath); err != nil {
+					t.Fatalf("EnsureClone() setup error = %v", err)
+				}
+				ok, err := store.TryOccupyClone(context.Background(), project, clonePath, "main", "LAB-687")
+				if err != nil {
+					t.Fatalf("TryOccupyClone() setup error = %v", err)
+				}
+				if !ok {
+					t.Fatal("TryOccupyClone() setup = false, want true")
+				}
+
+				if err := manager.Release(context.Background(), clonePath, "main"); err != nil {
+					t.Fatalf("Release() error = %v", err)
+				}
+
+				if !gitBranchExists(t, clonePath, "main") {
+					t.Fatal("base branch was deleted after Release()")
+				}
+				record := lookupClone(t, store, project, clonePath)
+				if got, want := record.Status, state.CloneStatusFree; got != want {
+					t.Fatalf("record.Status = %q, want %q", got, want)
+				}
+			},
+		},
+		{
 			name: "leaves clone occupied when cleanup fails",
 			run: func(t *testing.T, manager *pool.Manager, store *state.SQLiteStore, project string, clones []string) {
 				t.Helper()

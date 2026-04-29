@@ -424,6 +424,11 @@ func (m *Manager) cleanupClone(ctx context.Context, path, taskBranch string) err
 		}
 	}
 
+	taskBranch = strings.TrimSpace(taskBranch)
+	if taskBranch == "" || taskBranch == m.baseBranch {
+		return nil
+	}
+
 	exists, err := branchExists(ctx, path, taskBranch)
 	if err != nil {
 		return err
