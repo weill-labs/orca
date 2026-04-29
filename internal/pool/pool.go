@@ -155,7 +155,7 @@ func (m *Manager) HealthCheck(ctx context.Context, path string) error {
 		return err
 	}
 
-	health, err := inspectCloneHealth(ctx, clonePath)
+	health, err := inspectCloneHealth(ctx, clonePath, m.originBaseBranchRef())
 	if err != nil {
 		return err
 	}
@@ -405,7 +405,7 @@ func resolveClonePath(path string) (string, error) {
 func (m *Manager) prepareClone(ctx context.Context, path, issueBranch string) error {
 	commands := [][]string{
 		{"fetch", "origin", m.baseBranch},
-		{"checkout", m.baseBranch},
+		{"checkout", "--detach", m.originBaseBranchRef()},
 		{"reset", "--hard", m.originBaseBranchRef()},
 		{"checkout", "-B", issueBranch},
 	}
@@ -422,8 +422,8 @@ func (m *Manager) prepareClone(ctx context.Context, path, issueBranch string) er
 func (m *Manager) cleanupClone(ctx context.Context, path, taskBranch string) error {
 	commands := [][]string{
 		{"reset", "--hard"},
-		{"checkout", m.baseBranch},
 		{"fetch", "origin", m.baseBranch},
+		{"checkout", "--detach", m.originBaseBranchRef()},
 		{"reset", "--hard", m.originBaseBranchRef()},
 		{"clean", "-fdx"},
 	}
@@ -483,16 +483,20 @@ func branchExists(ctx context.Context, path, branch string) (bool, error) {
 }
 
 type cloneHealth struct {
-	clean         bool
-	currentBranch string
-	remoteErr     error
+	clean            bool
+	currentBranch    string
+	headCommit       string
+	originBaseCommit string
+	remoteErr        error
 }
 
 func (h cloneHealth) healthy(baseBranch string) bool {
-	return h.clean && h.currentBranch == baseBranch && h.remoteErr == nil
+	onBaseBranch := h.currentBranch == baseBranch
+	detachedAtBase := h.currentBranch == "HEAD" && h.headCommit != "" && h.headCommit == h.originBaseCommit
+	return h.clean && (onBaseBranch || detachedAtBase) && h.remoteErr == nil
 }
 
-func inspectCloneHealth(ctx context.Context, path string) (cloneHealth, error) {
+func inspectCloneHealth(ctx context.Context, path, originBaseRef string) (cloneHealth, error) {
 	status, err := gitOutput(ctx, path, "status", "--porcelain")
 	if err != nil {
 		return cloneHealth{}, err
@@ -503,10 +507,21 @@ func inspectCloneHealth(ctx context.Context, path string) (cloneHealth, error) {
 		return cloneHealth{}, err
 	}
 
+	headCommit, err := gitOutput(ctx, path, "rev-parse", "HEAD")
+	if err != nil {
+		return cloneHealth{}, err
+	}
+	originBaseCommit := ""
+	if commit, err := gitOutput(ctx, path, "rev-parse", originBaseRef); err == nil {
+		originBaseCommit = strings.TrimSpace(commit)
+	}
+
 	return cloneHealth{
-		clean:         statusClean(status),
-		currentBranch: strings.TrimSpace(branch),
-		remoteErr:     gitCommand(ctx, path, "ls-remote", "--exit-code", "origin", "HEAD"),
+		clean:            statusClean(status),
+		currentBranch:    strings.TrimSpace(branch),
+		headCommit:       strings.TrimSpace(headCommit),
+		originBaseCommit: originBaseCommit,
+		remoteErr:        gitCommand(ctx, path, "ls-remote", "--exit-code", "origin", "HEAD"),
 	}, nil
 }
 
