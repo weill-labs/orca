@@ -2,9 +2,11 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -28,6 +30,54 @@ func TestRotateDaemonLogKeepsFiveBackupGenerations(t *testing.T) {
 	assertDaemonLogTestFile(t, numberedDaemonLogPath(logPath, 1), "current")
 	assertDaemonLogTestFile(t, numberedDaemonLogPath(logPath, 2), "generation-1")
 	assertDaemonLogTestFile(t, numberedDaemonLogPath(logPath, 5), "generation-4")
+}
+
+func TestRotateDaemonLogRestoresFilesWhenCommitFails(t *testing.T) {
+	restoreDaemonLogHooks(t)
+
+	logPath := filepath.Join(t.TempDir(), "daemon.log")
+	writeDaemonLogTestFile(t, logPath, "current")
+	writeDaemonLogTestFile(t, numberedDaemonLogPath(logPath, 1), "generation-1")
+
+	realRename := renameDaemonLogFile
+	renameDaemonLogFile = func(oldpath, newpath string) error {
+		if strings.Contains(oldpath, ".rotate-") && newpath == numberedDaemonLogPath(logPath, 2) {
+			return errors.New("commit failed")
+		}
+		return realRename(oldpath, newpath)
+	}
+
+	err := rotateDaemonLogIfOversized(logPath, 1, 5)
+	if err == nil || !strings.Contains(err.Error(), "commit failed") {
+		t.Fatalf("rotateDaemonLogIfOversized() error = %v, want commit failure", err)
+	}
+
+	assertDaemonLogTestFile(t, logPath, "current")
+	assertDaemonLogTestFile(t, numberedDaemonLogPath(logPath, 1), "generation-1")
+}
+
+func TestRotateDaemonLogRestoresCurrentFileWhenStagingBackupFails(t *testing.T) {
+	restoreDaemonLogHooks(t)
+
+	logPath := filepath.Join(t.TempDir(), "daemon.log")
+	writeDaemonLogTestFile(t, logPath, "current")
+	writeDaemonLogTestFile(t, numberedDaemonLogPath(logPath, 1), "generation-1")
+
+	realRename := renameDaemonLogFile
+	renameDaemonLogFile = func(oldpath, newpath string) error {
+		if oldpath == numberedDaemonLogPath(logPath, 1) && strings.Contains(newpath, ".rotate-") {
+			return errors.New("stage failed")
+		}
+		return realRename(oldpath, newpath)
+	}
+
+	err := rotateDaemonLogIfOversized(logPath, 1, 5)
+	if err == nil || !strings.Contains(err.Error(), "stage failed") {
+		t.Fatalf("rotateDaemonLogIfOversized() error = %v, want stage failure", err)
+	}
+
+	assertDaemonLogTestFile(t, logPath, "current")
+	assertDaemonLogTestFile(t, numberedDaemonLogPath(logPath, 1), "generation-1")
 }
 
 func TestRotateDaemonLogSkipsWhenRotationIsNotNeeded(t *testing.T) {
@@ -132,17 +182,68 @@ func TestRedirectProcessOutputToDaemonLogIgnoresEmptyPath(t *testing.T) {
 func TestRedirectDaemonOutputFileReturnsDescriptorError(t *testing.T) {
 	t.Parallel()
 
-	file, err := os.Open(os.DevNull)
-	if err != nil {
-		t.Fatalf("Open(%q) error = %v", os.DevNull, err)
-	}
-	if err := file.Close(); err != nil {
-		t.Fatalf("Close(%q) error = %v", os.DevNull, err)
-	}
-
-	err = redirectDaemonOutputFile(file, "closed")
+	file := os.NewFile(uintptr(1<<20), "invalid")
+	err := redirectDaemonOutputFile(file, "invalid")
 	if err == nil || !strings.Contains(err.Error(), "redirect daemon stdout") {
 		t.Fatalf("redirectDaemonOutputFile() error = %v, want stdout redirect error", err)
+	}
+}
+
+func TestRedirectDaemonOutputFileRestoresStdoutWhenStderrRedirectFails(t *testing.T) {
+	restoreDaemonLogHooks(t)
+
+	logFile, err := os.CreateTemp(t.TempDir(), "daemon.log")
+	if err != nil {
+		t.Fatalf("CreateTemp() error = %v", err)
+	}
+	defer logFile.Close()
+
+	stdoutFD := 1
+	stderrFD := 2
+	previousStdout := stdoutFD + 1000
+	previousStderr := stderrFD + 1000
+	var dup2Calls [][2]int
+
+	stdoutDaemonLogFD = func() int {
+		return stdoutFD
+	}
+	stderrDaemonLogFD = func() int {
+		return stderrFD
+	}
+	dupDaemonLogFD = func(fd int) (int, error) {
+		switch fd {
+		case stdoutFD:
+			return previousStdout, nil
+		case stderrFD:
+			return previousStderr, nil
+		default:
+			return 0, fmt.Errorf("unexpected dup fd %d", fd)
+		}
+	}
+	closeDaemonLogFD = func(int) error {
+		return nil
+	}
+	dup2DaemonLogFD = func(oldfd int, newfd int) error {
+		dup2Calls = append(dup2Calls, [2]int{oldfd, newfd})
+		if oldfd == int(logFile.Fd()) && newfd == stderrFD {
+			return errors.New("stderr failed")
+		}
+		return nil
+	}
+
+	err = redirectDaemonOutputFile(logFile, "daemon.log")
+	if err == nil || !strings.Contains(err.Error(), "stderr failed") {
+		t.Fatalf("redirectDaemonOutputFile() error = %v, want stderr failure", err)
+	}
+
+	wantCalls := [][2]int{
+		{int(logFile.Fd()), stdoutFD},
+		{int(logFile.Fd()), stderrFD},
+		{previousStdout, stdoutFD},
+		{previousStderr, stderrFD},
+	}
+	if got, want := dup2Calls, wantCalls; !reflect.DeepEqual(got, want) {
+		t.Fatalf("dup2 calls = %#v, want %#v", got, want)
 	}
 }
 
@@ -227,6 +328,31 @@ func waitForDaemonLogTestFile(t *testing.T, path string) {
 		waitForDuration(t, 10*time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %s", path)
+}
+
+func restoreDaemonLogHooks(t *testing.T) {
+	t.Helper()
+
+	originalUserHomeDir := userHomeDir
+	originalStatDaemonLogFile := statDaemonLogFile
+	originalRenameDaemonLogFile := renameDaemonLogFile
+	originalRemoveDaemonLogFile := removeDaemonLogFile
+	originalDupDaemonLogFD := dupDaemonLogFD
+	originalDup2DaemonLogFD := dup2DaemonLogFD
+	originalCloseDaemonLogFD := closeDaemonLogFD
+	originalStdoutDaemonLogFD := stdoutDaemonLogFD
+	originalStderrDaemonLogFD := stderrDaemonLogFD
+	t.Cleanup(func() {
+		userHomeDir = originalUserHomeDir
+		statDaemonLogFile = originalStatDaemonLogFile
+		renameDaemonLogFile = originalRenameDaemonLogFile
+		removeDaemonLogFile = originalRemoveDaemonLogFile
+		dupDaemonLogFD = originalDupDaemonLogFD
+		dup2DaemonLogFD = originalDup2DaemonLogFD
+		closeDaemonLogFD = originalCloseDaemonLogFD
+		stdoutDaemonLogFD = originalStdoutDaemonLogFD
+		stderrDaemonLogFD = originalStderrDaemonLogFD
+	})
 }
 
 func saveProcessOutput(t *testing.T) func() {

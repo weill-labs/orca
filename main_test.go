@@ -226,6 +226,31 @@ func TestRunDaemonProcessDefaultsBuildCommitToDev(t *testing.T) {
 	}
 }
 
+func TestRunDaemonProcessReturnsLogRedirectError(t *testing.T) {
+	blocker := filepath.Join(t.TempDir(), "blocked")
+	if err := os.WriteFile(blocker, []byte("file"), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", blocker, err)
+	}
+
+	serveCalled := false
+	runDaemonServe := func(context.Context, daemon.ServeRequest) error {
+		serveCalled = true
+		return nil
+	}
+
+	err := runDaemonProcessWithServe([]string{
+		"--state-db", "/tmp/orca.db",
+		"--pid-file", "/tmp/orca.pid",
+		"--log-file", filepath.Join(blocker, "daemon.log"),
+	}, "", runDaemonServe)
+	if err == nil || !strings.Contains(err.Error(), "create daemon log directory") {
+		t.Fatalf("runDaemonProcess() error = %v, want daemon log redirect error", err)
+	}
+	if serveCalled {
+		t.Fatal("serve called after daemon log redirect failed")
+	}
+}
+
 func TestRunDaemonProcessRejectsLegacyProjectFlag(t *testing.T) {
 	t.Parallel()
 

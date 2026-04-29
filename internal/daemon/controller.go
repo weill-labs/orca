@@ -162,23 +162,29 @@ func ResolvePaths() (Paths, error) {
 			ConfigDir: filepath.Dir(resolvedStateDB),
 			StateDB:   resolvedStateDB,
 			PIDDir:    filepath.Join(filepath.Dir(resolvedStateDB), "pids"),
+			LogFile:   filepath.Join(filepath.Dir(resolvedStateDB), daemonLogFileName),
 		}, nil
 	}
 
-	configDir := strings.TrimSpace(os.Getenv("ORCA_CONFIG_DIR"))
+	configDirOverride := strings.TrimSpace(os.Getenv("ORCA_CONFIG_DIR"))
+	configDir := configDirOverride
 	if configDir == "" {
-		homeDir, err := os.UserHomeDir()
+		homeDir, err := userHomeDir()
 		if err != nil {
 			return Paths{}, fmt.Errorf("resolve home directory: %w", err)
 		}
 		configDir = filepath.Join(homeDir, ".config", "orca")
 	}
 
-	return Paths{
+	paths := Paths{
 		ConfigDir: configDir,
 		StateDB:   filepath.Join(configDir, "state.db"),
 		PIDDir:    filepath.Join(configDir, "pids"),
-	}, nil
+	}
+	if configDirOverride != "" {
+		paths.LogFile = filepath.Join(configDir, daemonLogFileName)
+	}
+	return paths, nil
 }
 
 func NewLocalController(options ControllerOptions) (*LocalController, error) {

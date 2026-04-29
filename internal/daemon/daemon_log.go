@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -20,6 +21,18 @@ const (
 	daemonLogRotateInterval       = 30 * time.Second
 )
 
+var (
+	userHomeDir         = os.UserHomeDir
+	statDaemonLogFile   = os.Stat
+	renameDaemonLogFile = os.Rename
+	removeDaemonLogFile = os.Remove
+	dupDaemonLogFD      = unix.Dup
+	dup2DaemonLogFD     = unix.Dup2
+	closeDaemonLogFD    = unix.Close
+	stdoutDaemonLogFD   = func() int { return int(os.Stdout.Fd()) }
+	stderrDaemonLogFD   = func() int { return int(os.Stderr.Fd()) }
+)
+
 type daemonLogRedirector struct {
 	path     string
 	maxBytes int64
@@ -28,7 +41,7 @@ type daemonLogRedirector struct {
 }
 
 func defaultDaemonLogFile() (string, error) {
-	homeDir, err := os.UserHomeDir()
+	homeDir, err := userHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("resolve home directory: %w", err)
 	}
@@ -109,11 +122,38 @@ func (r *daemonLogRedirector) rotateAndRedirect() error {
 }
 
 func redirectDaemonOutputFile(file *os.File, path string) error {
-	if err := unix.Dup2(int(file.Fd()), int(os.Stdout.Fd())); err != nil {
+	stdoutFD := stdoutDaemonLogFD()
+	stderrFD := stderrDaemonLogFD()
+	daemonLogFD := int(file.Fd())
+
+	previousStdout, err := dupDaemonLogFD(stdoutFD)
+	if err != nil {
+		return fmt.Errorf("snapshot daemon stdout: %w", err)
+	}
+	defer closeDaemonLogFD(previousStdout)
+
+	previousStderr, err := dupDaemonLogFD(stderrFD)
+	if err != nil {
+		return fmt.Errorf("snapshot daemon stderr: %w", err)
+	}
+	defer closeDaemonLogFD(previousStderr)
+
+	if err := dup2DaemonLogFD(daemonLogFD, stdoutFD); err != nil {
 		return fmt.Errorf("redirect daemon stdout to %s: %w", path, err)
 	}
-	if err := unix.Dup2(int(file.Fd()), int(os.Stderr.Fd())); err != nil {
-		return fmt.Errorf("redirect daemon stderr to %s: %w", path, err)
+	if err := dup2DaemonLogFD(daemonLogFD, stderrFD); err != nil {
+		restoreErr := errors.Join(
+			restoreDaemonOutputFD(previousStdout, stdoutFD, "stdout"),
+			restoreDaemonOutputFD(previousStderr, stderrFD, "stderr"),
+		)
+		return errors.Join(fmt.Errorf("redirect daemon stderr to %s: %w", path, err), restoreErr)
+	}
+	return nil
+}
+
+func restoreDaemonOutputFD(previousFD int, targetFD int, name string) error {
+	if err := dup2DaemonLogFD(previousFD, targetFD); err != nil {
+		return fmt.Errorf("restore daemon %s: %w", name, err)
 	}
 	return nil
 }
@@ -123,7 +163,7 @@ func rotateDaemonLogIfOversized(path string, maxBytes int64, backups int) error 
 		return nil
 	}
 
-	info, err := os.Stat(path)
+	info, err := statDaemonLogFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
@@ -134,20 +174,87 @@ func rotateDaemonLogIfOversized(path string, maxBytes int64, backups int) error 
 		return nil
 	}
 
-	if err := os.Remove(numberedDaemonLogPath(path, backups)); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("remove old daemon log backup: %w", err)
+	staged := make([]stagedDaemonLogFile, 0, backups+1)
+	if err := stageDaemonLogFile(&staged, path, numberedDaemonLogPath(path, 1), false); err != nil {
+		return err
 	}
-	for generation := backups - 1; generation >= 1; generation-- {
-		from := numberedDaemonLogPath(path, generation)
-		to := numberedDaemonLogPath(path, generation+1)
-		if err := os.Rename(from, to); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("rotate daemon log backup %s to %s: %w", from, to, err)
+	for generation := 1; generation <= backups; generation++ {
+		source := numberedDaemonLogPath(path, generation)
+		destination := numberedDaemonLogPath(path, generation+1)
+		drop := generation == backups
+		if drop {
+			destination = ""
+		}
+		if err := stageDaemonLogFile(&staged, source, destination, drop); err != nil {
+			restoreStagedDaemonLogFiles(staged)
+			return err
 		}
 	}
-	if err := os.Rename(path, numberedDaemonLogPath(path, 1)); err != nil {
-		return fmt.Errorf("rotate daemon log %s: %w", path, err)
+
+	committed := make([]stagedDaemonLogFile, 0, len(staged))
+	for _, entry := range staged {
+		if entry.drop {
+			continue
+		}
+		if err := renameDaemonLogFile(entry.temp, entry.destination); err != nil {
+			rollbackCommittedDaemonLogFiles(committed)
+			restoreStagedDaemonLogFiles(staged)
+			return fmt.Errorf("rotate daemon log %s to %s: %w", entry.temp, entry.destination, err)
+		}
+		committed = append(committed, entry)
+	}
+
+	for _, entry := range staged {
+		if !entry.drop {
+			continue
+		}
+		if err := removeDaemonLogFile(entry.temp); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove old daemon log backup: %w", err)
+		}
 	}
 	return nil
+}
+
+type stagedDaemonLogFile struct {
+	original    string
+	temp        string
+	destination string
+	drop        bool
+}
+
+func stageDaemonLogFile(staged *[]stagedDaemonLogFile, source string, destination string, drop bool) error {
+	temp := temporaryDaemonLogPath(source)
+	if err := renameDaemonLogFile(source, temp); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("stage daemon log %s: %w", source, err)
+	}
+	*staged = append(*staged, stagedDaemonLogFile{
+		original:    source,
+		temp:        temp,
+		destination: destination,
+		drop:        drop,
+	})
+	return nil
+}
+
+func rollbackCommittedDaemonLogFiles(committed []stagedDaemonLogFile) {
+	for i := len(committed) - 1; i >= 0; i-- {
+		entry := committed[i]
+		_ = renameDaemonLogFile(entry.destination, entry.temp)
+	}
+}
+
+func restoreStagedDaemonLogFiles(staged []stagedDaemonLogFile) {
+	for i := len(staged) - 1; i >= 0; i-- {
+		entry := staged[i]
+		_ = renameDaemonLogFile(entry.temp, entry.original)
+	}
+}
+
+func temporaryDaemonLogPath(path string) string {
+	return fmt.Sprintf("%s.rotate-%d-%d", path, os.Getpid(), time.Now().UnixNano())
 }
 
 func numberedDaemonLogPath(path string, generation int) string {

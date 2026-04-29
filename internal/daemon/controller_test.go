@@ -209,6 +209,9 @@ func TestResolvePathsAcceptsSQLiteURIOverride(t *testing.T) {
 	if got, want := paths.PIDDir, filepath.Join("/tmp", "pids"); got != want {
 		t.Fatalf("paths.PIDDir = %q, want %q", got, want)
 	}
+	if got, want := paths.LogFile, "/tmp/daemon.log"; got != want {
+		t.Fatalf("paths.LogFile = %q, want %q", got, want)
+	}
 }
 
 func TestResolvePathsRejectsInvalidSQLiteURIOverride(t *testing.T) {
@@ -220,6 +223,61 @@ func TestResolvePathsRejectsInvalidSQLiteURIOverride(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "sqlite:///absolute/path") {
 		t.Fatalf("ResolvePaths() error = %v, want sqlite path guidance", err)
+	}
+}
+
+func TestResolvePathsUsesConfigDirOverrideLogFile(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("ORCA_STATE_DB", "")
+	t.Setenv("ORCA_CONFIG_DIR", configDir)
+
+	paths, err := ResolvePaths()
+	if err != nil {
+		t.Fatalf("ResolvePaths() error = %v", err)
+	}
+	if got, want := paths.LogFile, filepath.Join(configDir, "daemon.log"); got != want {
+		t.Fatalf("paths.LogFile = %q, want %q", got, want)
+	}
+}
+
+func TestStartReturnsDaemonLogPathError(t *testing.T) {
+	restoreDaemonLogHooks(t)
+	userHomeDir = func() (string, error) {
+		return "", errors.New("home unavailable")
+	}
+
+	store := &fakeStore{}
+	projectPath := testProjectPath(t)
+	controller, _ := newTestController(t, store, projectPath, scriptOptions{
+		useDefaultLogFile: true,
+	})
+
+	_, err := controller.Start(context.Background(), StartRequest{
+		Session: "test",
+		Project: projectPath,
+	})
+	if err == nil || !strings.Contains(err.Error(), "home unavailable") {
+		t.Fatalf("Start() error = %v, want home resolution error", err)
+	}
+}
+
+func TestStartReturnsDaemonLogOpenError(t *testing.T) {
+	store := &fakeStore{}
+	projectPath := testProjectPath(t)
+	controller, _ := newTestController(t, store, projectPath, scriptOptions{})
+
+	blocker := filepath.Join(t.TempDir(), "blocked")
+	if err := os.WriteFile(blocker, []byte("file"), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", blocker, err)
+	}
+	controller.paths.LogFile = filepath.Join(blocker, "daemon.log")
+
+	_, err := controller.Start(context.Background(), StartRequest{
+		Session: "test",
+		Project: projectPath,
+	})
+	if err == nil || !strings.Contains(err.Error(), "create daemon log directory") {
+		t.Fatalf("Start() error = %v, want daemon log open error", err)
 	}
 }
 
