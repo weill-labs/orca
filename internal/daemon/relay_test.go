@@ -518,6 +518,47 @@ func TestCurrentPRPollIntervalCapsRelayHealthyPollingForTrackedPRs(t *testing.T)
 	}
 }
 
+func TestCurrentPRPollIntervalFallsBackWhenTaskScheduleUnavailable(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		setup func(*Daemon, *testDeps)
+	}{
+		{
+			name: "state missing",
+			setup: func(d *Daemon, _ *testDeps) {
+				d.state = nil
+			},
+		},
+		{
+			name: "task lookup error",
+			setup: func(d *Daemon, deps *testDeps) {
+				deps.state.rejectCanceledContext = true
+				ctx, cancel := context.WithCancel(context.Background())
+				cancel()
+				d.stopContext = ctx
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			deps := newTestDeps(t)
+			d := deps.newDaemon(t)
+			d.relayHealthy.Store(true)
+			tt.setup(d, deps)
+
+			if got, want := d.currentPRPollInterval(), d.pollInterval; got != want {
+				t.Fatalf("currentPRPollInterval() = %v, want %v", got, want)
+			}
+		})
+	}
+}
+
 func TestRelayRepoAliases(t *testing.T) {
 	t.Parallel()
 

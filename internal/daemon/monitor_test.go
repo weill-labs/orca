@@ -73,6 +73,47 @@ func TestDaemonSkipsBufferedPollTickWhilePollCycleIsRunning(t *testing.T) {
 	}
 }
 
+func TestDaemonStartEmitsPRPollTraceWithinConfiguredPollIntervalWhenRelayHealthy(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	seedTaskMonitorAssignment(t, deps, "LAB-1476", "pane-1", 0)
+	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-1476", "--json", "number"}, `[]`, nil)
+	deps.commands.queue("gh", issueIDPRSearchArgs("LAB-1476"), `[]`, nil)
+
+	const pollInterval = 250 * time.Millisecond
+	d := deps.newDaemonWithOptions(t, func(opts *Options) {
+		opts.NewTicker = nil
+		opts.PollInterval = pollInterval
+		opts.CaptureInterval = 25 * time.Millisecond
+	})
+	d.relayHealthy.Store(true)
+
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	deadline := time.After(2 * pollInterval)
+	ticker := time.NewTicker(5 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		if deps.events.countType(EventPRPollTrace) > 0 {
+			return
+		}
+
+		select {
+		case <-deadline:
+			t.Fatalf("pr.poll_trace event count = 0, want at least 1 within %s after Start", 2*pollInterval)
+		case <-ticker.C:
+		}
+	}
+}
+
 func TestAdaptivePRPollInterval(t *testing.T) {
 	t.Parallel()
 
