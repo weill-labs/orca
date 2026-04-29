@@ -18,7 +18,7 @@ const (
 	defaultGitHubAPIMaxAttempts    = 3
 	defaultPRSnapshotTTL           = time.Second
 	issueIDPRSearchJSONFields      = "number,state,headRefName,title"
-	prSnapshotJSONFields      = "mergedAt,state,closedAt,mergeable,mergeStateStatus,updatedAt,reviews,reviewDecision,comments"
+	prSnapshotJSONFields           = "mergedAt,state,closedAt,mergeable,mergeStateStatus,updatedAt,reviews,reviewDecision,comments"
 	prReviewJSONFields             = "reviews,reviewDecision,comments,updatedAt"
 )
 
@@ -596,6 +596,9 @@ func reviewPayloadFromSnapshot(payload prSnapshotPayload) (prReviewPayload, bool
 }
 
 func (c *gitHubCLIClient) run(ctx context.Context, args ...string) ([]byte, error) {
+	done := pollTickGitHubCall(ctx)
+	defer done()
+
 	backoff := c.initialBackoff
 	var (
 		output []byte
