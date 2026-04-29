@@ -21,6 +21,20 @@ func (c *LocalController) Spawn(ctx context.Context, req SpawnPaneRequest) (Spaw
 		return SpawnPaneResult{}, err
 	}
 
+	agentName := strings.TrimSpace(req.Agent)
+	if strings.TrimSpace(req.Prompt) != "" && agentName == "" {
+		return SpawnPaneResult{}, fmt.Errorf("spawn requires --agent when --prompt is set")
+	}
+
+	var command string
+	if agentName != "" {
+		profile, err := c.config.AgentProfile(ctx, agentName)
+		if err != nil {
+			return SpawnPaneResult{}, fmt.Errorf("load agent profile %q: %w", agentName, err)
+		}
+		command = profile.StartCommand
+	}
+
 	manager, amuxClient, err := c.spawnRuntime(projectPath, req.Session)
 	if err != nil {
 		return SpawnPaneResult{}, err
@@ -38,6 +52,7 @@ func (c *LocalController) Spawn(ctx context.Context, req SpawnPaneRequest) (Spaw
 		Window:  window,
 		Name:    req.Title,
 		CWD:     clone.Path,
+		Command: command,
 	})
 	if err != nil {
 		releaseErr := manager.Release(ctx, clone.Path, clone.CurrentBranch)
@@ -45,6 +60,13 @@ func (c *LocalController) Spawn(ctx context.Context, req SpawnPaneRequest) (Spaw
 			err = errors.Join(err, releaseErr)
 		}
 		return SpawnPaneResult{}, fmt.Errorf("spawn pane: %w", err)
+	}
+
+	if strings.TrimSpace(req.Prompt) != "" {
+		promptSender := &Daemon{amux: amuxClient, now: c.now, sleep: sleepContext}
+		if err := promptSender.sendAndConfirmWorking(ctx, pane.ID, req.Prompt); err != nil {
+			return SpawnPaneResult{}, fmt.Errorf("send prompt: %w", err)
+		}
 	}
 
 	return SpawnPaneResult{
