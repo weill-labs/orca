@@ -211,8 +211,9 @@ func TestAssignRollsBackOnAgentHandshakeFailure(t *testing.T) {
 	}
 
 	wantGit := []commandCall{
-		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"checkout", "main"}},
-		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"pull"}},
+		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"fetch", "origin", "main"}},
+		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"checkout", "--detach", "origin/main"}},
+		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"reset", "--hard", "origin/main"}},
 		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"config", "user.name", "Orca worker-01"}},
 		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"config", "user.email", "worker-01@orca.local"}},
 		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"checkout", "-B", "LAB-720"}},

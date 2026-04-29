@@ -20,8 +20,8 @@ type staticConfig struct {
 }
 
 func (c staticConfig) PoolDir() string     { return c.poolDir }
-func (c staticConfig) CloneOrigin() string  { return c.cloneOrigin }
-func (c staticConfig) BaseBranch() string   { return c.baseBranch }
+func (c staticConfig) CloneOrigin() string { return c.cloneOrigin }
+func (c staticConfig) BaseBranch() string  { return c.baseBranch }
 
 func TestManagerDiscover(t *testing.T) {
 	t.Parallel()
@@ -458,12 +458,7 @@ func TestManagerHealthCheck(t *testing.T) {
 			verify: func(t *testing.T, clonePath string) {
 				t.Helper()
 
-				if got, want := gitCurrentBranch(t, clonePath), "main"; got != want {
-					t.Fatalf("current branch = %q, want %q", got, want)
-				}
-				if got := gitStatusPorcelain(t, clonePath); !gitStatusClean(got) {
-					t.Fatalf("git status --porcelain = %q, want clean worktree", got)
-				}
+				assertCleanCloneAtOriginBase(t, clonePath, "main")
 				if _, err := os.Stat(filepath.Join(clonePath, "junk.txt")); !errors.Is(err, os.ErrNotExist) {
 					t.Fatalf("junk.txt stat error = %v, want not exist", err)
 				}
@@ -480,9 +475,7 @@ func TestManagerHealthCheck(t *testing.T) {
 			verify: func(t *testing.T, clonePath string) {
 				t.Helper()
 
-				if got, want := gitCurrentBranch(t, clonePath), "trunk"; got != want {
-					t.Fatalf("current branch = %q, want %q", got, want)
-				}
+				assertCleanCloneAtOriginBase(t, clonePath, "trunk")
 			},
 		},
 		{
@@ -601,9 +594,7 @@ func TestManagerRelease(t *testing.T) {
 					t.Fatalf("Release() error = %v", err)
 				}
 
-				if branch := gitCurrentBranch(t, clone.Path); branch != "main" {
-					t.Fatalf("current branch = %q, want %q", branch, "main")
-				}
+				assertCleanCloneAtOriginBase(t, clone.Path, "main")
 				if _, err := os.Stat(filepath.Join(clone.Path, "junk.txt")); !errors.Is(err, os.ErrNotExist) {
 					t.Fatalf("junk.txt stat error = %v, want not exist", err)
 				}
@@ -640,9 +631,7 @@ func TestManagerRelease(t *testing.T) {
 					t.Fatalf("Release() error = %v", err)
 				}
 
-				if got, want := gitCurrentBranch(t, clone.Path), "main"; got != want {
-					t.Fatalf("current branch = %q, want %q", got, want)
-				}
+				assertCleanCloneAtOriginBase(t, clone.Path, "main")
 				if got, want := gitHeadCommit(t, clone.Path), expectedHead; got != want {
 					t.Fatalf("HEAD = %q, want %q", got, want)
 				}
@@ -672,9 +661,7 @@ func TestManagerRelease(t *testing.T) {
 					t.Fatalf("Release() error = %v", err)
 				}
 
-				if branch := gitCurrentBranch(t, clone.Path); branch != "trunk" {
-					t.Fatalf("current branch = %q, want %q", branch, "trunk")
-				}
+				assertCleanCloneAtOriginBase(t, clone.Path, "trunk")
 			},
 		},
 		{
@@ -697,6 +684,36 @@ func TestManagerRelease(t *testing.T) {
 				record := lookupClone(t, store, project, clone.Path)
 				if record.Status != state.CloneStatusFree {
 					t.Fatalf("record.Status = %q, want %q", record.Status, state.CloneStatusFree)
+				}
+			},
+		},
+		{
+			name: "keeps base branch when task branch matches base branch",
+			run: func(t *testing.T, manager *pool.Manager, store *state.SQLiteStore, project string, clones []string) {
+				t.Helper()
+
+				clonePath := clones[0]
+				if _, err := store.EnsureClone(context.Background(), project, clonePath); err != nil {
+					t.Fatalf("EnsureClone() setup error = %v", err)
+				}
+				ok, err := store.TryOccupyClone(context.Background(), project, clonePath, "main", "LAB-687")
+				if err != nil {
+					t.Fatalf("TryOccupyClone() setup error = %v", err)
+				}
+				if !ok {
+					t.Fatal("TryOccupyClone() setup = false, want true")
+				}
+
+				if err := manager.Release(context.Background(), clonePath, "main"); err != nil {
+					t.Fatalf("Release() error = %v", err)
+				}
+
+				if !gitBranchExists(t, clonePath, "main") {
+					t.Fatal("base branch was deleted after Release()")
+				}
+				record := lookupClone(t, store, project, clonePath)
+				if got, want := record.Status, state.CloneStatusFree; got != want {
+					t.Fatalf("record.Status = %q, want %q", got, want)
 				}
 			},
 		},
@@ -754,6 +771,59 @@ func TestManagerRelease(t *testing.T) {
 
 			tc.run(t, manager, store, project, clones)
 		})
+	}
+}
+
+func TestManagerReleaseResetsWorktreeCloneWhenBaseBranchCheckedOutElsewhere(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	poolDir := filepath.Join(root, "pool")
+	origin := newOrigin(t, "main")
+	cloneWithMain := filepath.Join(poolDir, "clone-01")
+	releasedClone := filepath.Join(poolDir, "clone-02")
+
+	newClone(t, origin, cloneWithMain)
+	mustRun(t, cloneWithMain, "git", "worktree", "add", "-b", "LAB-687", releasedClone, "origin/main")
+	mustWriteFile(t, filepath.Join(releasedClone, "README.md"), "modified")
+	mustWriteFile(t, filepath.Join(releasedClone, "junk.txt"), "junk")
+
+	store := newStore(t)
+	if _, err := store.EnsureClone(context.Background(), project, releasedClone); err != nil {
+		t.Fatalf("EnsureClone() setup error = %v", err)
+	}
+	ok, err := store.TryOccupyClone(context.Background(), project, releasedClone, "LAB-687", "LAB-687")
+	if err != nil {
+		t.Fatalf("TryOccupyClone() setup error = %v", err)
+	}
+	if !ok {
+		t.Fatal("TryOccupyClone() setup = false, want true")
+	}
+	manager := newManager(t, project, staticConfig{
+		poolDir:     poolDir,
+		cloneOrigin: origin,
+	}, store)
+
+	if err := manager.Release(context.Background(), releasedClone, "LAB-687"); err != nil {
+		t.Fatalf("Release() error = %v", err)
+	}
+
+	if got, want := gitHeadCommit(t, releasedClone), gitRevision(t, releasedClone, "origin/main"); got != want {
+		t.Fatalf("HEAD = %q, want %q", got, want)
+	}
+	if got := gitStatusPorcelain(t, releasedClone); !gitStatusClean(got) {
+		t.Fatalf("git status --porcelain = %q, want clean worktree", got)
+	}
+	if _, err := os.Stat(filepath.Join(releasedClone, "junk.txt")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("junk.txt stat error = %v, want not exist", err)
+	}
+	if gitBranchExists(t, releasedClone, "LAB-687") {
+		t.Fatal("task branch still exists after Release()")
+	}
+	record := lookupClone(t, store, project, releasedClone)
+	if got, want := record.Status, state.CloneStatusFree; got != want {
+		t.Fatalf("record.Status = %q, want %q", got, want)
 	}
 }
 
@@ -883,6 +953,23 @@ func gitHeadCommit(t *testing.T, dir string) string {
 	t.Helper()
 
 	return strings.TrimSpace(mustOutput(t, dir, "git", "rev-parse", "HEAD"))
+}
+
+func gitRevision(t *testing.T, dir, ref string) string {
+	t.Helper()
+
+	return strings.TrimSpace(mustOutput(t, dir, "git", "rev-parse", ref))
+}
+
+func assertCleanCloneAtOriginBase(t *testing.T, dir, baseBranch string) {
+	t.Helper()
+
+	if got, want := gitHeadCommit(t, dir), gitRevision(t, dir, "origin/"+baseBranch); got != want {
+		t.Fatalf("HEAD = %q, want %q", got, want)
+	}
+	if got := gitStatusPorcelain(t, dir); !gitStatusClean(got) {
+		t.Fatalf("git status --porcelain = %q, want clean worktree", got)
+	}
 }
 
 func gitBranchExists(t *testing.T, dir, branch string) bool {

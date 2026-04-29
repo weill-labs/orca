@@ -231,7 +231,7 @@ func TestAssignAdditionalErrorPaths(t *testing.T) {
 		{
 			name: "prepare clone error",
 			setup: func(deps *testDeps, _ *assignStateStub, _ *assignAmuxStub) {
-				deps.commands.queue("git", []string{"checkout", "main"}, ``, errors.New("checkout failed"))
+				deps.commands.queue("git", []string{"checkout", "--detach", "origin/main"}, ``, errors.New("checkout failed"))
 			},
 			wantErr: "prepare clone",
 			assert: func(t *testing.T, deps *testDeps) {

@@ -82,8 +82,9 @@ func workerGitIdentity(workerID string) (name string, email string) {
 
 func (d *Daemon) prepareClone(ctx context.Context, clonePath, branch, workerID string) error {
 	commands := [][]string{
-		{"checkout", "main"},
-		{"pull"},
+		{"fetch", "origin", "main"},
+		{"checkout", "--detach", "origin/main"},
+		{"reset", "--hard", "origin/main"},
 	}
 	if name, email := workerGitIdentity(workerID); name != "" && email != "" {
 		commands = append(commands,
