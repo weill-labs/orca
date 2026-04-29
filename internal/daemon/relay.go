@@ -37,7 +37,7 @@ type relayMonitoredProject struct {
 }
 
 type relayEventMessage struct {
-	ID             string         `json:"id,omitempty"`
+	ID             relayEventID   `json:"id,omitempty"`
 	Type           string         `json:"type,omitempty"`
 	EventType      string         `json:"event_type,omitempty"`
 	Repo           string         `json:"repo,omitempty"`
@@ -149,7 +149,7 @@ func (d *Daemon) consumeRelayConnection(ctx context.Context, conn relayConnectio
 		}
 
 		if msg.ID != "" {
-			lastEventID = msg.ID
+			lastEventID = string(msg.ID)
 		}
 		d.handleRelayEvent(ctx, msg)
 	}

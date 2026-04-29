@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,18 @@ import (
 
 	"github.com/gorilla/websocket"
 )
+
+func TestRelayEventMessageDecodesNumericID(t *testing.T) {
+	t.Parallel()
+
+	var msg relayEventMessage
+	if err := json.Unmarshal([]byte(`{"id":12345,"event_type":"check_run"}`), &msg); err != nil {
+		t.Fatalf("json.Unmarshal(relay event) error = %v", err)
+	}
+	if got, want := string(msg.ID), "12345"; got != want {
+		t.Fatalf("msg.ID = %q, want %q", got, want)
+	}
+}
 
 func TestDaemonRelayEventPullRequestReviewTriggersImmediateReviewPoll(t *testing.T) {
 	t.Parallel()
