@@ -757,6 +757,59 @@ func TestManagerRelease(t *testing.T) {
 	}
 }
 
+func TestManagerReleaseResetsWorktreeCloneWhenBaseBranchCheckedOutElsewhere(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	poolDir := filepath.Join(root, "pool")
+	origin := newOrigin(t, "main")
+	cloneWithMain := filepath.Join(poolDir, "clone-01")
+	releasedClone := filepath.Join(poolDir, "clone-02")
+
+	newClone(t, origin, cloneWithMain)
+	mustRun(t, cloneWithMain, "git", "worktree", "add", "-b", "LAB-687", releasedClone, "origin/main")
+	mustWriteFile(t, filepath.Join(releasedClone, "README.md"), "modified")
+	mustWriteFile(t, filepath.Join(releasedClone, "junk.txt"), "junk")
+
+	store := newStore(t)
+	if _, err := store.EnsureClone(context.Background(), project, releasedClone); err != nil {
+		t.Fatalf("EnsureClone() setup error = %v", err)
+	}
+	ok, err := store.TryOccupyClone(context.Background(), project, releasedClone, "LAB-687", "LAB-687")
+	if err != nil {
+		t.Fatalf("TryOccupyClone() setup error = %v", err)
+	}
+	if !ok {
+		t.Fatal("TryOccupyClone() setup = false, want true")
+	}
+	manager := newManager(t, project, staticConfig{
+		poolDir:     poolDir,
+		cloneOrigin: origin,
+	}, store)
+
+	if err := manager.Release(context.Background(), releasedClone, "LAB-687"); err != nil {
+		t.Fatalf("Release() error = %v", err)
+	}
+
+	if got, want := gitHeadCommit(t, releasedClone), gitRevision(t, releasedClone, "origin/main"); got != want {
+		t.Fatalf("HEAD = %q, want %q", got, want)
+	}
+	if got := gitStatusPorcelain(t, releasedClone); !gitStatusClean(got) {
+		t.Fatalf("git status --porcelain = %q, want clean worktree", got)
+	}
+	if _, err := os.Stat(filepath.Join(releasedClone, "junk.txt")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("junk.txt stat error = %v, want not exist", err)
+	}
+	if gitBranchExists(t, releasedClone, "LAB-687") {
+		t.Fatal("task branch still exists after Release()")
+	}
+	record := lookupClone(t, store, project, releasedClone)
+	if got, want := record.Status, state.CloneStatusFree; got != want {
+		t.Fatalf("record.Status = %q, want %q", got, want)
+	}
+}
+
 func newStore(t *testing.T) *state.SQLiteStore {
 	t.Helper()
 
@@ -883,6 +936,12 @@ func gitHeadCommit(t *testing.T, dir string) string {
 	t.Helper()
 
 	return strings.TrimSpace(mustOutput(t, dir, "git", "rev-parse", "HEAD"))
+}
+
+func gitRevision(t *testing.T, dir, ref string) string {
+	t.Helper()
+
+	return strings.TrimSpace(mustOutput(t, dir, "git", "rev-parse", ref))
 }
 
 func gitBranchExists(t *testing.T, dir, branch string) bool {
