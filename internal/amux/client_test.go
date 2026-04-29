@@ -664,6 +664,17 @@ func TestParsePaneList(t *testing.T) {
 			},
 		},
 		{
+			name: "parses window after branch overflows column",
+			output: strings.Join([]string{
+				header,
+				"*481   pane-481             local           self-improve/20260423-alphatrader-pnl 195s ago  alphacritic              lead",
+				"",
+			}, "\n"),
+			want: []Pane{
+				{ID: "481", Name: "pane-481", Window: "alphacritic", Lead: true},
+			},
+		},
+		{
 			name: "rejects row without pane id",
 			output: strings.Join([]string{
 				header,
