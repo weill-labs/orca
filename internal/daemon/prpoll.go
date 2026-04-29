@@ -78,11 +78,7 @@ func (d *Daemon) checkTaskPRPoll(ctx context.Context, active ActiveAssignment) (
 		traceAction = "task_done"
 		return update
 	case TaskStateMerged:
-		update.PRMerged = true
-		update.CompletionStatus = TaskStatusDone
-		update.CompletionEventType = EventTaskCompleted
-		update.CompletionMerged = true
-		update.CompletionMessage = "task finished"
+		markAlreadyMergedCompletion(&update)
 		traceAction = "task_already_merged"
 		return update
 	}
@@ -214,6 +210,17 @@ func markTaskPRMerged(update *TaskStateUpdate, now time.Time) {
 		update.TaskChanged = true
 	}
 	update.PRMerged = true
+}
+
+func markAlreadyMergedCompletion(update *TaskStateUpdate) {
+	if update == nil {
+		return
+	}
+	update.PRMerged = true
+	update.CompletionStatus = TaskStatusDone
+	update.CompletionEventType = EventTaskCompleted
+	update.CompletionMerged = true
+	update.CompletionMessage = "task finished"
 }
 
 func (d *Daemon) resolvePRTerminalState(ctx context.Context, update *TaskStateUpdate, profile AgentProfile, now time.Time) (bool, error) {
