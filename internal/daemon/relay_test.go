@@ -22,7 +22,7 @@ func TestRelayEventMessageDecodesNumericID(t *testing.T) {
 	if err := json.Unmarshal([]byte(`{"id":12345,"event_type":"check_run"}`), &msg); err != nil {
 		t.Fatalf("json.Unmarshal(relay event) error = %v", err)
 	}
-	if got, want := msg.ID, "12345"; got != want {
+	if got, want := string(msg.ID), "12345"; got != want {
 		t.Fatalf("msg.ID = %q, want %q", got, want)
 	}
 }
