@@ -403,12 +403,7 @@ func resolveClonePath(path string) (string, error) {
 }
 
 func (m *Manager) prepareClone(ctx context.Context, path, issueBranch string) error {
-	commands := [][]string{
-		{"fetch", "origin", m.baseBranch},
-		{"checkout", "--detach", m.originBaseBranchRef()},
-		{"reset", "--hard", m.originBaseBranchRef()},
-		{"checkout", "-B", issueBranch},
-	}
+	commands := append(m.resetToOriginBaseCommands(), []string{"checkout", "-B", issueBranch})
 
 	for _, args := range commands {
 		if err := m.runner.Run(ctx, path, "git", args...); err != nil {
@@ -420,13 +415,8 @@ func (m *Manager) prepareClone(ctx context.Context, path, issueBranch string) er
 }
 
 func (m *Manager) cleanupClone(ctx context.Context, path, taskBranch string) error {
-	commands := [][]string{
-		{"reset", "--hard"},
-		{"fetch", "origin", m.baseBranch},
-		{"checkout", "--detach", m.originBaseBranchRef()},
-		{"reset", "--hard", m.originBaseBranchRef()},
-		{"clean", "-fdx"},
-	}
+	commands := append([][]string{{"reset", "--hard"}}, m.resetToOriginBaseCommands()...)
+	commands = append(commands, []string{"clean", "-fdx"})
 
 	for _, args := range commands {
 		if err := m.runner.Run(ctx, path, "git", args...); err != nil {
@@ -447,6 +437,14 @@ func (m *Manager) cleanupClone(ctx context.Context, path, taskBranch string) err
 	}
 
 	return nil
+}
+
+func (m *Manager) resetToOriginBaseCommands() [][]string {
+	return [][]string{
+		{"fetch", "origin", m.baseBranch},
+		{"checkout", "--detach", m.originBaseBranchRef()},
+		{"reset", "--hard", m.originBaseBranchRef()},
+	}
 }
 
 func defaultBaseBranch(baseBranch string) string {
