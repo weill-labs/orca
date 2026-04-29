@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -231,10 +230,10 @@ func TestAppRunDispatchesCommands(t *testing.T) {
 				if got, want := d.spawnRequest.Project, repoRoot; got != want {
 					t.Fatalf("spawn project = %q, want %q", got, want)
 				}
-				if got, want := spawnRequestStringField(t, d.spawnRequest, "Agent"), "codex"; got != want {
+				if got, want := d.spawnRequest.Agent, "codex"; got != want {
 					t.Fatalf("spawn agent = %q, want %q", got, want)
 				}
-				if got, want := spawnRequestStringField(t, d.spawnRequest, "Prompt"), "explore the repo"; got != want {
+				if got, want := d.spawnRequest.Prompt, "explore the repo"; got != want {
 					t.Fatalf("spawn prompt = %q, want %q", got, want)
 				}
 				if !strings.Contains(stdout, "pane-7") || !strings.Contains(stdout, "/clones/orca01") {
@@ -2385,19 +2384,6 @@ func (f *fakeDaemon) Resume(_ context.Context, req daemon.ResumeRequest) (daemon
 	}
 	f.resumeRequest = &req
 	return f.resumeResult, nil
-}
-
-func spawnRequestStringField(t *testing.T, req *daemon.SpawnPaneRequest, fieldName string) string {
-	t.Helper()
-
-	field := reflect.ValueOf(req).Elem().FieldByName(fieldName)
-	if !field.IsValid() {
-		t.Fatalf("SpawnPaneRequest missing %s field", fieldName)
-	}
-	if field.Kind() != reflect.String {
-		t.Fatalf("SpawnPaneRequest.%s kind = %s, want string", fieldName, field.Kind())
-	}
-	return field.String()
 }
 
 type fakeState struct {

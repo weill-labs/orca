@@ -6,7 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -142,7 +142,7 @@ func TestLocalControllerSpawn(t *testing.T) {
 				if got, want := amuxClient.spawnRequests[0].Command, "codex --profile scratch"; got != want {
 					t.Fatalf("spawn command = %q, want %q", got, want)
 				}
-				if got, want := amuxClient.sentKeys["pane-7"], []string{"explore the repo\n"}; !reflect.DeepEqual(got, want) {
+				if got, want := amuxClient.sentKeys["pane-7"], []string{"explore the repo\n"}; !slices.Equal(got, want) {
 					t.Fatalf("sent keys = %#v, want %#v", got, want)
 				}
 				if got, want := len(amuxClient.waitContentCalls), 1; got != want {
@@ -311,9 +311,7 @@ func TestLocalControllerSpawn(t *testing.T) {
 				DetectOrigin: detectOrigin,
 				Amux:         tt.amux,
 				PoolRunner:   tt.poolRunner,
-			}
-			if tt.config != nil {
-				setControllerOptionsConfig(t, &options, tt.config)
+				Config:       tt.config,
 			}
 			controller, err := NewLocalController(options)
 			if err != nil {
@@ -325,8 +323,9 @@ func TestLocalControllerSpawn(t *testing.T) {
 				Session:  session,
 				LeadPane: "lead-pane",
 				Title:    "Scratch pane",
+				Agent:    tt.agent,
+				Prompt:   tt.prompt,
 			}
-			setSpawnPaneRequestAgentPrompt(t, &req, tt.agent, tt.prompt)
 
 			result, err := controller.Spawn(context.Background(), req)
 			if tt.wantErr != "" {
@@ -339,41 +338,6 @@ func TestLocalControllerSpawn(t *testing.T) {
 
 			tt.assert(t, store, result, tt.amux, canonicalProject)
 		})
-	}
-}
-
-func setControllerOptionsConfig(t *testing.T, options *ControllerOptions, config ConfigProvider) {
-	t.Helper()
-
-	field := reflect.ValueOf(options).Elem().FieldByName("Config")
-	if !field.IsValid() {
-		t.Fatal("ControllerOptions missing Config field")
-	}
-	if !field.CanSet() {
-		t.Fatal("ControllerOptions.Config cannot be set")
-	}
-	field.Set(reflect.ValueOf(config))
-}
-
-func setSpawnPaneRequestAgentPrompt(t *testing.T, req *SpawnPaneRequest, agent, prompt string) {
-	t.Helper()
-	if agent == "" && prompt == "" {
-		return
-	}
-
-	value := reflect.ValueOf(req).Elem()
-	for fieldName, fieldValue := range map[string]string{
-		"Agent":  agent,
-		"Prompt": prompt,
-	} {
-		field := value.FieldByName(fieldName)
-		if !field.IsValid() {
-			t.Fatalf("SpawnPaneRequest missing %s field", fieldName)
-		}
-		if field.Kind() != reflect.String {
-			t.Fatalf("SpawnPaneRequest.%s kind = %s, want string", fieldName, field.Kind())
-		}
-		field.SetString(fieldValue)
 	}
 }
 
