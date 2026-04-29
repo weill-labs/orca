@@ -20,6 +20,7 @@ const (
 	defaultPollInterval            = 30 * time.Second
 	defaultMergeGracePeriod        = 10 * time.Minute
 	defaultShutdownCleanupDeadline = 30 * time.Second
+	defaultDaemonStopTimeout       = defaultShutdownCleanupDeadline + 5*time.Second
 	relayHealthyPollInterval       = 5 * time.Minute
 )
 
