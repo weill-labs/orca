@@ -104,11 +104,15 @@ func (r *daemonLogRedirector) rotateAndRedirect() error {
 	}
 	defer file.Close()
 
+	return redirectDaemonOutputFile(file, r.path)
+}
+
+func redirectDaemonOutputFile(file *os.File, path string) error {
 	if err := syscall.Dup2(int(file.Fd()), int(os.Stdout.Fd())); err != nil {
-		return fmt.Errorf("redirect daemon stdout to %s: %w", r.path, err)
+		return fmt.Errorf("redirect daemon stdout to %s: %w", path, err)
 	}
 	if err := syscall.Dup2(int(file.Fd()), int(os.Stderr.Fd())); err != nil {
-		return fmt.Errorf("redirect daemon stderr to %s: %w", r.path, err)
+		return fmt.Errorf("redirect daemon stderr to %s: %w", path, err)
 	}
 	return nil
 }
