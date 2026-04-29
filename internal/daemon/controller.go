@@ -38,6 +38,7 @@ type Paths struct {
 	ConfigDir string
 	StateDB   string
 	PIDDir    string
+	LogFile   string
 }
 
 type ControllerOptions struct {
@@ -161,23 +162,29 @@ func ResolvePaths() (Paths, error) {
 			ConfigDir: filepath.Dir(resolvedStateDB),
 			StateDB:   resolvedStateDB,
 			PIDDir:    filepath.Join(filepath.Dir(resolvedStateDB), "pids"),
+			LogFile:   filepath.Join(filepath.Dir(resolvedStateDB), daemonLogFileName),
 		}, nil
 	}
 
-	configDir := strings.TrimSpace(os.Getenv("ORCA_CONFIG_DIR"))
+	configDirOverride := strings.TrimSpace(os.Getenv("ORCA_CONFIG_DIR"))
+	configDir := configDirOverride
 	if configDir == "" {
-		homeDir, err := os.UserHomeDir()
+		homeDir, err := userHomeDir()
 		if err != nil {
 			return Paths{}, fmt.Errorf("resolve home directory: %w", err)
 		}
 		configDir = filepath.Join(homeDir, ".config", "orca")
 	}
 
-	return Paths{
+	paths := Paths{
 		ConfigDir: configDir,
 		StateDB:   filepath.Join(configDir, "state.db"),
 		PIDDir:    filepath.Join(configDir, "pids"),
-	}, nil
+	}
+	if configDirOverride != "" {
+		paths.LogFile = filepath.Join(configDir, daemonLogFileName)
+	}
+	return paths, nil
 }
 
 func NewLocalController(options ControllerOptions) (*LocalController, error) {
@@ -252,16 +259,27 @@ func (c *LocalController) Start(ctx context.Context, req StartRequest) (StartRes
 	}
 	defer devNull.Close()
 
+	logFilePath, err := c.paths.daemonLogFile()
+	if err != nil {
+		return StartResult{}, err
+	}
+	logFile, err := openDaemonLogFile(logFilePath)
+	if err != nil {
+		return StartResult{}, err
+	}
+	defer logFile.Close()
+
 	cmd := exec.Command(
 		executable,
 		"__daemon-serve",
 		"--session", session,
 		"--state-db", c.paths.StateDB,
 		"--pid-file", pidFile,
+		"--log-file", logFilePath,
 	)
 	cmd.Stdin = devNull
-	cmd.Stdout = devNull
-	cmd.Stderr = devNull
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 
 	if err := cmd.Start(); err != nil {

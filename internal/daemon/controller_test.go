@@ -110,6 +110,89 @@ func TestStartLaunchesDaemonInOwnProcessGroup(t *testing.T) {
 	waitForProcessExit(t, pid)
 }
 
+func TestStartRedirectsDaemonOutputToDefaultLogFile(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+
+	store := &fakeStore{}
+	projectPath := testProjectPath(t)
+	controller, _ := newTestController(t, store, projectPath, scriptOptions{
+		startTimeout:      150 * time.Millisecond,
+		useDefaultLogFile: true,
+		stdoutLine:        "daemon stdout marker",
+		stderrLine:        "daemon stderr marker",
+	})
+
+	_, err := controller.Start(context.Background(), StartRequest{
+		Session: "test",
+		Project: projectPath,
+	})
+	if err == nil || !strings.Contains(err.Error(), "daemon failed to report running state") {
+		t.Fatalf("Start() error = %v, want startup timeout", err)
+	}
+
+	logPath := filepath.Join(homeDir, ".local", "state", "orca", "daemon.log")
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", logPath, err)
+	}
+	output := string(data)
+	for _, want := range []string{"daemon stdout marker", "daemon stderr marker"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("daemon log = %q, want %q", output, want)
+		}
+	}
+}
+
+func TestStartRotatesOversizedDaemonLogBeforeWriting(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+
+	logPath := filepath.Join(homeDir, ".local", "state", "orca", "daemon.log")
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", filepath.Dir(logPath), err)
+	}
+	if err := os.WriteFile(logPath, nil, 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", logPath, err)
+	}
+	if err := os.Truncate(logPath, 10*1024*1024+1); err != nil {
+		t.Fatalf("Truncate(%q) error = %v", logPath, err)
+	}
+
+	store := &fakeStore{}
+	projectPath := testProjectPath(t)
+	controller, _ := newTestController(t, store, projectPath, scriptOptions{
+		startTimeout:      150 * time.Millisecond,
+		useDefaultLogFile: true,
+		stderrLine:        "fresh daemon output",
+	})
+
+	_, err := controller.Start(context.Background(), StartRequest{
+		Session: "test",
+		Project: projectPath,
+	})
+	if err == nil || !strings.Contains(err.Error(), "daemon failed to report running state") {
+		t.Fatalf("Start() error = %v, want startup timeout", err)
+	}
+
+	rotatedPath := logPath + ".1"
+	rotatedInfo, err := os.Stat(rotatedPath)
+	if err != nil {
+		t.Fatalf("Stat(%q) error = %v", rotatedPath, err)
+	}
+	if got, want := rotatedInfo.Size(), int64(10*1024*1024+1); got != want {
+		t.Fatalf("rotated log size = %d, want %d", got, want)
+	}
+
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", logPath, err)
+	}
+	if got := string(data); !strings.Contains(got, "fresh daemon output") {
+		t.Fatalf("daemon log = %q, want fresh output", got)
+	}
+}
+
 func TestResolvePathsAcceptsSQLiteURIOverride(t *testing.T) {
 	t.Setenv("ORCA_STATE_DB", "sqlite:///tmp/orca-state.db")
 
@@ -126,6 +209,9 @@ func TestResolvePathsAcceptsSQLiteURIOverride(t *testing.T) {
 	if got, want := paths.PIDDir, filepath.Join("/tmp", "pids"); got != want {
 		t.Fatalf("paths.PIDDir = %q, want %q", got, want)
 	}
+	if got, want := paths.LogFile, "/tmp/daemon.log"; got != want {
+		t.Fatalf("paths.LogFile = %q, want %q", got, want)
+	}
 }
 
 func TestResolvePathsRejectsInvalidSQLiteURIOverride(t *testing.T) {
@@ -137,6 +223,61 @@ func TestResolvePathsRejectsInvalidSQLiteURIOverride(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "sqlite:///absolute/path") {
 		t.Fatalf("ResolvePaths() error = %v, want sqlite path guidance", err)
+	}
+}
+
+func TestResolvePathsUsesConfigDirOverrideLogFile(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("ORCA_STATE_DB", "")
+	t.Setenv("ORCA_CONFIG_DIR", configDir)
+
+	paths, err := ResolvePaths()
+	if err != nil {
+		t.Fatalf("ResolvePaths() error = %v", err)
+	}
+	if got, want := paths.LogFile, filepath.Join(configDir, "daemon.log"); got != want {
+		t.Fatalf("paths.LogFile = %q, want %q", got, want)
+	}
+}
+
+func TestStartReturnsDaemonLogPathError(t *testing.T) {
+	restoreDaemonLogHooks(t)
+	userHomeDir = func() (string, error) {
+		return "", errors.New("home unavailable")
+	}
+
+	store := &fakeStore{}
+	projectPath := testProjectPath(t)
+	controller, _ := newTestController(t, store, projectPath, scriptOptions{
+		useDefaultLogFile: true,
+	})
+
+	_, err := controller.Start(context.Background(), StartRequest{
+		Session: "test",
+		Project: projectPath,
+	})
+	if err == nil || !strings.Contains(err.Error(), "home unavailable") {
+		t.Fatalf("Start() error = %v, want home resolution error", err)
+	}
+}
+
+func TestStartReturnsDaemonLogOpenError(t *testing.T) {
+	store := &fakeStore{}
+	projectPath := testProjectPath(t)
+	controller, _ := newTestController(t, store, projectPath, scriptOptions{})
+
+	blocker := filepath.Join(t.TempDir(), "blocked")
+	if err := os.WriteFile(blocker, []byte("file"), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", blocker, err)
+	}
+	controller.paths.LogFile = filepath.Join(blocker, "daemon.log")
+
+	_, err := controller.Start(context.Background(), StartRequest{
+		Session: "test",
+		Project: projectPath,
+	})
+	if err == nil || !strings.Contains(err.Error(), "create daemon log directory") {
+		t.Fatalf("Start() error = %v, want daemon log open error", err)
 	}
 }
 
@@ -625,8 +766,12 @@ func TestLocalControllerAssignCancelResumeRPC(t *testing.T) {
 }
 
 type scriptOptions struct {
-	ignoreTERM  bool
-	stopTimeout time.Duration
+	ignoreTERM        bool
+	startTimeout      time.Duration
+	stopTimeout       time.Duration
+	useDefaultLogFile bool
+	stdoutLine        string
+	stderrLine        string
 }
 
 func newTestController(t *testing.T, store *fakeStore, projectPath string, options scriptOptions) (*LocalController, string) {
@@ -640,18 +785,33 @@ func newTestController(t *testing.T, store *fakeStore, projectPath string, optio
 	if options.ignoreTERM {
 		script += "trap '' TERM\n"
 	}
+	if options.stdoutLine != "" {
+		script += fmt.Sprintf("printf '%%s\\n' %q\n", options.stdoutLine)
+	}
+	if options.stderrLine != "" {
+		script += fmt.Sprintf("printf '%%s\\n' %q >&2\n", options.stderrLine)
+	}
 	script += "exec sleep 1000\n"
 
 	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
 		t.Fatalf("write helper daemon script: %v", err)
 	}
 
+	paths := Paths{
+		StateDB: filepath.Join(tempDir, "state.db"),
+		PIDDir:  filepath.Join(tempDir, "pids"),
+		LogFile: filepath.Join(tempDir, "daemon.log"),
+	}
+	if options.useDefaultLogFile {
+		paths.LogFile = ""
+	}
+
 	controller, err := NewLocalController(ControllerOptions{
 		Store:        store,
-		Paths:        Paths{StateDB: filepath.Join(tempDir, "state.db"), PIDDir: filepath.Join(tempDir, "pids")},
+		Paths:        paths,
 		Executable:   scriptPath,
 		Now:          func() time.Time { return time.Unix(1, 0).UTC() },
-		StartTimeout: 1500 * time.Millisecond,
+		StartTimeout: resolvedStartTimeout(options.startTimeout),
 		StopTimeout:  resolvedStopTimeout(options.stopTimeout),
 	})
 	if err != nil {
@@ -659,6 +819,13 @@ func newTestController(t *testing.T, store *fakeStore, projectPath string, optio
 	}
 
 	return controller, pidOutputPath
+}
+
+func resolvedStartTimeout(startTimeout time.Duration) time.Duration {
+	if startTimeout > 0 {
+		return startTimeout
+	}
+	return 1500 * time.Millisecond
 }
 
 func resolvedStopTimeout(stopTimeout time.Duration) time.Duration {

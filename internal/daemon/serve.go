@@ -37,6 +37,7 @@ type ServeRequest struct {
 	Session     string
 	StateDB     string
 	PIDFile     string
+	LogFile     string
 	BuildCommit string
 }
 
@@ -312,13 +313,17 @@ func stopDaemonForReload(instance *Daemon) {
 }
 
 func daemonServeArgs(executable string, req ServeRequest) []string {
-	return []string{
+	args := []string{
 		executable,
 		"__daemon-serve",
 		"--session", req.Session,
 		"--state-db", req.StateDB,
 		"--pid-file", req.PIDFile,
 	}
+	if strings.TrimSpace(req.LogFile) != "" {
+		args = append(args, "--log-file", req.LogFile)
+	}
+	return args
 }
 
 func serveRPC(ctx context.Context, listener net.Listener, req ServeRequest, instance *Daemon, store daemonStateStore, buildCommit string, execProcess func(string, []string, []string) error) error {
