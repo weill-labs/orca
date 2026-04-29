@@ -652,7 +652,7 @@ func TestParsePaneList(t *testing.T) {
 		{
 			name:    "rejects malformed header",
 			output:  "PANE ONLY\n",
-			wantErr: "parse pane list header",
+			wantErr: "got 2 columns",
 		},
 		{
 			name: "parses rows and strips active marker",
@@ -698,6 +698,28 @@ func TestParsePaneList(t *testing.T) {
 			}, "\n"),
 			want: []Pane{
 				{ID: "329", Name: "pane-329", Window: "alphatrader", Lead: true},
+			},
+		},
+		{
+			name: "parses window after compound idle duration",
+			output: strings.Join([]string{
+				header,
+				"330   pane-330             local           self-improve/20260423-alphatrader-pnl 1h30m ago alphatrader              lead",
+				"",
+			}, "\n"),
+			want: []Pane{
+				{ID: "330", Name: "pane-330", Window: "alphatrader", Lead: true},
+			},
+		},
+		{
+			name: "does not mark lead when word appears only in task title",
+			output: strings.Join([]string{
+				header,
+				fmt.Sprintf("%-6s %-20s %-15s %-30s %-9s %-10s %-12s %s", "9", "w-LAB-9", "local", "LAB-9", "--", "main", "Fix lead detection", ""),
+				"",
+			}, "\n"),
+			want: []Pane{
+				{ID: "9", Name: "w-LAB-9", Window: "main"},
 			},
 		},
 		{
