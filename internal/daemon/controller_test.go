@@ -117,9 +117,10 @@ func TestStartRedirectsDaemonOutputToDefaultLogFile(t *testing.T) {
 	store := &fakeStore{}
 	projectPath := testProjectPath(t)
 	controller, _ := newTestController(t, store, projectPath, scriptOptions{
-		startTimeout: 150 * time.Millisecond,
-		stdoutLine:   "daemon stdout marker",
-		stderrLine:   "daemon stderr marker",
+		startTimeout:      150 * time.Millisecond,
+		useDefaultLogFile: true,
+		stdoutLine:        "daemon stdout marker",
+		stderrLine:        "daemon stderr marker",
 	})
 
 	_, err := controller.Start(context.Background(), StartRequest{
@@ -161,8 +162,9 @@ func TestStartRotatesOversizedDaemonLogBeforeWriting(t *testing.T) {
 	store := &fakeStore{}
 	projectPath := testProjectPath(t)
 	controller, _ := newTestController(t, store, projectPath, scriptOptions{
-		startTimeout: 150 * time.Millisecond,
-		stderrLine:   "fresh daemon output",
+		startTimeout:      150 * time.Millisecond,
+		useDefaultLogFile: true,
+		stderrLine:        "fresh daemon output",
 	})
 
 	_, err := controller.Start(context.Background(), StartRequest{
@@ -706,11 +708,12 @@ func TestLocalControllerAssignCancelResumeRPC(t *testing.T) {
 }
 
 type scriptOptions struct {
-	ignoreTERM   bool
-	startTimeout time.Duration
-	stopTimeout  time.Duration
-	stdoutLine   string
-	stderrLine   string
+	ignoreTERM        bool
+	startTimeout      time.Duration
+	stopTimeout       time.Duration
+	useDefaultLogFile bool
+	stdoutLine        string
+	stderrLine        string
 }
 
 func newTestController(t *testing.T, store *fakeStore, projectPath string, options scriptOptions) (*LocalController, string) {
@@ -736,9 +739,18 @@ func newTestController(t *testing.T, store *fakeStore, projectPath string, optio
 		t.Fatalf("write helper daemon script: %v", err)
 	}
 
+	paths := Paths{
+		StateDB: filepath.Join(tempDir, "state.db"),
+		PIDDir:  filepath.Join(tempDir, "pids"),
+		LogFile: filepath.Join(tempDir, "daemon.log"),
+	}
+	if options.useDefaultLogFile {
+		paths.LogFile = ""
+	}
+
 	controller, err := NewLocalController(ControllerOptions{
 		Store:        store,
-		Paths:        Paths{StateDB: filepath.Join(tempDir, "state.db"), PIDDir: filepath.Join(tempDir, "pids")},
+		Paths:        paths,
 		Executable:   scriptPath,
 		Now:          func() time.Time { return time.Unix(1, 0).UTC() },
 		StartTimeout: resolvedStartTimeout(options.startTimeout),

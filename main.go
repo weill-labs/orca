@@ -181,10 +181,12 @@ func runDaemonProcessWithServe(args []string, buildCommit string, serve func(con
 	var session string
 	var stateDB string
 	var pidFile string
+	var logFile string
 
 	fs.StringVar(&session, "session", "", "daemon session")
 	fs.StringVar(&stateDB, "state-db", "", "state db path")
 	fs.StringVar(&pidFile, "pid-file", "", "pid file path")
+	fs.StringVar(&logFile, "log-file", "", "daemon log file path")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -200,10 +202,15 @@ func runDaemonProcessWithServe(args []string, buildCommit string, serve func(con
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	if err := daemon.RedirectProcessOutputToDaemonLog(ctx, logFile); err != nil {
+		return err
+	}
+
 	return serve(ctx, daemon.ServeRequest{
 		Session:     session,
 		StateDB:     stateDB,
 		PIDFile:     pidFile,
+		LogFile:     logFile,
 		BuildCommit: buildCommit,
 	})
 }
