@@ -13,65 +13,69 @@ import (
 )
 
 const (
-	defaultCaptureInterval       = 5 * time.Second
-	defaultAgentHandshakeTimeout = 30 * time.Second
-	defaultPromptSettleDuration  = 2 * time.Second
-	defaultTrustPromptTimeout    = 2 * time.Second
-	defaultPollInterval          = 30 * time.Second
-	defaultMergeGracePeriod      = 10 * time.Minute
-	relayHealthyPollInterval     = 5 * time.Minute
+	defaultCaptureInterval         = 5 * time.Second
+	defaultAgentHandshakeTimeout   = 30 * time.Second
+	defaultPromptSettleDuration    = 2 * time.Second
+	defaultTrustPromptTimeout      = 2 * time.Second
+	defaultPollInterval            = 30 * time.Second
+	defaultMergeGracePeriod        = 10 * time.Minute
+	defaultShutdownCleanupDeadline = 30 * time.Second
+	relayHealthyPollInterval       = 5 * time.Minute
 )
 
 type Daemon struct {
-	project              string
-	session              string
-	pidPath              string
-	allowCurrentPIDReuse bool
-	config               ConfigProvider
-	state                StateStore
-	pool                 Pool
-	amux                 AmuxClient
-	issueTracker         IssueTracker
-	commands             CommandRunner
-	github               gitHubClient
-	githubMu             sync.Mutex
-	githubClients        map[string]gitHubClient
-	events               EventSink
-	now                  func() time.Time
-	newTicker            func(time.Duration) Ticker
-	newWatchdogTicker    func(time.Duration) Ticker
-	sleep                func(context.Context, time.Duration) error
-	captureInterval      time.Duration
-	pollInterval         time.Duration
-	mergeGracePeriod     time.Duration
-	statusWriter         daemonStatusWriter
-	logf                 func(string, ...any)
-	monitorGitHubCircuit *CircuitBreaker
-	relayURL             string
-	relayToken           string
-	hostname             string
-	detectOrigin         func(projectDir string) (string, error)
+	project                 string
+	session                 string
+	pidPath                 string
+	allowCurrentPIDReuse    bool
+	config                  ConfigProvider
+	state                   StateStore
+	pool                    Pool
+	amux                    AmuxClient
+	issueTracker            IssueTracker
+	commands                CommandRunner
+	github                  gitHubClient
+	githubMu                sync.Mutex
+	githubClients           map[string]gitHubClient
+	events                  EventSink
+	now                     func() time.Time
+	newTicker               func(time.Duration) Ticker
+	newWatchdogTicker       func(time.Duration) Ticker
+	sleep                   func(context.Context, time.Duration) error
+	captureInterval         time.Duration
+	pollInterval            time.Duration
+	mergeGracePeriod        time.Duration
+	shutdownCleanupDeadline time.Duration
+	statusWriter            daemonStatusWriter
+	logf                    func(string, ...any)
+	monitorGitHubCircuit    *CircuitBreaker
+	relayURL                string
+	relayToken              string
+	hostname                string
+	detectOrigin            func(projectDir string) (string, error)
 
-	started           atomic.Bool
-	lastHeartbeat     atomic.Int64
-	relayHealthy      atomic.Bool
-	stopContext       context.Context
-	stopCancel        context.CancelFunc
-	loopDone          chan struct{}
-	eventStreamDone   chan struct{}
-	watchdogDone      chan struct{}
-	relayDone         chan struct{}
-	mergeQueueInbox   chan ProcessQueue
-	mergeQueueUpdates chan MergeQueueUpdate
-	mergeQueueDone    chan struct{}
-	pollIntervalCh    chan time.Duration
-	monitorRuns       sync.WaitGroup
-	taskMonitorMu     sync.Mutex
-	taskMonitors      map[string]*TaskMonitor
-	codexStartupMu    sync.Mutex
-	relayConnMu       sync.Mutex
-	relayConn         relayConnection
-	relayReconnect    atomic.Bool
+	started            atomic.Bool
+	lastHeartbeat      atomic.Int64
+	relayHealthy       atomic.Bool
+	stopContext        context.Context
+	stopCancel         context.CancelFunc
+	cleanupDrainCtx    context.Context
+	cleanupDrainCancel context.CancelFunc
+	loopDone           chan struct{}
+	eventStreamDone    chan struct{}
+	watchdogDone       chan struct{}
+	relayDone          chan struct{}
+	mergeQueueInbox    chan ProcessQueue
+	mergeQueueUpdates  chan MergeQueueUpdate
+	mergeQueueDone     chan struct{}
+	pollIntervalCh     chan time.Duration
+	monitorRuns        sync.WaitGroup
+	taskMonitorMu      sync.Mutex
+	taskMonitors       map[string]*TaskMonitor
+	codexStartupMu     sync.Mutex
+	relayConnMu        sync.Mutex
+	relayConn          relayConnection
+	relayReconnect     atomic.Bool
 }
 
 type realTicker struct {
@@ -122,6 +126,9 @@ func New(opts Options) (*Daemon, error) {
 	if opts.MergeGracePeriod <= 0 {
 		opts.MergeGracePeriod = defaultMergeGracePeriod
 	}
+	if opts.ShutdownCleanupDeadline <= 0 {
+		opts.ShutdownCleanupDeadline = defaultShutdownCleanupDeadline
+	}
 	if opts.PIDPath == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
@@ -142,33 +149,34 @@ func New(opts Options) (*Daemon, error) {
 	}
 
 	return &Daemon{
-		project:              opts.Project,
-		session:              opts.Session,
-		pidPath:              opts.PIDPath,
-		allowCurrentPIDReuse: opts.AllowCurrentPIDReuse,
-		config:               opts.Config,
-		state:                opts.State,
-		pool:                 opts.Pool,
-		amux:                 opts.Amux,
-		issueTracker:         opts.IssueTracker,
-		commands:             opts.Commands,
-		github:               newDefaultGitHubClient(opts.Project, opts.Commands, opts.Logf),
-		githubClients:        make(map[string]gitHubClient),
-		events:               opts.Events,
-		now:                  opts.Now,
-		newTicker:            opts.NewTicker,
-		newWatchdogTicker:    opts.NewWatchdogTicker,
-		sleep:                opts.Sleep,
-		captureInterval:      opts.CaptureInterval,
-		pollInterval:         opts.PollInterval,
-		mergeGracePeriod:     opts.MergeGracePeriod,
-		statusWriter:         opts.DaemonStatusWriter,
-		logf:                 opts.Logf,
-		relayURL:             strings.TrimSpace(opts.RelayURL),
-		relayToken:           strings.TrimSpace(opts.RelayToken),
-		hostname:             strings.TrimSpace(opts.Hostname),
-		detectOrigin:         opts.DetectOrigin,
-		monitorGitHubCircuit: NewCircuitBreakerWithHooks(opts.Now, defaultCircuitBreakerFailureThreshold, defaultCircuitBreakerCooldown, daemonCircuitHooks(opts.Project, opts.Now, opts.State, opts.Events, "monitor github")),
+		project:                 opts.Project,
+		session:                 opts.Session,
+		pidPath:                 opts.PIDPath,
+		allowCurrentPIDReuse:    opts.AllowCurrentPIDReuse,
+		config:                  opts.Config,
+		state:                   opts.State,
+		pool:                    opts.Pool,
+		amux:                    opts.Amux,
+		issueTracker:            opts.IssueTracker,
+		commands:                opts.Commands,
+		github:                  newDefaultGitHubClient(opts.Project, opts.Commands, opts.Logf),
+		githubClients:           make(map[string]gitHubClient),
+		events:                  opts.Events,
+		now:                     opts.Now,
+		newTicker:               opts.NewTicker,
+		newWatchdogTicker:       opts.NewWatchdogTicker,
+		sleep:                   opts.Sleep,
+		captureInterval:         opts.CaptureInterval,
+		pollInterval:            opts.PollInterval,
+		mergeGracePeriod:        opts.MergeGracePeriod,
+		shutdownCleanupDeadline: opts.ShutdownCleanupDeadline,
+		statusWriter:            opts.DaemonStatusWriter,
+		logf:                    opts.Logf,
+		relayURL:                strings.TrimSpace(opts.RelayURL),
+		relayToken:              strings.TrimSpace(opts.RelayToken),
+		hostname:                strings.TrimSpace(opts.Hostname),
+		detectOrigin:            opts.DetectOrigin,
+		monitorGitHubCircuit:    NewCircuitBreakerWithHooks(opts.Now, defaultCircuitBreakerFailureThreshold, defaultCircuitBreakerCooldown, daemonCircuitHooks(opts.Project, opts.Now, opts.State, opts.Events, "monitor github")),
 	}, nil
 }
 
@@ -220,6 +228,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 	}
 
 	d.stopContext, d.stopCancel = context.WithCancel(context.Background())
+	d.cleanupDrainCtx, d.cleanupDrainCancel = context.WithCancel(context.Background())
 	d.lastHeartbeat.Store(d.now().UnixMilli())
 	d.releaseStalePoolClones(ctx)
 	d.reconcileNonTerminalAssignments(ctx)
@@ -303,6 +312,8 @@ func (d *Daemon) Stop(ctx context.Context) error {
 	if d.stopCancel != nil {
 		d.stopCancel()
 	}
+	stopCleanupDrain := d.beginShutdownCleanupDrain()
+	defer stopCleanupDrain()
 	d.closeRelayConn()
 	if d.loopDone != nil {
 		<-d.loopDone
@@ -331,6 +342,8 @@ func (d *Daemon) Stop(ctx context.Context) error {
 	d.watchdogDone = nil
 	d.relayDone = nil
 	d.pollIntervalCh = nil
+	d.cleanupDrainCtx = nil
+	d.cleanupDrainCancel = nil
 
 	d.emit(ctx, Event{
 		Time:    d.now(),
@@ -340,6 +353,20 @@ func (d *Daemon) Stop(ctx context.Context) error {
 	})
 	return nil
 }
+
+func (d *Daemon) beginShutdownCleanupDrain() func() {
+	cancel := d.cleanupDrainCancel
+	if cancel == nil {
+		return func() {}
+	}
+
+	timer := time.AfterFunc(d.shutdownCleanupDeadline, cancel)
+	return func() {
+		timer.Stop()
+		cancel()
+	}
+}
+
 func (d *Daemon) Cancel(ctx context.Context, issue string) error {
 	return d.cancel(ctx, d.project, issue)
 }
