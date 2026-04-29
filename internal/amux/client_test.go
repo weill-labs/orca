@@ -364,6 +364,7 @@ func TestCLIClientListPanes(t *testing.T) {
 		fmt.Sprintf("%-6s %-20s %-15s %-30s %-9s %-10s %-12s %s", "PANE", "NAME", "HOST", "BRANCH", "IDLE", "WINDOW", "TASK", "META"),
 		fmt.Sprintf("%-6s %-20s %-15s %-30s %-9s %-10s %-12s %s", "*1", "w-LAB-711", "local", "LAB-711", "--", "main", "LAB-711", "agent=codex"),
 		fmt.Sprintf("%-6s %-20s %-15s %-30s %-9s %-10s %-12s %s", "2", "w-LAB-712", "local", "LAB-712", "--", "main", "LAB-712", "agent=codex"),
+		"481   pane-481             local           self-improve/20260423-alphatrader-pnl 195s ago  alphacritic              lead",
 		"",
 	}, "\n")
 
@@ -372,6 +373,7 @@ func TestCLIClientListPanes(t *testing.T) {
 			{output: []byte(listOutput)},
 			{output: []byte(`{"id":1,"name":"w-LAB-711","cwd":"/tmp/orca01"}`)},
 			{output: []byte(`{"id":2,"name":"w-LAB-712","cwd":"/tmp/orca02"}`)},
+			{output: []byte(`{"id":481,"name":"pane-481","cwd":"/tmp/orca481"}`)},
 		},
 	}
 	client := newTestClient(Config{Session: "orca-dev"}, runner)
@@ -384,6 +386,7 @@ func TestCLIClientListPanes(t *testing.T) {
 	wantPanes := []Pane{
 		{ID: "1", Name: "w-LAB-711", CWD: "/tmp/orca01", Window: "main"},
 		{ID: "2", Name: "w-LAB-712", CWD: "/tmp/orca02", Window: "main"},
+		{ID: "481", Name: "pane-481", CWD: "/tmp/orca481", Window: "alphacritic", Lead: true},
 	}
 	if !reflect.DeepEqual(panes, wantPanes) {
 		t.Fatalf("ListPanes() = %#v, want %#v", panes, wantPanes)
@@ -393,6 +396,7 @@ func TestCLIClientListPanes(t *testing.T) {
 		{name: "amux", args: []string{"-s", "orca-dev", "list", "--no-cwd"}},
 		{name: "amux", args: []string{"-s", "orca-dev", "capture", "--format", "json", "w-LAB-711"}},
 		{name: "amux", args: []string{"-s", "orca-dev", "capture", "--format", "json", "w-LAB-712"}},
+		{name: "amux", args: []string{"-s", "orca-dev", "capture", "--format", "json", "pane-481"}},
 	}
 	if !reflect.DeepEqual(runner.calls, wantCmds) {
 		t.Fatalf("ListPanes() commands = %#v, want %#v", runner.calls, wantCmds)
@@ -675,6 +679,28 @@ func TestParsePaneList(t *testing.T) {
 			},
 		},
 		{
+			name: "parses window after idle fills column",
+			output: strings.Join([]string{
+				header,
+				"840   w-LAB-1288           local           LAB-1288                       3561s ago sonar      Tier 1 dashboard agent_profile=codex",
+				"",
+			}, "\n"),
+			want: []Pane{
+				{ID: "840", Name: "w-LAB-1288", Window: "sonar"},
+			},
+		},
+		{
+			name: "parses window after branch and idle overflow columns",
+			output: strings.Join([]string{
+				header,
+				"329   pane-329             local           self-improve/20260423-alphatrader-pnl 1700s ago alphatrader              lead",
+				"",
+			}, "\n"),
+			want: []Pane{
+				{ID: "329", Name: "pane-329", Window: "alphatrader", Lead: true},
+			},
+		},
+		{
 			name: "rejects row without pane id",
 			output: strings.Join([]string{
 				header,
@@ -682,6 +708,15 @@ func TestParsePaneList(t *testing.T) {
 				"",
 			}, "\n"),
 			wantErr: "parse pane id from list row",
+		},
+		{
+			name: "rejects row without idle and window columns",
+			output: strings.Join([]string{
+				header,
+				"481  pane-481  local  self-improve/20260423-alphatrader-pnl",
+				"",
+			}, "\n"),
+			wantErr: "parse pane idle/window from list row",
 		},
 	}
 
@@ -702,32 +737,6 @@ func TestParsePaneList(t *testing.T) {
 			}
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Fatalf("parsePaneList() = %#v, want %#v", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestColumnSlice(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name  string
-		line  string
-		start int
-		end   int
-		want  string
-	}{
-		{name: "returns empty when start past end of line", line: "orca", start: 10, end: 12, want: ""},
-		{name: "caps end at line length", line: "orca", start: 1, end: 10, want: "rca"},
-		{name: "returns empty when end before start", line: "orca", start: 3, end: 1, want: ""},
-	}
-
-	for _, tt := range tests {
-		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			if got := columnSlice(tt.line, tt.start, tt.end); got != tt.want {
-				t.Fatalf("columnSlice(%q, %d, %d) = %q, want %q", tt.line, tt.start, tt.end, got, tt.want)
 			}
 		})
 	}
