@@ -18,7 +18,7 @@ var (
 	paneListSeparatorPattern = regexp.MustCompile(` {2,}`)
 	paneListPaneIDPattern    = regexp.MustCompile(`^\*?\d+$`)
 	paneListRowPrefixPattern = regexp.MustCompile(`^(\*?\d+)\s+(\S+)\s+(\S+)\s+(.*)$`)
-	paneListTailPattern      = regexp.MustCompile(`^(?:(?:.+?)\s+)?(?:--|[0-9]+[A-Za-z]+ ago)\s+(\S+)(.*)$`)
+	paneListTailPattern      = regexp.MustCompile(`^(?:(?:.+?)\s+)?(?:--|[0-9]+[A-Za-z]+(?:[0-9]+[A-Za-z]+)* ago)\s+(\S+)(.*)$`)
 )
 
 var ErrWaitContentTimeout = errors.New("amux wait content timeout")
@@ -576,7 +576,7 @@ func parsePaneList(output string) ([]Pane, error) {
 
 	header := lines[0]
 	if err := parsePaneListHeader(header); err != nil {
-		return nil, fmt.Errorf("parse pane list header: %q", strings.TrimSpace(header))
+		return nil, fmt.Errorf("parse pane list header %q: %w", strings.TrimSpace(header), err)
 	}
 
 	panes := make([]Pane, 0, len(lines)-1)
@@ -668,8 +668,8 @@ func paneListMetadataSuffix(text string) string {
 		}
 	}
 	for i, token := range tokens {
-		if token == "lead" {
-			return strings.Join(tokens[i:], " ")
+		if token == "lead" && i == len(tokens)-1 {
+			return "lead"
 		}
 	}
 	return ""
