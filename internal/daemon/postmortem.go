@@ -117,7 +117,7 @@ func (d *Daemon) finishAssignmentWithMessage(ctx context.Context, active ActiveA
 func (d *Daemon) finishAssignmentWithMessageAndPrompt(ctx context.Context, active ActiveAssignment, status, eventType string, merged bool, wrapUpPrompt, message string) error {
 	var result error
 	cancelled := status == TaskStatusCancelled
-	cleanupCtx := context.WithoutCancel(ctx)
+	cleanupCtx := d.cleanupContext(ctx)
 	d.stopTaskMonitorForProject(active.Task.Project, active.Task.Issue)
 
 	if prompt := completionWrapUpPrompt(merged, wrapUpPrompt); prompt != "" {
@@ -212,6 +212,34 @@ func (d *Daemon) finishAssignmentWithMessageAndPrompt(ctx context.Context, activ
 		Message:      message,
 	})
 	return result
+}
+
+func (d *Daemon) cleanupContext(ctx context.Context) context.Context {
+	base := context.WithoutCancel(ctx)
+	if d.cleanupDrainCtx == nil {
+		return base
+	}
+	return shutdownCleanupContext{
+		Context: base,
+		drain:   d.cleanupDrainCtx,
+	}
+}
+
+type shutdownCleanupContext struct {
+	context.Context
+	drain context.Context
+}
+
+func (c shutdownCleanupContext) Deadline() (time.Time, bool) {
+	return c.drain.Deadline()
+}
+
+func (c shutdownCleanupContext) Done() <-chan struct{} {
+	return c.drain.Done()
+}
+
+func (c shutdownCleanupContext) Err() error {
+	return c.drain.Err()
 }
 
 func (d *Daemon) emitMergeNotifyFailed(ctx context.Context, active ActiveAssignment, err error) {

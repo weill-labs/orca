@@ -421,6 +421,83 @@ func TestFinishAssignmentMergedCleanupSendsWrapUpThenPostmortem(t *testing.T) {
 	}
 }
 
+func TestDaemonStopCancelsPostmortemCleanupAfterShutdownDeadline(t *testing.T) {
+	deps := newTestDeps(t)
+	captureTicker := newFakeTicker()
+	prTicker := newFakeTicker()
+	deps.tickers.enqueue(captureTicker, prTicker)
+	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--state", "open", "--json", "number"}, `[]`, nil)
+	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-689", "--json", "number"}, `[{"number":42}]`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, `{"mergedAt":"2026-04-02T12:00:00Z"}`, nil)
+
+	shutdownCleanupDeadline := 40 * time.Millisecond
+	postmortemWaitStarted := make(chan struct{}, 1)
+	releasePostmortemWait := make(chan struct{})
+	deps.amux.waitIdleFunc = func(ctx context.Context, _ string, timeout, settle time.Duration) error {
+		if timeout == codexPromptRetryIdleProbeTime && settle == 0 {
+			return errors.New("idle timeout")
+		}
+		if timeout != postmortemWaitTimeout || settle != 0 {
+			return nil
+		}
+		select {
+		case postmortemWaitStarted <- struct{}{}:
+		default:
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-releasePostmortemWait:
+			return nil
+		}
+	}
+
+	d := deps.newDaemonWithOptions(t, func(opts *Options) {
+		opts.MergeGracePeriod = 30 * time.Second
+		opts.ShutdownCleanupDeadline = shutdownCleanupDeadline
+	})
+	t.Cleanup(func() {
+		close(releasePostmortemWait)
+		if d.started.Load() {
+			_ = d.Stop(context.Background())
+		}
+	})
+
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if err := d.Assign(ctx, "LAB-689", "Implement daemon core", "codex", "Shutdown cleanup"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	prTicker.tick(deps.clock.Now())
+	select {
+	case <-postmortemWaitStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for postmortem cleanup to start")
+	}
+
+	stopDone := make(chan error, 1)
+	stopStarted := time.Now()
+	go func() {
+		stopDone <- d.Stop(context.Background())
+	}()
+
+	stopBudget := shutdownCleanupDeadline + 500*time.Millisecond
+	select {
+	case err := <-stopDone:
+		if err != nil {
+			t.Fatalf("Stop() error = %v", err)
+		}
+		if elapsed := time.Since(stopStarted); elapsed > stopBudget {
+			t.Fatalf("Stop() elapsed = %s, want within %s", elapsed, stopBudget)
+		}
+	case <-time.After(stopBudget):
+		t.Fatalf("Stop() did not return within shutdown cleanup deadline budget %s", stopBudget)
+	}
+}
+
 func TestFinishAssignmentMergedCleanupSetsDoneMetadataAfterPostmortem(t *testing.T) {
 	t.Parallel()
 

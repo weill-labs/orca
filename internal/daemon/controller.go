@@ -217,7 +217,7 @@ func NewLocalController(options ControllerOptions) (*LocalController, error) {
 
 	stopTimeout := options.StopTimeout
 	if stopTimeout == 0 {
-		stopTimeout = 5 * time.Second
+		stopTimeout = defaultDaemonStopTimeout
 	}
 
 	return &LocalController{

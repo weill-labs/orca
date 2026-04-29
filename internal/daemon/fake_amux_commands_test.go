@@ -35,6 +35,7 @@ type fakeAmux struct {
 	killHook                     func(paneID string)
 	waitIdleErr                  error
 	waitIdleHook                 func(paneID string, timeout, settle time.Duration)
+	waitIdleFunc                 func(ctx context.Context, paneID string, timeout, settle time.Duration) error
 	waitContentErr               error
 	waitContentResults           []error
 	waitContentHook              func(paneID, substring string, timeout time.Duration)
@@ -430,12 +431,20 @@ func (a *fakeAmux) WaitIdle(ctx context.Context, paneID string, timeout time.Dur
 		a.waitIdleHook(paneID, timeout, 0)
 	}
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	a.waitIdleCalls = append(a.waitIdleCalls, waitIdleCall{PaneID: paneID, Timeout: timeout})
-	if timeout == codexPromptRetryIdleProbeTime && a.waitIdleHook == nil && a.waitIdleErr == nil && len(a.sentKeys[paneID]) > 0 {
+	waitIdleFunc := a.waitIdleFunc
+	waitIdleErr := a.waitIdleErr
+	sentKeyCount := len(a.sentKeys[paneID])
+	hasWaitIdleHook := a.waitIdleHook != nil
+	a.mu.Unlock()
+
+	if waitIdleFunc != nil {
+		return waitIdleFunc(ctx, paneID, timeout, 0)
+	}
+	if timeout == codexPromptRetryIdleProbeTime && !hasWaitIdleHook && waitIdleErr == nil && sentKeyCount > 0 {
 		return errors.New("idle timeout")
 	}
-	return a.waitIdleErr
+	return waitIdleErr
 }
 
 func (a *fakeAmux) WaitIdleSettle(ctx context.Context, paneID string, timeout, settle time.Duration) error {
@@ -446,9 +455,15 @@ func (a *fakeAmux) WaitIdleSettle(ctx context.Context, paneID string, timeout, s
 		a.waitIdleHook(paneID, timeout, settle)
 	}
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	a.waitIdleCalls = append(a.waitIdleCalls, waitIdleCall{PaneID: paneID, Timeout: timeout, Settle: settle})
-	return a.waitIdleErr
+	waitIdleFunc := a.waitIdleFunc
+	waitIdleErr := a.waitIdleErr
+	a.mu.Unlock()
+
+	if waitIdleFunc != nil {
+		return waitIdleFunc(ctx, paneID, timeout, settle)
+	}
+	return waitIdleErr
 }
 
 func (a *fakeAmux) WaitContent(ctx context.Context, paneID, substring string, timeout time.Duration) error {
