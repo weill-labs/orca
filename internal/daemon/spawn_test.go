@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -22,9 +23,12 @@ func TestLocalControllerSpawn(t *testing.T) {
 	tests := []struct {
 		name         string
 		amux         *fakeSpawnAmux
+		config       ConfigProvider
 		store        func(t *testing.T) state.Store
 		detect       func(string) (string, error)
 		session      *string
+		agent        string
+		prompt       string
 		setupProject func(t *testing.T, project string)
 		poolRunner   pool.Runner
 		assert       func(t *testing.T, store state.Store, result SpawnPaneResult, amuxClient *fakeSpawnAmux, project string)
@@ -93,6 +97,59 @@ func TestLocalControllerSpawn(t *testing.T) {
 				}
 				if clones[0].Issue == "" || clones[0].Branch == "" {
 					t.Fatalf("clone occupancy = %#v, want synthetic issue and branch", clones[0])
+				}
+			},
+		},
+		{
+			name: "starts requested agent from configured profile",
+			amux: &fakeSpawnAmux{
+				spawnPane: amux.Pane{ID: "pane-7", Name: "Scratch pane"},
+			},
+			config: &fakeConfig{
+				profiles: map[string]AgentProfile{
+					"scratch": {Name: "scratch", StartCommand: "codex --profile scratch"},
+				},
+			},
+			agent: "scratch",
+			assert: func(t *testing.T, _ state.Store, _ SpawnPaneResult, amuxClient *fakeSpawnAmux, _ string) {
+				t.Helper()
+				if got, want := len(amuxClient.spawnRequests), 1; got != want {
+					t.Fatalf("len(spawnRequests) = %d, want %d", got, want)
+				}
+				if got, want := amuxClient.spawnRequests[0].Command, "codex --profile scratch"; got != want {
+					t.Fatalf("spawn command = %q, want %q", got, want)
+				}
+			},
+		},
+		{
+			name: "sends prompt to spawned agent",
+			amux: &fakeSpawnAmux{
+				spawnPane:   amux.Pane{ID: "pane-7", Name: "Scratch pane"},
+				waitIdleErr: errors.New("still working"),
+			},
+			config: &fakeConfig{
+				profiles: map[string]AgentProfile{
+					"scratch": {Name: "scratch", StartCommand: "codex --profile scratch"},
+				},
+			},
+			agent:  "scratch",
+			prompt: "explore the repo",
+			assert: func(t *testing.T, _ state.Store, _ SpawnPaneResult, amuxClient *fakeSpawnAmux, _ string) {
+				t.Helper()
+				if got, want := len(amuxClient.spawnRequests), 1; got != want {
+					t.Fatalf("len(spawnRequests) = %d, want %d", got, want)
+				}
+				if got, want := amuxClient.spawnRequests[0].Command, "codex --profile scratch"; got != want {
+					t.Fatalf("spawn command = %q, want %q", got, want)
+				}
+				if got, want := amuxClient.sentKeys["pane-7"], []string{"explore the repo\n"}; !reflect.DeepEqual(got, want) {
+					t.Fatalf("sent keys = %#v, want %#v", got, want)
+				}
+				if got, want := len(amuxClient.waitContentCalls), 1; got != want {
+					t.Fatalf("len(waitContentCalls) = %d, want %d", got, want)
+				}
+				if got, want := amuxClient.waitContentCalls[0].Substring, codexWorkingText; got != want {
+					t.Fatalf("wait content substring = %q, want %q", got, want)
 				}
 			},
 		},
@@ -247,14 +304,18 @@ func TestLocalControllerSpawn(t *testing.T) {
 				session = *tt.session
 			}
 
-			controller, err := NewLocalController(ControllerOptions{
+			options := ControllerOptions{
 				Store:        store,
 				Paths:        Paths{StateDB: filepath.Join(t.TempDir(), "state.db"), PIDDir: filepath.Join(t.TempDir(), "pids")},
 				Now:          func() time.Time { return time.Date(2026, 4, 5, 12, 0, 0, 123, time.UTC) },
 				DetectOrigin: detectOrigin,
 				Amux:         tt.amux,
 				PoolRunner:   tt.poolRunner,
-			})
+			}
+			if tt.config != nil {
+				setControllerOptionsConfig(t, &options, tt.config)
+			}
+			controller, err := NewLocalController(options)
 			if err != nil {
 				t.Fatalf("NewLocalController() error = %v", err)
 			}
@@ -265,6 +326,7 @@ func TestLocalControllerSpawn(t *testing.T) {
 				LeadPane: "lead-pane",
 				Title:    "Scratch pane",
 			}
+			setSpawnPaneRequestAgentPrompt(t, &req, tt.agent, tt.prompt)
 
 			result, err := controller.Spawn(context.Background(), req)
 			if tt.wantErr != "" {
@@ -277,6 +339,41 @@ func TestLocalControllerSpawn(t *testing.T) {
 
 			tt.assert(t, store, result, tt.amux, canonicalProject)
 		})
+	}
+}
+
+func setControllerOptionsConfig(t *testing.T, options *ControllerOptions, config ConfigProvider) {
+	t.Helper()
+
+	field := reflect.ValueOf(options).Elem().FieldByName("Config")
+	if !field.IsValid() {
+		t.Fatal("ControllerOptions missing Config field")
+	}
+	if !field.CanSet() {
+		t.Fatal("ControllerOptions.Config cannot be set")
+	}
+	field.Set(reflect.ValueOf(config))
+}
+
+func setSpawnPaneRequestAgentPrompt(t *testing.T, req *SpawnPaneRequest, agent, prompt string) {
+	t.Helper()
+	if agent == "" && prompt == "" {
+		return
+	}
+
+	value := reflect.ValueOf(req).Elem()
+	for fieldName, fieldValue := range map[string]string{
+		"Agent":  agent,
+		"Prompt": prompt,
+	} {
+		field := value.FieldByName(fieldName)
+		if !field.IsValid() {
+			t.Fatalf("SpawnPaneRequest missing %s field", fieldName)
+		}
+		if field.Kind() != reflect.String {
+			t.Fatalf("SpawnPaneRequest.%s kind = %s, want string", fieldName, field.Kind())
+		}
+		field.SetString(fieldValue)
 	}
 }
 
@@ -415,10 +512,13 @@ func (r spawnFailingRunner) Run(context.Context, string, string, ...string) erro
 }
 
 type fakeSpawnAmux struct {
-	spawnRequests []amux.SpawnRequest
-	spawnPane     amux.Pane
-	spawnErr      error
-	listPanes     []amux.Pane
+	spawnRequests    []amux.SpawnRequest
+	spawnPane        amux.Pane
+	spawnErr         error
+	listPanes        []amux.Pane
+	waitIdleErr      error
+	sentKeys         map[string][]string
+	waitContentCalls []waitContentCall
 }
 
 func (f *fakeSpawnAmux) Spawn(_ context.Context, req amux.SpawnRequest) (amux.Pane, error) {
@@ -441,8 +541,14 @@ func (f *fakeSpawnAmux) Events(context.Context, amux.EventsRequest) (<-chan amux
 func (f *fakeSpawnAmux) Metadata(context.Context, string) (map[string]string, error) {
 	return nil, nil
 }
-func (f *fakeSpawnAmux) SendKeys(context.Context, string, ...string) error { return nil }
-func (f *fakeSpawnAmux) Capture(context.Context, string) (string, error)   { return "", nil }
+func (f *fakeSpawnAmux) SendKeys(_ context.Context, paneID string, keys ...string) error {
+	if f.sentKeys == nil {
+		f.sentKeys = make(map[string][]string)
+	}
+	f.sentKeys[paneID] = appendNormalizedSentKeys(f.sentKeys[paneID], normalizeSentKeys(keys...))
+	return nil
+}
+func (f *fakeSpawnAmux) Capture(context.Context, string) (string, error) { return "", nil }
 func (f *fakeSpawnAmux) CapturePane(context.Context, string) (amux.PaneCapture, error) {
 	return amux.PaneCapture{}, nil
 }
@@ -452,11 +558,16 @@ func (f *fakeSpawnAmux) CaptureHistory(context.Context, string) (amux.PaneCaptur
 func (f *fakeSpawnAmux) SetMetadata(context.Context, string, map[string]string) error { return nil }
 func (f *fakeSpawnAmux) RemoveMetadata(context.Context, string, ...string) error      { return nil }
 func (f *fakeSpawnAmux) KillPane(context.Context, string) error                       { return nil }
-func (f *fakeSpawnAmux) WaitIdle(context.Context, string, time.Duration) error        { return nil }
+func (f *fakeSpawnAmux) WaitIdle(context.Context, string, time.Duration) error {
+	return f.waitIdleErr
+}
 func (f *fakeSpawnAmux) WaitIdleSettle(context.Context, string, time.Duration, time.Duration) error {
 	return nil
 }
-func (f *fakeSpawnAmux) WaitContent(context.Context, string, string, time.Duration) error { return nil }
+func (f *fakeSpawnAmux) WaitContent(_ context.Context, paneID, substring string, timeout time.Duration) error {
+	f.waitContentCalls = append(f.waitContentCalls, waitContentCall{PaneID: paneID, Substring: substring, Timeout: timeout})
+	return nil
+}
 
 func newSpawnProject(t *testing.T) (string, string) {
 	t.Helper()
