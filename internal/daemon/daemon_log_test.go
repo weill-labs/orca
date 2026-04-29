@@ -100,6 +100,19 @@ func TestRotateDaemonLogContinuesWhenDroppedBackupCleanupFails(t *testing.T) {
 	assertDaemonLogTestFile(t, numberedDaemonLogPath(logPath, 5), "generation-4")
 }
 
+func TestRotateDaemonLogReturnsStatError(t *testing.T) {
+	restoreDaemonLogHooks(t)
+
+	statDaemonLogFile = func(string) (os.FileInfo, error) {
+		return nil, errors.New("stat failed")
+	}
+
+	err := rotateDaemonLogIfOversized(filepath.Join(t.TempDir(), "daemon.log"), 1, 5)
+	if err == nil || !strings.Contains(err.Error(), "stat daemon log") || !strings.Contains(err.Error(), "stat failed") {
+		t.Fatalf("rotateDaemonLogIfOversized() error = %v, want stat error", err)
+	}
+}
+
 func TestRotateDaemonLogSkipsWhenRotationIsNotNeeded(t *testing.T) {
 	t.Parallel()
 
@@ -206,6 +219,55 @@ func TestRedirectDaemonOutputFileReturnsDescriptorError(t *testing.T) {
 	err := redirectDaemonOutputFile(file, "invalid")
 	if err == nil || !strings.Contains(err.Error(), "redirect daemon stdout") {
 		t.Fatalf("redirectDaemonOutputFile() error = %v, want stdout redirect error", err)
+	}
+}
+
+func TestRedirectDaemonOutputFileReturnsSnapshotErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		fd   int
+		want string
+	}{
+		{name: "stdout", fd: 1, want: "snapshot daemon stdout"},
+		{name: "stderr", fd: 2, want: "snapshot daemon stderr"},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			restoreDaemonLogHooks(t)
+
+			logFile, err := os.CreateTemp(t.TempDir(), "daemon.log")
+			if err != nil {
+				t.Fatalf("CreateTemp() error = %v", err)
+			}
+			defer logFile.Close()
+
+			stdoutDaemonLogFD = func() int { return 1 }
+			stderrDaemonLogFD = func() int { return 2 }
+			dupDaemonLogFD = func(fd int) (int, error) {
+				if fd == tt.fd {
+					return 0, errors.New("dup failed")
+				}
+				return fd + 1000, nil
+			}
+			closeDaemonLogFD = func(int) error {
+				return nil
+			}
+			dup2Calls := 0
+			dup2DaemonLogFD = func(int, int) error {
+				dup2Calls++
+				return nil
+			}
+
+			err = redirectDaemonOutputFile(logFile, "daemon.log")
+			if err == nil || !strings.Contains(err.Error(), tt.want) || !strings.Contains(err.Error(), "dup failed") {
+				t.Fatalf("redirectDaemonOutputFile() error = %v, want %q", err, tt.want)
+			}
+			if dup2Calls != 0 {
+				t.Fatalf("dup2 calls = %d, want 0 before snapshot succeeds", dup2Calls)
+			}
+		})
 	}
 }
 
