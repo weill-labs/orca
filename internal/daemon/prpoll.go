@@ -78,6 +78,7 @@ func (d *Daemon) checkTaskPRPoll(ctx context.Context, active ActiveAssignment) (
 		traceAction = "task_done"
 		return update
 	case TaskStateMerged:
+		update.PRMerged = true
 		update.CompletionStatus = TaskStatusDone
 		update.CompletionEventType = EventTaskCompleted
 		update.CompletionMerged = true
