@@ -454,7 +454,7 @@ func TestDaemonStopCancelsPostmortemCleanupAfterShutdownDeadline(t *testing.T) {
 
 	d := deps.newDaemonWithOptions(t, func(opts *Options) {
 		opts.MergeGracePeriod = 30 * time.Second
-		configureShutdownCleanupDeadlineForTest(t, opts, shutdownCleanupDeadline)
+		opts.ShutdownCleanupDeadline = shutdownCleanupDeadline
 	})
 	t.Cleanup(func() {
 		close(releasePostmortemWait)
@@ -496,16 +496,6 @@ func TestDaemonStopCancelsPostmortemCleanupAfterShutdownDeadline(t *testing.T) {
 	case <-time.After(stopBudget):
 		t.Fatalf("Stop() did not return within shutdown cleanup deadline budget %s", stopBudget)
 	}
-}
-
-func configureShutdownCleanupDeadlineForTest(t *testing.T, opts *Options, deadline time.Duration) {
-	t.Helper()
-
-	field := reflect.ValueOf(opts).Elem().FieldByName("ShutdownCleanupDeadline")
-	if !field.IsValid() {
-		return
-	}
-	field.SetInt(int64(deadline))
 }
 
 func TestFinishAssignmentMergedCleanupSetsDoneMetadataAfterPostmortem(t *testing.T) {
