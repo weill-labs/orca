@@ -8,8 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -108,10 +109,10 @@ func (r *daemonLogRedirector) rotateAndRedirect() error {
 }
 
 func redirectDaemonOutputFile(file *os.File, path string) error {
-	if err := syscall.Dup2(int(file.Fd()), int(os.Stdout.Fd())); err != nil {
+	if err := unix.Dup2(int(file.Fd()), int(os.Stdout.Fd())); err != nil {
 		return fmt.Errorf("redirect daemon stdout to %s: %w", path, err)
 	}
-	if err := syscall.Dup2(int(file.Fd()), int(os.Stderr.Fd())); err != nil {
+	if err := unix.Dup2(int(file.Fd()), int(os.Stderr.Fd())); err != nil {
 		return fmt.Errorf("redirect daemon stderr to %s: %w", path, err)
 	}
 	return nil

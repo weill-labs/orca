@@ -6,9 +6,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 func TestRotateDaemonLogKeepsFiveBackupGenerations(t *testing.T) {
@@ -231,13 +232,13 @@ func waitForDaemonLogTestFile(t *testing.T, path string) {
 func saveProcessOutput(t *testing.T) func() {
 	t.Helper()
 
-	stdoutFD, err := syscall.Dup(int(os.Stdout.Fd()))
+	stdoutFD, err := unix.Dup(int(os.Stdout.Fd()))
 	if err != nil {
 		t.Fatalf("dup stdout: %v", err)
 	}
-	stderrFD, err := syscall.Dup(int(os.Stderr.Fd()))
+	stderrFD, err := unix.Dup(int(os.Stderr.Fd()))
 	if err != nil {
-		_ = syscall.Close(stdoutFD)
+		_ = unix.Close(stdoutFD)
 		t.Fatalf("dup stderr: %v", err)
 	}
 
@@ -247,14 +248,14 @@ func saveProcessOutput(t *testing.T) func() {
 			return
 		}
 		restored = true
-		if err := syscall.Dup2(stdoutFD, int(os.Stdout.Fd())); err != nil {
+		if err := unix.Dup2(stdoutFD, int(os.Stdout.Fd())); err != nil {
 			t.Fatalf("restore stdout: %v", err)
 		}
-		if err := syscall.Dup2(stderrFD, int(os.Stderr.Fd())); err != nil {
+		if err := unix.Dup2(stderrFD, int(os.Stderr.Fd())); err != nil {
 			t.Fatalf("restore stderr: %v", err)
 		}
-		_ = syscall.Close(stdoutFD)
-		_ = syscall.Close(stderrFD)
+		_ = unix.Close(stdoutFD)
+		_ = unix.Close(stderrFD)
 	}
 	t.Cleanup(restore)
 	return restore
