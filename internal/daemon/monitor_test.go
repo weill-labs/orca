@@ -74,6 +74,8 @@ func TestDaemonSkipsBufferedPollTickWhilePollCycleIsRunning(t *testing.T) {
 }
 
 func TestDaemonStartEmitsPRPollTraceWithinConfiguredPollIntervalWhenRelayHealthy(t *testing.T) {
+	t.Parallel()
+
 	deps := newTestDeps(t)
 	seedTaskMonitorAssignment(t, deps, "LAB-1476", "pane-1", 0)
 	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-1476", "--json", "number"}, `[]`, nil)
