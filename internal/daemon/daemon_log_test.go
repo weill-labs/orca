@@ -29,6 +29,70 @@ func TestRotateDaemonLogKeepsFiveBackupGenerations(t *testing.T) {
 	assertDaemonLogTestFile(t, numberedDaemonLogPath(logPath, 5), "generation-4")
 }
 
+func TestRotateDaemonLogSkipsWhenRotationIsNotNeeded(t *testing.T) {
+	t.Parallel()
+
+	t.Run("disabled", func(t *testing.T) {
+		t.Parallel()
+
+		logPath := filepath.Join(t.TempDir(), "daemon.log")
+		writeDaemonLogTestFile(t, logPath, "current")
+		if err := rotateDaemonLogIfOversized(logPath, 0, 5); err != nil {
+			t.Fatalf("rotateDaemonLogIfOversized() error = %v", err)
+		}
+		assertDaemonLogTestFile(t, logPath, "current")
+	})
+
+	t.Run("missing", func(t *testing.T) {
+		t.Parallel()
+
+		logPath := filepath.Join(t.TempDir(), "daemon.log")
+		if err := rotateDaemonLogIfOversized(logPath, 1, 5); err != nil {
+			t.Fatalf("rotateDaemonLogIfOversized() error = %v", err)
+		}
+	})
+
+	t.Run("below limit", func(t *testing.T) {
+		t.Parallel()
+
+		logPath := filepath.Join(t.TempDir(), "daemon.log")
+		writeDaemonLogTestFile(t, logPath, "small")
+		if err := rotateDaemonLogIfOversized(logPath, 10, 5); err != nil {
+			t.Fatalf("rotateDaemonLogIfOversized() error = %v", err)
+		}
+		assertDaemonLogTestFile(t, logPath, "small")
+		if _, err := os.Stat(numberedDaemonLogPath(logPath, 1)); !os.IsNotExist(err) {
+			t.Fatalf("Stat(rotated log) error = %v, want not exist", err)
+		}
+	})
+}
+
+func TestOpenDaemonLogFileSurfacesFilesystemErrors(t *testing.T) {
+	t.Parallel()
+
+	t.Run("directory cannot be created", func(t *testing.T) {
+		t.Parallel()
+
+		blocker := filepath.Join(t.TempDir(), "blocked")
+		if err := os.WriteFile(blocker, []byte("file"), 0o644); err != nil {
+			t.Fatalf("WriteFile(%q) error = %v", blocker, err)
+		}
+		_, err := openDaemonLogFile(filepath.Join(blocker, "daemon.log"))
+		if err == nil || !strings.Contains(err.Error(), "create daemon log directory") {
+			t.Fatalf("openDaemonLogFile() error = %v, want create directory error", err)
+		}
+	})
+
+	t.Run("log path cannot be opened", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := openDaemonLogFile(t.TempDir())
+		if err == nil || !strings.Contains(err.Error(), "open daemon log") {
+			t.Fatalf("openDaemonLogFile() error = %v, want open error", err)
+		}
+	})
+}
+
 func TestRedirectProcessOutputToDaemonLogCapturesStdoutAndStderr(t *testing.T) {
 	restoreOutput := saveProcessOutput(t)
 
@@ -53,6 +117,31 @@ func TestRedirectProcessOutputToDaemonLogCapturesStdoutAndStderr(t *testing.T) {
 		if !strings.Contains(output, want) {
 			t.Fatalf("daemon log = %q, want %q", output, want)
 		}
+	}
+}
+
+func TestRedirectProcessOutputToDaemonLogIgnoresEmptyPath(t *testing.T) {
+	t.Parallel()
+
+	if err := RedirectProcessOutputToDaemonLog(context.Background(), "   "); err != nil {
+		t.Fatalf("RedirectProcessOutputToDaemonLog() error = %v", err)
+	}
+}
+
+func TestRedirectDaemonOutputFileReturnsDescriptorError(t *testing.T) {
+	t.Parallel()
+
+	file, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatalf("Open(%q) error = %v", os.DevNull, err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("Close(%q) error = %v", os.DevNull, err)
+	}
+
+	err = redirectDaemonOutputFile(file, "closed")
+	if err == nil || !strings.Contains(err.Error(), "redirect daemon stdout") {
+		t.Fatalf("redirectDaemonOutputFile() error = %v, want stdout redirect error", err)
 	}
 }
 
@@ -84,6 +173,21 @@ func TestDaemonLogRedirectorRunRotatesAfterSizeLimit(t *testing.T) {
 	restoreOutput()
 
 	assertDaemonLogTestFile(t, numberedDaemonLogPath(logPath, 1), "enough bytes to rotate\n")
+}
+
+func TestDaemonServeArgsIncludesLogFileWhenPresent(t *testing.T) {
+	t.Parallel()
+
+	args := daemonServeArgs("/bin/orca", ServeRequest{
+		Session: "alpha",
+		StateDB: "/tmp/orca.db",
+		PIDFile: "/tmp/orca.pid",
+		LogFile: "/tmp/daemon.log",
+	})
+
+	if !containsArgPair(args, "--log-file", "/tmp/daemon.log") {
+		t.Fatalf("daemonServeArgs() = %#v, want log file flag", args)
+	}
 }
 
 func writeDaemonLogTestFile(t *testing.T, path string, content string) {
