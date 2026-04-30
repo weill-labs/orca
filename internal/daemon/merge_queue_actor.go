@@ -208,6 +208,19 @@ func (d *Daemon) applyMergeQueueUpdates(ctx context.Context) {
 	}
 }
 
+func (d *Daemon) runMergeQueueUpdateLoop(ctx context.Context, done chan<- struct{}) {
+	defer close(done)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case update := <-d.mergeQueueUpdates:
+			d.applyMergeQueueUpdate(ctx, update)
+		}
+	}
+}
+
 func (d *Daemon) applyMergeQueueUpdate(ctx context.Context, update MergeQueueUpdate) {
 	var persistenceErr error
 	if !update.Delete {

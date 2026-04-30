@@ -77,6 +77,7 @@ func TestDaemonPollLoopLogsPollBetweenTickGap(t *testing.T) {
 	deps.clock.Advance(5 * time.Second)
 	pollTicker.tick(deps.clock.Now())
 	waitForPollTickTimingLog(t, logs)
+	d.waitForMonitorRuns()
 
 	deps.clock.Advance(7 * time.Second)
 	pollTicker.tick(deps.clock.Now())
