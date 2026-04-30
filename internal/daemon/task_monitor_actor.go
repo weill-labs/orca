@@ -120,15 +120,12 @@ func (m *TaskMonitor) recoverPanic(recovered any, request *taskMonitorRequest) {
 	update.Events = append(update.Events, m.daemon.assignmentEvent(update.Active, profile, EventTaskMonitorPanicked, message))
 	m.daemon.escalateTaskState(&update, profile, message, m.daemon.now())
 
-	select {
-	case request.response <- taskMonitorResult{
+	request.response <- taskMonitorResult{
 		key:           m.key,
 		kind:          request.kind,
 		monitor:       m,
 		update:        update,
 		removeMonitor: true,
-	}:
-	default:
 	}
 }
 

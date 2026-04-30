@@ -283,11 +283,120 @@ func TestTaskMonitorPanicRecoveryEscalatesTaskAndOtherTasksKeepTicking(t *testin
 	if got, want := deps.events.countType(EventReviewApproved), 1; got != want {
 		t.Fatalf("review approved event count = %d, want %d", got, want)
 	}
+	if got, want := d.taskMonitorCount(), 1; got != want {
+		t.Fatalf("taskMonitorCount() = %d, want %d", got, want)
+	}
 	logMu.Lock()
 	logCount := len(logs)
 	logMu.Unlock()
 	if logCount == 0 {
 		t.Fatal("panic log count = 0, want at least 1")
+	}
+}
+
+func TestTaskMonitorPanicRecoveryRemovesMonitorAfterSingleDispatch(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	seedTaskMonitorAssignment(t, deps, "LAB-1521", "pane-1", 41)
+
+	d := deps.newDaemon(t)
+	t.Cleanup(func() {
+		d.stopAllTaskMonitors(true)
+	})
+
+	ctx := context.WithValue(context.Background(), gitHubClientFactoryContextKey{}, func(string) gitHubClient {
+		return panicReviewGitHubClient{
+			gitHubClient:  d.github,
+			panicPRNumber: 41,
+		}
+	})
+
+	d.dispatchTaskMonitorCheck(ctx, activeTaskMonitorAssignment(t, deps, "LAB-1521"), taskMonitorCheckReviewPoll)
+
+	task, ok := deps.state.task("LAB-1521")
+	if !ok {
+		t.Fatal("task missing after monitor recovery")
+	}
+	if got, want := task.State, TaskStateEscalated; got != want {
+		t.Fatalf("task state = %q, want %q", got, want)
+	}
+	worker, ok := deps.state.worker("pane-1")
+	if !ok {
+		t.Fatal("worker missing after monitor recovery")
+	}
+	if got, want := worker.Health, WorkerHealthEscalated; got != want {
+		t.Fatalf("worker health = %q, want %q", got, want)
+	}
+	if got, want := d.taskMonitorCount(), 0; got != want {
+		t.Fatalf("taskMonitorCount() = %d, want %d", got, want)
+	}
+	if got, want := deps.events.countType(EventTaskMonitorPanicked), 1; got != want {
+		t.Fatalf("task monitor panic event count = %d, want %d", got, want)
+	}
+}
+
+func TestTaskMonitorRecoverPanicHandlesMissingRecoveryContext(t *testing.T) {
+	t.Parallel()
+
+	(&TaskMonitor{}).recoverPanic("boom", nil)
+
+	deps := newTestDeps(t)
+	d := deps.newDaemon(t)
+	monitor := &TaskMonitor{daemon: d, key: "missing-request"}
+	monitor.recoverPanic("boom", nil)
+}
+
+func TestTaskMonitorRecoverPanicFallsBackToTaskProfile(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	d := deps.newDaemon(t)
+	response := make(chan taskMonitorResult, 1)
+	active := ActiveAssignment{
+		Task: Task{
+			Project:      "/tmp/project",
+			Issue:        "LAB-1521",
+			Status:       TaskStatusActive,
+			State:        TaskStatePRDetected,
+			PaneID:       "pane-1",
+			AgentProfile: "missing-profile",
+		},
+		Worker: Worker{
+			Project:      "/tmp/project",
+			PaneID:       "pane-1",
+			Issue:        "LAB-1521",
+			AgentProfile: "missing-profile",
+		},
+	}
+	monitor := &TaskMonitor{
+		daemon: d,
+		key:    taskMonitorKey(active.Task.Project, active.Task.Issue),
+	}
+
+	monitor.recoverPanic("boom", &taskMonitorRequest{
+		ctx:      context.Background(),
+		kind:     taskMonitorCheckReviewPoll,
+		active:   active,
+		response: response,
+	})
+
+	result := <-response
+	if !result.removeMonitor {
+		t.Fatal("result.removeMonitor = false, want true")
+	}
+	if got, want := result.update.Active.Task.State, TaskStateEscalated; got != want {
+		t.Fatalf("task state = %q, want %q", got, want)
+	}
+	if got, want := result.update.Active.Worker.Health, WorkerHealthEscalated; got != want {
+		t.Fatalf("worker health = %q, want %q", got, want)
+	}
+	event, ok := lastTaskStateUpdateEventOfType(result.update, EventTaskMonitorPanicked)
+	if !ok {
+		t.Fatalf("missing %s event", EventTaskMonitorPanicked)
+	}
+	if got, want := event.AgentProfile, "missing-profile"; got != want {
+		t.Fatalf("panic event AgentProfile = %q, want %q", got, want)
 	}
 }
 
@@ -573,6 +682,15 @@ func reloadTaskMonitorAssignments(t *testing.T, deps *testDeps, assignments []Ac
 		reloaded = append(reloaded, activeTaskMonitorAssignment(t, deps, assignment.Task.Issue))
 	}
 	return reloaded
+}
+
+func lastTaskStateUpdateEventOfType(update TaskStateUpdate, eventType string) (Event, bool) {
+	for i := len(update.Events) - 1; i >= 0; i-- {
+		if update.Events[i].Type == eventType {
+			return update.Events[i], true
+		}
+	}
+	return Event{}, false
 }
 
 type panicReviewGitHubClient struct {
