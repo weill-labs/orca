@@ -32,7 +32,8 @@ func (d *Daemon) runLoop(ctx context.Context, done chan struct{}) {
 	captureTick := d.newTicker(d.captureInterval)
 	defer captureTick.Stop()
 	pollInterval := d.currentPRPollInterval()
-	pollTick := d.newTicker(prPollSchedulerTickInterval(pollInterval))
+	pollSchedulerInterval := prPollSchedulerTickInterval(pollInterval)
+	pollTick := d.newTicker(pollSchedulerInterval)
 	defer func() {
 		pollTick.Stop()
 	}()
@@ -41,6 +42,7 @@ func (d *Daemon) runLoop(ctx context.Context, done chan struct{}) {
 	pollIntervalCh := d.pollIntervalCh
 	captureInFlight := false
 	pollInFlight := false
+	var lastPollTickFinishedAt time.Time
 	var lastMissingPRNumberReconcile time.Time
 
 	for {
@@ -66,9 +68,12 @@ func (d *Daemon) runLoop(ctx context.Context, done chan struct{}) {
 			pollTick.Stop()
 			drainMonitorTicks(pollTickCh)
 			pollInterval = interval
-			pollTick = d.newTicker(prPollSchedulerTickInterval(pollInterval))
+			pollSchedulerInterval = prPollSchedulerTickInterval(pollInterval)
+			pollTick = d.newTicker(pollSchedulerInterval)
 			pollTickCh = pollTick.C()
 		case <-pollTickCh:
+			pollTickStartedAt := d.now()
+			d.logPollBetweenTicks(lastPollTickFinishedAt, pollTickStartedAt, pollSchedulerInterval)
 			if pollInFlight {
 				continue
 			}
@@ -84,6 +89,7 @@ func (d *Daemon) runLoop(ctx context.Context, done chan struct{}) {
 			timing.log(d.logf)
 			d.recordHeartbeat(ctx)
 			drainMonitorTicks(pollTickCh)
+			lastPollTickFinishedAt = d.now()
 			pollInFlight = false
 		}
 	}
