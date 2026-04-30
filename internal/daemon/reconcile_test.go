@@ -350,6 +350,159 @@ func TestReconcileSkipsNonActiveTaskWithoutPane(t *testing.T) {
 	}
 }
 
+func TestReconcileUsesDefaultProjectAndSortsFindings(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	seedReconcileAssignment(t, deps, "LAB-1506", "pane-1506", "worker-1506", 0)
+	seedReconcileAssignment(t, deps, "LAB-1505", "pane-1505", "worker-1505", 0)
+	deps.amux.paneExists = map[string]bool{
+		"pane-1505": false,
+		"pane-1506": false,
+	}
+
+	result, err := deps.newDaemon(t).Reconcile(context.Background(), ReconcileRequest{})
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	if got, want := result.Project, "/tmp/project"; got != want {
+		t.Fatalf("result.Project = %q, want %q", got, want)
+	}
+	if got, want := findingIssues(result.Findings), []string{"LAB-1505", "LAB-1506"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("finding issues = %#v, want %#v", got, want)
+	}
+}
+
+func TestReconcileReturnsScanErrors(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		prepare func(*testing.T, *testDeps, context.Context) context.Context
+		want    string
+	}{
+		{
+			name: "non terminal task list",
+			prepare: func(t *testing.T, deps *testDeps, ctx context.Context) context.Context {
+				t.Helper()
+				deps.state.rejectCanceledContext = true
+				canceled, cancel := context.WithCancel(ctx)
+				cancel()
+				return canceled
+			},
+			want: "list non-terminal tasks",
+		},
+		{
+			name: "pane exists",
+			prepare: func(t *testing.T, deps *testDeps, ctx context.Context) context.Context {
+				t.Helper()
+				seedReconcileAssignment(t, deps, "LAB-1507", "pane-1507", "worker-1507", 0)
+				deps.amux.paneExistsErr = errors.New("amux unavailable")
+				return ctx
+			},
+			want: "check pane for LAB-1507",
+		},
+		{
+			name: "pane list",
+			prepare: func(t *testing.T, deps *testDeps, ctx context.Context) context.Context {
+				t.Helper()
+				deps.amux.listPanesErr = errors.New("list failed")
+				return ctx
+			},
+			want: "list amux panes",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			deps := newTestDeps(t)
+			ctx := tt.prepare(t, deps, context.Background())
+			_, err := deps.newDaemon(t).Reconcile(ctx, ReconcileRequest{Project: "/tmp/project"})
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("Reconcile() error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestReconcilePaneDriftReturnsTaskLookupError(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.state.rejectCanceledContext = true
+	deps.amux.listPanes = []Pane{{ID: "906", Name: "w-LAB-1491"}}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := deps.newDaemon(t).reconcilePaneDrift(ctx, "/tmp/project")
+	if err == nil || !strings.Contains(err.Error(), "lookup task for pane") {
+		t.Fatalf("reconcilePaneDrift() error = %v, want task lookup failure", err)
+	}
+}
+
+func TestFixMergedReconcileFindingFillsFallbackMetadata(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.issueTracker.errors = map[string]error{IssueStateDone: errors.New("linear unavailable")}
+	task := Task{
+		Project:      "/tmp/project",
+		Issue:        "LAB-1508",
+		Status:       TaskStatusActive,
+		PaneID:       "missing-pane",
+		ClonePath:    "/tmp/LAB-1508",
+		AgentProfile: "unknown-profile",
+		CreatedAt:    deps.clock.Now(),
+		UpdatedAt:    deps.clock.Now(),
+	}
+	finding := ReconcileFinding{
+		Kind:     ReconcileRecoverableGhost,
+		Issue:    "LAB-1508",
+		Branch:   "renamed-branch",
+		PRNumber: 508,
+		PRState:  reconcilePRStateMerged,
+	}
+
+	if err := deps.newDaemon(t).fixMergedReconcileFinding(context.Background(), task, finding); err != nil {
+		t.Fatalf("fixMergedReconcileFinding() error = %v", err)
+	}
+	updated, ok := deps.state.task("LAB-1508")
+	if !ok {
+		t.Fatal("LAB-1508 task missing")
+	}
+	if updated.PRNumber != 508 || updated.Branch != "renamed-branch" || updated.Status != TaskStatusDone {
+		t.Fatalf("updated task = %#v, want PR number, branch, and done status", updated)
+	}
+	if got := deps.events.lastMessage(EventPRMerged); !strings.Contains(got, "failed to update Linear issue status") {
+		t.Fatalf("pr.merged message = %q, want Linear failure context", got)
+	}
+}
+
+func TestReconcileFindingHelpersUseFallbacks(t *testing.T) {
+	t.Parallel()
+
+	finding := taskReconcileFinding(Task{
+		Issue:  " LAB-1509 ",
+		Status: " active ",
+		Branch: " local-branch ",
+	}, reconcilePRInfo{})
+	if finding.PRState != reconcilePRStateNone {
+		t.Fatalf("finding.PRState = %q, want none", finding.PRState)
+	}
+
+	overridden := taskReconcileFinding(Task{Branch: "local-branch"}, reconcilePRInfo{branch: "remote-branch"})
+	if overridden.Branch != "remote-branch" {
+		t.Fatalf("finding.Branch = %q, want remote branch", overridden.Branch)
+	}
+
+	if got := issueFromReconcileWorkerPane(Pane{Name: " "}); got != "" {
+		t.Fatalf("issueFromReconcileWorkerPane(blank) = %q, want empty", got)
+	}
+}
+
 func TestLocalControllerReconcileUsesRuntimeAdapters(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("LINEAR_API_KEY", "")
@@ -447,4 +600,12 @@ func findingKindsByIssue(findings []ReconcileFinding) map[string]string {
 		out[finding.Issue] = finding.Kind
 	}
 	return out
+}
+
+func findingIssues(findings []ReconcileFinding) []string {
+	issues := make([]string, 0, len(findings))
+	for _, finding := range findings {
+		issues = append(issues, finding.Issue)
+	}
+	return issues
 }

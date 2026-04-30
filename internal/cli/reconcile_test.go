@@ -104,6 +104,37 @@ func TestAppRunReconcileWritesPartialResultOnError(t *testing.T) {
 	}
 }
 
+func TestAppRunReconcileJoinsPartialOutputError(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := newRepoRoot(t)
+	app := New(Options{
+		Daemon: &fakeDaemon{
+			reconcileResult: daemon.ReconcileResult{
+				Project: repoRoot,
+				Findings: []daemon.ReconcileFinding{{
+					Kind:   daemon.ReconcileRecoverableGhost,
+					Issue:  "LAB-1487",
+					Action: "fix_failed",
+				}},
+			},
+			reconcileErr: errors.New("release failed"),
+		},
+		State:   &fakeState{},
+		Stdout:  errWriter{},
+		Stderr:  &bytes.Buffer{},
+		Version: "build-123",
+		Cwd: func() (string, error) {
+			return repoRoot, nil
+		},
+	})
+
+	err := app.Run(context.Background(), []string{"reconcile"})
+	if err == nil || !strings.Contains(err.Error(), "release failed") || !strings.Contains(err.Error(), "write failed") {
+		t.Fatalf("Run(reconcile) error = %v, want reconcile and write failures", err)
+	}
+}
+
 func TestWriteReconcileResultVariants(t *testing.T) {
 	t.Parallel()
 
