@@ -134,6 +134,21 @@ func (t *pollTickTiming) log(logf func(string, ...any)) {
 	logf("%s", strings.Join(parts, " "))
 }
 
+func (d *Daemon) logPollBetweenTicks(previousFinishedAt, startedAt time.Time, interval time.Duration) {
+	if d.logf == nil || previousFinishedAt.IsZero() {
+		return
+	}
+	gap := startedAt.Sub(previousFinishedAt)
+	if gap < 0 {
+		gap = 0
+	}
+	d.logf(
+		"daemon poll between ticks: gap=%s interval=%s",
+		formatPollTickDuration(gap),
+		formatPollTickDuration(interval),
+	)
+}
+
 func formatPollTickDuration(duration time.Duration) string {
 	if duration <= 0 {
 		return "0s"

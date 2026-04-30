@@ -55,28 +55,29 @@ type Daemon struct {
 	hostname                string
 	detectOrigin            func(projectDir string) (string, error)
 
-	started            atomic.Bool
-	lastHeartbeat      atomic.Int64
-	relayHealthy       atomic.Bool
-	stopContext        context.Context
-	stopCancel         context.CancelFunc
-	cleanupDrainCtx    context.Context
-	cleanupDrainCancel context.CancelFunc
-	loopDone           chan struct{}
-	eventStreamDone    chan struct{}
-	watchdogDone       chan struct{}
-	relayDone          chan struct{}
-	mergeQueueInbox    chan ProcessQueue
-	mergeQueueUpdates  chan MergeQueueUpdate
-	mergeQueueDone     chan struct{}
-	pollIntervalCh     chan time.Duration
-	monitorRuns        sync.WaitGroup
-	taskMonitorMu      sync.Mutex
-	taskMonitors       map[string]*TaskMonitor
-	codexStartupMu     sync.Mutex
-	relayConnMu        sync.Mutex
-	relayConn          relayConnection
-	relayReconnect     atomic.Bool
+	started              atomic.Bool
+	lastHeartbeat        atomic.Int64
+	relayHealthy         atomic.Bool
+	stopContext          context.Context
+	stopCancel           context.CancelFunc
+	cleanupDrainCtx      context.Context
+	cleanupDrainCancel   context.CancelFunc
+	loopDone             chan struct{}
+	eventStreamDone      chan struct{}
+	watchdogDone         chan struct{}
+	relayDone            chan struct{}
+	mergeQueueInbox      chan ProcessQueue
+	mergeQueueUpdates    chan MergeQueueUpdate
+	mergeQueueDone       chan struct{}
+	mergeQueueUpdateDone chan struct{}
+	pollIntervalCh       chan time.Duration
+	monitorRuns          sync.WaitGroup
+	taskMonitorMu        sync.Mutex
+	taskMonitors         map[string]*TaskMonitor
+	codexStartupMu       sync.Mutex
+	relayConnMu          sync.Mutex
+	relayConn            relayConnection
+	relayReconnect       atomic.Bool
 }
 
 type realTicker struct {
@@ -238,6 +239,8 @@ func (d *Daemon) Start(ctx context.Context) error {
 	d.mergeQueueInbox = make(chan ProcessQueue)
 	d.mergeQueueUpdates = make(chan MergeQueueUpdate, 32)
 	d.mergeQueueDone = make(chan struct{})
+	d.mergeQueueUpdateDone = make(chan struct{})
+	go d.runMergeQueueUpdateLoop(d.stopContext, d.mergeQueueUpdateDone)
 	actor := newMergeQueueActor(d.project, d.commands, d.mergeQueueUpdates)
 	go actor.run(d.stopContext, d.mergeQueueInbox, d.mergeQueueDone)
 	d.eventStreamDone = make(chan struct{})
@@ -331,6 +334,9 @@ func (d *Daemon) Stop(ctx context.Context) error {
 	if d.mergeQueueDone != nil {
 		<-d.mergeQueueDone
 	}
+	if d.mergeQueueUpdateDone != nil {
+		<-d.mergeQueueUpdateDone
+	}
 
 	if err := os.Remove(d.pidPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("remove pid file: %w", err)
@@ -339,6 +345,7 @@ func (d *Daemon) Stop(ctx context.Context) error {
 	d.mergeQueueInbox = nil
 	d.mergeQueueUpdates = nil
 	d.mergeQueueDone = nil
+	d.mergeQueueUpdateDone = nil
 	d.eventStreamDone = nil
 	d.watchdogDone = nil
 	d.relayDone = nil

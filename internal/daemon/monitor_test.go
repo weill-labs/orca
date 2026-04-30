@@ -73,6 +73,44 @@ func TestDaemonSkipsBufferedPollTickWhilePollCycleIsRunning(t *testing.T) {
 	}
 }
 
+func TestDaemonPollLoopHeartbeatsWhileMergeCleanupBlocks(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	captureTicker := newFakeTicker()
+	pollTicker := newFakeTicker()
+	deps.tickers.enqueue(captureTicker, pollTicker)
+	seedTaskMonitorAssignment(t, deps, "LAB-1498", "pane-1", 42)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, `{"mergedAt":"2026-04-02T09:00:00Z"}`, nil)
+
+	waitIdle := newBlockedWaitIdle()
+	deps.amux.waitIdleHook = waitIdle.hook
+
+	d := deps.newDaemonWithOptions(t, func(opts *Options) {
+		opts.PollInterval = 5 * time.Second
+	})
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		waitIdle.releaseAll()
+		_ = d.Stop(context.Background())
+	})
+
+	deps.clock.Advance(5 * time.Second)
+	pollTicker.tick(deps.clock.Now())
+	waitIdle.waitForStarted(t, 1)
+
+	deps.clock.Advance(11 * time.Second)
+	heartbeatDuringCleanupAt := deps.clock.Now()
+	pollTicker.tick(heartbeatDuringCleanupAt)
+
+	waitFor(t, "poll heartbeat during blocked merge cleanup", func() bool {
+		return d.lastHeartbeat.Load() == heartbeatDuringCleanupAt.UnixMilli()
+	})
+}
+
 func TestDaemonStartEmitsPRPollTraceWithinConfiguredPollIntervalWhenRelayHealthy(t *testing.T) {
 	t.Parallel()
 

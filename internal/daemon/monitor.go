@@ -24,6 +24,11 @@ const (
 	monitorTickPoll
 )
 
+type monitorTickResult struct {
+	kind       monitorTickKind
+	finishedAt time.Time
+}
+
 func (d *Daemon) runLoop(ctx context.Context, done chan struct{}) {
 	defer close(done)
 	defer d.waitForMonitorRuns()
@@ -32,33 +37,46 @@ func (d *Daemon) runLoop(ctx context.Context, done chan struct{}) {
 	captureTick := d.newTicker(d.captureInterval)
 	defer captureTick.Stop()
 	pollInterval := d.currentPRPollInterval()
-	pollTick := d.newTicker(prPollSchedulerTickInterval(pollInterval))
+	pollSchedulerInterval := prPollSchedulerTickInterval(pollInterval)
+	pollTick := d.newTicker(pollSchedulerInterval)
 	defer func() {
 		pollTick.Stop()
 	}()
 	captureTickCh := captureTick.C()
 	pollTickCh := pollTick.C()
 	pollIntervalCh := d.pollIntervalCh
+	// Monitor work can include worker cleanup. Keep it outside the select loop so
+	// later ticks can refresh heartbeat while in-flight work is coalesced.
+	tickDone := make(chan monitorTickResult, 2)
 	captureInFlight := false
 	pollInFlight := false
+	var lastPollTickFinishedAt time.Time
 	var lastMissingPRNumberReconcile time.Time
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case update := <-d.mergeQueueUpdates:
-			d.applyMergeQueueUpdate(ctx, update)
+		case result := <-tickDone:
+			switch result.kind {
+			case monitorTickCapture:
+				captureInFlight = false
+			case monitorTickPoll:
+				pollInFlight = false
+				lastPollTickFinishedAt = result.finishedAt
+			}
+			d.recordHeartbeat(ctx)
 		case <-captureTickCh:
 			if captureInFlight {
+				d.recordHeartbeat(ctx)
+				drainMonitorTicks(captureTickCh)
 				continue
 			}
 			captureInFlight = true
-			timing := d.runCaptureTick(ctx)
-			timing.log(d.logf)
-			d.recordHeartbeat(ctx)
-			drainMonitorTicks(captureTickCh)
-			captureInFlight = false
+			d.startMonitorTick(ctx, tickDone, monitorTickCapture, func() {
+				timing := d.runCaptureTick(ctx)
+				timing.log(d.logf)
+			})
 		case interval := <-pollIntervalCh:
 			if interval <= 0 || interval == pollInterval {
 				continue
@@ -66,35 +84,48 @@ func (d *Daemon) runLoop(ctx context.Context, done chan struct{}) {
 			pollTick.Stop()
 			drainMonitorTicks(pollTickCh)
 			pollInterval = interval
-			pollTick = d.newTicker(prPollSchedulerTickInterval(pollInterval))
+			pollSchedulerInterval = prPollSchedulerTickInterval(pollInterval)
+			pollTick = d.newTicker(pollSchedulerInterval)
 			pollTickCh = pollTick.C()
 		case <-pollTickCh:
+			pollTickStartedAt := d.now()
+			d.logPollBetweenTicks(lastPollTickFinishedAt, pollTickStartedAt, pollSchedulerInterval)
 			if pollInFlight {
+				d.recordHeartbeat(ctx)
+				drainMonitorTicks(pollTickCh)
 				continue
 			}
 			pollInFlight = true
-			timing := d.runPollTick(ctx)
-			now := d.now()
-			if shouldRunMissingPRNumberReconciliation(lastMissingPRNumberReconcile, now) {
-				done := timing.stage("missing_pr_reconcile")
-				d.reconcileMissingPRNumbers(ctx)
-				done()
-				lastMissingPRNumberReconcile = now
+			runMissingPRNumberReconcile := shouldRunMissingPRNumberReconciliation(lastMissingPRNumberReconcile, pollTickStartedAt)
+			if runMissingPRNumberReconcile {
+				lastMissingPRNumberReconcile = pollTickStartedAt
 			}
-			timing.log(d.logf)
-			d.recordHeartbeat(ctx)
-			drainMonitorTicks(pollTickCh)
-			pollInFlight = false
+			d.startMonitorTick(ctx, tickDone, monitorTickPoll, func() {
+				timing := d.runPollTick(ctx)
+				if runMissingPRNumberReconcile {
+					done := timing.stage("missing_pr_reconcile")
+					d.reconcileMissingPRNumbers(ctx)
+					done()
+				}
+				timing.log(d.logf)
+			})
 		}
 	}
 }
 
-func (d *Daemon) startMonitorTick(done chan<- monitorTickKind, kind monitorTickKind, run func()) {
+func (d *Daemon) startMonitorTick(ctx context.Context, done chan<- monitorTickResult, kind monitorTickKind, run func()) {
 	d.monitorRuns.Add(1)
 	go func() {
 		defer d.monitorRuns.Done()
 		run()
-		done <- kind
+		result := monitorTickResult{
+			kind:       kind,
+			finishedAt: d.now(),
+		}
+		select {
+		case done <- result:
+		case <-ctx.Done():
+		}
 	}()
 }
 
@@ -139,7 +170,9 @@ func (d *Daemon) runPollTick(ctx context.Context) *pollTickTiming {
 	ctx = withPollTickTiming(ctx, timing)
 	ctx = d.withMonitorCircuits(ctx)
 	done := timing.stage("merge_updates_initial")
-	d.applyMergeQueueUpdates(ctx)
+	if d.mergeQueueUpdateDone == nil {
+		d.applyMergeQueueUpdates(ctx)
+	}
 	done()
 
 	done = timing.stage("state_read")
@@ -167,7 +200,9 @@ func (d *Daemon) runPollTick(ctx context.Context) *pollTickTiming {
 	d.dispatchMergeQueue(ctx)
 	done()
 	done = timing.stage("merge_updates_final")
-	d.applyMergeQueueUpdates(ctx)
+	if d.mergeQueueUpdateDone == nil {
+		d.applyMergeQueueUpdates(ctx)
+	}
 	done()
 	return timing
 }
