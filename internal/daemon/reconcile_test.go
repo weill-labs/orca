@@ -309,29 +309,44 @@ func TestReconcileSkipsLiveTaskWithDiscoveredOpenPR(t *testing.T) {
 	}
 }
 
-func TestReconcileSkipsStartingTaskWithoutPane(t *testing.T) {
+func TestReconcileSkipsNonActiveTaskWithoutPane(t *testing.T) {
 	t.Parallel()
 
-	deps := newTestDeps(t)
-	deps.state.putTaskForTest(Task{
-		Project:      "/tmp/project",
-		Issue:        "LAB-1504",
-		Status:       TaskStatusStarting,
-		Branch:       "LAB-1504",
-		AgentProfile: "codex",
-		CreatedAt:    deps.clock.Now(),
-		UpdatedAt:    deps.clock.Now(),
-	})
+	tests := []struct {
+		name   string
+		status string
+	}{
+		{name: "starting", status: TaskStatusStarting},
+		{name: "queued", status: "queued"},
+	}
 
-	result, err := deps.newDaemon(t).Reconcile(context.Background(), ReconcileRequest{Project: "/tmp/project"})
-	if err != nil {
-		t.Fatalf("Reconcile() error = %v", err)
-	}
-	if len(result.Findings) != 0 {
-		t.Fatalf("findings = %#v, want none", result.Findings)
-	}
-	if got := len(deps.commands.callsByName("gh")); got != 0 {
-		t.Fatalf("gh call count = %d, want 0", got)
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			deps := newTestDeps(t)
+			deps.state.putTaskForTest(Task{
+				Project:      "/tmp/project",
+				Issue:        "LAB-1504",
+				Status:       tt.status,
+				Branch:       "LAB-1504",
+				AgentProfile: "codex",
+				CreatedAt:    deps.clock.Now(),
+				UpdatedAt:    deps.clock.Now(),
+			})
+
+			result, err := deps.newDaemon(t).Reconcile(context.Background(), ReconcileRequest{Project: "/tmp/project"})
+			if err != nil {
+				t.Fatalf("Reconcile() error = %v", err)
+			}
+			if len(result.Findings) != 0 {
+				t.Fatalf("findings = %#v, want none", result.Findings)
+			}
+			if got := len(deps.commands.callsByName("gh")); got != 0 {
+				t.Fatalf("gh call count = %d, want 0", got)
+			}
+		})
 	}
 }
 

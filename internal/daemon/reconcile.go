@@ -129,7 +129,7 @@ func (d *Daemon) Reconcile(ctx context.Context, req ReconcileRequest) (Reconcile
 }
 
 func (d *Daemon) reconcileTaskDrift(ctx context.Context, task Task) (ReconcileFinding, bool, error) {
-	if task.Status == TaskStatusStarting {
+	if task.Status != TaskStatusActive {
 		return ReconcileFinding{}, false, nil
 	}
 

@@ -2317,8 +2317,9 @@ type fakeDaemon struct {
 	resumeResult    daemon.TaskActionResult
 	reconcileResult daemon.ReconcileResult
 
-	cancelHook func(context.Context, daemon.CancelRequest) (daemon.TaskActionResult, error)
-	err        error
+	cancelHook   func(context.Context, daemon.CancelRequest) (daemon.TaskActionResult, error)
+	err          error
+	reconcileErr error
 }
 
 func (f *fakeDaemon) Start(_ context.Context, req daemon.StartRequest) (daemon.StartResult, error) {
@@ -2393,7 +2394,7 @@ func (f *fakeDaemon) Reconcile(_ context.Context, req daemon.ReconcileRequest) (
 		return daemon.ReconcileResult{}, f.err
 	}
 	f.reconcileRequest = &req
-	return f.reconcileResult, nil
+	return f.reconcileResult, f.reconcileErr
 }
 
 type fakeState struct {

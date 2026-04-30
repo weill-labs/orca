@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -40,13 +41,22 @@ func (a *App) runReconcile(ctx context.Context, args []string) error {
 		Fix:     fix,
 	})
 	if err != nil {
+		if len(result.Findings) > 0 {
+			if writeErr := writeReconcileOutput(a.stdout, result, jsonOutput); writeErr != nil {
+				return errors.Join(err, writeErr)
+			}
+		}
 		return err
 	}
 
+	return writeReconcileOutput(a.stdout, result, jsonOutput)
+}
+
+func writeReconcileOutput(w io.Writer, result daemon.ReconcileResult, jsonOutput bool) error {
 	if jsonOutput {
-		return writeJSON(a.stdout, result)
+		return writeJSON(w, result)
 	}
-	return writeReconcileResult(a.stdout, result)
+	return writeReconcileResult(w, result)
 }
 
 func writeReconcileResult(w io.Writer, result daemon.ReconcileResult) error {

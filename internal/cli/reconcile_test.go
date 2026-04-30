@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -60,6 +61,46 @@ func TestAppRunReconcileRejectsPositionalArguments(t *testing.T) {
 	err := app.Run(context.Background(), []string{"reconcile", "LAB-1487"})
 	if err == nil || !strings.Contains(err.Error(), "does not accept positional") {
 		t.Fatalf("Run(reconcile LAB-1487) error = %v, want positional rejection", err)
+	}
+}
+
+func TestAppRunReconcileWritesPartialResultOnError(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := newRepoRoot(t)
+	var stdout bytes.Buffer
+	app := New(Options{
+		Daemon: &fakeDaemon{
+			reconcileResult: daemon.ReconcileResult{
+				Project: repoRoot,
+				Fix:     true,
+				Findings: []daemon.ReconcileFinding{{
+					Kind:    daemon.ReconcileRecoverableGhost,
+					Issue:   "LAB-1487",
+					Action:  "fix_failed",
+					Message: "task is active but its pane is missing and its PR is merged: release failed",
+				}},
+			},
+			reconcileErr: errors.New("release failed"),
+		},
+		State:   &fakeState{},
+		Stdout:  &stdout,
+		Stderr:  &bytes.Buffer{},
+		Version: "build-123",
+		Cwd: func() (string, error) {
+			return repoRoot, nil
+		},
+	})
+
+	err := app.Run(context.Background(), []string{"reconcile", "--fix"})
+	if err == nil || !strings.Contains(err.Error(), "release failed") {
+		t.Fatalf("Run(reconcile --fix) error = %v, want release failure", err)
+	}
+	got := stdout.String()
+	for _, want := range []string{"drift: 1 finding(s)", "recoverable_ghost", "fix_failed", "release failed"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("output = %q, want %q", got, want)
+		}
 	}
 }
 
