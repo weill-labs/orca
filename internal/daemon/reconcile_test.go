@@ -2,10 +2,13 @@ package daemon
 
 import (
 	"context"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
 	"testing"
+
+	state "github.com/weill-labs/orca/internal/daemonstate"
 )
 
 func TestReconcileClassifiesTaskAndPaneDrift(t *testing.T) {
@@ -108,6 +111,203 @@ func TestReconcileFixCompletesMergedGhostWithoutTouchingPanes(t *testing.T) {
 	deps.events.requireTypes(t, EventReconcileFinding, EventPRMerged, EventWorkerPostmortem, EventTaskCompleted)
 	if got := deps.events.lastMessage(EventWorkerPostmortem); !strings.Contains(got, "postmortem skipped") {
 		t.Fatalf("worker.postmortem message = %q, want skipped postmortem", got)
+	}
+}
+
+func TestReconcileDiscoversMergedPRByIssueID(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	seedReconcileAssignment(t, deps, "LAB-1322", "pane-1322", "worker-1322", 0)
+	deps.amux.paneExists = map[string]bool{"pane-1322": false}
+	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-1322", "--state", "all", "--json", "number,state"}, `[]`, nil)
+	deps.commands.queue("gh", issueIDPRSearchArgs("LAB-1322"), `[{"number":456,"state":"MERGED","headRefName":"lab-1322-renamed","title":"LAB-1322: recover renamed branch"}]`, nil)
+	queuePRSnapshot(deps, 456, `{"state":"MERGED","mergedAt":"2026-04-29T22:35:51Z"}`)
+
+	result, err := deps.newDaemon(t).Reconcile(context.Background(), ReconcileRequest{Project: "/tmp/project"})
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	if got, want := len(result.Findings), 1; got != want {
+		t.Fatalf("len(findings) = %d, want %d: %#v", got, want, result.Findings)
+	}
+	finding := result.Findings[0]
+	if got, want := finding.Kind, ReconcileRecoverableGhost; got != want {
+		t.Fatalf("finding.Kind = %q, want %q", got, want)
+	}
+	if got, want := finding.PRNumber, 456; got != want {
+		t.Fatalf("finding.PRNumber = %d, want %d", got, want)
+	}
+	if got, want := finding.Branch, "lab-1322-renamed"; got != want {
+		t.Fatalf("finding.Branch = %q, want %q", got, want)
+	}
+}
+
+func TestReconcileFixReportsClosedPRWithoutCompleting(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	seedReconcileAssignment(t, deps, "LAB-1501", "pane-1501", "worker-1501", 501)
+	deps.amux.paneExists = map[string]bool{"pane-1501": true}
+	queuePRSnapshot(deps, 501, `{"state":"CLOSED","mergedAt":null,"closedAt":"2026-04-29T22:35:51Z"}`)
+
+	result, err := deps.newDaemon(t).Reconcile(context.Background(), ReconcileRequest{
+		Project: "/tmp/project",
+		Fix:     true,
+	})
+	if err != nil {
+		t.Fatalf("Reconcile(--fix) error = %v", err)
+	}
+	if got, want := result.Fixed, 0; got != want {
+		t.Fatalf("result.Fixed = %d, want %d", got, want)
+	}
+	if got, want := len(result.Findings), 1; got != want {
+		t.Fatalf("len(findings) = %d, want %d", got, want)
+	}
+	finding := result.Findings[0]
+	if got, want := finding.Kind, ReconcileStuckCleanup; got != want {
+		t.Fatalf("finding.Kind = %q, want %q", got, want)
+	}
+	if got, want := finding.PRState, "closed"; got != want {
+		t.Fatalf("finding.PRState = %q, want %q", got, want)
+	}
+	if got, want := finding.Action, "reported"; got != want {
+		t.Fatalf("finding.Action = %q, want %q", got, want)
+	}
+	task, ok := deps.state.task("LAB-1501")
+	if !ok {
+		t.Fatal("LAB-1501 task missing")
+	}
+	if got, want := task.Status, TaskStatusActive; got != want {
+		t.Fatalf("task.Status = %q, want %q", got, want)
+	}
+	if len(deps.amux.killCalls) != 0 {
+		t.Fatalf("kill calls = %#v, want none", deps.amux.killCalls)
+	}
+	deps.amux.requireSentKeys(t, "pane-1501", nil)
+}
+
+func TestReconcileSkipsLiveTaskWithOpenPR(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	seedReconcileAssignment(t, deps, "LAB-1502", "pane-1502", "worker-1502", 502)
+	deps.amux.paneExists = map[string]bool{"pane-1502": true}
+	queuePRSnapshot(deps, 502, `{"state":"OPEN","mergedAt":null,"closedAt":null}`)
+
+	result, err := deps.newDaemon(t).Reconcile(context.Background(), ReconcileRequest{Project: "/tmp/project"})
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	if len(result.Findings) != 0 {
+		t.Fatalf("findings = %#v, want none", result.Findings)
+	}
+	if got := deps.events.countType(EventReconcileFinding); got != 0 {
+		t.Fatalf("reconcile finding event count = %d, want 0", got)
+	}
+}
+
+func TestReconcileSkipsLiveTaskWithDiscoveredOpenPR(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	seedReconcileAssignment(t, deps, "LAB-1503", "pane-1503", "worker-1503", 0)
+	deps.amux.paneExists = map[string]bool{"pane-1503": true}
+	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-1503", "--state", "all", "--json", "number,state"}, `[{"number":503,"state":"OPEN"}]`, nil)
+
+	result, err := deps.newDaemon(t).Reconcile(context.Background(), ReconcileRequest{Project: "/tmp/project"})
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	if len(result.Findings) != 0 {
+		t.Fatalf("findings = %#v, want none", result.Findings)
+	}
+}
+
+func TestLocalControllerReconcileUsesRuntimeAdapters(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("LINEAR_API_KEY", "")
+
+	projectPath := testProjectPath(t)
+	stateDB := filepath.Join(t.TempDir(), "state.db")
+	store, err := state.OpenSQLite(stateDB)
+	if err != nil {
+		t.Fatalf("OpenSQLite() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	})
+
+	controller, err := NewLocalController(ControllerOptions{
+		Store: store,
+		Paths: Paths{
+			StateDB: stateDB,
+			PIDDir:  t.TempDir(),
+		},
+		Amux: &fakeAmux{listPanes: []Pane{{ID: "906", Name: "w-LAB-1491"}}},
+	})
+	if err != nil {
+		t.Fatalf("NewLocalController() error = %v", err)
+	}
+
+	result, err := controller.Reconcile(context.Background(), ReconcileRequest{Project: projectPath})
+	if err != nil {
+		t.Fatalf("controller.Reconcile() error = %v", err)
+	}
+	if got, want := result.Project, projectPath; got != want {
+		t.Fatalf("result.Project = %q, want %q", got, want)
+	}
+	if got := findingKindsByIssue(result.Findings); !reflect.DeepEqual(got, map[string]string{"LAB-1491": ReconcileOrphanPane}) {
+		t.Fatalf("finding kinds = %#v, want orphan pane", got)
+	}
+}
+
+func TestLocalControllerReconcileSessionPrecedence(t *testing.T) {
+	projectPath := filepath.Join(t.TempDir(), "repo")
+	t.Setenv("AMUX_SESSION", "from-env")
+
+	controller := &LocalController{
+		store: &fakeStore{projectStatus: state.ProjectStatus{
+			Daemon: &state.DaemonStatus{Session: "from-db"},
+		}},
+	}
+	if got, want := controller.reconcileSession(context.Background(), projectPath), "from-db"; got != want {
+		t.Fatalf("reconcileSession() = %q, want %q", got, want)
+	}
+
+	controller.store = &fakeStore{}
+	if got, want := controller.reconcileSession(context.Background(), projectPath), "from-env"; got != want {
+		t.Fatalf("reconcileSession() with env = %q, want %q", got, want)
+	}
+
+	t.Setenv("AMUX_SESSION", "")
+	if got, want := controller.reconcileSession(context.Background(), projectPath), "repo"; got != want {
+		t.Fatalf("reconcileSession() fallback = %q, want %q", got, want)
+	}
+	if got, want := controller.reconcileSession(context.Background(), ""), "orca"; got != want {
+		t.Fatalf("reconcileSession() empty project = %q, want %q", got, want)
+	}
+}
+
+func TestLocalControllerReconcileRejectsReaderOnlyStore(t *testing.T) {
+	t.Parallel()
+
+	controller, err := NewLocalController(ControllerOptions{
+		Store: &fakeStore{},
+		Paths: Paths{
+			StateDB: filepath.Join(t.TempDir(), "state.db"),
+			PIDDir:  t.TempDir(),
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewLocalController() error = %v", err)
+	}
+
+	_, err = controller.Reconcile(context.Background(), ReconcileRequest{Project: testProjectPath(t)})
+	if err == nil || !strings.Contains(err.Error(), "task-capable state store") {
+		t.Fatalf("controller.Reconcile() error = %v, want task-capable store error", err)
 	}
 }
 
