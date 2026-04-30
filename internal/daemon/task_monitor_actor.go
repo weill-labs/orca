@@ -54,10 +54,11 @@ type taskMonitorRequest struct {
 }
 
 type taskMonitorResult struct {
-	key     string
-	kind    taskMonitorCheckKind
-	monitor *TaskMonitor
-	update  TaskStateUpdate
+	key           string
+	kind          taskMonitorCheckKind
+	monitor       *TaskMonitor
+	update        TaskStateUpdate
+	removeMonitor bool
 }
 
 func newTaskMonitor(daemon *Daemon, key string) *TaskMonitor {
@@ -121,10 +122,11 @@ func (m *TaskMonitor) recoverPanic(recovered any, request *taskMonitorRequest) {
 
 	select {
 	case request.response <- taskMonitorResult{
-		key:     m.key,
-		kind:    request.kind,
-		monitor: m,
-		update:  update,
+		key:           m.key,
+		kind:          request.kind,
+		monitor:       m,
+		update:        update,
+		removeMonitor: true,
 	}:
 	default:
 	}
@@ -253,15 +255,6 @@ func (m *TaskMonitor) wait() {
 	<-m.doneCh
 }
 
-func (m *TaskMonitor) done() bool {
-	select {
-	case <-m.doneCh:
-		return true
-	default:
-		return false
-	}
-}
-
 func (d *Daemon) ensureTaskMonitor(issue string) *TaskMonitor {
 	return d.ensureTaskMonitorForProject(d.project, issue)
 }
@@ -279,9 +272,7 @@ func (d *Daemon) ensureTaskMonitorForProject(projectPath, issue string) *TaskMon
 		d.taskMonitors = make(map[string]*TaskMonitor)
 	}
 	if monitor := d.taskMonitors[key]; monitor != nil {
-		if !monitor.done() {
-			return monitor
-		}
+		return monitor
 	}
 
 	monitor := newTaskMonitor(d, key)
@@ -307,7 +298,7 @@ func (d *Daemon) syncTaskMonitors(assignments []ActiveAssignment) map[string]*Ta
 	monitors := make(map[string]*TaskMonitor, len(desired))
 	for key := range desired {
 		monitor := d.taskMonitors[key]
-		if monitor == nil || monitor.done() {
+		if monitor == nil {
 			monitor = newTaskMonitor(d, key)
 			d.taskMonitors[key] = monitor
 		}
@@ -454,6 +445,9 @@ func (d *Daemon) applyTaskMonitorResults(ctx context.Context, results []taskMoni
 			continue
 		}
 		d.applyTaskStateUpdate(ctx, result.update)
+		if result.removeMonitor {
+			d.removeTaskMonitor(result.key, result.monitor)
+		}
 	}
 }
 
@@ -479,6 +473,17 @@ func (d *Daemon) dispatchTaskMonitorCheck(ctx context.Context, active ActiveAssi
 			return
 		}
 		d.applyTaskStateUpdate(ctx, result.update)
+		if result.removeMonitor {
+			d.removeTaskMonitor(result.key, result.monitor)
+		}
+	}
+}
+
+func (d *Daemon) removeTaskMonitor(key string, monitor *TaskMonitor) {
+	d.taskMonitorMu.Lock()
+	defer d.taskMonitorMu.Unlock()
+	if d.taskMonitors[key] == monitor {
+		delete(d.taskMonitors, key)
 	}
 }
 

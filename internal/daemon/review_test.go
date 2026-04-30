@@ -453,11 +453,12 @@ func TestPRReviewPollingResetsStaleInlineCommentWatermarkWhenCommentsRegress(t *
 	}
 	worker.LastReviewCount = 1
 	worker.LastInlineReviewCommentCount = 4
-	worker.LastReviewUpdatedAt = time.Date(2026, 4, 2, 9, 5, 0, 0, time.UTC)
+	worker.LastReviewUpdatedAt = time.Date(2026, 4, 2, 9, 4, 0, 0, time.UTC)
 	if err := deps.state.PutWorker(context.Background(), worker); err != nil {
 		t.Fatalf("PutWorker() error = %v", err)
 	}
 	queuePRReviewPayload(deps, 42, `{"reviewDecision":"CHANGES_REQUESTED","updatedAt":"2026-04-02T09:05:00Z","reviews":[{"author":{"login":"alice"},"state":"COMMENTED","body":"Looks close."}],"comments":[]}`)
+	deps.commands.queue("gh", []string{"api", "repos/{owner}/{repo}/pulls/42/comments?per_page=100"}, `[]`, nil)
 
 	d := deps.newDaemon(t)
 	update := d.checkTaskReviewPoll(context.Background(), activeTaskMonitorAssignment(t, deps, "LAB-1521"), AgentProfile{Name: "codex"})
