@@ -78,6 +78,7 @@ func (d *Daemon) Reconcile(ctx context.Context, req ReconcileRequest) (Reconcile
 	sort.Slice(tasks, func(i, j int) bool { return tasks[i].Issue < tasks[j].Issue })
 
 	var fixErr error
+	fixedLivePaneIssues := make(map[string]bool)
 	for _, task := range tasks {
 		finding, ok, err := d.reconcileTaskDrift(ctx, task)
 		if err != nil {
@@ -98,6 +99,9 @@ func (d *Daemon) Reconcile(ctx context.Context, req ReconcileRequest) (Reconcile
 			}
 			finding.Action = reconcileActionFixed
 			result.Fixed++
+			if finding.Kind == ReconcileStuckCleanup {
+				fixedLivePaneIssues[strings.ToUpper(strings.TrimSpace(finding.Issue))] = true
+			}
 		}
 
 		d.emitReconcileFinding(ctx, projectPath, finding)
@@ -109,6 +113,9 @@ func (d *Daemon) Reconcile(ctx context.Context, req ReconcileRequest) (Reconcile
 		return result, errors.Join(fixErr, err)
 	}
 	for _, finding := range orphanFindings {
+		if fixedLivePaneIssues[strings.ToUpper(strings.TrimSpace(finding.Issue))] {
+			continue
+		}
 		d.emitReconcileFinding(ctx, projectPath, finding)
 		result.Findings = append(result.Findings, finding)
 	}

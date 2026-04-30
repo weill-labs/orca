@@ -162,6 +162,7 @@ func TestReconcileFixCompletesStuckCleanupWithLivePane(t *testing.T) {
 	setLifecyclePromptActiveAfterIdleProbes(deps, 0)
 	seedReconcileAssignment(t, deps, "LAB-1500", "pane-1500", "worker-1500", 500)
 	deps.amux.paneExists = map[string]bool{"pane-1500": true}
+	deps.amux.listPanes = []Pane{{ID: "pane-1500", Name: "w-LAB-1500"}}
 	queuePRSnapshot(deps, 500, `{"state":"MERGED","mergedAt":"2026-04-29T22:35:51Z"}`)
 
 	result, err := deps.newDaemon(t).Reconcile(context.Background(), ReconcileRequest{
@@ -173,6 +174,9 @@ func TestReconcileFixCompletesStuckCleanupWithLivePane(t *testing.T) {
 	}
 	if got, want := result.Fixed, 1; got != want {
 		t.Fatalf("result.Fixed = %d, want %d", got, want)
+	}
+	if got, want := len(result.Findings), 1; got != want {
+		t.Fatalf("len(findings) = %d, want %d: %#v", got, want, result.Findings)
 	}
 	if got, want := findingKindsByIssue(result.Findings), map[string]string{"LAB-1500": ReconcileStuckCleanup}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("finding kinds = %#v, want %#v", got, want)
