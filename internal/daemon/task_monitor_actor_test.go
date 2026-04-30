@@ -226,7 +226,15 @@ func TestTaskMonitorPanicRecoveryEscalatesTaskAndOtherTasksKeepTicking(t *testin
 	seedTaskMonitorAssignment(t, deps, "LAB-1521-B", "pane-2", 42)
 	queuePRReviewPayload(deps, 42, `{"reviewDecision":"APPROVED","reviews":[],"comments":[]}`)
 
-	d := deps.newDaemon(t)
+	var logMu sync.Mutex
+	var logs []string
+	d := deps.newDaemonWithOptions(t, func(opts *Options) {
+		opts.Logf = func(format string, args ...any) {
+			logMu.Lock()
+			defer logMu.Unlock()
+			logs = append(logs, fmt.Sprintf(format, args...))
+		}
+	})
 	t.Cleanup(func() {
 		d.stopAllTaskMonitors(true)
 	})
@@ -274,6 +282,12 @@ func TestTaskMonitorPanicRecoveryEscalatesTaskAndOtherTasksKeepTicking(t *testin
 	}
 	if got, want := deps.events.countType(EventReviewApproved), 1; got != want {
 		t.Fatalf("review approved event count = %d, want %d", got, want)
+	}
+	logMu.Lock()
+	logCount := len(logs)
+	logMu.Unlock()
+	if logCount == 0 {
+		t.Fatal("panic log count = 0, want at least 1")
 	}
 }
 

@@ -477,6 +477,32 @@ func TestPRReviewPollingResetsStaleInlineCommentWatermarkWhenCommentsRegress(t *
 	}
 }
 
+func TestClampedSliceStart(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		previousCount int
+		length        int
+		want          int
+	}{
+		{name: "within bounds", previousCount: 2, length: 4, want: 2},
+		{name: "above bounds", previousCount: 4, length: 0, want: 0},
+		{name: "below bounds", previousCount: -1, length: 4, want: 0},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := clampedSliceStart(tt.previousCount, tt.length); got != tt.want {
+				t.Fatalf("clampedSliceStart(%d, %d) = %d, want %d", tt.previousCount, tt.length, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestPRReviewPollingNudgesWorkerForGitHubActionsIssueCommentsWithoutLGTM(t *testing.T) {
 	t.Parallel()
 

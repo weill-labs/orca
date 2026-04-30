@@ -116,7 +116,7 @@ func (m *TaskMonitor) recoverPanic(recovered any, request *taskMonitorRequest) {
 	if err != nil {
 		profile = AgentProfile{Name: request.active.Task.AgentProfile}
 	}
-	message := fmt.Sprintf("task monitor panic during %s: %v", taskMonitorCheckName(request.kind), recovered)
+	message := fmt.Sprintf("task monitor panic: %v", recovered)
 	update.Events = append(update.Events, m.daemon.assignmentEvent(update.Active, profile, EventTaskMonitorPanicked, message))
 	m.daemon.escalateTaskState(&update, profile, message, m.daemon.now())
 
@@ -164,27 +164,6 @@ func (m *TaskMonitor) handle(ctx context.Context, kind taskMonitorCheckKind, act
 		return m.daemon.checkTaskImmediateMergeConflictPoll(ctx, active)
 	default:
 		return TaskStateUpdate{Active: active}
-	}
-}
-
-func taskMonitorCheckName(kind taskMonitorCheckKind) string {
-	switch kind {
-	case taskMonitorCheckCapture:
-		return "capture check"
-	case taskMonitorCheckPRPoll:
-		return "pr poll"
-	case taskMonitorCheckExitedEvent:
-		return "exited event"
-	case taskMonitorCheckReviewPoll:
-		return "review poll"
-	case taskMonitorCheckCIPoll:
-		return "ci poll"
-	case taskMonitorCheckMergePoll:
-		return "merge poll"
-	case taskMonitorCheckMergeConflictPoll:
-		return "merge conflict poll"
-	default:
-		return "unknown check"
 	}
 }
 
