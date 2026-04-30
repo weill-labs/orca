@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
 	"strings"
 	"sync"
 )
@@ -73,12 +74,19 @@ func newTaskMonitor(daemon *Daemon, key string) *TaskMonitor {
 
 func (m *TaskMonitor) run() {
 	defer close(m.doneCh)
+	var current *taskMonitorRequest
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			m.recoverPanic(recovered, current)
+		}
+	}()
 
 	for {
 		select {
 		case <-m.stopCh:
 			return
 		case request := <-m.inbox:
+			current = &request
 			update := m.handle(request.ctx, request.kind, request.active)
 			request.response <- taskMonitorResult{
 				key:     m.key,
@@ -86,7 +94,39 @@ func (m *TaskMonitor) run() {
 				monitor: m,
 				update:  update,
 			}
+			current = nil
 		}
+	}
+}
+
+func (m *TaskMonitor) recoverPanic(recovered any, request *taskMonitorRequest) {
+	if m.daemon == nil {
+		return
+	}
+	if m.daemon.logf != nil {
+		m.daemon.logf("task monitor %s panicked: %v\n%s", m.key, recovered, debug.Stack())
+	}
+	if request == nil || request.response == nil {
+		return
+	}
+
+	update := TaskStateUpdate{Active: request.active}
+	profile, err := m.daemon.profileForTask(request.ctx, request.active.Task)
+	if err != nil {
+		profile = AgentProfile{Name: request.active.Task.AgentProfile}
+	}
+	message := fmt.Sprintf("task monitor panic during %s: %v", taskMonitorCheckName(request.kind), recovered)
+	update.Events = append(update.Events, m.daemon.assignmentEvent(update.Active, profile, EventTaskMonitorPanicked, message))
+	m.daemon.escalateTaskState(&update, profile, message, m.daemon.now())
+
+	select {
+	case request.response <- taskMonitorResult{
+		key:     m.key,
+		kind:    request.kind,
+		monitor: m,
+		update:  update,
+	}:
+	default:
 	}
 }
 
@@ -122,6 +162,27 @@ func (m *TaskMonitor) handle(ctx context.Context, kind taskMonitorCheckKind, act
 		return m.daemon.checkTaskImmediateMergeConflictPoll(ctx, active)
 	default:
 		return TaskStateUpdate{Active: active}
+	}
+}
+
+func taskMonitorCheckName(kind taskMonitorCheckKind) string {
+	switch kind {
+	case taskMonitorCheckCapture:
+		return "capture check"
+	case taskMonitorCheckPRPoll:
+		return "pr poll"
+	case taskMonitorCheckExitedEvent:
+		return "exited event"
+	case taskMonitorCheckReviewPoll:
+		return "review poll"
+	case taskMonitorCheckCIPoll:
+		return "ci poll"
+	case taskMonitorCheckMergePoll:
+		return "merge poll"
+	case taskMonitorCheckMergeConflictPoll:
+		return "merge conflict poll"
+	default:
+		return "unknown check"
 	}
 }
 
@@ -192,6 +253,15 @@ func (m *TaskMonitor) wait() {
 	<-m.doneCh
 }
 
+func (m *TaskMonitor) done() bool {
+	select {
+	case <-m.doneCh:
+		return true
+	default:
+		return false
+	}
+}
+
 func (d *Daemon) ensureTaskMonitor(issue string) *TaskMonitor {
 	return d.ensureTaskMonitorForProject(d.project, issue)
 }
@@ -209,7 +279,9 @@ func (d *Daemon) ensureTaskMonitorForProject(projectPath, issue string) *TaskMon
 		d.taskMonitors = make(map[string]*TaskMonitor)
 	}
 	if monitor := d.taskMonitors[key]; monitor != nil {
-		return monitor
+		if !monitor.done() {
+			return monitor
+		}
 	}
 
 	monitor := newTaskMonitor(d, key)
@@ -235,7 +307,7 @@ func (d *Daemon) syncTaskMonitors(assignments []ActiveAssignment) map[string]*Ta
 	monitors := make(map[string]*TaskMonitor, len(desired))
 	for key := range desired {
 		monitor := d.taskMonitors[key]
-		if monitor == nil {
+		if monitor == nil || monitor.done() {
 			monitor = newTaskMonitor(d, key)
 			d.taskMonitors[key] = monitor
 		}

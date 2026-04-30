@@ -43,6 +43,7 @@ const (
 	EventTaskCompleted             = "task.completed"
 	EventTaskFailed                = "task.failed"
 	EventTaskCompletionFailed      = "task.completion_failed"
+	EventTaskMonitorPanicked       = "task_monitor.panicked"
 	EventWorkerHandshake           = "worker.handshake"
 	EventWorkerHandshakeRetry      = "worker.handshake_retry"
 	EventWorkerStartupTransition   = "worker.startup_transition"
