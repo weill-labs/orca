@@ -90,7 +90,7 @@ func (d *Daemon) Reconcile(ctx context.Context, req ReconcileRequest) (Reconcile
 			if err := d.fixMergedReconcileFinding(ctx, task, finding); err != nil {
 				finding.Action = reconcileActionFixFailed
 				finding.Message = finding.Message + ": " + err.Error()
-				d.emitReconcileFinding(ctx, finding)
+				d.emitReconcileFinding(ctx, projectPath, finding)
 				result.Findings = append(result.Findings, finding)
 				return result, err
 			}
@@ -98,7 +98,7 @@ func (d *Daemon) Reconcile(ctx context.Context, req ReconcileRequest) (Reconcile
 			result.Fixed++
 		}
 
-		d.emitReconcileFinding(ctx, finding)
+		d.emitReconcileFinding(ctx, projectPath, finding)
 		result.Findings = append(result.Findings, finding)
 	}
 
@@ -107,7 +107,7 @@ func (d *Daemon) Reconcile(ctx context.Context, req ReconcileRequest) (Reconcile
 		return result, err
 	}
 	for _, finding := range orphanFindings {
-		d.emitReconcileFinding(ctx, finding)
+		d.emitReconcileFinding(ctx, projectPath, finding)
 		result.Findings = append(result.Findings, finding)
 	}
 
@@ -403,7 +403,7 @@ func (d *Daemon) finishMergedAssignmentWithoutPane(ctx context.Context, active A
 	return result
 }
 
-func (d *Daemon) emitReconcileFinding(ctx context.Context, finding ReconcileFinding) {
+func (d *Daemon) emitReconcileFinding(ctx context.Context, projectPath string, finding ReconcileFinding) {
 	message := finding.Message
 	if message == "" {
 		message = "reconcile drift detected"
@@ -412,7 +412,7 @@ func (d *Daemon) emitReconcileFinding(ctx context.Context, finding ReconcileFind
 	d.emit(ctx, Event{
 		Time:     d.now(),
 		Type:     EventReconcileFinding,
-		Project:  d.project,
+		Project:  projectPath,
 		Issue:    finding.Issue,
 		PaneID:   finding.PaneID,
 		PaneName: finding.PaneName,

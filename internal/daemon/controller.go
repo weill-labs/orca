@@ -517,9 +517,10 @@ func (c *LocalController) Reconcile(ctx context.Context, req ReconcileRequest) (
 		detectOrigin = config.DetectOrigin
 	}
 
+	session := c.reconcileSession(ctx, projectPath)
 	amuxClient := c.amux
 	if amuxClient == nil {
-		amuxClient = amux.NewClient(amux.Config{Session: c.reconcileSession(ctx, projectPath)})
+		amuxClient = amux.NewClient(amux.Config{Session: session})
 	}
 
 	issueTracker, err := newLinearIssueTrackerFromEnv()
@@ -529,7 +530,7 @@ func (c *LocalController) Reconcile(ctx context.Context, req ReconcileRequest) (
 
 	instance, err := New(Options{
 		Project:      projectPath,
-		Session:      c.reconcileSession(ctx, projectPath),
+		Session:      session,
 		PIDPath:      c.paths.pidFile(),
 		Config:       c.config,
 		State:        newSQLiteStateAdapter(runtimeStore),
