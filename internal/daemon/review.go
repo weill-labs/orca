@@ -141,7 +141,7 @@ func (d *Daemon) checkTaskReviewPoll(ctx context.Context, active ActiveAssignmen
 		updatedAt:        payload.UpdatedAt,
 	}
 	if reviewPollNeedsInlineCommentLookup(previousReviewState, nextReviewState, payload) ||
-		previousInlineCommentCount > len(payload.ReviewComments) {
+		reviewPollHasStaleInlineCommentWatermark(previousReviewState, payload) {
 		reviewComments, err := d.lookupPRReviewComments(ctx, active.Task.Project, active.Task.PRNumber)
 		if err != nil {
 			d.appendGitHubRateLimitEvent(&update, profile, err)
@@ -280,6 +280,10 @@ func reviewPollNeedsInlineCommentLookup(previous, next reviewWorkerState, payloa
 		next.reviewCount != previous.reviewCount ||
 		next.commentCount != previous.commentCount ||
 		next.reviewApproved != previous.reviewApproved
+}
+
+func reviewPollHasStaleInlineCommentWatermark(previous reviewWorkerState, payload prReviewPayload) bool {
+	return previous.inlineCommentCount > len(payload.ReviewComments)
 }
 
 const (

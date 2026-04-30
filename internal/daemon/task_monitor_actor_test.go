@@ -266,7 +266,7 @@ func TestTaskMonitorPanicRecoveryEscalatesTaskAndOtherTasksKeepTicking(t *testin
 	if !otherWorker.ReviewApproved {
 		t.Fatal("other worker ReviewApproved = false, want true")
 	}
-	if got, want := deps.events.countType("task_monitor.panicked"), 1; got != want {
+	if got, want := deps.events.countType(EventTaskMonitorPanicked), 1; got != want {
 		t.Fatalf("task monitor panic event count = %d, want %d", got, want)
 	}
 	if got, want := deps.events.countType(EventWorkerEscalated), 1; got != want {
