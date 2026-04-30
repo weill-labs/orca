@@ -218,6 +218,65 @@ func TestDispatchTaskMonitorChecksEmitsTraceWhenStoppedPRPollMonitorDropsDispatc
 	}
 }
 
+func TestTaskMonitorPanicRecoveryEscalatesTaskAndOtherTasksKeepTicking(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	seedTaskMonitorAssignment(t, deps, "LAB-1521-A", "pane-1", 41)
+	seedTaskMonitorAssignment(t, deps, "LAB-1521-B", "pane-2", 42)
+	queuePRReviewPayload(deps, 42, `{"reviewDecision":"APPROVED","reviews":[],"comments":[]}`)
+
+	d := deps.newDaemon(t)
+	t.Cleanup(func() {
+		d.stopAllTaskMonitors(true)
+	})
+
+	ctx := context.WithValue(context.Background(), gitHubClientFactoryContextKey{}, func(string) gitHubClient {
+		return panicReviewGitHubClient{
+			gitHubClient:  d.github,
+			panicPRNumber: 41,
+		}
+	})
+	assignments := []ActiveAssignment{
+		activeTaskMonitorAssignment(t, deps, "LAB-1521-A"),
+		activeTaskMonitorAssignment(t, deps, "LAB-1521-B"),
+	}
+
+	results := d.dispatchTaskMonitorChecks(ctx, assignments, taskMonitorCheckReviewPoll)
+	d.applyTaskMonitorResults(context.Background(), results)
+
+	task, ok := deps.state.task("LAB-1521-A")
+	if !ok {
+		t.Fatal("panicking task missing after monitor recovery")
+	}
+	if got, want := task.State, TaskStateEscalated; got != want {
+		t.Fatalf("panicking task state = %q, want %q", got, want)
+	}
+	worker, ok := deps.state.worker("pane-1")
+	if !ok {
+		t.Fatal("panicking worker missing after monitor recovery")
+	}
+	if got, want := worker.Health, WorkerHealthEscalated; got != want {
+		t.Fatalf("panicking worker health = %q, want %q", got, want)
+	}
+	otherWorker, ok := deps.state.worker("pane-2")
+	if !ok {
+		t.Fatal("other worker missing after monitor recovery")
+	}
+	if !otherWorker.ReviewApproved {
+		t.Fatal("other worker ReviewApproved = false, want true")
+	}
+	if got, want := deps.events.countType("task_monitor.panicked"), 1; got != want {
+		t.Fatalf("task monitor panic event count = %d, want %d", got, want)
+	}
+	if got, want := deps.events.countType(EventWorkerEscalated), 1; got != want {
+		t.Fatalf("worker escalated event count = %d, want %d", got, want)
+	}
+	if got, want := deps.events.countType(EventReviewApproved), 1; got != want {
+		t.Fatalf("review approved event count = %d, want %d", got, want)
+	}
+}
+
 func TestApplyTaskStateUpdateDoesNotPersistUnflaggedWorkerFieldsFromMergedUpdate(t *testing.T) {
 	t.Parallel()
 
@@ -500,6 +559,18 @@ func reloadTaskMonitorAssignments(t *testing.T, deps *testDeps, assignments []Ac
 		reloaded = append(reloaded, activeTaskMonitorAssignment(t, deps, assignment.Task.Issue))
 	}
 	return reloaded
+}
+
+type panicReviewGitHubClient struct {
+	gitHubClient
+	panicPRNumber int
+}
+
+func (c panicReviewGitHubClient) lookupPRReviews(ctx context.Context, prNumber int) (prReviewPayload, bool, error) {
+	if prNumber == c.panicPRNumber {
+		panic("review poll exploded")
+	}
+	return c.gitHubClient.lookupPRReviews(ctx, prNumber)
 }
 
 type blockedWaitIdle struct {
