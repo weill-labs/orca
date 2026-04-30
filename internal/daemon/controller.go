@@ -32,6 +32,7 @@ type Controller interface {
 	Enqueue(ctx context.Context, req EnqueueRequest) (MergeQueueActionResult, error)
 	Cancel(ctx context.Context, req CancelRequest) (TaskActionResult, error)
 	Resume(ctx context.Context, req ResumeRequest) (TaskActionResult, error)
+	Reconcile(ctx context.Context, req ReconcileRequest) (ReconcileResult, error)
 }
 
 type Paths struct {
@@ -494,6 +495,75 @@ func (c *LocalController) Resume(ctx context.Context, req ResumeRequest) (TaskAc
 		return TaskActionResult{}, err
 	}
 	return result, nil
+}
+
+func (c *LocalController) Reconcile(ctx context.Context, req ReconcileRequest) (ReconcileResult, error) {
+	projectPath, err := project.CanonicalPath(req.Project)
+	if err != nil {
+		return ReconcileResult{}, err
+	}
+
+	runtimeStore, ok := c.store.(daemonStateStore)
+	if !ok {
+		return ReconcileResult{}, fmt.Errorf("reconcile requires task-capable state store")
+	}
+	poolStore, ok := c.store.(pool.Store)
+	if !ok {
+		return ReconcileResult{}, fmt.Errorf("reconcile requires clone-capable state store")
+	}
+
+	detectOrigin := c.detectOrigin
+	if detectOrigin == nil {
+		detectOrigin = config.DetectOrigin
+	}
+
+	amuxClient := c.amux
+	if amuxClient == nil {
+		amuxClient = amux.NewClient(amux.Config{Session: c.reconcileSession(ctx, projectPath)})
+	}
+
+	issueTracker, err := newLinearIssueTrackerFromEnv()
+	if err != nil {
+		return ReconcileResult{}, fmt.Errorf("configure Linear issue tracker: %w", err)
+	}
+
+	instance, err := New(Options{
+		Project:      projectPath,
+		Session:      c.reconcileSession(ctx, projectPath),
+		PIDPath:      c.paths.pidFile(),
+		Config:       c.config,
+		State:        newSQLiteStateAdapter(runtimeStore),
+		Pool:         newMultiProjectPool(poolStore, detectOrigin, amuxClient, c.poolRunner),
+		Amux:         amuxClient,
+		IssueTracker: issueTracker,
+		Commands:     execCommandRunner{},
+		Now:          c.now,
+		Sleep:        sleepContext,
+		DetectOrigin: detectOrigin,
+	})
+	if err != nil {
+		return ReconcileResult{}, err
+	}
+
+	return instance.Reconcile(ctx, ReconcileRequest{
+		Project: projectPath,
+		Fix:     req.Fix,
+	})
+}
+
+func (c *LocalController) reconcileSession(ctx context.Context, projectPath string) string {
+	if status, err := c.store.ProjectStatus(ctx, projectPath); err == nil && status.Daemon != nil {
+		if session := strings.TrimSpace(status.Daemon.Session); session != "" {
+			return session
+		}
+	}
+	if session := strings.TrimSpace(os.Getenv("AMUX_SESSION")); session != "" {
+		return session
+	}
+	if projectPath != "" {
+		return filepath.Base(projectPath)
+	}
+	return "orca"
 }
 
 func (c *LocalController) preparePIDState(ctx context.Context) error {

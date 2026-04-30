@@ -987,6 +987,10 @@ func (*stubController) Resume(context.Context, daemon.ResumeRequest) (daemon.Tas
 	return daemon.TaskActionResult{}, nil
 }
 
+func (*stubController) Reconcile(context.Context, daemon.ReconcileRequest) (daemon.ReconcileResult, error) {
+	return daemon.ReconcileResult{}, nil
+}
+
 func fillRunDependencies(overrides runDependencies, store *stubStateStore, app *stubAppRunner) runDependencies {
 	deps := runDependencies{
 		resolvePaths: func() (daemon.Paths, error) {
