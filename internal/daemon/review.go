@@ -189,7 +189,9 @@ func (d *Daemon) checkTaskReviewPoll(ctx context.Context, active ActiveAssignmen
 		return traceAndReturn(&nextReviewState, 0, reviewPollIdleNotChecked, "persist_approved_review_feedback", true)
 	}
 
-	newReviews := reviewItems(payload.Reviews[previousReviewCount:], payload.ReviewComments[previousInlineCommentCount:])
+	reviewStart := clampedSliceStart(previousReviewCount, len(payload.Reviews))
+	inlineCommentStart := clampedSliceStart(previousInlineCommentCount, len(payload.ReviewComments))
+	newReviews := reviewItems(payload.Reviews[reviewStart:], payload.ReviewComments[inlineCommentStart:])
 	newComments := changedIssueComments(payload.Comments, previousCommentWatermark)
 	blocking := blockingReviewFeedback(payload.ReviewDecision, newReviews, newComments)
 	if len(blocking) == 0 {
@@ -229,6 +231,16 @@ func (d *Daemon) checkTaskReviewPoll(ctx context.Context, active ActiveAssignmen
 		update.Events = append(update.Events, d.assignmentEvent(update.Active, profile, EventWorkerNudgedReview, fmt.Sprintf("sent %d new blocking review(s) to worker", len(blocking))))
 	})
 	return traceAndReturn(&nextReviewState, len(blocking), idleResult, "queue_review_nudge", false)
+}
+
+func clampedSliceStart(previousCount, length int) int {
+	if previousCount < 0 {
+		return 0
+	}
+	if previousCount > length {
+		return length
+	}
+	return previousCount
 }
 
 func (d *Daemon) persistReviewWorkerState(worker *Worker, state reviewWorkerState, now time.Time) {
