@@ -53,6 +53,46 @@ func TestDaemonPollLoopLogsPollTickTiming(t *testing.T) {
 	}
 }
 
+func TestDaemonPollLoopLogsPollBetweenTickGap(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	captureTicker := newFakeTicker()
+	pollTicker := newFakeTicker()
+	deps.tickers.enqueue(captureTicker, pollTicker)
+
+	logs := &fakeLogSink{}
+	d := deps.newDaemonWithOptions(t, func(opts *Options) {
+		opts.Logf = logs.Printf
+		opts.PollInterval = 5 * time.Second
+	})
+
+	if err := d.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	deps.clock.Advance(5 * time.Second)
+	pollTicker.tick(deps.clock.Now())
+	waitForPollTickTimingLog(t, logs)
+
+	deps.clock.Advance(7 * time.Second)
+	pollTicker.tick(deps.clock.Now())
+
+	message := waitForPollBetweenTickLog(t, logs)
+	for _, fragment := range []string{
+		"daemon poll between ticks:",
+		"gap=7s",
+		"interval=5s",
+	} {
+		if !strings.Contains(message, fragment) {
+			t.Fatalf("poll between-ticks log = %q, want fragment %q", message, fragment)
+		}
+	}
+}
+
 func TestDaemonPollLoopTimingTracksStateAndGitHubDurations(t *testing.T) {
 	t.Parallel()
 
@@ -104,6 +144,22 @@ func waitForPollTickTimingLog(t *testing.T, logs *fakeLogSink) string {
 	waitFor(t, "poll tick timing log", func() bool {
 		for _, candidate := range logs.messages() {
 			if strings.Contains(candidate, "daemon poll tick timing:") {
+				message = candidate
+				return true
+			}
+		}
+		return false
+	})
+	return message
+}
+
+func waitForPollBetweenTickLog(t *testing.T, logs *fakeLogSink) string {
+	t.Helper()
+
+	var message string
+	waitFor(t, "poll between-ticks log", func() bool {
+		for _, candidate := range logs.messages() {
+			if strings.Contains(candidate, "daemon poll between ticks:") {
 				message = candidate
 				return true
 			}
