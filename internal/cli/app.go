@@ -34,6 +34,7 @@ commands:
   status   Show daemon and task status
   migrate-state  Copy state from SQLite to Postgres
   metrics  Show latency metrics from orchestration events
+  reconcile  Detect task and pane drift
   assign   Assign an issue to a worker
   spawn    Open a clone in a new amux pane
   enqueue  Queue a PR for serialized landing
@@ -75,6 +76,14 @@ Show latency metrics from orchestration events.
 Flags:
   --project Project path
   --since   Lookback window (default: 7d)
+  --json    Emit JSON output`,
+	"reconcile": `usage: orca reconcile [--project PATH] [--fix] [--json]
+
+Detect drift between orca tasks and amux panes.
+
+Flags:
+  --project Project path
+  --fix     Complete safe automated recovery for merged PR cleanup only
   --json    Emit JSON output`,
 	"assign": `usage: orca assign ISSUE --prompt TEXT [--agent NAME] [--project PATH] [--json]
 
@@ -253,6 +262,8 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.runMigrateState(ctx, args[1:])
 	case "metrics":
 		return a.runMetrics(ctx, args[1:])
+	case "reconcile":
+		return a.runReconcile(ctx, args[1:])
 	case "assign":
 		return a.runAssign(ctx, args[1:])
 	case "spawn":

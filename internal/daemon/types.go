@@ -70,6 +70,7 @@ const (
 	EventPRClosedWithoutMerge      = "pr.closed_without_merge"
 	EventPRMerged                  = "pr.merged"
 	EventPRClosed                  = "pr.closed"
+	EventReconcileFinding          = "reconcile.finding"
 )
 
 var (

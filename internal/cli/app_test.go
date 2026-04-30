@@ -2297,26 +2297,29 @@ func newRepoRoot(t *testing.T) string {
 }
 
 type fakeDaemon struct {
-	startRequest   *daemon.StartRequest
-	stopRequest    *daemon.StopRequest
-	reloadRequest  *daemon.ReloadRequest
-	assignRequest  *daemon.AssignRequest
-	spawnRequest   *daemon.SpawnPaneRequest
-	enqueueRequest *daemon.EnqueueRequest
-	cancelRequest  *daemon.CancelRequest
-	resumeRequest  *daemon.ResumeRequest
+	startRequest     *daemon.StartRequest
+	stopRequest      *daemon.StopRequest
+	reloadRequest    *daemon.ReloadRequest
+	assignRequest    *daemon.AssignRequest
+	spawnRequest     *daemon.SpawnPaneRequest
+	enqueueRequest   *daemon.EnqueueRequest
+	cancelRequest    *daemon.CancelRequest
+	resumeRequest    *daemon.ResumeRequest
+	reconcileRequest *daemon.ReconcileRequest
 
-	startResult   daemon.StartResult
-	stopResult    daemon.StopResult
-	reloadResult  daemon.ReloadResult
-	assignResult  daemon.TaskActionResult
-	spawnResult   daemon.SpawnPaneResult
-	enqueueResult daemon.MergeQueueActionResult
-	cancelResult  daemon.TaskActionResult
-	resumeResult  daemon.TaskActionResult
+	startResult     daemon.StartResult
+	stopResult      daemon.StopResult
+	reloadResult    daemon.ReloadResult
+	assignResult    daemon.TaskActionResult
+	spawnResult     daemon.SpawnPaneResult
+	enqueueResult   daemon.MergeQueueActionResult
+	cancelResult    daemon.TaskActionResult
+	resumeResult    daemon.TaskActionResult
+	reconcileResult daemon.ReconcileResult
 
-	cancelHook func(context.Context, daemon.CancelRequest) (daemon.TaskActionResult, error)
-	err        error
+	cancelHook   func(context.Context, daemon.CancelRequest) (daemon.TaskActionResult, error)
+	err          error
+	reconcileErr error
 }
 
 func (f *fakeDaemon) Start(_ context.Context, req daemon.StartRequest) (daemon.StartResult, error) {
@@ -2384,6 +2387,14 @@ func (f *fakeDaemon) Resume(_ context.Context, req daemon.ResumeRequest) (daemon
 	}
 	f.resumeRequest = &req
 	return f.resumeResult, nil
+}
+
+func (f *fakeDaemon) Reconcile(_ context.Context, req daemon.ReconcileRequest) (daemon.ReconcileResult, error) {
+	if f.err != nil {
+		return daemon.ReconcileResult{}, f.err
+	}
+	f.reconcileRequest = &req
+	return f.reconcileResult, f.reconcileErr
 }
 
 type fakeState struct {
@@ -2495,6 +2506,9 @@ func TestUsageTextIncludesResumeCommand(t *testing.T) {
 	if !strings.Contains(UsageText(), "resume") {
 		t.Fatalf("UsageText() = %q, want resume command", UsageText())
 	}
+	if !strings.Contains(UsageText(), "reconcile") {
+		t.Fatalf("UsageText() = %q, want reconcile command", UsageText())
+	}
 	if !strings.Contains(UsageText(), "spawn") {
 		t.Fatalf("UsageText() = %q, want spawn command", UsageText())
 	}
@@ -2506,6 +2520,58 @@ func TestUsageTextIncludesResumeCommand(t *testing.T) {
 	}
 	if !strings.Contains(UsageText(), "help") {
 		t.Fatalf("UsageText() = %q, want help command", UsageText())
+	}
+}
+
+func TestAppRunReconcile(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := newRepoRoot(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	fake := &fakeDaemon{
+		reconcileResult: daemon.ReconcileResult{
+			Project: repoRoot,
+			Fix:     true,
+			Fixed:   1,
+			Findings: []daemon.ReconcileFinding{{
+				Kind:     daemon.ReconcileRecoverableGhost,
+				Issue:    "LAB-1487",
+				PRNumber: 470,
+				PRState:  "merged",
+				Action:   "fixed",
+				Message:  "task is active but its pane is missing and its PR is merged",
+			}},
+		},
+	}
+	app := New(Options{
+		Daemon:  fake,
+		State:   &fakeState{},
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		Version: "build-123",
+		Cwd: func() (string, error) {
+			return repoRoot, nil
+		},
+	})
+
+	if err := app.Run(context.Background(), []string{"reconcile", "--fix"}); err != nil {
+		t.Fatalf("Run(reconcile) error = %v", err)
+	}
+	if fake.reconcileRequest == nil {
+		t.Fatal("expected reconcile to be called")
+	}
+	if got, want := fake.reconcileRequest.Project, repoRoot; got != want {
+		t.Fatalf("reconcile project = %q, want %q", got, want)
+	}
+	if !fake.reconcileRequest.Fix {
+		t.Fatal("reconcile --fix did not set Fix")
+	}
+	if got := stdout.String(); !strings.Contains(got, "recoverable_ghost") || !strings.Contains(got, "fixed: 1") {
+		t.Fatalf("reconcile output = %q, want finding and fixed count", got)
+	}
+	if stderr.String() != "" {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
 	}
 }
 
