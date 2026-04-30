@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"reflect"
 	"strconv"
@@ -114,6 +115,90 @@ func TestReconcileFixCompletesMergedGhostWithoutTouchingPanes(t *testing.T) {
 	}
 }
 
+func TestReconcileFixFailureContinuesFullScan(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	seedReconcileAssignment(t, deps, "LAB-1487", "pane-1487", "worker-1487", 470)
+	seedReconcileAssignment(t, deps, "LAB-1198", "pane-1198", "worker-1198", 0)
+	deps.amux.paneExists = map[string]bool{
+		"pane-1487": false,
+		"pane-1198": false,
+	}
+	deps.amux.listPanes = []Pane{{ID: "906", Name: "w-LAB-1491"}}
+	deps.pool.releaseErr = errors.New("release failed")
+	queuePRSnapshot(deps, 470, `{"state":"MERGED","mergedAt":"2026-04-29T22:35:51Z"}`)
+
+	result, err := deps.newDaemon(t).Reconcile(context.Background(), ReconcileRequest{
+		Project: "/tmp/project",
+		Fix:     true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "release failed") {
+		t.Fatalf("Reconcile(--fix) error = %v, want release failure", err)
+	}
+	got := findingKindsByIssue(result.Findings)
+	want := map[string]string{
+		"LAB-1487": ReconcileRecoverableGhost,
+		"LAB-1198": ReconcileAbandoned,
+		"LAB-1491": ReconcileOrphanPane,
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("finding kinds = %#v, want %#v", got, want)
+	}
+	for _, finding := range result.Findings {
+		if finding.Issue == "LAB-1487" && finding.Action != reconcileActionFixFailed {
+			t.Fatalf("LAB-1487 action = %q, want %q", finding.Action, reconcileActionFixFailed)
+		}
+	}
+	if got := deps.events.countType(EventReconcileFinding); got != len(want) {
+		t.Fatalf("reconcile finding event count = %d, want %d", got, len(want))
+	}
+}
+
+func TestReconcileFixCompletesStuckCleanupWithLivePane(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	setLifecyclePromptActiveAfterIdleProbes(deps, 0)
+	seedReconcileAssignment(t, deps, "LAB-1500", "pane-1500", "worker-1500", 500)
+	deps.amux.paneExists = map[string]bool{"pane-1500": true}
+	queuePRSnapshot(deps, 500, `{"state":"MERGED","mergedAt":"2026-04-29T22:35:51Z"}`)
+
+	result, err := deps.newDaemon(t).Reconcile(context.Background(), ReconcileRequest{
+		Project: "/tmp/project",
+		Fix:     true,
+	})
+	if err != nil {
+		t.Fatalf("Reconcile(--fix) error = %v", err)
+	}
+	if got, want := result.Fixed, 1; got != want {
+		t.Fatalf("result.Fixed = %d, want %d", got, want)
+	}
+	if got, want := findingKindsByIssue(result.Findings), map[string]string{"LAB-1500": ReconcileStuckCleanup}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("finding kinds = %#v, want %#v", got, want)
+	}
+	task, ok := deps.state.task("LAB-1500")
+	if !ok {
+		t.Fatal("LAB-1500 task missing")
+	}
+	if got, want := task.Status, TaskStatusDone; got != want {
+		t.Fatalf("task.Status = %q, want %q", got, want)
+	}
+	if len(deps.amux.killCalls) != 0 {
+		t.Fatalf("kill calls = %#v, want none", deps.amux.killCalls)
+	}
+	if got := len(deps.amux.waitIdleCalls); got < 2 {
+		t.Fatalf("wait idle call count = %d, want wrapup and postmortem waits", got)
+	}
+	deps.amux.requireSentKeys(t, "pane-1500", []string{
+		mergedWrapUpPrompt,
+		"Enter",
+		postmortemCommand,
+		"Enter",
+	})
+	deps.events.requireTypes(t, EventReconcileFinding, EventPRMerged, EventWorkerPostmortem, EventTaskCompleted)
+}
+
 func TestReconcileDiscoversMergedPRByIssueID(t *testing.T) {
 	t.Parallel()
 
@@ -221,6 +306,32 @@ func TestReconcileSkipsLiveTaskWithDiscoveredOpenPR(t *testing.T) {
 	}
 	if len(result.Findings) != 0 {
 		t.Fatalf("findings = %#v, want none", result.Findings)
+	}
+}
+
+func TestReconcileSkipsStartingTaskWithoutPane(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.state.putTaskForTest(Task{
+		Project:      "/tmp/project",
+		Issue:        "LAB-1504",
+		Status:       TaskStatusStarting,
+		Branch:       "LAB-1504",
+		AgentProfile: "codex",
+		CreatedAt:    deps.clock.Now(),
+		UpdatedAt:    deps.clock.Now(),
+	})
+
+	result, err := deps.newDaemon(t).Reconcile(context.Background(), ReconcileRequest{Project: "/tmp/project"})
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	if len(result.Findings) != 0 {
+		t.Fatalf("findings = %#v, want none", result.Findings)
+	}
+	if got := len(deps.commands.callsByName("gh")); got != 0 {
+		t.Fatalf("gh call count = %d, want 0", got)
 	}
 }
 

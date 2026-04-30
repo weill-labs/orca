@@ -503,6 +503,8 @@ func (c *LocalController) Reconcile(ctx context.Context, req ReconcileRequest) (
 		return ReconcileResult{}, err
 	}
 
+	// Reconcile intentionally runs in-process instead of requiring a live
+	// daemon so it can diagnose and repair drift after daemon outages.
 	runtimeStore, ok := c.store.(daemonStateStore)
 	if !ok {
 		return ReconcileResult{}, fmt.Errorf("reconcile requires task-capable state store")

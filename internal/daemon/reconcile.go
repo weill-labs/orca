@@ -77,6 +77,7 @@ func (d *Daemon) Reconcile(ctx context.Context, req ReconcileRequest) (Reconcile
 	}
 	sort.Slice(tasks, func(i, j int) bool { return tasks[i].Issue < tasks[j].Issue })
 
+	var fixErr error
 	for _, task := range tasks {
 		finding, ok, err := d.reconcileTaskDrift(ctx, task)
 		if err != nil {
@@ -92,7 +93,8 @@ func (d *Daemon) Reconcile(ctx context.Context, req ReconcileRequest) (Reconcile
 				finding.Message = finding.Message + ": " + err.Error()
 				d.emitReconcileFinding(ctx, projectPath, finding)
 				result.Findings = append(result.Findings, finding)
-				return result, err
+				fixErr = errors.Join(fixErr, err)
+				continue
 			}
 			finding.Action = reconcileActionFixed
 			result.Fixed++
@@ -104,7 +106,7 @@ func (d *Daemon) Reconcile(ctx context.Context, req ReconcileRequest) (Reconcile
 
 	orphanFindings, err := d.reconcilePaneDrift(ctx, projectPath)
 	if err != nil {
-		return result, err
+		return result, errors.Join(fixErr, err)
 	}
 	for _, finding := range orphanFindings {
 		d.emitReconcileFinding(ctx, projectPath, finding)
@@ -123,10 +125,14 @@ func (d *Daemon) Reconcile(ctx context.Context, req ReconcileRequest) (Reconcile
 		return left.PaneID < right.PaneID
 	})
 
-	return result, nil
+	return result, fixErr
 }
 
 func (d *Daemon) reconcileTaskDrift(ctx context.Context, task Task) (ReconcileFinding, bool, error) {
+	if task.Status == TaskStatusStarting {
+		return ReconcileFinding{}, false, nil
+	}
+
 	paneID := strings.TrimSpace(task.PaneID)
 	paneExists := false
 	if paneID != "" {

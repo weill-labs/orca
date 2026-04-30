@@ -606,6 +606,7 @@ type fakePool struct {
 	clones                []Clone
 	acquired              map[string]bool
 	released              []Clone
+	releaseErr            error
 }
 
 func (p *fakePool) Acquire(ctx context.Context, project, issue string) (Clone, error) {
@@ -648,6 +649,9 @@ func (p *fakePool) Release(ctx context.Context, project string, clone Clone) err
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.releaseErr != nil {
+		return p.releaseErr
+	}
 	if p.acquired != nil {
 		delete(p.acquired, clone.Path)
 	}
