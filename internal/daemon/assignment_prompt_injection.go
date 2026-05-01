@@ -38,11 +38,7 @@ func (d *Daemon) sendIdempotentAssignmentPromptCommand(ctx context.Context, pane
 	if err != nil {
 		return fmt.Errorf("read assignment prompt metadata: %w", err)
 	}
-	stage := ""
-	promptAlreadySent := metadata[assignmentPromptInjectionTokenKey] == token
-	if promptAlreadySent {
-		stage = metadata[assignmentPromptInjectionStageKey]
-	}
+	stage, promptAlreadySent := assignmentPromptInjectionStage(metadata, token)
 	if stage == assignmentPromptInjectionStageCommandSent {
 		return nil
 	}
@@ -85,6 +81,13 @@ func (d *Daemon) logAssignmentPromptSettleError(err error) {
 	if err != nil && d.logf != nil {
 		d.logf("assignment prompt settle failed before Enter; sending Enter anyway: %v", err)
 	}
+}
+
+func assignmentPromptInjectionStage(metadata map[string]string, token string) (string, bool) {
+	if metadata[assignmentPromptInjectionTokenKey] != token {
+		return "", false
+	}
+	return metadata[assignmentPromptInjectionStageKey], true
 }
 
 func assignmentPromptInjectionToken(task Task, prompt string) string {
