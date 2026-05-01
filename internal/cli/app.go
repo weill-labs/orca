@@ -34,6 +34,7 @@ commands:
   status   Show daemon and task status
   migrate-state  Copy state from SQLite to Postgres
   metrics  Show latency metrics from orchestration events
+  refresh-codex  Print the Codex refresh command
   reconcile  Detect task and pane drift
   assign   Assign an issue to a worker
   spawn    Open a clone in a new amux pane
@@ -77,6 +78,9 @@ Flags:
   --project Project path
   --since   Lookback window (default: 7d)
   --json    Emit JSON output`,
+	"refresh-codex": `usage: orca refresh-codex
+
+Print the Codex refresh command.`,
 	"reconcile": `usage: orca reconcile [--project PATH] [--fix] [--json]
 
 Detect drift between orca tasks and amux panes.
@@ -262,6 +266,8 @@ func (a *App) Run(ctx context.Context, args []string) error {
 		return a.runMigrateState(ctx, args[1:])
 	case "metrics":
 		return a.runMetrics(ctx, args[1:])
+	case "refresh-codex":
+		return a.runRefreshCodex(ctx, args[1:])
 	case "reconcile":
 		return a.runReconcile(ctx, args[1:])
 	case "assign":
