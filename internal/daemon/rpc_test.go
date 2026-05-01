@@ -142,6 +142,59 @@ func TestProjectStatusRPC(t *testing.T) {
 	}
 }
 
+func TestDispatchStatusReportsResponsiveStaleHeartbeatAsDegraded(t *testing.T) {
+	t.Parallel()
+
+	projectPath := testProjectPath(t)
+	store := openDaemonStateStore(t)
+	now := time.Date(2026, 4, 2, 15, 0, 0, 0, time.UTC)
+	staleHeartbeatAt := now.Add(-time.Minute)
+	if err := store.UpsertDaemon(context.Background(), projectPath, state.DaemonStatus{
+		Session:   "orca",
+		PID:       42,
+		Status:    daemonStatusUnhealthy,
+		StartedAt: now.Add(-time.Hour),
+		UpdatedAt: staleHeartbeatAt,
+	}); err != nil {
+		t.Fatalf("UpsertDaemon() error = %v", err)
+	}
+
+	instance := &Daemon{
+		captureInterval: 5 * time.Second,
+		now:             func() time.Time { return now },
+	}
+	instance.lastHeartbeat.Store(staleHeartbeatAt.UnixMilli())
+
+	response := dispatchRPCRequest(context.Background(), rpcRequest{
+		ID:     json.RawMessage(`1`),
+		Method: "status",
+	}, instance, store, "build-1554", projectPath)
+	if response.Error != nil {
+		t.Fatalf("dispatch status error = %#v", response.Error)
+	}
+
+	payload, err := json.Marshal(response.Result)
+	if err != nil {
+		t.Fatalf("Marshal(status result) error = %v", err)
+	}
+	var result ProjectStatusRPCResult
+	if err := json.Unmarshal(payload, &result); err != nil {
+		t.Fatalf("Unmarshal(status result) error = %v", err)
+	}
+	if result.Daemon == nil {
+		t.Fatal("status daemon = nil, want degraded daemon status")
+	}
+	if got, want := result.Daemon.Status, "degraded"; got != want {
+		t.Fatalf("daemon status = %q, want %q", got, want)
+	}
+	if got, want := result.Daemon.Reason, "heartbeat stale but daemon socket responding"; got != want {
+		t.Fatalf("daemon reason = %q, want %q", got, want)
+	}
+	if got, want := result.Daemon.UpdatedAt, staleHeartbeatAt; !got.Equal(want) {
+		t.Fatalf("daemon updated_at = %v, want stale heartbeat %v", got, want)
+	}
+}
+
 func TestAssignTypesIncludeTitleField(t *testing.T) {
 	t.Parallel()
 
