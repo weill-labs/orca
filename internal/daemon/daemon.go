@@ -13,15 +13,16 @@ import (
 )
 
 const (
-	defaultCaptureInterval         = 5 * time.Second
-	defaultAgentHandshakeTimeout   = 30 * time.Second
-	defaultPromptSettleDuration    = 2 * time.Second
-	defaultTrustPromptTimeout      = 2 * time.Second
-	defaultPollInterval            = 30 * time.Second
-	defaultMergeGracePeriod        = 10 * time.Minute
-	defaultShutdownCleanupDeadline = 30 * time.Second
-	defaultDaemonStopTimeout       = defaultShutdownCleanupDeadline + 5*time.Second
-	relayHealthyPollInterval       = 5 * time.Minute
+	defaultCaptureInterval          = 5 * time.Second
+	defaultAgentHandshakeTimeout    = 30 * time.Second
+	defaultPromptSettleDuration     = 2 * time.Second
+	defaultTrustPromptTimeout       = 2 * time.Second
+	defaultPollInterval             = 30 * time.Second
+	defaultMergeGracePeriod         = 10 * time.Minute
+	defaultShutdownCleanupDeadline  = 30 * time.Second
+	defaultDaemonStopTimeout        = defaultShutdownCleanupDeadline + 5*time.Second
+	defaultDaemonStatusWriteTimeout = 2 * time.Second
+	relayHealthyPollInterval        = 5 * time.Minute
 )
 
 type Daemon struct {
@@ -48,6 +49,7 @@ type Daemon struct {
 	mergeGracePeriod        time.Duration
 	shutdownCleanupDeadline time.Duration
 	statusWriter            daemonStatusWriter
+	statusWriteTimeout      time.Duration
 	logf                    func(string, ...any)
 	monitorGitHubCircuit    *CircuitBreaker
 	relayURL                string
@@ -65,11 +67,13 @@ type Daemon struct {
 	loopDone             chan struct{}
 	eventStreamDone      chan struct{}
 	watchdogDone         chan struct{}
+	statusPublisherDone  chan struct{}
 	relayDone            chan struct{}
 	mergeQueueInbox      chan ProcessQueue
 	mergeQueueUpdates    chan MergeQueueUpdate
 	mergeQueueDone       chan struct{}
 	mergeQueueUpdateDone chan struct{}
+	statusUpdates        chan heartbeatStatusUpdate
 	pollIntervalCh       chan time.Duration
 	monitorRuns          sync.WaitGroup
 	taskMonitorMu        sync.Mutex
@@ -131,6 +135,12 @@ func New(opts Options) (*Daemon, error) {
 	if opts.ShutdownCleanupDeadline <= 0 {
 		opts.ShutdownCleanupDeadline = defaultShutdownCleanupDeadline
 	}
+	if opts.DaemonStatusWriteTimeout <= 0 {
+		opts.DaemonStatusWriteTimeout = defaultDaemonStatusWriteTimeout
+		if opts.CaptureInterval < opts.DaemonStatusWriteTimeout {
+			opts.DaemonStatusWriteTimeout = opts.CaptureInterval
+		}
+	}
 	if opts.PIDPath == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
@@ -173,6 +183,7 @@ func New(opts Options) (*Daemon, error) {
 		mergeGracePeriod:        opts.MergeGracePeriod,
 		shutdownCleanupDeadline: opts.ShutdownCleanupDeadline,
 		statusWriter:            opts.DaemonStatusWriter,
+		statusWriteTimeout:      opts.DaemonStatusWriteTimeout,
 		logf:                    opts.Logf,
 		relayURL:                strings.TrimSpace(opts.RelayURL),
 		relayToken:              strings.TrimSpace(opts.RelayToken),
@@ -251,6 +262,11 @@ func (d *Daemon) Start(ctx context.Context) error {
 		go d.runRelayLoop(d.stopContext, d.relayDone)
 	}
 	d.loopDone = make(chan struct{})
+	if d.statusWriter != nil {
+		d.statusUpdates = make(chan heartbeatStatusUpdate, 1)
+		d.statusPublisherDone = make(chan struct{})
+		go d.runDaemonStatusPublisher(d.stopContext, d.statusPublisherDone)
+	}
 	go d.runLoop(d.stopContext, d.loopDone)
 	if d.newWatchdogTicker != nil {
 		d.watchdogDone = make(chan struct{})
@@ -328,6 +344,9 @@ func (d *Daemon) Stop(ctx context.Context) error {
 	if d.watchdogDone != nil {
 		<-d.watchdogDone
 	}
+	if d.statusPublisherDone != nil {
+		<-d.statusPublisherDone
+	}
 	if d.relayDone != nil {
 		<-d.relayDone
 	}
@@ -348,6 +367,8 @@ func (d *Daemon) Stop(ctx context.Context) error {
 	d.mergeQueueUpdateDone = nil
 	d.eventStreamDone = nil
 	d.watchdogDone = nil
+	d.statusPublisherDone = nil
+	d.statusUpdates = nil
 	d.relayDone = nil
 	d.pollIntervalCh = nil
 	d.cleanupDrainCtx = nil

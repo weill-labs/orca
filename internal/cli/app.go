@@ -1122,7 +1122,7 @@ func shouldPrintHeartbeatAge(daemon *state.DaemonStatus) bool {
 		return false
 	}
 	switch daemon.Status {
-	case "running", "unhealthy":
+	case "running", "degraded", "unhealthy":
 		return true
 	default:
 		return false
@@ -1155,7 +1155,7 @@ func daemonStatusText(status state.ProjectStatus, daemonBuildCommit, installedBu
 		daemonState = status.Daemon.Status
 		daemonReason = strings.TrimSpace(status.Daemon.Reason)
 	}
-	if daemonState == "unhealthy" && daemonReason != "" {
+	if daemonReason != "" {
 		return fmt.Sprintf("%s (%s)", daemonState, daemonReason)
 	}
 

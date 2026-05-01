@@ -23,6 +23,8 @@ const (
 	unixSocketPathMax = 103
 )
 
+const daemonHeartbeatStaleReason = "heartbeat stale but daemon socket responding"
+
 type rpcRequest struct {
 	JSONRPC string          `json:"jsonrpc"`
 	ID      json.RawMessage `json:"id,omitempty"`

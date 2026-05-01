@@ -17,6 +17,11 @@ type daemonStatusWriter interface {
 	Update(ctx context.Context, status string, heartbeatAt time.Time) error
 }
 
+type heartbeatStatusUpdate struct {
+	status      string
+	heartbeatAt time.Time
+}
+
 func (d *Daemon) runWatchdog(ctx context.Context, done chan struct{}) {
 	defer close(done)
 
@@ -67,7 +72,57 @@ func (d *Daemon) updateDaemonStatus(ctx context.Context, status string, heartbea
 	if d.statusWriter == nil {
 		return
 	}
-	if err := d.statusWriter.Update(ctx, status, heartbeatAt); err != nil && d.logf != nil {
+	update := heartbeatStatusUpdate{status: status, heartbeatAt: heartbeatAt}
+	if d.statusUpdates == nil {
+		d.writeDaemonStatus(ctx, update)
+		return
+	}
+	d.enqueueDaemonStatusUpdate(ctx, update)
+}
+
+func (d *Daemon) enqueueDaemonStatusUpdate(ctx context.Context, update heartbeatStatusUpdate) {
+	select {
+	case d.statusUpdates <- update:
+		return
+	case <-ctx.Done():
+		return
+	default:
+	}
+
+	select {
+	case <-d.statusUpdates:
+	default:
+	}
+
+	select {
+	case d.statusUpdates <- update:
+	case <-ctx.Done():
+	default:
+	}
+}
+
+func (d *Daemon) runDaemonStatusPublisher(ctx context.Context, done chan struct{}) {
+	defer close(done)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case update := <-d.statusUpdates:
+			d.writeDaemonStatus(ctx, update)
+		}
+	}
+}
+
+func (d *Daemon) writeDaemonStatus(ctx context.Context, update heartbeatStatusUpdate) {
+	writeCtx := ctx
+	cancel := func() {}
+	if d.statusWriteTimeout > 0 {
+		writeCtx, cancel = context.WithTimeout(ctx, d.statusWriteTimeout)
+	}
+	defer cancel()
+
+	if err := d.statusWriter.Update(writeCtx, update.status, update.heartbeatAt); err != nil && ctx.Err() == nil && d.logf != nil {
 		d.logf("daemon status update failed: %v", err)
 	}
 }

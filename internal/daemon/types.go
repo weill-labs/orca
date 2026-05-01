@@ -24,6 +24,7 @@ const (
 	WorkerHealthEscalated = "escalated"
 
 	daemonStatusRunning   = "running"
+	daemonStatusDegraded  = "degraded"
 	daemonStatusUnhealthy = "unhealthy"
 
 	MergeQueueStatusQueued         = "queued"
@@ -82,31 +83,32 @@ var (
 )
 
 type Options struct {
-	Project                 string
-	Session                 string
-	PIDPath                 string
-	AllowCurrentPIDReuse    bool
-	Config                  ConfigProvider
-	State                   StateStore
-	Pool                    Pool
-	Amux                    AmuxClient
-	IssueTracker            IssueTracker
-	Commands                CommandRunner
-	Events                  EventSink
-	Now                     func() time.Time
-	NewTicker               func(time.Duration) Ticker
-	Sleep                   func(context.Context, time.Duration) error
-	CaptureInterval         time.Duration
-	PollInterval            time.Duration
-	MergeGracePeriod        time.Duration
-	ShutdownCleanupDeadline time.Duration
-	NewWatchdogTicker       func(time.Duration) Ticker
-	DaemonStatusWriter      daemonStatusWriter
-	Logf                    func(string, ...any)
-	RelayURL                string
-	RelayToken              string
-	Hostname                string
-	DetectOrigin            func(projectDir string) (string, error)
+	Project                  string
+	Session                  string
+	PIDPath                  string
+	AllowCurrentPIDReuse     bool
+	Config                   ConfigProvider
+	State                    StateStore
+	Pool                     Pool
+	Amux                     AmuxClient
+	IssueTracker             IssueTracker
+	Commands                 CommandRunner
+	Events                   EventSink
+	Now                      func() time.Time
+	NewTicker                func(time.Duration) Ticker
+	Sleep                    func(context.Context, time.Duration) error
+	CaptureInterval          time.Duration
+	PollInterval             time.Duration
+	MergeGracePeriod         time.Duration
+	ShutdownCleanupDeadline  time.Duration
+	NewWatchdogTicker        func(time.Duration) Ticker
+	DaemonStatusWriter       daemonStatusWriter
+	DaemonStatusWriteTimeout time.Duration
+	Logf                     func(string, ...any)
+	RelayURL                 string
+	RelayToken               string
+	Hostname                 string
+	DetectOrigin             func(projectDir string) (string, error)
 }
 
 type ConfigProvider interface {
