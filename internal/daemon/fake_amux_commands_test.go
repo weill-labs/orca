@@ -31,6 +31,7 @@ type fakeAmux struct {
 	sendKeysHook                 func(paneID string, keys []string)
 	setMetadataErr               error
 	setMetadataHook              func(paneID string, metadata map[string]string)
+	removeMetadataErr            error
 	removeMetadataHook           func(paneID string, keys []string)
 	killErr                      error
 	killHook                     func(paneID string)
@@ -235,6 +236,9 @@ func (a *fakeAmux) RemoveMetadata(ctx context.Context, paneID string, keys ...st
 	}
 	if a.removeMetadataHook != nil {
 		a.removeMetadataHook(paneID, append([]string(nil), keys...))
+	}
+	if a.removeMetadataErr != nil {
+		return a.removeMetadataErr
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()

@@ -410,6 +410,25 @@ func TestAssignmentPromptInjectionReturnsMetadataReadErrorBeforeSending(t *testi
 	deps.amux.requireSentKeys(t, "pane-1", nil)
 }
 
+func TestAssignmentPromptInjectionReturnsNormalizeErrorBeforeSending(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	d := deps.newDaemon(t)
+	task := Task{
+		Project:   "/tmp/project",
+		Issue:     "LAB-1555",
+		WorkerID:  "worker-01",
+		CreatedAt: deps.clock.Now(),
+	}
+
+	err := d.sendAssignmentPromptAndEnter(context.Background(), "pane-1", task, "\n")
+	if err == nil || err.Error() != "prompt is empty" {
+		t.Fatalf("sendAssignmentPromptAndEnter() error = %v, want prompt is empty", err)
+	}
+	deps.amux.requireSentKeys(t, "pane-1", nil)
+}
+
 func TestAssignmentPromptInjectionValidationErrors(t *testing.T) {
 	t.Parallel()
 
@@ -451,6 +470,46 @@ func TestAssignmentPromptInjectionLogsMetadataAndSettleFailures(t *testing.T) {
 	deps.amux.requireSentKeys(t, "pane-1", []string{"Fix prompt delivery\n"})
 	requireLogContaining(t, logs, "record assignment prompt injection stage failed: metadata failed")
 	requireLogContaining(t, logs, "assignment prompt settle failed before Enter; sending Enter anyway: settle failed")
+}
+
+func TestAssignmentPromptInjectionLogsClearFailure(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.amux.removeMetadataErr = errors.New("remove metadata failed")
+	var logs []string
+	d := deps.newDaemonWithOptions(t, func(opts *Options) {
+		opts.Logf = func(format string, args ...any) {
+			logs = append(logs, fmt.Sprintf(format, args...))
+		}
+	})
+
+	d.clearAssignmentPromptInjection(context.Background(), "pane-1")
+
+	requireLogContaining(t, logs, "clear assignment prompt injection metadata failed: remove metadata failed")
+}
+
+func TestAssignmentPromptInjectionIgnoresBestEffortFailuresWithoutLogger(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.amux.setMetadataErr = errors.New("metadata failed")
+	deps.amux.waitIdleErr = errors.New("settle failed")
+	deps.amux.removeMetadataErr = errors.New("remove metadata failed")
+	d := deps.newDaemon(t)
+	task := Task{
+		Project:   "/tmp/project",
+		Issue:     "LAB-1555",
+		WorkerID:  "worker-01",
+		CreatedAt: deps.clock.Now(),
+	}
+
+	if err := d.sendAssignmentPromptAndEnter(context.Background(), "pane-1", task, "Fix prompt delivery"); err != nil {
+		t.Fatalf("sendAssignmentPromptAndEnter() error = %v", err)
+	}
+	d.clearAssignmentPromptInjection(context.Background(), "pane-1")
+
+	deps.amux.requireSentKeys(t, "pane-1", []string{"Fix prompt delivery\n"})
 }
 
 func requireLogContaining(t *testing.T, logs []string, want string) {
