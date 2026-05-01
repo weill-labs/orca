@@ -142,35 +142,49 @@ func TestProjectStatusRPC(t *testing.T) {
 	}
 }
 
-func TestDispatchStatusReportsResponsiveStaleHeartbeatAsDegraded(t *testing.T) {
+func TestStatusRPCReportsResponsiveStaleHeartbeatAsDegraded(t *testing.T) {
 	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	instance := deps.newDaemon(t)
+	if err := instance.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = instance.Stop(context.Background())
+	})
 
 	projectPath := testProjectPath(t)
 	store := openDaemonStateStore(t)
-	now := time.Date(2026, 4, 2, 15, 0, 0, 0, time.UTC)
-	staleHeartbeatAt := now.Add(-time.Minute)
+	staleHeartbeatAt := deps.clock.Now()
 	if err := store.UpsertDaemon(context.Background(), projectPath, state.DaemonStatus{
 		Session:   "orca",
 		PID:       42,
 		Status:    daemonStatusUnhealthy,
-		StartedAt: now.Add(-time.Hour),
+		StartedAt: staleHeartbeatAt.Add(-time.Hour),
 		UpdatedAt: staleHeartbeatAt,
 	}); err != nil {
 		t.Fatalf("UpsertDaemon() error = %v", err)
 	}
 
-	instance := &Daemon{
-		captureInterval: 5 * time.Second,
-		now:             func() time.Time { return now },
+	deps.clock.Advance(time.Minute)
+	client, server := net.Pipe()
+	defer client.Close()
+	go handleRPCConn(context.Background(), server, instance, store, "build-1554", projectPath)
+	if err := json.NewEncoder(client).Encode(rpcRequest{
+		JSONRPC: jsonRPCVersion,
+		ID:      json.RawMessage(`1`),
+		Method:  "status",
+	}); err != nil {
+		t.Fatalf("Encode(status request) error = %v", err)
 	}
-	instance.lastHeartbeat.Store(staleHeartbeatAt.UnixMilli())
-
-	response := dispatchRPCRequest(context.Background(), rpcRequest{
-		ID:     json.RawMessage(`1`),
-		Method: "status",
-	}, instance, store, "build-1554", projectPath)
+	var response rpcResponse
+	if err := json.NewDecoder(client).Decode(&response); err != nil {
+		t.Fatalf("Decode(status response) error = %v", err)
+	}
 	if response.Error != nil {
-		t.Fatalf("dispatch status error = %#v", response.Error)
+		t.Fatalf("status rpc error = %#v", response.Error)
 	}
 
 	payload, err := json.Marshal(response.Result)
