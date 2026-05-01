@@ -64,6 +64,9 @@ func codexOutputMatchesUpdatePermissionError(output string) bool {
 
 	globalInstallFailed := strings.Contains(output, "global npm install") &&
 		(strings.Contains(output, "fail") || strings.Contains(output, "eacces") || strings.Contains(output, "permission"))
+	// The /usr/lib/node_modules path matches the production Linux failure from
+	// LAB-1553; other global install paths are covered by the generic Codex
+	// "global npm install" failure text above.
 	nodeModulesPermissionDenied := strings.Contains(output, "/usr/lib/node_modules") &&
 		(strings.Contains(output, "eacces") || strings.Contains(output, "permission denied") || strings.Contains(output, "operation was rejected"))
 

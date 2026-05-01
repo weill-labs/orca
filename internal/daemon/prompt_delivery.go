@@ -93,6 +93,9 @@ func (d *Daemon) submitToCodex(ctx context.Context, paneID, prompt string) error
 			return err
 		case promptDeliveryWaitTimedOut:
 			lastErr = err
+			if errors.Is(err, ErrCodexUpdateRequired) {
+				return err
+			}
 		}
 		if attempt == codexWorkingConfirmationAttempts {
 			return lastErr

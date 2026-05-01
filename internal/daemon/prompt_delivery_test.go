@@ -214,6 +214,36 @@ func TestConfirmPromptDeliveryWrapsCodexUpdateRequiredOnNpmPermissionError(t *te
 	}
 }
 
+func TestConfirmPromptDeliveryStopsRetryingWhenIdlePaneShowsCodexUpdateError(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	setLifecyclePromptActiveAfterIdleProbes(deps, 1)
+	deps.amux.captureHistorySequence("pane-1", []PaneCapture{{
+		Content: []string{
+			"Codex global npm install failed while checking for updates",
+			"npm ERR! code EACCES",
+		},
+		CurrentCommand: "codex",
+	}})
+	d := deps.newDaemon(t)
+
+	err := d.confirmPromptDelivery(context.Background(), "pane-1", AgentProfile{Name: "codex"})
+	if err == nil {
+		t.Fatal("confirmPromptDelivery() error = nil, want codex update remediation")
+	}
+	if !errors.Is(err, ErrCodexUpdateRequired) {
+		t.Fatalf("confirmPromptDelivery() error = %v, want ErrCodexUpdateRequired", err)
+	}
+	deps.amux.requireSentKeys(t, "pane-1", nil)
+	if got, want := len(deps.amux.waitContentCalls), 0; got != want {
+		t.Fatalf("waitContent calls = %d, want %d", got, want)
+	}
+	if got, want := len(deps.amux.waitIdleCalls), 1; got != want {
+		t.Fatalf("waitIdle calls = %d, want %d", got, want)
+	}
+}
+
 func TestConfirmPromptDeliveryReturnsExitedPaneError(t *testing.T) {
 	t.Parallel()
 

@@ -1524,6 +1524,7 @@ func TestAppRunParseErrors(t *testing.T) {
 		{name: "status too many args", args: []string{"status", "LAB-690", "extra"}, wantErr: "status accepts at most one issue"},
 		{name: "assign missing issue", args: []string{"assign", "--prompt", "x"}, wantErr: "assign requires ISSUE"},
 		{name: "assign missing prompt", args: []string{"assign", "LAB-690"}, wantErr: "assign requires --prompt"},
+		{name: "refresh codex extra arg", args: []string{"refresh-codex", "codex"}, wantErr: "refresh-codex does not accept positional arguments"},
 		{name: "batch unknown command", args: []string{"batch"}, wantErr: "unknown command \"batch\""},
 		{name: "spawn extra arg", args: []string{"spawn", "extra"}, wantErr: "spawn does not accept positional arguments"},
 		{name: "enqueue missing pr number", args: []string{"enqueue"}, wantErr: "enqueue requires PR_NUMBER"},
