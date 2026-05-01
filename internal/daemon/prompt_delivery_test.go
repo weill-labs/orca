@@ -342,6 +342,53 @@ func TestConfirmPromptDeliveryRetriesPasteCollapseUntilPaneTurnsActive(t *testin
 	}
 }
 
+func TestAssignmentPromptInjectionIsIdempotentForTaskToken(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	d := deps.newDaemon(t)
+	task := Task{
+		Project:   "/tmp/project",
+		Issue:     "LAB-1555",
+		WorkerID:  "worker-01",
+		CreatedAt: deps.clock.Now(),
+	}
+
+	if err := d.sendAssignmentPromptAndEnter(context.Background(), "pane-1", task, "Fix prompt delivery"); err != nil {
+		t.Fatalf("first sendAssignmentPromptAndEnter() error = %v", err)
+	}
+	if err := d.sendAssignmentPromptAndEnter(context.Background(), "pane-1", task, "Fix prompt delivery"); err != nil {
+		t.Fatalf("second sendAssignmentPromptAndEnter() error = %v", err)
+	}
+
+	deps.amux.requireSentKeys(t, "pane-1", []string{"Fix prompt delivery\n"})
+}
+
+func TestAssignmentPromptInjectionRetrySendsOnlyMissingEnter(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.amux.sendKeysResults = []error{nil, errors.New("enter failed")}
+	d := deps.newDaemon(t)
+	task := Task{
+		Project:   "/tmp/project",
+		Issue:     "LAB-1555",
+		WorkerID:  "worker-01",
+		CreatedAt: deps.clock.Now(),
+	}
+
+	err := d.sendAssignmentPromptAndEnter(context.Background(), "pane-1", task, "Fix prompt delivery")
+	if err == nil || !strings.Contains(err.Error(), "enter failed") {
+		t.Fatalf("first sendAssignmentPromptAndEnter() error = %v, want enter failure", err)
+	}
+	deps.amux.requireSentKeys(t, "pane-1", []string{"Fix prompt delivery"})
+
+	if err := d.sendAssignmentPromptAndEnter(context.Background(), "pane-1", task, "Fix prompt delivery"); err != nil {
+		t.Fatalf("second sendAssignmentPromptAndEnter() error = %v", err)
+	}
+	deps.amux.requireSentKeys(t, "pane-1", []string{"Fix prompt delivery\n"})
+}
+
 func TestSendAndConfirmWorkingTreatsStaleWorkingAsUnconfirmed(t *testing.T) {
 	t.Parallel()
 
