@@ -102,8 +102,7 @@ func (d *Daemon) startAssignmentWorker(ctx context.Context, projectPath string, 
 		if err != nil {
 			var phaseErr assignStartupAttemptError
 			if errors.As(err, &phaseErr) && phaseErr.phase == assignStartupPhasePrompt {
-				scrollback := d.captureStartupRetryScrollback(cleanupCtx, pane.ID)
-				err = wrapCodexUpdateRequiredFromScrollback(profile, err, scrollback)
+				err, scrollback := d.classifyAssignStartupError(cleanupCtx, pane.ID, profile, err)
 				if errors.Is(err, ErrCodexUpdateRequired) {
 					return result, err
 				}
@@ -123,8 +122,7 @@ func (d *Daemon) startAssignmentWorker(ctx context.Context, projectPath string, 
 				continue
 			}
 
-			scrollback := d.captureStartupRetryScrollback(cleanupCtx, pane.ID)
-			err = wrapCodexUpdateRequiredFromScrollback(profile, err, scrollback)
+			err, scrollback := d.classifyAssignStartupError(cleanupCtx, pane.ID, profile, err)
 			retryHandshake := shouldRetryAssignStartupHandshake(profile, err)
 			if !retryHandshake {
 				return result, fmt.Errorf("agent handshake: %w", err)
@@ -145,6 +143,11 @@ func (d *Daemon) startAssignmentWorker(ctx context.Context, projectPath string, 
 	}
 
 	return result, fmt.Errorf("assignment startup exhausted after %d attempts", maxAttempts)
+}
+
+func (d *Daemon) classifyAssignStartupError(ctx context.Context, paneID string, profile AgentProfile, err error) (error, []string) {
+	scrollback := d.captureStartupRetryScrollback(ctx, paneID)
+	return wrapCodexUpdateRequiredFromScrollback(profile, err, scrollback), scrollback
 }
 
 func (d *Daemon) assignmentStartupState(projectPath string, clone Clone, task Task, worker Worker, pane Pane) (Task, Worker) {
