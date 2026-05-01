@@ -82,6 +82,12 @@ func (d *Daemon) updateDaemonStatus(ctx context.Context, status string, heartbea
 
 func (d *Daemon) enqueueDaemonStatusUpdate(ctx context.Context, update heartbeatStatusUpdate) {
 	select {
+	case <-ctx.Done():
+		return
+	default:
+	}
+
+	select {
 	case d.statusUpdates <- update:
 		return
 	case <-ctx.Done():
