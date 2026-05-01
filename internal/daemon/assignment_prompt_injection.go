@@ -65,6 +65,8 @@ func (d *Daemon) recordAssignmentPromptInjectionStage(ctx context.Context, paneI
 		assignmentPromptInjectionTokenKey: token,
 		assignmentPromptInjectionStageKey: stage,
 	})
+	// Once prompt text has been sent, metadata errors must not prevent the tail
+	// Enter. Idempotency becomes best-effort if amux cannot store the stage.
 	if err != nil && d.logf != nil {
 		d.logf("record assignment prompt injection stage failed: %v", err)
 	}

@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -387,6 +388,80 @@ func TestAssignmentPromptInjectionRetrySendsOnlyMissingEnter(t *testing.T) {
 		t.Fatalf("second sendAssignmentPromptAndEnter() error = %v", err)
 	}
 	deps.amux.requireSentKeys(t, "pane-1", []string{"Fix prompt delivery\n"})
+}
+
+func TestAssignmentPromptInjectionReturnsMetadataReadErrorBeforeSending(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.amux.metadataErr = errors.New("metadata unavailable")
+	d := deps.newDaemon(t)
+	task := Task{
+		Project:   "/tmp/project",
+		Issue:     "LAB-1555",
+		WorkerID:  "worker-01",
+		CreatedAt: deps.clock.Now(),
+	}
+
+	err := d.sendAssignmentPromptAndEnter(context.Background(), "pane-1", task, "Fix prompt delivery")
+	if err == nil || !strings.Contains(err.Error(), "read assignment prompt metadata: metadata unavailable") {
+		t.Fatalf("sendAssignmentPromptAndEnter() error = %v, want metadata read failure", err)
+	}
+	deps.amux.requireSentKeys(t, "pane-1", nil)
+}
+
+func TestAssignmentPromptInjectionValidationErrors(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	d := deps.newDaemon(t)
+
+	if err := d.sendIdempotentAssignmentPromptCommand(context.Background(), "pane-1", "token", "", "Enter"); err == nil || err.Error() != "prompt is empty" {
+		t.Fatalf("empty prompt error = %v, want prompt is empty", err)
+	}
+	if err := d.sendIdempotentAssignmentPromptCommand(context.Background(), "pane-1", "token", "Fix prompt delivery", " "); err == nil || err.Error() != "command is empty" {
+		t.Fatalf("empty command error = %v, want command is empty", err)
+	}
+	deps.amux.requireSentKeys(t, "pane-1", nil)
+}
+
+func TestAssignmentPromptInjectionLogsMetadataAndSettleFailures(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.amux.setMetadataErr = errors.New("metadata failed")
+	deps.amux.waitIdleErr = errors.New("settle failed")
+	var logs []string
+	d := deps.newDaemonWithOptions(t, func(opts *Options) {
+		opts.Logf = func(format string, args ...any) {
+			logs = append(logs, fmt.Sprintf(format, args...))
+		}
+	})
+	task := Task{
+		Project:   "/tmp/project",
+		Issue:     "LAB-1555",
+		WorkerID:  "worker-01",
+		CreatedAt: deps.clock.Now(),
+	}
+
+	if err := d.sendAssignmentPromptAndEnter(context.Background(), "pane-1", task, "Fix prompt delivery"); err != nil {
+		t.Fatalf("sendAssignmentPromptAndEnter() error = %v", err)
+	}
+
+	deps.amux.requireSentKeys(t, "pane-1", []string{"Fix prompt delivery\n"})
+	requireLogContaining(t, logs, "record assignment prompt injection stage failed: metadata failed")
+	requireLogContaining(t, logs, "assignment prompt settle failed before Enter; sending Enter anyway: settle failed")
+}
+
+func requireLogContaining(t *testing.T, logs []string, want string) {
+	t.Helper()
+
+	for _, log := range logs {
+		if strings.Contains(log, want) {
+			return
+		}
+	}
+	t.Fatalf("logs = %#v, want entry containing %q", logs, want)
 }
 
 func TestSendAndConfirmWorkingTreatsStaleWorkingAsUnconfirmed(t *testing.T) {

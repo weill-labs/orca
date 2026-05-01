@@ -518,6 +518,16 @@ func TestAssignSubmitsCodexPromptWhenHeartbeatIsStale(t *testing.T) {
 	deps.amux.requireSentKeys(t, "pane-1", []string{
 		wrappedCodexPrompt("LAB-1555", "Fix prompt delivery") + "\n",
 	})
+	metadata, err := deps.amux.Metadata(ctx, "pane-1")
+	if err != nil {
+		t.Fatalf("Metadata() error = %v", err)
+	}
+	if _, ok := metadata[assignmentPromptInjectionTokenKey]; ok {
+		t.Fatalf("assignment prompt token metadata still present after confirmation: %#v", metadata)
+	}
+	if _, ok := metadata[assignmentPromptInjectionStageKey]; ok {
+		t.Fatalf("assignment prompt stage metadata still present after confirmation: %#v", metadata)
+	}
 }
 
 func TestAssignRetriesCodexPromptDeliveryAfterPaneReturnsToShell(t *testing.T) {
