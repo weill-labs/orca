@@ -88,12 +88,15 @@ func (d *Daemon) startAssignmentWorker(ctx context.Context, projectPath string, 
 			result.worker = attemptWorker
 			d.emitAssignStartupTransition(ctx, result, profile, attempt, maxAttempts, assignStartupStepHandshakeReady)
 			err = d.withAssignStartupGate(ctx, result, profile, attempt, maxAttempts, func() error {
-				if err := d.sendNormalizedPromptAndEnter(ctx, pane.ID, prompt); err != nil {
+				if err := d.sendAssignmentStartupPrompt(ctx, pane.ID, attemptTask, profile, prompt); err != nil {
 					return assignStartupAttemptError{phase: assignStartupPhasePrompt, err: err}
 				}
 				d.emitAssignStartupTransition(ctx, result, profile, attempt, maxAttempts, assignStartupStepPromptSubmitted)
 				if err := d.confirmPromptDelivery(ctx, pane.ID, profile); err != nil {
 					return assignStartupAttemptError{phase: assignStartupPhasePrompt, err: err}
+				}
+				if strings.EqualFold(profile.Name, "codex") {
+					d.clearAssignmentPromptInjection(ctx, pane.ID)
 				}
 				d.emitAssignStartupTransition(ctx, result, profile, attempt, maxAttempts, assignStartupStepPromptConfirmed)
 				return nil
@@ -148,6 +151,13 @@ func (d *Daemon) startAssignmentWorker(ctx context.Context, projectPath string, 
 func (d *Daemon) classifyAssignStartupError(ctx context.Context, paneID string, profile AgentProfile, err error) (error, []string) {
 	scrollback := d.captureStartupRetryScrollback(ctx, paneID)
 	return wrapCodexUpdateRequiredFromScrollback(profile, err, scrollback), scrollback
+}
+
+func (d *Daemon) sendAssignmentStartupPrompt(ctx context.Context, paneID string, task Task, profile AgentProfile, prompt string) error {
+	if strings.EqualFold(profile.Name, "codex") {
+		return d.sendAssignmentPromptAndEnter(ctx, paneID, task, prompt)
+	}
+	return d.sendNormalizedPromptAndEnter(ctx, paneID, prompt)
 }
 
 func (d *Daemon) assignmentStartupState(projectPath string, clone Clone, task Task, worker Worker, pane Pane) (Task, Worker) {
