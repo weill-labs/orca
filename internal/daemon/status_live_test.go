@@ -75,6 +75,28 @@ func TestProjectStatusWithLiveDaemonKeepsNewerStoredHeartbeat(t *testing.T) {
 	}
 }
 
+func TestProjectStatusWithLiveDaemonSetsHeartbeatWhenNewerThanStored(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 2, 9, 0, 0, 0, time.UTC)
+	d := &Daemon{
+		captureInterval: 5 * time.Second,
+		now:             func() time.Time { return now },
+	}
+	d.lastHeartbeat.Store(now.UnixMilli())
+
+	status := d.projectStatusWithLiveDaemon(state.ProjectStatus{
+		Daemon: &state.DaemonStatus{
+			Status:    daemonStatusRunning,
+			UpdatedAt: now.Add(-time.Second),
+		},
+	})
+
+	if got, want := status.Daemon.UpdatedAt, now; !got.Equal(want) {
+		t.Fatalf("daemon updated_at = %v, want live heartbeat %v", got, want)
+	}
+}
+
 func TestProjectStatusWithLiveDaemonLeavesStatusWithoutHeartbeat(t *testing.T) {
 	t.Parallel()
 
