@@ -73,6 +73,7 @@ type Daemon struct {
 	mergeQueueUpdates    chan MergeQueueUpdate
 	mergeQueueDone       chan struct{}
 	mergeQueueUpdateDone chan struct{}
+	statusUpdateMu       sync.Mutex
 	statusUpdates        chan heartbeatStatusUpdate
 	pollIntervalCh       chan time.Duration
 	monitorRuns          sync.WaitGroup
@@ -137,6 +138,8 @@ func New(opts Options) (*Daemon, error) {
 	}
 	if opts.DaemonStatusWriteTimeout <= 0 {
 		opts.DaemonStatusWriteTimeout = defaultDaemonStatusWriteTimeout
+		// CaptureInterval is resolved above; keep the write timeout within one
+		// heartbeat cycle so status I/O cannot stall multiple heartbeats.
 		if opts.CaptureInterval < opts.DaemonStatusWriteTimeout {
 			opts.DaemonStatusWriteTimeout = opts.CaptureInterval
 		}

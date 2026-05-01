@@ -87,6 +87,11 @@ func (d *Daemon) enqueueDaemonStatusUpdate(ctx context.Context, update heartbeat
 	default:
 	}
 
+	d.statusUpdateMu.Lock()
+	defer d.statusUpdateMu.Unlock()
+
+	// Keep only the latest pending status update and never block the heartbeat
+	// caller on the publisher goroutine.
 	select {
 	case d.statusUpdates <- update:
 		return
