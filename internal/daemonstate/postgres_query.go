@@ -83,17 +83,17 @@ func (s *PostgresStore) ProjectStatus(ctx context.Context, project string) (Proj
 
 func (s *PostgresStore) KnownProjects(ctx context.Context) ([]string, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT project FROM tasks WHERE BTRIM(project) <> ''
+		SELECT project FROM tasks WHERE BTRIM(project) <> '' AND `+postgresHostMatch("host", 1)+`
 		UNION
-		SELECT project FROM workers WHERE BTRIM(project) <> ''
+		SELECT project FROM workers WHERE BTRIM(project) <> '' AND `+postgresHostMatch("host", 1)+`
 		UNION
-		SELECT project FROM clones WHERE BTRIM(project) <> ''
+		SELECT project FROM clones WHERE BTRIM(project) <> '' AND `+postgresHostMatch("host", 1)+`
 		UNION
-		SELECT project FROM daemon_statuses WHERE BTRIM(project) <> ''
+		SELECT project FROM daemon_statuses WHERE BTRIM(project) <> '' AND `+postgresHostMatch("host", 1)+`
 		UNION
 		SELECT project FROM merge_queue WHERE BTRIM(project) <> ''
 		ORDER BY project ASC
-	`)
+	`, s.host)
 	if err != nil {
 		return nil, fmt.Errorf("list known projects: %w", err)
 	}

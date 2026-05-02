@@ -918,6 +918,10 @@ func (s *stubStateStore) TaskStatus(context.Context, string, string) (state.Task
 	return state.TaskStatus{}, state.ErrNotFound
 }
 
+func (s *stubStateStore) KnownProjects(context.Context) ([]string, error) {
+	return nil, nil
+}
+
 func (s *stubStateStore) ListWorkers(context.Context, string) ([]state.Worker, error) {
 	return nil, nil
 }

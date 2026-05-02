@@ -387,17 +387,17 @@ func (s *SQLiteStore) ProjectStatus(ctx context.Context, project string) (Projec
 
 func (s *SQLiteStore) KnownProjects(ctx context.Context) ([]string, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT project FROM tasks WHERE TRIM(project) <> ''
+		SELECT project FROM tasks WHERE TRIM(project) <> '' AND `+sqliteHostMatch("host")+`
 		UNION
-		SELECT project FROM workers WHERE TRIM(project) <> ''
+		SELECT project FROM workers WHERE TRIM(project) <> '' AND `+sqliteHostMatch("host")+`
 		UNION
-		SELECT project FROM clones WHERE TRIM(project) <> ''
+		SELECT project FROM clones WHERE TRIM(project) <> '' AND `+sqliteHostMatch("host")+`
 		UNION
-		SELECT project FROM daemon_statuses WHERE TRIM(project) <> ''
+		SELECT project FROM daemon_statuses WHERE TRIM(project) <> '' AND `+sqliteHostMatch("host")+`
 		UNION
 		SELECT project FROM merge_queue WHERE TRIM(project) <> ''
 		ORDER BY project ASC
-	`)
+	`, s.host, s.host, s.host, s.host)
 	if err != nil {
 		return nil, fmt.Errorf("list known projects: %w", err)
 	}
