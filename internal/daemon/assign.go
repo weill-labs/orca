@@ -273,6 +273,9 @@ func (d *Daemon) validateAssignment(ctx context.Context, projectPath, issue, pro
 }
 
 func (d *Daemon) emitAssignFailure(ctx context.Context, projectPath, issue, workerID, profileName string, clone Clone, pane Pane, prNumber int, err error) {
+	if d.logf != nil && errors.Is(err, ErrCodexUpdateRequired) {
+		d.logf("codex bootstrap remediation required: project=%s issue=%s worker_id=%s agent_profile=%s pane_id=%s remediation=%q error=%v", projectPath, issue, workerID, profileName, pane.ID, CodexRefreshCommand, err)
+	}
 	d.emit(ctx, Event{
 		Time:         d.now(),
 		Type:         EventTaskAssignFailed,

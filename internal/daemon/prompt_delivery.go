@@ -12,11 +12,11 @@ import (
 )
 
 const (
-	codexWorkingText                   = "Working"
-	codexWorkingConfirmationAttempts   = 6
-	codexPromptRetryIdleProbeTime      = 5 * time.Second
-	codexWorkingFreshnessProbeTimeout  = 500 * time.Millisecond
-	codexWorkingFreshnessPollInterval  = 50 * time.Millisecond
+	codexWorkingText                  = "Working"
+	codexWorkingConfirmationAttempts  = 6
+	codexPromptRetryIdleProbeTime     = 5 * time.Second
+	codexWorkingFreshnessProbeTimeout = 500 * time.Millisecond
+	codexWorkingFreshnessPollInterval = 50 * time.Millisecond
 )
 
 var ErrPromptDeliveryNotConfirmed = errors.New("prompt delivery not confirmed")
@@ -93,6 +93,9 @@ func (d *Daemon) submitToCodex(ctx context.Context, paneID, prompt string) error
 			return err
 		case promptDeliveryWaitTimedOut:
 			lastErr = err
+			if errors.Is(err, ErrCodexUpdateRequired) {
+				return err
+			}
 		}
 		if attempt == codexWorkingConfirmationAttempts {
 			return lastErr
@@ -144,12 +147,12 @@ func (d *Daemon) waitForPromptDeliveryIdleOrWorking(ctx context.Context, paneID 
 		return promptDeliveryWaitError, fmt.Errorf("capture prompt delivery state while waiting for idle %s: %w", phase, err)
 	}
 	if promptDeliveryReturnedToShell(profile, snapshot) {
-		return promptDeliveryWaitAgentGone, promptDeliveryFailure(fmt.Sprintf("%s and codex returned to shell", phase), snapshot)
+		return promptDeliveryWaitAgentGone, promptDeliveryFailure(profile, fmt.Sprintf("%s and codex returned to shell", phase), snapshot)
 	}
 	if snapshot.Exited {
-		return promptDeliveryWaitAgentGone, promptDeliveryFailure(fmt.Sprintf("%s and pane exited", phase), snapshot)
+		return promptDeliveryWaitAgentGone, promptDeliveryFailure(profile, fmt.Sprintf("%s and pane exited", phase), snapshot)
 	}
-	return promptDeliveryWaitTimedOut, promptDeliveryFailure(fmt.Sprintf("pane remained idle %s", phase), snapshot)
+	return promptDeliveryWaitTimedOut, promptDeliveryFailure(profile, fmt.Sprintf("pane remained idle %s", phase), snapshot)
 }
 
 func (d *Daemon) waitForPromptDeliveryMarker(ctx context.Context, paneID string, profile AgentProfile, timeout time.Duration, phase string) (promptDeliveryWaitState, error) {
@@ -166,12 +169,12 @@ func (d *Daemon) waitForPromptDeliveryMarker(ctx context.Context, paneID string,
 			return promptDeliveryWaitError, fmt.Errorf("capture pane while waiting for %q %s: %w", codexWorkingText, phase, captureErr)
 		}
 		if promptDeliveryReturnedToShell(profile, snapshot) {
-			return promptDeliveryWaitAgentGone, promptDeliveryFailure(fmt.Sprintf("%s and codex returned to shell", phase), snapshot)
+			return promptDeliveryWaitAgentGone, promptDeliveryFailure(profile, fmt.Sprintf("%s and codex returned to shell", phase), snapshot)
 		}
 		if snapshot.Exited {
-			return promptDeliveryWaitAgentGone, promptDeliveryFailure(fmt.Sprintf("%s and pane exited", phase), snapshot)
+			return promptDeliveryWaitAgentGone, promptDeliveryFailure(profile, fmt.Sprintf("%s and pane exited", phase), snapshot)
 		}
-		return promptDeliveryWaitTimedOut, promptDeliveryFailure(fmt.Sprintf("wait for %q %s timed out", codexWorkingText, phase), snapshot)
+		return promptDeliveryWaitTimedOut, promptDeliveryFailure(profile, fmt.Sprintf("wait for %q %s timed out", codexWorkingText, phase), snapshot)
 	}
 	return promptDeliveryWaitObserved, nil
 }
@@ -191,13 +194,13 @@ func (d *Daemon) waitForFreshPromptDeliveryMarker(ctx context.Context, paneID st
 			return promptDeliveryWaitObserved, nil
 		}
 		if promptDeliveryReturnedToShell(profile, snapshot) {
-			return promptDeliveryWaitAgentGone, promptDeliveryFailure(fmt.Sprintf("%s and codex returned to shell", phase), snapshot)
+			return promptDeliveryWaitAgentGone, promptDeliveryFailure(profile, fmt.Sprintf("%s and codex returned to shell", phase), snapshot)
 		}
 		if snapshot.Exited {
-			return promptDeliveryWaitAgentGone, promptDeliveryFailure(fmt.Sprintf("%s and pane exited", phase), snapshot)
+			return promptDeliveryWaitAgentGone, promptDeliveryFailure(profile, fmt.Sprintf("%s and pane exited", phase), snapshot)
 		}
 		if !d.now().Before(deadline) {
-			return promptDeliveryWaitTimedOut, promptDeliveryFailure(fmt.Sprintf("wait for fresh %q %s timed out", codexWorkingText, phase), snapshot)
+			return promptDeliveryWaitTimedOut, promptDeliveryFailure(profile, fmt.Sprintf("wait for fresh %q %s timed out", codexWorkingText, phase), snapshot)
 		}
 
 		sleepFor := codexWorkingFreshnessPollInterval
@@ -205,7 +208,7 @@ func (d *Daemon) waitForFreshPromptDeliveryMarker(ctx context.Context, paneID st
 			sleepFor = remaining
 		}
 		if sleepFor <= 0 {
-			return promptDeliveryWaitTimedOut, promptDeliveryFailure(fmt.Sprintf("wait for fresh %q %s timed out", codexWorkingText, phase), snapshot)
+			return promptDeliveryWaitTimedOut, promptDeliveryFailure(profile, fmt.Sprintf("wait for fresh %q %s timed out", codexWorkingText, phase), snapshot)
 		}
 		if err := d.sleep(ctx, sleepFor); err != nil {
 			return promptDeliveryWaitError, fmt.Errorf("wait for fresh %q %s: %w", codexWorkingText, phase, err)
@@ -279,6 +282,7 @@ func promptDeliveryReturnedToShell(profile AgentProfile, snapshot PaneCapture) b
 	}
 }
 
-func promptDeliveryFailure(message string, snapshot PaneCapture) error {
-	return fmt.Errorf("%w: %s: %s", ErrPromptDeliveryNotConfirmed, message, describePaneSnapshot(snapshot))
+func promptDeliveryFailure(profile AgentProfile, message string, snapshot PaneCapture) error {
+	err := fmt.Errorf("%w: %s: %s", ErrPromptDeliveryNotConfirmed, message, describePaneSnapshot(snapshot))
+	return wrapCodexUpdateRequiredFromOutput(profile, err, snapshot.Output())
 }

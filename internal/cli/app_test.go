@@ -1371,6 +1371,36 @@ func TestAppRunAssignDefaultsCallerPaneFromAMUXPaneEnv(t *testing.T) {
 	}
 }
 
+func TestAppRunRefreshCodexPrintsRemediationCommand(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	app := New(Options{
+		Daemon:  &fakeDaemon{},
+		State:   &fakeState{},
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		Version: "build-123",
+		Cwd: func() (string, error) {
+			return newRepoRoot(t), nil
+		},
+	})
+
+	if err := app.Run(context.Background(), []string{"refresh-codex"}); err != nil {
+		t.Fatalf("Run(refresh-codex) error = %v", err)
+	}
+	if got := stdout.String(); !strings.Contains(got, daemon.CodexRefreshCommand) {
+		t.Fatalf("stdout = %q, want %q", got, daemon.CodexRefreshCommand)
+	}
+	if strings.Contains(stdout.String(), "running") || strings.Contains(stdout.String(), "sudo executed") {
+		t.Fatalf("stdout = %q, want printable command only", stdout.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+}
+
 func TestHelpTextOmitsLeadPaneFromStartUsage(t *testing.T) {
 	t.Parallel()
 
@@ -1396,6 +1426,7 @@ func allSubcommandHelpCases() []subcommandHelpCase {
 		{command: "status", wantUsage: "usage: orca status"},
 		{command: "migrate-state", wantUsage: "usage: orca migrate-state"},
 		{command: "metrics", wantUsage: "usage: orca metrics"},
+		{command: "refresh-codex", wantUsage: "usage: orca refresh-codex"},
 		{command: "assign", wantUsage: "usage: orca assign ISSUE"},
 		{command: "spawn", wantUsage: "usage: orca spawn"},
 		{command: "enqueue", wantUsage: "usage: orca enqueue PR_NUMBER"},
@@ -1493,6 +1524,7 @@ func TestAppRunParseErrors(t *testing.T) {
 		{name: "status too many args", args: []string{"status", "LAB-690", "extra"}, wantErr: "status accepts at most one issue"},
 		{name: "assign missing issue", args: []string{"assign", "--prompt", "x"}, wantErr: "assign requires ISSUE"},
 		{name: "assign missing prompt", args: []string{"assign", "LAB-690"}, wantErr: "assign requires --prompt"},
+		{name: "refresh codex extra arg", args: []string{"refresh-codex", "codex"}, wantErr: "refresh-codex does not accept positional arguments"},
 		{name: "batch unknown command", args: []string{"batch"}, wantErr: "unknown command \"batch\""},
 		{name: "spawn extra arg", args: []string{"spawn", "extra"}, wantErr: "spawn does not accept positional arguments"},
 		{name: "enqueue missing pr number", args: []string{"enqueue"}, wantErr: "enqueue requires PR_NUMBER"},

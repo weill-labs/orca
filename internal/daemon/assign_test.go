@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"slices"
 	"strings"
@@ -581,6 +582,72 @@ func TestAssignRollsBackWhenPromptDeliveryCheckReturnsHardError(t *testing.T) {
 	}
 	if got, want := deps.amux.killCalls, []string{"pane-1"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("kill calls = %#v, want %#v", got, want)
+	}
+}
+
+func TestAssignSurfacesCodexUpdateRemediationFromPromptDeliveryFailure(t *testing.T) {
+	t.Parallel()
+
+	var logs []string
+	deps := newTestDeps(t)
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	deps.amux.spawnPanes = []Pane{{ID: "pane-1", Name: "worker-1"}}
+	deps.amux.waitContentResults = []error{
+		amuxapi.ErrWaitContentTimeout,
+		amuxapi.ErrWaitContentTimeout,
+	}
+	deps.amux.captureSequence("pane-1", []string{"OpenAI Codex\n›"})
+	deps.amux.capturePaneSequence("pane-1", []PaneCapture{{
+		Content: []string{
+			"Checking for Codex updates",
+			"npm ERR! code EACCES",
+			"npm ERR! Error: EACCES: permission denied, mkdir '/usr/lib/node_modules/@openai'",
+		},
+		CurrentCommand: "bash",
+	}})
+	d := deps.newDaemonWithOptions(t, func(opts *Options) {
+		opts.Logf = func(format string, args ...any) {
+			logs = append(logs, fmt.Sprintf(format, args...))
+		}
+	})
+	ctx := context.Background()
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	err := d.Assign(ctx, "LAB-1553", "Surface Codex remediation", "codex")
+	if err == nil {
+		t.Fatal("Assign() error = nil, want codex update remediation")
+	}
+	if !errors.Is(err, ErrCodexUpdateRequired) {
+		t.Fatalf("Assign() error = %v, want ErrCodexUpdateRequired", err)
+	}
+	for _, want := range []string{
+		CodexRefreshCommand,
+		"/usr/lib/node_modules",
+		"codex self-update failed",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("Assign() error = %v, want substring %q", err, want)
+		}
+	}
+
+	event := requireAssignFailureEvent(t, deps, CodexRefreshCommand)
+	if got, want := event.AgentProfile, "codex"; got != want {
+		t.Fatalf("assign failure agent profile = %q, want %q", got, want)
+	}
+	if got, want := event.PaneID, "pane-1"; got != want {
+		t.Fatalf("assign failure pane id = %q, want %q", got, want)
+	}
+	if got, want := deps.amux.killCalls, []string{"pane-1"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("kill calls = %#v, want %#v", got, want)
+	}
+	if got := strings.Join(logs, "\n"); !strings.Contains(got, "agent_profile=codex") || !strings.Contains(got, "pane_id=pane-1") || !strings.Contains(got, CodexRefreshCommand) {
+		t.Fatalf("daemon log = %q, want agent, pane, and remediation context", got)
 	}
 }
 

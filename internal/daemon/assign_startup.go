@@ -102,10 +102,14 @@ func (d *Daemon) startAssignmentWorker(ctx context.Context, projectPath string, 
 		if err != nil {
 			var phaseErr assignStartupAttemptError
 			if errors.As(err, &phaseErr) && phaseErr.phase == assignStartupPhasePrompt {
+				err, scrollback := d.classifyAssignStartupError(cleanupCtx, pane.ID, profile, err)
+				if errors.Is(err, ErrCodexUpdateRequired) {
+					return result, err
+				}
 				if !shouldRetryAssignStartupPromptDelivery(profile, err) {
 					return result, err
 				}
-				d.emitAssignPromptDeliveryRetry(cleanupCtx, result, profile, attempt, maxAttempts, err, d.captureStartupRetryScrollback(cleanupCtx, pane.ID))
+				d.emitAssignPromptDeliveryRetry(cleanupCtx, result, profile, attempt, maxAttempts, err, scrollback)
 				if attempt == maxAttempts {
 					return result, fmt.Errorf("prompt delivery failed after %d attempts: %w", maxAttempts, err)
 				}
@@ -118,11 +122,12 @@ func (d *Daemon) startAssignmentWorker(ctx context.Context, projectPath string, 
 				continue
 			}
 
+			err, scrollback := d.classifyAssignStartupError(cleanupCtx, pane.ID, profile, err)
 			retryHandshake := shouldRetryAssignStartupHandshake(profile, err)
 			if !retryHandshake {
 				return result, fmt.Errorf("agent handshake: %w", err)
 			}
-			d.emitAssignHandshakeRetry(cleanupCtx, result, profile, attempt, maxAttempts, err, d.captureStartupRetryScrollback(cleanupCtx, pane.ID))
+			d.emitAssignHandshakeRetry(cleanupCtx, result, profile, attempt, maxAttempts, err, scrollback)
 			if attempt == maxAttempts {
 				return result, fmt.Errorf("agent handshake failed after %d attempts: %w", maxAttempts, err)
 			}
@@ -138,6 +143,11 @@ func (d *Daemon) startAssignmentWorker(ctx context.Context, projectPath string, 
 	}
 
 	return result, fmt.Errorf("assignment startup exhausted after %d attempts", maxAttempts)
+}
+
+func (d *Daemon) classifyAssignStartupError(ctx context.Context, paneID string, profile AgentProfile, err error) (error, []string) {
+	scrollback := d.captureStartupRetryScrollback(ctx, paneID)
+	return wrapCodexUpdateRequiredFromScrollback(profile, err, scrollback), scrollback
 }
 
 func (d *Daemon) assignmentStartupState(projectPath string, clone Clone, task Task, worker Worker, pane Pane) (Task, Worker) {
@@ -173,11 +183,11 @@ func (d *Daemon) assignmentStartupState(projectPath string, clone Clone, task Ta
 }
 
 func shouldRetryAssignStartupHandshake(profile AgentProfile, err error) bool {
-	return strings.EqualFold(profile.Name, "codex") && errors.Is(err, ErrAgentStartupNotReady)
+	return strings.EqualFold(profile.Name, "codex") && !errors.Is(err, ErrCodexUpdateRequired) && errors.Is(err, ErrAgentStartupNotReady)
 }
 
 func shouldRetryAssignStartupPromptDelivery(profile AgentProfile, err error) bool {
-	return strings.EqualFold(profile.Name, "codex") && errors.Is(err, ErrPromptDeliveryNotConfirmed)
+	return strings.EqualFold(profile.Name, "codex") && !errors.Is(err, ErrCodexUpdateRequired) && errors.Is(err, ErrPromptDeliveryNotConfirmed)
 }
 
 func (d *Daemon) captureStartupRetryScrollback(ctx context.Context, paneID string) []string {
