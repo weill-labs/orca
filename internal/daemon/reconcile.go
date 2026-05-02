@@ -224,7 +224,7 @@ func (d *Daemon) reconcileTaskPRInfo(ctx context.Context, task Task) (reconcileP
 	}
 
 	if info.number > 0 {
-		state, err := d.reconcilePRStateForNumber(ctx, task.Project, info.number)
+		state, err := d.reconcilePRStateForNumber(ctx, prProjectForTask(task), info.number)
 		if err != nil {
 			return reconcilePRInfo{}, err
 		}
@@ -237,7 +237,7 @@ func (d *Daemon) reconcileTaskPRInfo(ctx context.Context, task Task) (reconcileP
 		branch = strings.TrimSpace(task.Issue)
 	}
 	if branch != "" {
-		number, merged, err := d.lookupOpenOrMergedPRNumber(ctx, task.Project, branch)
+		number, merged, err := d.lookupOpenOrMergedPRNumber(ctx, prProjectForTask(task), branch)
 		if err != nil {
 			return reconcilePRInfo{}, err
 		}
@@ -253,7 +253,7 @@ func (d *Daemon) reconcileTaskPRInfo(ctx context.Context, task Task) (reconcileP
 		}
 	}
 
-	number, discoveredBranch, err := d.findPRByIssueID(ctx, task.Project, task.Issue)
+	number, discoveredBranch, err := d.findPRByIssueID(ctx, prProjectForTask(task), task.Issue)
 	if err != nil {
 		return reconcilePRInfo{}, err
 	}
@@ -261,7 +261,7 @@ func (d *Daemon) reconcileTaskPRInfo(ctx context.Context, task Task) (reconcileP
 		return info, nil
 	}
 
-	state, err := d.reconcilePRStateForNumber(ctx, task.Project, number)
+	state, err := d.reconcilePRStateForNumber(ctx, prProjectForTask(task), number)
 	if err != nil {
 		return reconcilePRInfo{}, err
 	}

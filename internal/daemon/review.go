@@ -115,7 +115,7 @@ func (d *Daemon) checkTaskReviewPoll(ctx context.Context, active ActiveAssignmen
 		return update
 	}
 
-	payload, ok, err := d.lookupPRReviews(ctx, active.Task.Project, active.Task.PRNumber)
+	payload, ok, err := d.lookupPRReviews(ctx, prProjectForTask(active.Task), active.Task.PRNumber)
 	if err != nil {
 		d.appendGitHubRateLimitEvent(&update, profile, err)
 		return traceAndReturn(nil, 0, reviewPollIdleNotChecked, "lookup_reviews_error", false)
@@ -141,7 +141,7 @@ func (d *Daemon) checkTaskReviewPoll(ctx context.Context, active ActiveAssignmen
 		updatedAt:        payload.UpdatedAt,
 	}
 	if reviewPollNeedsInlineCommentLookup(previousReviewState, nextReviewState, payload) {
-		reviewComments, err := d.lookupPRReviewComments(ctx, active.Task.Project, active.Task.PRNumber)
+		reviewComments, err := d.lookupPRReviewComments(ctx, prProjectForTask(active.Task), active.Task.PRNumber)
 		if err != nil {
 			d.appendGitHubRateLimitEvent(&update, profile, err)
 			return traceAndReturn(nil, 0, reviewPollIdleNotChecked, "lookup_review_comments_error", false)

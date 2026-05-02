@@ -1052,6 +1052,10 @@ func (f *fakeStore) TaskStatus(_ context.Context, _, _ string) (state.TaskStatus
 	return state.TaskStatus{}, nil
 }
 
+func (f *fakeStore) KnownProjects(context.Context) ([]string, error) {
+	return nil, nil
+}
+
 func (f *fakeStore) ListWorkers(_ context.Context, _ string) ([]state.Worker, error) {
 	return nil, nil
 }

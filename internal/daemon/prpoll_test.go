@@ -861,6 +861,9 @@ func TestPRPollDiscoversAndPollsPRFromDifferentKnownProject(t *testing.T) {
 	if got, want := task.PRNumber, prNumber; got != want {
 		t.Fatalf("task.PRNumber = %d, want %d", got, want)
 	}
+	if got, want := task.PRRepo, prProject; got != want {
+		t.Fatalf("task.PRRepo = %q, want %q", got, want)
+	}
 	worker, ok := deps.state.worker("pane-1")
 	if !ok {
 		t.Fatal("worker missing after poll")

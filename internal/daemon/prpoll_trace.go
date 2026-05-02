@@ -50,6 +50,9 @@ func formatPRPollTraceMessage(active ActiveAssignment, action string, err error)
 		active.Task.PRNumber,
 		strings.TrimSpace(action),
 	)
+	if prRepo := strings.TrimSpace(active.Task.PRRepo); prRepo != "" {
+		message += fmt.Sprintf(" pr_repo=%q", prRepo)
+	}
 	if err != nil {
 		message += fmt.Sprintf(" error=%q", err)
 	}

@@ -61,7 +61,11 @@ func (d *Daemon) checkTaskPRPoll(ctx context.Context, active ActiveAssignment) (
 	profile := AgentProfile{Name: active.Task.AgentProfile}
 	traceAction := "poll_complete"
 	var traceErr error
+	prRepoDriftDetected := false
 	defer func() {
+		if prRepoDriftDetected && traceErr == nil {
+			traceAction = "pr_repo_drift_detected"
+		}
 		d.tracePRPoll(&update, profile, traceAction, traceErr)
 	}()
 
@@ -84,7 +88,8 @@ func (d *Daemon) checkTaskPRPoll(ctx context.Context, active ActiveAssignment) (
 	}
 
 	if update.Active.Task.PRNumber == 0 {
-		prNumber, err := d.lookupPRNumber(ctx, update.Active.Task.Project, update.Active.Task.Branch)
+		prLookupProject := prProjectForTask(update.Active.Task)
+		prNumber, err := d.lookupPRNumber(ctx, prLookupProject, update.Active.Task.Branch)
 		if err != nil {
 			traceAction = "lookup_pr_error"
 			traceErr = err
@@ -93,7 +98,7 @@ func (d *Daemon) checkTaskPRPoll(ctx context.Context, active ActiveAssignment) (
 		}
 		if prNumber == 0 {
 			discoveredBranch := ""
-			prNumber, discoveredBranch, err = d.findPRByIssueID(ctx, update.Active.Task.Project, update.Active.Task.Issue)
+			prNumber, discoveredBranch, err = d.findPRByIssueID(ctx, prLookupProject, update.Active.Task.Issue)
 			if err != nil {
 				traceAction = "find_pr_by_issue_error"
 				traceErr = err
@@ -102,6 +107,20 @@ func (d *Daemon) checkTaskPRPoll(ctx context.Context, active ActiveAssignment) (
 			}
 			if prNumber > 0 {
 				d.recordDiscoveredBranch(&update, discoveredBranch, now)
+			}
+		}
+		if prNumber == 0 {
+			var prProject string
+			prProject, prNumber, err = d.findPRRepoDrift(ctx, update.Active.Task, prLookupProject)
+			if err != nil {
+				traceAction = "find_pr_repo_drift_error"
+				traceErr = err
+				d.appendGitHubRateLimitEvent(&update, profile, err)
+				return update
+			}
+			if prNumber > 0 {
+				update.Active.Task.PRRepo = prProject
+				prRepoDriftDetected = true
 			}
 		}
 		if prNumber > 0 {
@@ -225,7 +244,7 @@ func (d *Daemon) resolvePRTerminalState(ctx context.Context, update *TaskStateUp
 		return false, nil
 	}
 
-	state, err := d.lookupPRTerminalState(ctx, update.Active.Task.Project, update.Active.Task.PRNumber)
+	state, err := d.lookupPRTerminalState(ctx, prProjectForTask(update.Active.Task), update.Active.Task.PRNumber)
 	if err != nil {
 		return false, err
 	}
@@ -296,4 +315,84 @@ func (d *Daemon) recordDiscoveredBranch(update *TaskStateUpdate, branch string, 
 	update.PaneMetadata = mergeMetadata(update.PaneMetadata, map[string]string{
 		"branch": branch,
 	})
+}
+
+func prProjectForTask(task Task) string {
+	if project := strings.TrimSpace(task.PRRepo); project != "" {
+		return project
+	}
+	return strings.TrimSpace(task.Project)
+}
+
+func (d *Daemon) findPRRepoDrift(ctx context.Context, task Task, alreadyCheckedProject string) (string, int, error) {
+	branch := strings.TrimSpace(task.Branch)
+	if !nonTrivialPRLookupBranch(branch) {
+		return "", 0, nil
+	}
+
+	projects, err := d.knownPRLookupProjects(ctx, alreadyCheckedProject)
+	if err != nil {
+		return "", 0, err
+	}
+
+	type match struct {
+		project string
+		number  int
+	}
+	matches := make([]match, 0, 1)
+	for _, project := range projects {
+		if project == alreadyCheckedProject {
+			continue
+		}
+		prNumber, err := d.lookupPRNumber(ctx, project, branch)
+		if err != nil {
+			return "", 0, err
+		}
+		if prNumber > 0 {
+			matches = append(matches, match{project: project, number: prNumber})
+		}
+	}
+
+	if len(matches) != 1 {
+		return "", 0, nil
+	}
+	return matches[0].project, matches[0].number, nil
+}
+
+func (d *Daemon) knownPRLookupProjects(ctx context.Context, preferredProject string) ([]string, error) {
+	seen := make(map[string]bool)
+	projects := make([]string, 0)
+	add := func(project string) {
+		project = strings.TrimSpace(project)
+		if project == "" || seen[project] {
+			return
+		}
+		seen[project] = true
+		projects = append(projects, project)
+	}
+
+	add(preferredProject)
+	add(d.project)
+
+	known, err := d.state.KnownProjects(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, project := range known {
+		add(project)
+	}
+	return projects, nil
+}
+
+func nonTrivialPRLookupBranch(branch string) bool {
+	branch = strings.TrimSpace(branch)
+	if len(branch) < 4 {
+		return false
+	}
+	switch strings.ToLower(branch) {
+	case "main", "master", "develop", "dev", "head":
+		return false
+	default:
+		return true
+	}
 }

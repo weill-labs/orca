@@ -12,6 +12,7 @@ var ErrNotFound = errors.New("state: not found")
 type Reader interface {
 	ProjectStatus(ctx context.Context, project string) (ProjectStatus, error)
 	TaskStatus(ctx context.Context, project, issue string) (TaskStatus, error)
+	KnownProjects(ctx context.Context) ([]string, error)
 	ListWorkers(ctx context.Context, project string) ([]Worker, error)
 	ListClones(ctx context.Context, project string) ([]Clone, error)
 	Events(ctx context.Context, project string, afterID int64) (<-chan Event, <-chan error)
@@ -81,6 +82,7 @@ type Task struct {
 	ClonePath     string    `json:"clone_path,omitempty"`
 	Branch        string    `json:"branch,omitempty"`
 	PRNumber      *int      `json:"pr_number,omitempty"`
+	PRRepo        string    `json:"pr_repo,omitempty"`
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
 }

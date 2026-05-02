@@ -71,8 +71,8 @@ func (s *PostgresStore) UpsertTask(ctx context.Context, project string, task Tas
 	}
 
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO tasks(project, issue, host, status, state, agent, prompt, caller_pane, worker_id, clone_path, branch, pr_number, created_at, updated_at)
-		VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+		INSERT INTO tasks(project, issue, host, status, state, agent, prompt, caller_pane, worker_id, clone_path, branch, pr_number, pr_repo, created_at, updated_at)
+		VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 		ON CONFLICT(project, issue) DO UPDATE SET
 			host = excluded.host,
 			status = excluded.status,
@@ -84,8 +84,9 @@ func (s *PostgresStore) UpsertTask(ctx context.Context, project string, task Tas
 			clone_path = excluded.clone_path,
 			branch = excluded.branch,
 			pr_number = excluded.pr_number,
+			pr_repo = excluded.pr_repo,
 			updated_at = excluded.updated_at
-	`, project, task.Issue, s.host, task.Status, task.State, task.Agent, task.Prompt, task.CallerPane, task.WorkerID, task.ClonePath, task.Branch, prNumber, normalizeTime(task.CreatedAt), normalizeTime(task.UpdatedAt))
+	`, project, task.Issue, s.host, task.Status, task.State, task.Agent, task.Prompt, task.CallerPane, task.WorkerID, task.ClonePath, task.Branch, prNumber, task.PRRepo, normalizeTime(task.CreatedAt), normalizeTime(task.UpdatedAt))
 	if err != nil {
 		return fmt.Errorf("upsert task: %w", err)
 	}
@@ -252,8 +253,8 @@ func (s *PostgresStore) ClaimTask(ctx context.Context, project string, task Task
 	}()
 
 	tag, err := tx.Exec(ctx, `
-		INSERT INTO tasks(project, issue, host, status, state, agent, prompt, caller_pane, worker_id, clone_path, branch, pr_number, created_at, updated_at)
-		VALUES($1, $2, $3, $4, $5, $6, $7, $8, '', '', $9, NULL, $10, $11)
+		INSERT INTO tasks(project, issue, host, status, state, agent, prompt, caller_pane, worker_id, clone_path, branch, pr_number, pr_repo, created_at, updated_at)
+		VALUES($1, $2, $3, $4, $5, $6, $7, $8, '', '', $9, NULL, '', $10, $11)
 		ON CONFLICT(project, issue) DO NOTHING
 	`, project, task.Issue, s.host, task.Status, task.State, task.Agent, task.Prompt, task.CallerPane, task.Branch, normalizeTime(task.CreatedAt), normalizeTime(task.UpdatedAt))
 	if err != nil {
@@ -267,7 +268,7 @@ func (s *PostgresStore) ClaimTask(ctx context.Context, project string, task Task
 	}
 
 	row := tx.QueryRow(ctx, `
-		SELECT t.issue, t.status, t.state, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.created_at, t.updated_at
+		SELECT t.issue, t.status, t.state, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.pr_repo, t.created_at, t.updated_at
 		FROM tasks t
 		LEFT JOIN workers w
 			ON w.project = t.project
@@ -286,7 +287,7 @@ func (s *PostgresStore) ClaimTask(ctx context.Context, project string, task Task
 
 	if _, err := tx.Exec(ctx, `
 		UPDATE tasks
-		SET host = $1, status = $2, state = $3, agent = $4, prompt = $5, caller_pane = $6, worker_id = '', clone_path = '', branch = $7, pr_number = NULL, updated_at = $8
+		SET host = $1, status = $2, state = $3, agent = $4, prompt = $5, caller_pane = $6, worker_id = '', clone_path = '', branch = $7, pr_number = NULL, pr_repo = '', updated_at = $8
 		WHERE project = $9 AND issue = $10
 	`, s.host, task.Status, task.State, task.Agent, task.Prompt, task.CallerPane, task.Branch, normalizeTime(task.UpdatedAt), project, task.Issue); err != nil {
 		return nil, fmt.Errorf("update claimed task: %w", err)

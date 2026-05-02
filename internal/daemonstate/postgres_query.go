@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -78,6 +79,41 @@ func (s *PostgresStore) ProjectStatus(ctx context.Context, project string) (Proj
 	}
 
 	return status, nil
+}
+
+func (s *PostgresStore) KnownProjects(ctx context.Context) ([]string, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT project FROM tasks WHERE BTRIM(project) <> ''
+		UNION
+		SELECT project FROM workers WHERE BTRIM(project) <> ''
+		UNION
+		SELECT project FROM clones WHERE BTRIM(project) <> ''
+		UNION
+		SELECT project FROM daemon_statuses WHERE BTRIM(project) <> ''
+		UNION
+		SELECT project FROM merge_queue WHERE BTRIM(project) <> ''
+		ORDER BY project ASC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("list known projects: %w", err)
+	}
+	defer rows.Close()
+
+	projects := make([]string, 0)
+	for rows.Next() {
+		var project string
+		if err := rows.Scan(&project); err != nil {
+			return nil, fmt.Errorf("scan known project: %w", err)
+		}
+		project = strings.TrimSpace(project)
+		if project != "" {
+			projects = append(projects, project)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate known projects: %w", err)
+	}
+	return projects, nil
 }
 
 func (s *PostgresStore) ProjectStatusAllHosts(ctx context.Context, project string) (ProjectStatus, error) {
@@ -339,7 +375,7 @@ func (s *PostgresStore) NonTerminalTasks(ctx context.Context, project string) ([
 	}
 
 	rows, err := s.pool.Query(ctx, `
-		SELECT t.issue, t.status, t.state, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.created_at, t.updated_at
+		SELECT t.issue, t.status, t.state, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.pr_repo, t.created_at, t.updated_at
 		FROM tasks t
 		LEFT JOIN workers w
 			ON w.project = t.project
@@ -460,7 +496,7 @@ func (s *PostgresStore) ActiveAssignments(ctx context.Context, project string) (
 
 	rows, err := s.pool.Query(ctx, `
 		SELECT
-			t.issue, t.status, t.state, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.created_at, t.updated_at,
+			t.issue, t.status, t.state, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.pr_repo, t.created_at, t.updated_at,
 			w.worker_id, w.current_pane_id, w.agent_profile, w.state, w.issue, w.clone_path, w.last_review_count, w.last_inline_review_comment_count, w.last_issue_comment_count, w.last_issue_comment_watermark, w.last_review_updated_at, w.review_nudge_count, w.review_approved, w.last_ci_state, w.ci_nudge_count, w.ci_failure_poll_count, w.ci_escalated, w.last_mergeable_state, w.nudge_count, w.last_capture, w.last_activity_at, w.last_pr_number, w.last_push_at, w.last_pr_poll_at, w.restart_count, w.first_crash_at, w.created_at, w.last_seen_at
 		FROM tasks t
 		INNER JOIN workers w
@@ -495,7 +531,7 @@ func (s *PostgresStore) ActiveAssignmentByIssue(ctx context.Context, project, is
 	query := `
 		SELECT
 			t.project,
-			t.issue, t.status, t.state, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.created_at, t.updated_at,
+			t.issue, t.status, t.state, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.pr_repo, t.created_at, t.updated_at,
 			w.worker_id, w.current_pane_id, w.agent_profile, w.state, w.issue, w.clone_path, w.last_review_count, w.last_inline_review_comment_count, w.last_issue_comment_count, w.last_issue_comment_watermark, w.last_review_updated_at, w.review_nudge_count, w.review_approved, w.last_ci_state, w.ci_nudge_count, w.ci_failure_poll_count, w.ci_escalated, w.last_mergeable_state, w.nudge_count, w.last_capture, w.last_activity_at, w.last_pr_number, w.last_push_at, w.last_pr_poll_at, w.restart_count, w.first_crash_at, w.created_at, w.last_seen_at
 		FROM tasks t
 		INNER JOIN workers w
@@ -525,7 +561,7 @@ func (s *PostgresStore) ActiveAssignmentByBranch(ctx context.Context, project, b
 	query := `
 		SELECT
 			t.project,
-			t.issue, t.status, t.state, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.created_at, t.updated_at,
+			t.issue, t.status, t.state, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.pr_repo, t.created_at, t.updated_at,
 			w.worker_id, w.current_pane_id, w.agent_profile, w.state, w.issue, w.clone_path, w.last_review_count, w.last_inline_review_comment_count, w.last_issue_comment_count, w.last_issue_comment_watermark, w.last_review_updated_at, w.review_nudge_count, w.review_approved, w.last_ci_state, w.ci_nudge_count, w.ci_failure_poll_count, w.ci_escalated, w.last_mergeable_state, w.nudge_count, w.last_capture, w.last_activity_at, w.last_pr_number, w.last_push_at, w.last_pr_poll_at, w.restart_count, w.first_crash_at, w.created_at, w.last_seen_at
 		FROM tasks t
 		INNER JOIN workers w
@@ -556,7 +592,7 @@ func (s *PostgresStore) ActiveAssignmentByPRNumber(ctx context.Context, project 
 	query := `
 		SELECT
 			t.project,
-			t.issue, t.status, t.state, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.created_at, t.updated_at,
+			t.issue, t.status, t.state, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.pr_repo, t.created_at, t.updated_at,
 			w.worker_id, w.current_pane_id, w.agent_profile, w.state, w.issue, w.clone_path, w.last_review_count, w.last_inline_review_comment_count, w.last_issue_comment_count, w.last_issue_comment_watermark, w.last_review_updated_at, w.review_nudge_count, w.review_approved, w.last_ci_state, w.ci_nudge_count, w.ci_failure_poll_count, w.ci_escalated, w.last_mergeable_state, w.nudge_count, w.last_capture, w.last_activity_at, w.last_pr_number, w.last_push_at, w.last_pr_poll_at, w.restart_count, w.first_crash_at, w.created_at, w.last_seen_at
 		FROM tasks t
 		INNER JOIN workers w
@@ -663,7 +699,7 @@ func (s *PostgresStore) lookupTask(ctx context.Context, project, issue string) (
 		query += `		t.project,`
 	}
 	query += `
-			t.issue, t.status, t.state, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.created_at, t.updated_at
+			t.issue, t.status, t.state, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.pr_repo, t.created_at, t.updated_at
 		FROM tasks t
 		LEFT JOIN workers w
 			ON w.project = t.project
@@ -697,7 +733,7 @@ func (s *PostgresStore) listTasks(ctx context.Context, project string) ([]Task, 
 	}
 
 	rows, err := s.pool.Query(ctx, `
-		SELECT t.issue, t.status, t.state, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.created_at, t.updated_at
+		SELECT t.issue, t.status, t.state, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.pr_repo, t.created_at, t.updated_at
 		FROM tasks t
 		LEFT JOIN workers w
 			ON w.project = t.project
@@ -735,7 +771,7 @@ func (s *PostgresStore) lookupTaskAllHosts(ctx context.Context, project, issue s
 		query += `		t.project,`
 	}
 	query += `
-			t.issue, t.status, t.state, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.created_at, t.updated_at
+			t.issue, t.status, t.state, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.pr_repo, t.created_at, t.updated_at
 		FROM tasks t
 		LEFT JOIN workers w
 			ON w.project = t.project
@@ -764,7 +800,7 @@ func (s *PostgresStore) lookupTaskAllHosts(ctx context.Context, project, issue s
 
 func (s *PostgresStore) listTasksAllHostsForProject(ctx context.Context, project string) ([]Task, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT t.issue, t.status, t.state, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.created_at, t.updated_at
+		SELECT t.issue, t.status, t.state, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.pr_repo, t.created_at, t.updated_at
 		FROM tasks t
 		LEFT JOIN workers w
 			ON w.project = t.project
@@ -796,7 +832,7 @@ func (s *PostgresStore) hostTasks(ctx context.Context) ([]Task, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT
 			t.project,
-			t.issue, t.status, t.state, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.created_at, t.updated_at
+			t.issue, t.status, t.state, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.pr_repo, t.created_at, t.updated_at
 		FROM tasks t
 		LEFT JOIN workers w
 			ON w.project = t.project
@@ -828,7 +864,7 @@ func (s *PostgresStore) allTasks(ctx context.Context) ([]Task, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT
 			t.project,
-			t.issue, t.status, t.state, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.created_at, t.updated_at
+			t.issue, t.status, t.state, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.pr_repo, t.created_at, t.updated_at
 		FROM tasks t
 		LEFT JOIN workers w
 			ON w.project = t.project
@@ -978,7 +1014,7 @@ func (s *PostgresStore) TasksByPane(ctx context.Context, project, paneID string)
 		query += `		t.project,`
 	}
 	query += `
-			t.issue, t.status, t.state, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.created_at, t.updated_at
+			t.issue, t.status, t.state, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.pr_repo, t.created_at, t.updated_at
 		FROM tasks t
 		INNER JOIN workers w
 			ON w.project = t.project
@@ -1020,7 +1056,7 @@ func (s *PostgresStore) AllNonTerminalTasks(ctx context.Context) ([]Task, error)
 	rows, err := s.pool.Query(ctx, `
 		SELECT
 			t.project,
-			t.issue, t.status, t.state, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.created_at, t.updated_at
+			t.issue, t.status, t.state, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.pr_repo, t.created_at, t.updated_at
 		FROM tasks t
 		LEFT JOIN workers w
 			ON w.project = t.project
@@ -1051,7 +1087,7 @@ func (s *PostgresStore) hostNonTerminalTasks(ctx context.Context) ([]Task, error
 	rows, err := s.pool.Query(ctx, `
 		SELECT
 			t.project,
-			t.issue, t.status, t.state, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.created_at, t.updated_at
+			t.issue, t.status, t.state, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.pr_repo, t.created_at, t.updated_at
 		FROM tasks t
 		LEFT JOIN workers w
 			ON w.project = t.project
@@ -1214,7 +1250,7 @@ func (s *PostgresStore) hostActiveAssignments(ctx context.Context) ([]Assignment
 	rows, err := s.pool.Query(ctx, `
 		SELECT
 			t.project,
-			t.issue, t.status, t.state, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.created_at, t.updated_at,
+			t.issue, t.status, t.state, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.pr_repo, t.created_at, t.updated_at,
 			w.worker_id, w.current_pane_id, w.agent_profile, w.state, w.issue, w.clone_path, w.last_review_count, w.last_inline_review_comment_count, w.last_issue_comment_count, w.last_issue_comment_watermark, w.last_review_updated_at, w.review_nudge_count, w.review_approved, w.last_ci_state, w.ci_nudge_count, w.ci_failure_poll_count, w.ci_escalated, w.last_mergeable_state, w.nudge_count, w.last_capture, w.last_activity_at, w.last_pr_number, w.last_push_at, w.last_pr_poll_at, w.restart_count, w.first_crash_at, w.created_at, w.last_seen_at
 		FROM tasks t
 		INNER JOIN workers w
@@ -1247,7 +1283,7 @@ func (s *PostgresStore) AllActiveAssignments(ctx context.Context) ([]Assignment,
 	rows, err := s.pool.Query(ctx, `
 		SELECT
 			t.project,
-			t.issue, t.status, t.state, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.created_at, t.updated_at,
+			t.issue, t.status, t.state, t.agent, t.prompt, t.caller_pane, t.worker_id, w.current_pane_id, t.clone_path, t.branch, t.pr_number, t.pr_repo, t.created_at, t.updated_at,
 			w.worker_id, w.current_pane_id, w.agent_profile, w.state, w.issue, w.clone_path, w.last_review_count, w.last_inline_review_comment_count, w.last_issue_comment_count, w.last_issue_comment_watermark, w.last_review_updated_at, w.review_nudge_count, w.review_approved, w.last_ci_state, w.ci_nudge_count, w.ci_failure_poll_count, w.ci_escalated, w.last_mergeable_state, w.nudge_count, w.last_capture, w.last_activity_at, w.last_pr_number, w.last_push_at, w.last_pr_poll_at, w.restart_count, w.first_crash_at, w.created_at, w.last_seen_at
 		FROM tasks t
 		INNER JOIN workers w
