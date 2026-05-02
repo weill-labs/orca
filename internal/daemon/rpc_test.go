@@ -142,6 +142,73 @@ func TestProjectStatusRPC(t *testing.T) {
 	}
 }
 
+func TestStatusRPCReportsResponsiveStaleHeartbeatAsDegraded(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	instance := deps.newDaemon(t)
+	if err := instance.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = instance.Stop(context.Background())
+	})
+
+	projectPath := testProjectPath(t)
+	store := openDaemonStateStore(t)
+	staleHeartbeatAt := deps.clock.Now()
+	if err := store.UpsertDaemon(context.Background(), projectPath, state.DaemonStatus{
+		Session:   "orca",
+		PID:       42,
+		Status:    daemonStatusUnhealthy,
+		StartedAt: staleHeartbeatAt.Add(-time.Hour),
+		UpdatedAt: staleHeartbeatAt,
+	}); err != nil {
+		t.Fatalf("UpsertDaemon() error = %v", err)
+	}
+
+	deps.clock.Advance(time.Minute)
+	client, server := net.Pipe()
+	defer client.Close()
+	go handleRPCConn(context.Background(), server, instance, store, "build-1554", projectPath)
+	if err := json.NewEncoder(client).Encode(rpcRequest{
+		JSONRPC: jsonRPCVersion,
+		ID:      json.RawMessage(`1`),
+		Method:  "status",
+	}); err != nil {
+		t.Fatalf("Encode(status request) error = %v", err)
+	}
+	var response rpcResponse
+	if err := json.NewDecoder(client).Decode(&response); err != nil {
+		t.Fatalf("Decode(status response) error = %v", err)
+	}
+	if response.Error != nil {
+		t.Fatalf("status rpc error = %#v", response.Error)
+	}
+
+	payload, err := json.Marshal(response.Result)
+	if err != nil {
+		t.Fatalf("Marshal(status result) error = %v", err)
+	}
+	var result ProjectStatusRPCResult
+	if err := json.Unmarshal(payload, &result); err != nil {
+		t.Fatalf("Unmarshal(status result) error = %v", err)
+	}
+	if result.Daemon == nil {
+		t.Fatal("status daemon = nil, want degraded daemon status")
+	}
+	if got, want := result.Daemon.Status, "degraded"; got != want {
+		t.Fatalf("daemon status = %q, want %q", got, want)
+	}
+	if got, want := result.Daemon.Reason, "heartbeat stale but daemon socket responding"; got != want {
+		t.Fatalf("daemon reason = %q, want %q", got, want)
+	}
+	if got, want := result.Daemon.UpdatedAt, staleHeartbeatAt; !got.Equal(want) {
+		t.Fatalf("daemon updated_at = %v, want stale heartbeat %v", got, want)
+	}
+}
+
 func TestAssignTypesIncludeTitleField(t *testing.T) {
 	t.Parallel()
 

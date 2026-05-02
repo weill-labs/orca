@@ -488,6 +488,7 @@ func dispatchRPCRequest(ctx context.Context, request rpcRequest, instance *Daemo
 			if err != nil {
 				return rpcFailure(request.ID, -32000, err)
 			}
+			status = instance.projectStatusWithLiveDaemon(status)
 			return rpcSuccess(request.ID, ProjectStatusRPCResult{
 				ProjectStatus: status,
 				BuildCommit:   buildCommit,

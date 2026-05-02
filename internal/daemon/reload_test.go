@@ -556,6 +556,33 @@ daemonReady:
 	}
 }
 
+func TestStopDaemonForReloadPreservesWorkerPanes(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.amux.listPanes = []Pane{{ID: "pane-1", Name: "w-LAB-1554"}}
+	instance := deps.newDaemon(t)
+	instance.stopContext, instance.stopCancel = context.WithCancel(context.Background())
+
+	stopDaemonForReload(instance)
+
+	select {
+	case <-instance.stopContext.Done():
+	default:
+		t.Fatal("reload did not cancel daemon context")
+	}
+	if got := deps.amux.killCalls; len(got) != 0 {
+		t.Fatalf("reload killed panes = %#v, want none", got)
+	}
+	panes, err := deps.amux.ListPanes(context.Background())
+	if err != nil {
+		t.Fatalf("ListPanes() error = %v", err)
+	}
+	if got, want := panes, []Pane{{ID: "pane-1", Name: "w-LAB-1554"}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("panes after reload = %#v, want %#v", got, want)
+	}
+}
+
 func TestDaemonStartAllowsCurrentPIDReuseDuringReload(t *testing.T) {
 	t.Parallel()
 

@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -47,6 +48,73 @@ func TestDaemonPollLoopRecordsHeartbeatAndRunningStatus(t *testing.T) {
 	if got, want := update.HeartbeatAt, deps.clock.Now(); !got.Equal(want) {
 		t.Fatalf("heartbeatAt = %v, want %v", got, want)
 	}
+}
+
+func TestDaemonStatusUpdatesUseBoundedContext(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	captureTicker := newFakeTicker()
+	pollTicker := newFakeTicker()
+	deps.tickers.enqueue(captureTicker, pollTicker)
+
+	statusWriter := &deadlineCheckingDaemonStatusWriter{seen: make(chan bool, 1)}
+	d := deps.newDaemonWithOptions(t, func(opts *Options) {
+		opts.DaemonStatusWriter = statusWriter
+	})
+
+	if err := d.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	deps.clock.Advance(5 * time.Second)
+	captureTicker.tick(deps.clock.Now())
+
+	select {
+	case hasDeadline := <-statusWriter.seen:
+		if !hasDeadline {
+			t.Fatal("daemon status update context has no deadline")
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timed out waiting for daemon status update")
+	}
+}
+
+func TestDaemonPollLoopKeepsHeartbeatingWhenStatusWriterStalls(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	captureTicker := newFakeTicker()
+	pollTicker := newFakeTicker()
+	deps.tickers.enqueue(captureTicker, pollTicker)
+
+	statusWriter := newStallingDaemonStatusWriter()
+	d := deps.newDaemonWithOptions(t, func(opts *Options) {
+		opts.DaemonStatusWriter = statusWriter
+	})
+
+	if err := d.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	deps.clock.Advance(5 * time.Second)
+	firstHeartbeatAt := deps.clock.Now()
+	captureTicker.tick(firstHeartbeatAt)
+	statusWriter.waitForStall(t)
+
+	deps.clock.Advance(5 * time.Second)
+	secondHeartbeatAt := deps.clock.Now()
+	captureTicker.tick(secondHeartbeatAt)
+
+	waitFor(t, "heartbeat after stalled status update", func() bool {
+		return d.lastHeartbeat.Load() == secondHeartbeatAt.UnixMilli()
+	})
 }
 
 func TestDaemonWatchdogWarnsAndMarksUnhealthyAfterStaleHeartbeat(t *testing.T) {
@@ -168,6 +236,102 @@ func TestDaemonWatchdogRecoveryWritesRunningHeartbeat(t *testing.T) {
 	}
 }
 
+func TestDaemonStatusUpdateQueueCoalescesLatest(t *testing.T) {
+	t.Parallel()
+
+	d := &Daemon{statusUpdates: make(chan heartbeatStatusUpdate, 1)}
+	first := heartbeatStatusUpdate{
+		status:      daemonStatusRunning,
+		heartbeatAt: time.Date(2026, 4, 2, 9, 0, 0, 0, time.UTC),
+	}
+	latest := heartbeatStatusUpdate{
+		status:      daemonStatusDegraded,
+		heartbeatAt: first.heartbeatAt.Add(time.Second),
+	}
+
+	d.enqueueDaemonStatusUpdate(context.Background(), first)
+	d.enqueueDaemonStatusUpdate(context.Background(), latest)
+
+	select {
+	case got := <-d.statusUpdates:
+		if got != latest {
+			t.Fatalf("queued update = %#v, want latest %#v", got, latest)
+		}
+	default:
+		t.Fatal("status update queue is empty, want latest update")
+	}
+}
+
+func TestDaemonStatusUpdateQueueDropsWhenContextCancelled(t *testing.T) {
+	t.Parallel()
+
+	d := &Daemon{statusUpdates: make(chan heartbeatStatusUpdate, 1)}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	d.enqueueDaemonStatusUpdate(ctx, heartbeatStatusUpdate{status: daemonStatusRunning})
+
+	select {
+	case got := <-d.statusUpdates:
+		t.Fatalf("queued update after cancellation = %#v, want none", got)
+	default:
+	}
+}
+
+func TestDaemonStatusUpdateWithoutWriterNoops(t *testing.T) {
+	t.Parallel()
+
+	d := &Daemon{}
+	d.updateDaemonStatus(context.Background(), daemonStatusRunning, time.Date(2026, 4, 2, 9, 0, 0, 0, time.UTC))
+}
+
+func TestDaemonStatusUpdateWritesSynchronouslyWithoutPublisher(t *testing.T) {
+	t.Parallel()
+
+	statusWriter := &fakeDaemonStatusWriter{}
+	heartbeatAt := time.Date(2026, 4, 2, 9, 0, 0, 0, time.UTC)
+	d := &Daemon{
+		statusWriter:       statusWriter,
+		statusWriteTimeout: time.Second,
+	}
+
+	d.updateDaemonStatus(context.Background(), daemonStatusRunning, heartbeatAt)
+
+	update, ok := statusWriter.lastUpdate()
+	if !ok {
+		t.Fatal("lastUpdate() = ok false, want synchronous update")
+	}
+	if got, want := update.Status, daemonStatusRunning; got != want {
+		t.Fatalf("status = %q, want %q", got, want)
+	}
+	if got, want := update.HeartbeatAt, heartbeatAt; !got.Equal(want) {
+		t.Fatalf("heartbeatAt = %v, want %v", got, want)
+	}
+}
+
+func TestWriteDaemonStatusLogsWriterErrorWithoutTimeout(t *testing.T) {
+	t.Parallel()
+
+	logs := &fakeLogSink{}
+	d := &Daemon{
+		statusWriter: errDaemonStatusWriter{err: errors.New("write failed")},
+		logf:         logs.Printf,
+	}
+
+	d.writeDaemonStatus(context.Background(), heartbeatStatusUpdate{
+		status:      daemonStatusRunning,
+		heartbeatAt: time.Date(2026, 4, 2, 9, 0, 0, 0, time.UTC),
+	})
+
+	messages := logs.messages()
+	if len(messages) != 1 {
+		t.Fatalf("log count = %d, want 1", len(messages))
+	}
+	if got := messages[0]; !strings.Contains(got, "daemon status update failed: write failed") {
+		t.Fatalf("log message = %q, want writer error", got)
+	}
+}
+
 type fakeDaemonStatusWriter struct {
 	mu      sync.Mutex
 	updates []daemonStatusUpdate
@@ -195,6 +359,54 @@ func (f *fakeDaemonStatusWriter) lastUpdate() (daemonStatusUpdate, bool) {
 		return daemonStatusUpdate{}, false
 	}
 	return f.updates[len(f.updates)-1], true
+}
+
+type errDaemonStatusWriter struct {
+	err error
+}
+
+func (f errDaemonStatusWriter) Update(ctx context.Context, status string, heartbeatAt time.Time) error {
+	return f.err
+}
+
+type deadlineCheckingDaemonStatusWriter struct {
+	seen chan bool
+}
+
+func (f *deadlineCheckingDaemonStatusWriter) Update(ctx context.Context, status string, heartbeatAt time.Time) error {
+	_, hasDeadline := ctx.Deadline()
+	select {
+	case f.seen <- hasDeadline:
+	default:
+	}
+	return nil
+}
+
+type stallingDaemonStatusWriter struct {
+	started chan struct{}
+	once    sync.Once
+}
+
+func newStallingDaemonStatusWriter() *stallingDaemonStatusWriter {
+	return &stallingDaemonStatusWriter{started: make(chan struct{})}
+}
+
+func (f *stallingDaemonStatusWriter) Update(ctx context.Context, status string, heartbeatAt time.Time) error {
+	f.once.Do(func() {
+		close(f.started)
+	})
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func (f *stallingDaemonStatusWriter) waitForStall(t *testing.T) {
+	t.Helper()
+
+	select {
+	case <-f.started:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timed out waiting for stalled daemon status update")
+	}
 }
 
 type fakeLogSink struct {

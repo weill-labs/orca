@@ -2064,6 +2064,26 @@ func TestWriteProjectStatusAndTaskStatus(t *testing.T) {
 			},
 		},
 		{
+			name: "project status identifies responsive stale heartbeat",
+			write: func(buf *bytes.Buffer) error {
+				return writeProjectStatusAt(buf, state.ProjectStatus{
+					Project: "repo",
+					Daemon: &state.DaemonStatus{
+						Session:   "alpha",
+						PID:       42,
+						Status:    "degraded",
+						Reason:    "heartbeat stale but daemon socket responding",
+						UpdatedAt: now.Add(-2 * time.Minute),
+					},
+				}, "", "", now)
+			},
+			wants: []string{
+				"project: repo",
+				"daemon: degraded (heartbeat stale but daemon socket responding)",
+				"heartbeat age: 2m0s",
+			},
+		},
+		{
 			name: "project status with daemon but no explicit status",
 			write: func(buf *bytes.Buffer) error {
 				return writeProjectStatus(buf, state.ProjectStatus{
