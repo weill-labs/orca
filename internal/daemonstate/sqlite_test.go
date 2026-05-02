@@ -427,6 +427,11 @@ func TestSQLiteStoreSchemaIncludesHostColumns(t *testing.T) {
 	testStoreSchemaIncludesHostColumns(t, newSQLiteContractHarness(t))
 }
 
+func TestSQLiteStoreKnownProjectsHostScoped(t *testing.T) {
+	t.Parallel()
+	testStoreKnownProjectsHostScoped(t, newSQLiteContractHarness(t))
+}
+
 func TestSQLiteStoreProjectStatusAllHostsAcrossHosts(t *testing.T) {
 	t.Parallel()
 	testStoreProjectStatusAllHostsAcrossHosts(t, newSQLiteContractHarness(t))

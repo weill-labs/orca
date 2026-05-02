@@ -91,6 +91,11 @@ func TestPostgresStoreSchemaIncludesHostColumns(t *testing.T) {
 	testStoreSchemaIncludesHostColumns(t, newPostgresContractHarness(t))
 }
 
+func TestPostgresStoreKnownProjectsHostScoped(t *testing.T) {
+	t.Parallel()
+	testStoreKnownProjectsHostScoped(t, newPostgresContractHarness(t))
+}
+
 func TestPostgresStoreProjectStatusAllHostsAcrossHosts(t *testing.T) {
 	t.Parallel()
 	testStoreProjectStatusAllHostsAcrossHosts(t, newPostgresContractHarness(t))

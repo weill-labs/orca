@@ -894,13 +894,100 @@ func TestPRPollDiscoversAndPollsPRFromDifferentKnownProject(t *testing.T) {
 	}
 }
 
+func TestPRPollSkipsRepoDriftWhenMultipleKnownProjectsMatchBranch(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	const (
+		issue      = "LAB-1555"
+		branch     = "lab-1555-idempotent-prompt"
+		prProjectA = "/tmp/orca-a"
+		prProjectB = "/tmp/orca-b"
+	)
+	seedTaskMonitorAssignment(t, deps, issue, "pane-1", 0)
+	task, ok := deps.state.task(issue)
+	if !ok {
+		t.Fatal("task missing after seed")
+	}
+	task.Branch = branch
+	deps.state.putTaskForTest(task)
+	seedKnownProjectForPRLookup(t, deps, prProjectA)
+	seedKnownProjectForPRLookup(t, deps, prProjectB)
+
+	branchLookupArgs := []string{"pr", "list", "--head", branch, "--json", "number"}
+	deps.commands.queue("gh", branchLookupArgs, `[]`, nil)
+	deps.commands.queue("gh", issueIDPRSearchArgs(issue), `[]`, nil)
+	deps.commands.queue("gh", branchLookupArgs, `[{"number":214}]`, nil)
+	deps.commands.queue("gh", branchLookupArgs, `[{"number":215}]`, nil)
+
+	d := deps.newDaemon(t)
+	update := d.checkTaskPRPoll(context.Background(), activeTaskMonitorAssignment(t, deps, issue))
+	d.applyTaskStateUpdate(context.Background(), update)
+
+	task, ok = deps.state.task(issue)
+	if !ok {
+		t.Fatal("task missing after poll")
+	}
+	if got := task.PRNumber; got != 0 {
+		t.Fatalf("task.PRNumber = %d, want 0", got)
+	}
+	if got := task.PRRepo; got != "" {
+		t.Fatalf("task.PRRepo = %q, want empty", got)
+	}
+	if got, want := deps.events.countType(EventPRDetected), 0; got != want {
+		t.Fatalf("PR detected event count = %d, want %d", got, want)
+	}
+	if event, ok := deps.events.lastEventOfType(EventPRPollTrace); !ok || !strings.Contains(event.Message, "action=no_pr_found") {
+		t.Fatalf("last PR poll trace = %#v, want no_pr_found", event)
+	}
+}
+
+func TestPRPollSkipsRepoDriftForReservedBranch(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	const (
+		issue     = "LAB-1555"
+		branch    = "main"
+		prProject = "/tmp/orca"
+	)
+	seedTaskMonitorAssignment(t, deps, issue, "pane-1", 0)
+	task, ok := deps.state.task(issue)
+	if !ok {
+		t.Fatal("task missing after seed")
+	}
+	task.Branch = branch
+	deps.state.putTaskForTest(task)
+	seedKnownProjectForPRLookup(t, deps, prProject)
+
+	branchLookupArgs := []string{"pr", "list", "--head", branch, "--json", "number"}
+	deps.commands.queue("gh", branchLookupArgs, `[]`, nil)
+	deps.commands.queue("gh", issueIDPRSearchArgs(issue), `[]`, nil)
+
+	d := deps.newDaemon(t)
+	update := d.checkTaskPRPoll(context.Background(), activeTaskMonitorAssignment(t, deps, issue))
+	d.applyTaskStateUpdate(context.Background(), update)
+
+	if got := deps.commands.countCalls("gh", branchLookupArgs); got != 1 {
+		t.Fatalf("branch lookup count = %d, want 1", got)
+	}
+	for _, call := range deps.commands.callsByName("gh") {
+		if call.Dir == prProject {
+			t.Fatalf("unexpected fallback PR lookup in %s: %#v", prProject, call)
+		}
+	}
+	if event, ok := deps.events.lastEventOfType(EventPRPollTrace); !ok || !strings.Contains(event.Message, "action=no_pr_found") {
+		t.Fatalf("last PR poll trace = %#v, want no_pr_found", event)
+	}
+}
+
 func seedKnownProjectForPRLookup(t *testing.T, deps *testDeps, project string) {
 	t.Helper()
 
 	now := deps.clock.Now()
 	deps.state.putTaskForTest(Task{
 		Project:      project,
-		Issue:        "LAB-KNOWN",
+		Issue:        "LAB-KNOWN-" + strings.NewReplacer("/", "-", " ", "-").Replace(project),
 		Status:       TaskStatusDone,
 		State:        TaskStateDone,
 		AgentProfile: "codex",
