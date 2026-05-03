@@ -16,6 +16,7 @@ type fakeState struct {
 	workers               map[string]Worker
 	cloneOccupancies      []CloneOccupancy
 	mergeQueue            []MergeQueueEntry
+	knownProjectsErr      error
 	updateMergeErr        error
 	deleteMergeErr        error
 	events                []Event
@@ -259,6 +260,9 @@ func (s *fakeState) NonTerminalTasks(ctx context.Context, project string) ([]Tas
 func (s *fakeState) KnownProjects(ctx context.Context) ([]string, error) {
 	if s.rejectCanceledContext && ctx.Err() != nil {
 		return nil, ctx.Err()
+	}
+	if s.knownProjectsErr != nil {
+		return nil, s.knownProjectsErr
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -981,6 +981,51 @@ func TestPRPollSkipsRepoDriftForReservedBranch(t *testing.T) {
 	}
 }
 
+func TestPRPollTracesRepoDriftLookupError(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	const (
+		issue  = "LAB-1555"
+		branch = "lab-1555-idempotent-prompt"
+	)
+	seedTaskMonitorAssignment(t, deps, issue, "pane-1", 0)
+	task, ok := deps.state.task(issue)
+	if !ok {
+		t.Fatal("task missing after seed")
+	}
+	task.Branch = branch
+	deps.state.putTaskForTest(task)
+	deps.state.knownProjectsErr = errors.New("known projects unavailable")
+
+	branchLookupArgs := []string{"pr", "list", "--head", branch, "--json", "number"}
+	deps.commands.queue("gh", branchLookupArgs, `[]`, nil)
+	deps.commands.queue("gh", issueIDPRSearchArgs(issue), `[]`, nil)
+
+	d := deps.newDaemon(t)
+	update := d.checkTaskPRPoll(context.Background(), activeTaskMonitorAssignment(t, deps, issue))
+	d.applyTaskStateUpdate(context.Background(), update)
+
+	task, ok = deps.state.task(issue)
+	if !ok {
+		t.Fatal("task missing after poll")
+	}
+	if got := task.PRNumber; got != 0 {
+		t.Fatalf("task.PRNumber = %d, want 0", got)
+	}
+	if got, want := deps.events.countType(EventPRDetected), 0; got != want {
+		t.Fatalf("PR detected event count = %d, want %d", got, want)
+	}
+	event, ok := deps.events.lastEventOfType(EventPRPollTrace)
+	if !ok {
+		t.Fatal("PR poll trace missing")
+	}
+	if !strings.Contains(event.Message, `action=find_pr_repo_drift_error`) ||
+		!strings.Contains(event.Message, `error="known projects unavailable"`) {
+		t.Fatalf("last PR poll trace = %q, want repo drift lookup error", event.Message)
+	}
+}
+
 func seedKnownProjectForPRLookup(t *testing.T, deps *testDeps, project string) {
 	t.Helper()
 
