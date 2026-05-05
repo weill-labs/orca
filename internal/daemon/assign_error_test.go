@@ -298,17 +298,6 @@ func TestAssignAdditionalErrorPaths(t *testing.T) {
 			wantErr: "store pending worker",
 		},
 		{
-			name: "prompt settle error",
-			setup: func(_ *testDeps, _ *assignStateStub, amux *assignAmuxStub) {
-				amux.sendKeysHook = func(_ string, keys []string) {
-					if len(keys) == 1 && strings.Contains(keys[0], codexAssignmentPromptSuffix) {
-						amux.waitIdleErr = errors.New("settle failed")
-					}
-				}
-			},
-			wantErr: "send prompt: settle failed",
-		},
-		{
 			name: "enter send error",
 			setup: func(_ *testDeps, _ *assignStateStub, amux *assignAmuxStub) {
 				amux.sendKeysResults = []error{nil, errors.New("enter failed")}

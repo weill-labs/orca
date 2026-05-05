@@ -25,11 +25,13 @@ type fakeAmux struct {
 	paneExistsErr                error
 	listPanes                    []Pane
 	listPanesErr                 error
+	metadataErr                  error
 	sendKeysErr                  error
 	sendKeysResults              []error
 	sendKeysHook                 func(paneID string, keys []string)
 	setMetadataErr               error
 	setMetadataHook              func(paneID string, metadata map[string]string)
+	removeMetadataErr            error
 	removeMetadataHook           func(paneID string, keys []string)
 	killErr                      error
 	killHook                     func(paneID string)
@@ -192,6 +194,9 @@ func (a *fakeAmux) Metadata(ctx context.Context, paneID string) (map[string]stri
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.metadataCalls = append(a.metadataCalls, paneID)
+	if a.metadataErr != nil {
+		return nil, a.metadataErr
+	}
 	return copyMetadataMap(a.metadata[paneID]), nil
 }
 
@@ -231,6 +236,9 @@ func (a *fakeAmux) RemoveMetadata(ctx context.Context, paneID string, keys ...st
 	}
 	if a.removeMetadataHook != nil {
 		a.removeMetadataHook(paneID, append([]string(nil), keys...))
+	}
+	if a.removeMetadataErr != nil {
+		return a.removeMetadataErr
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()

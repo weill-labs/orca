@@ -478,6 +478,58 @@ func TestAssignRetriesCodexPromptUntilWorkingAppears(t *testing.T) {
 	}
 }
 
+func TestAssignSubmitsCodexPromptWhenHeartbeatIsStale(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	deps.clock.Advance(watchdogUnhealthyMultiplier*d.captureInterval + time.Second)
+	staleErr := errors.New("stale heartbeat stalled prompt settle")
+	deps.amux.waitIdleHook = func(_ string, timeout, settle time.Duration) {
+		deps.amux.waitIdleErr = nil
+		if timeout == defaultAgentHandshakeTimeout && settle == defaultPromptSettleDuration {
+			deps.amux.waitIdleErr = staleErr
+			return
+		}
+		if timeout == codexPromptRetryIdleProbeTime {
+			deps.amux.waitIdleErr = errors.New("codex became active")
+		}
+	}
+
+	if err := d.Assign(ctx, "LAB-1555", "Fix prompt delivery", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	waitFor(t, "task registration", func() bool {
+		task, ok := deps.state.task("LAB-1555")
+		return ok && task.Status == TaskStatusActive
+	})
+
+	deps.amux.requireSentKeys(t, "pane-1", []string{
+		wrappedCodexPrompt("LAB-1555", "Fix prompt delivery") + "\n",
+	})
+	metadata, err := deps.amux.Metadata(ctx, "pane-1")
+	if err != nil {
+		t.Fatalf("Metadata() error = %v", err)
+	}
+	if _, ok := metadata[assignmentPromptInjectionTokenKey]; ok {
+		t.Fatalf("assignment prompt token metadata still present after confirmation: %#v", metadata)
+	}
+	if _, ok := metadata[assignmentPromptInjectionStageKey]; ok {
+		t.Fatalf("assignment prompt stage metadata still present after confirmation: %#v", metadata)
+	}
+}
+
 func TestAssignRetriesCodexPromptDeliveryAfterPaneReturnsToShell(t *testing.T) {
 	t.Parallel()
 
