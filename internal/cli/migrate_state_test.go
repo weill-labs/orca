@@ -290,6 +290,10 @@ func (*migrateStateStoreStub) TaskStatus(context.Context, string, string) (state
 	return state.TaskStatus{}, nil
 }
 
+func (*migrateStateStoreStub) KnownProjects(context.Context) ([]string, error) {
+	return nil, nil
+}
+
 func (*migrateStateStoreStub) ListWorkers(context.Context, string) ([]state.Worker, error) {
 	return nil, nil
 }

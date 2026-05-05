@@ -2513,6 +2513,10 @@ func (f *fakeState) TaskStatusAllHosts(_ context.Context, project, issue string)
 	return f.allHostsTaskStatus, nil
 }
 
+func (f *fakeState) KnownProjects(context.Context) ([]string, error) {
+	return nil, nil
+}
+
 func (f *fakeState) ListWorkers(_ context.Context, project string) ([]state.Worker, error) {
 	if f.err != nil {
 		return nil, f.err

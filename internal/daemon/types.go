@@ -124,6 +124,7 @@ type StateStore interface {
 	TaskByIssue(ctx context.Context, project, issue string) (Task, error)
 	TasksByPane(ctx context.Context, project, paneID string) ([]Task, error)
 	NonTerminalTasks(ctx context.Context, project string) ([]Task, error)
+	KnownProjects(ctx context.Context) ([]string, error)
 	StaleCloneOccupancies(ctx context.Context, project string) ([]CloneOccupancy, error)
 	PutWorker(ctx context.Context, worker Worker) error
 	WorkerByID(ctx context.Context, project, workerID string) (Worker, error)
@@ -223,6 +224,7 @@ type Task struct {
 	Branch       string    `json:"branch,omitempty"`
 	AgentProfile string    `json:"agent_profile,omitempty"`
 	PRNumber     int       `json:"pr_number,omitempty"`
+	PRRepo       string    `json:"pr_repo,omitempty"`
 	CreatedAt    time.Time `json:"created_at,omitempty"`
 	UpdatedAt    time.Time `json:"updated_at,omitempty"`
 }

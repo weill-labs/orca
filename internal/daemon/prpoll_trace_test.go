@@ -66,6 +66,7 @@ func TestTracePRPollAppendsEventAndLogs(t *testing.T) {
 	})
 
 	update := TaskStateUpdate{Active: activeTaskMonitorAssignment(t, deps, "LAB-1415")}
+	update.Active.Task.PRRepo = "/tmp/orca"
 	traceErr := errors.New("github unavailable")
 
 	d.tracePRPoll(&update, AgentProfile{Name: "codex"}, "follow_up_poll", traceErr)
@@ -74,10 +75,10 @@ func TestTracePRPollAppendsEventAndLogs(t *testing.T) {
 	if got, want := len(update.Events), 1; got != want {
 		t.Fatalf("len(update.Events) = %d, want %d", got, want)
 	}
-	if got, want := update.Events[0].Message, `pr poll trace: issue=LAB-1415 pr_number=42 action=follow_up_poll error="github unavailable"`; got != want {
+	if got, want := update.Events[0].Message, `pr poll trace: issue=LAB-1415 pr_number=42 action=follow_up_poll pr_repo=/tmp/orca error="github unavailable"`; got != want {
 		t.Fatalf("update.Events[0].Message = %q, want %q", got, want)
 	}
-	if got, want := logged, []string{`pr poll trace: issue=LAB-1415 pr_number=42 action=follow_up_poll error="github unavailable"`}; !reflect.DeepEqual(got, want) {
+	if got, want := logged, []string{`pr poll trace: issue=LAB-1415 pr_number=42 action=follow_up_poll pr_repo=/tmp/orca error="github unavailable"`}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("logged = %#v, want %#v", got, want)
 	}
 }

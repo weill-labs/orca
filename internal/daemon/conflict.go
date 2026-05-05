@@ -30,7 +30,7 @@ func (d *Daemon) handleQueuedPRFailure(ctx context.Context, active ActiveAssignm
 }
 
 func (d *Daemon) handlePRMergeablePoll(ctx context.Context, update *TaskStateUpdate, profile AgentProfile) {
-	state, ok, err := d.lookupPRMergeableState(ctx, update.Active.Task.Project, update.Active.Task.PRNumber)
+	state, ok, err := d.lookupPRMergeableState(ctx, prProjectForTask(update.Active.Task), update.Active.Task.PRNumber)
 	if err != nil || !ok {
 		return
 	}
@@ -76,7 +76,7 @@ func (d *Daemon) checkTaskImmediateMergeConflictPoll(ctx context.Context, active
 		return update
 	}
 
-	state, ok, err := d.lookupPRMergeableStateAfterMerge(ctx, active.Task.Project, active.Task.PRNumber)
+	state, ok, err := d.lookupPRMergeableStateAfterMerge(ctx, prProjectForTask(active.Task), active.Task.PRNumber)
 	if err != nil {
 		d.appendGitHubRateLimitEvent(&update, profile, err)
 		return update

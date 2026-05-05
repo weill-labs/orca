@@ -9,6 +9,7 @@ func scanPostgresTask(scanner rowScanner, includeProject bool) (Task, error) {
 	var task Task
 	var prNumber sql.NullInt64
 	var currentPaneID sql.NullString
+	var prRepo string
 
 	fields := []any{
 		&task.Issue,
@@ -22,6 +23,7 @@ func scanPostgresTask(scanner rowScanner, includeProject bool) (Task, error) {
 		&task.ClonePath,
 		&task.Branch,
 		&prNumber,
+		&prRepo,
 		&task.CreatedAt,
 		&task.UpdatedAt,
 	}
@@ -39,6 +41,7 @@ func scanPostgresTask(scanner rowScanner, includeProject bool) (Task, error) {
 		value := int(prNumber.Int64)
 		task.PRNumber = &value
 	}
+	task.PRRepo = prRepo
 	if currentPaneID.Valid {
 		task.CurrentPaneID = currentPaneID.String
 	}
@@ -118,6 +121,7 @@ func scanPostgresAssignment(scanner rowScanner, includeProject bool) (Assignment
 	var task Task
 	var worker Worker
 	var prNumber sql.NullInt64
+	var prRepo string
 	var lastActivityAt sql.NullTime
 	var lastReviewUpdatedAt sql.NullTime
 	var lastPushAt sql.NullTime
@@ -136,6 +140,7 @@ func scanPostgresAssignment(scanner rowScanner, includeProject bool) (Assignment
 		&task.ClonePath,
 		&task.Branch,
 		&prNumber,
+		&prRepo,
 		&task.CreatedAt,
 		&task.UpdatedAt,
 		&worker.WorkerID,
@@ -181,6 +186,7 @@ func scanPostgresAssignment(scanner rowScanner, includeProject bool) (Assignment
 		value := int(prNumber.Int64)
 		task.PRNumber = &value
 	}
+	task.PRRepo = prRepo
 	if task.State == "" {
 		task.State = defaultPersistedTaskState(task.Status, task.PRNumber)
 	}

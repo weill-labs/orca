@@ -249,6 +249,10 @@ func (fakeDaemonStateStore) TaskStatus(context.Context, string, string) (state.T
 	return state.TaskStatus{}, nil
 }
 
+func (fakeDaemonStateStore) KnownProjects(context.Context) ([]string, error) {
+	return nil, nil
+}
+
 func (fakeDaemonStateStore) ListWorkers(context.Context, string) ([]state.Worker, error) {
 	return nil, nil
 }

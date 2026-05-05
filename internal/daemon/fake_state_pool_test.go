@@ -16,6 +16,7 @@ type fakeState struct {
 	workers               map[string]Worker
 	cloneOccupancies      []CloneOccupancy
 	mergeQueue            []MergeQueueEntry
+	knownProjectsErr      error
 	updateMergeErr        error
 	deleteMergeErr        error
 	events                []Event
@@ -254,6 +255,46 @@ func (s *fakeState) NonTerminalTasks(ctx context.Context, project string) ([]Tas
 		}
 	}
 	return tasks, nil
+}
+
+func (s *fakeState) KnownProjects(ctx context.Context) ([]string, error) {
+	if s.rejectCanceledContext && ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if s.knownProjectsErr != nil {
+		return nil, s.knownProjectsErr
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	seen := make(map[string]bool)
+	for _, task := range s.tasks {
+		if project := strings.TrimSpace(task.Project); project != "" {
+			seen[project] = true
+		}
+	}
+	for _, worker := range s.workers {
+		if project := strings.TrimSpace(worker.Project); project != "" {
+			seen[project] = true
+		}
+	}
+	for _, occupancy := range s.cloneOccupancies {
+		if project := strings.TrimSpace(occupancy.Project); project != "" {
+			seen[project] = true
+		}
+	}
+	for _, entry := range s.mergeQueue {
+		if project := strings.TrimSpace(entry.Project); project != "" {
+			seen[project] = true
+		}
+	}
+
+	projects := make([]string, 0, len(seen))
+	for project := range seen {
+		projects = append(projects, project)
+	}
+	sort.Strings(projects)
+	return projects, nil
 }
 
 func (s *fakeState) StaleCloneOccupancies(ctx context.Context, project string) ([]CloneOccupancy, error) {

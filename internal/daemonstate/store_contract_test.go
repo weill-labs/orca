@@ -15,6 +15,7 @@ import (
 type storeContract interface {
 	ProjectStatus(context.Context, string) (ProjectStatus, error)
 	ProjectStatusAllHosts(context.Context, string) (ProjectStatus, error)
+	KnownProjects(context.Context) ([]string, error)
 	UpsertDaemon(context.Context, string, DaemonStatus) error
 	EnsureClone(context.Context, string, string) (legacy.CloneRecord, error)
 	TryOccupyClone(context.Context, string, string, string, string) (bool, error)
@@ -918,6 +919,114 @@ func testStoreSchemaIncludesHostColumns(t *testing.T, h storeContractHarness) {
 		t.Fatal("assertHostColumns is nil")
 	}
 	h.assertHostColumns(t)
+}
+
+func testStoreKnownProjectsHostScoped(t *testing.T, h storeContractHarness) {
+	t.Helper()
+	if h.setHost == nil {
+		t.Fatal("setHost is nil")
+	}
+
+	ctx := context.Background()
+	now := time.Date(2026, 5, 2, 12, 0, 0, 0, time.UTC)
+
+	h.setHost("host-a")
+	h.setNow(now)
+	if err := h.store.UpsertTask(ctx, "/repo-task", Task{
+		Issue:     "LAB-2601",
+		Status:    "active",
+		State:     "assigned",
+		Agent:     "codex",
+		CreatedAt: now,
+		UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("UpsertTask(host-a) error = %v", err)
+	}
+	if err := h.store.UpsertWorker(ctx, "/repo-worker", Worker{
+		WorkerID:      "worker-a",
+		CurrentPaneID: "pane-a",
+		Agent:         "codex",
+		State:         "healthy",
+		Issue:         "LAB-2602",
+		CreatedAt:     now,
+		LastSeenAt:    now,
+	}); err != nil {
+		t.Fatalf("UpsertWorker(host-a) error = %v", err)
+	}
+	if _, err := h.store.EnsureClone(ctx, "/repo-clone", "/clones/known-a"); err != nil {
+		t.Fatalf("EnsureClone(host-a) error = %v", err)
+	}
+	if err := h.store.UpsertDaemon(ctx, "/repo-daemon", DaemonStatus{
+		Session:   "daemon-a",
+		PID:       2601,
+		Status:    "running",
+		StartedAt: now,
+		UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("UpsertDaemon(host-a) error = %v", err)
+	}
+	if _, err := h.store.EnqueueMergeEntry(ctx, MergeQueueEntry{
+		Project:   "/repo-merge",
+		Issue:     "LAB-2603",
+		PRNumber:  2603,
+		Status:    "queued",
+		CreatedAt: now,
+		UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("EnqueueMergeEntry() error = %v", err)
+	}
+
+	h.setHost("host-b")
+	h.setNow(now.Add(time.Minute))
+	if err := h.store.UpsertTask(ctx, "/other-task", Task{
+		Issue:     "LAB-2604",
+		Status:    "active",
+		State:     "assigned",
+		Agent:     "codex",
+		CreatedAt: now.Add(time.Minute),
+		UpdatedAt: now.Add(time.Minute),
+	}); err != nil {
+		t.Fatalf("UpsertTask(host-b) error = %v", err)
+	}
+	if err := h.store.UpsertWorker(ctx, "/other-worker", Worker{
+		WorkerID:      "worker-b",
+		CurrentPaneID: "pane-b",
+		Agent:         "codex",
+		State:         "healthy",
+		Issue:         "LAB-2605",
+		CreatedAt:     now.Add(time.Minute),
+		LastSeenAt:    now.Add(time.Minute),
+	}); err != nil {
+		t.Fatalf("UpsertWorker(host-b) error = %v", err)
+	}
+	if _, err := h.store.EnsureClone(ctx, "/other-clone", "/clones/known-b"); err != nil {
+		t.Fatalf("EnsureClone(host-b) error = %v", err)
+	}
+	if err := h.store.UpsertDaemon(ctx, "/other-daemon", DaemonStatus{
+		Session:   "daemon-b",
+		PID:       2604,
+		Status:    "running",
+		StartedAt: now.Add(time.Minute),
+		UpdatedAt: now.Add(time.Minute),
+	}); err != nil {
+		t.Fatalf("UpsertDaemon(host-b) error = %v", err)
+	}
+
+	h.setHost("host-a")
+	projects, err := h.store.KnownProjects(ctx)
+	if err != nil {
+		t.Fatalf("KnownProjects() error = %v", err)
+	}
+	want := []string{
+		"/repo-clone",
+		"/repo-daemon",
+		"/repo-merge",
+		"/repo-task",
+		"/repo-worker",
+	}
+	if got, want := strings.Join(projects, "\n"), strings.Join(want, "\n"); got != want {
+		t.Fatalf("KnownProjects() = [%s], want [%s]", got, want)
+	}
 }
 
 func testStoreProjectStatusAllHostsAcrossHosts(t *testing.T, h storeContractHarness) {

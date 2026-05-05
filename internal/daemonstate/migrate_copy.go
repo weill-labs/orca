@@ -41,9 +41,9 @@ func copySQLiteRows(
 
 func copyTasks(ctx context.Context, source *SQLiteStore, destination pgx.Tx) error {
 	return copySQLiteRows(ctx, source, destination, "tasks", "tasks",
-		[]string{"project", "issue", "host", "status", "state", "agent", "prompt", "caller_pane", "worker_id", "clone_path", "branch", "pr_number", "created_at", "updated_at"},
+		[]string{"project", "issue", "host", "status", "state", "agent", "prompt", "caller_pane", "worker_id", "clone_path", "branch", "pr_number", "pr_repo", "created_at", "updated_at"},
 		`
-		SELECT project, issue, host, status, state, agent, prompt, caller_pane, worker_id, clone_path, branch, pr_number, created_at, updated_at
+		SELECT project, issue, host, status, state, agent, prompt, caller_pane, worker_id, clone_path, branch, pr_number, pr_repo, created_at, updated_at
 		FROM tasks
 		ORDER BY project ASC, issue ASC
 	`, func(rows *sql.Rows) ([]any, error) {
@@ -59,6 +59,7 @@ func copyTasks(ctx context.Context, source *SQLiteStore, destination pgx.Tx) err
 			var clonePath string
 			var branch string
 			var prNumber sql.NullInt64
+			var prRepo string
 			var createdAtText string
 			var updatedAtText string
 
@@ -75,6 +76,7 @@ func copyTasks(ctx context.Context, source *SQLiteStore, destination pgx.Tx) err
 				&clonePath,
 				&branch,
 				&prNumber,
+				&prRepo,
 				&createdAtText,
 				&updatedAtText,
 			); err != nil {
@@ -108,6 +110,7 @@ func copyTasks(ctx context.Context, source *SQLiteStore, destination pgx.Tx) err
 				clonePath,
 				branch,
 				prNumberArg,
+				prRepo,
 				createdAt,
 				updatedAt,
 			}, nil

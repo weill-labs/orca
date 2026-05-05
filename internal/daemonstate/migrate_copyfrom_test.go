@@ -27,7 +27,7 @@ func TestCopyMigrationTablesUseCopyFrom(t *testing.T) {
 		{
 			name:     "tasks",
 			table:    "tasks",
-			columns:  []string{"project", "issue", "host", "status", "state", "agent", "prompt", "caller_pane", "worker_id", "clone_path", "branch", "pr_number", "created_at", "updated_at"},
+			columns:  []string{"project", "issue", "host", "status", "state", "agent", "prompt", "caller_pane", "worker_id", "clone_path", "branch", "pr_number", "pr_repo", "created_at", "updated_at"},
 			wantRows: 2,
 			copyFn:   copyTasks,
 			assertRow: func(t *testing.T, rows [][]any) {
@@ -36,7 +36,8 @@ func TestCopyMigrationTablesUseCopyFrom(t *testing.T) {
 				assertCopyString(t, rows[0], 0, "/repo-alpha")
 				assertCopyString(t, rows[0], 1, "LAB-1304")
 				assertCopyInt64(t, rows[0], 11, 104)
-				assertCopyTime(t, rows[0], 12, time.Date(2026, 4, 15, 9, 10, 0, 0, time.UTC))
+				assertCopyString(t, rows[0], 12, "")
+				assertCopyTime(t, rows[0], 13, time.Date(2026, 4, 15, 9, 10, 0, 0, time.UTC))
 				assertCopyNil(t, rows[1], 11)
 			},
 		},

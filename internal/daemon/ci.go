@@ -19,7 +19,7 @@ const (
 )
 
 func (d *Daemon) handlePRChecksPoll(ctx context.Context, update *TaskStateUpdate, profile AgentProfile) bool {
-	ciState, err := d.lookupPRChecksState(ctx, update.Active.Task.Project, update.Active.Task.PRNumber)
+	ciState, err := d.lookupPRChecksState(ctx, prProjectForTask(update.Active.Task), update.Active.Task.PRNumber)
 	if err != nil {
 		return d.handleCIPollLookupError(update, profile, "lookup_checks_error", err)
 	}
@@ -134,7 +134,7 @@ func (d *Daemon) nudgeForCIFailure(ctx context.Context, update *TaskStateUpdate,
 		return false
 	}
 
-	failedChecks, err := d.lookupFailedPRChecks(ctx, update.Active.Task.Project, update.Active.Task.PRNumber)
+	failedChecks, err := d.lookupFailedPRChecks(ctx, prProjectForTask(update.Active.Task), update.Active.Task.PRNumber)
 	if err != nil {
 		d.handleCIPollLookupError(update, profile, "lookup_failed_checks_error", err)
 		failedChecks = nil

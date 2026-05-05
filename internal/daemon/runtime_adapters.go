@@ -138,6 +138,7 @@ func convertStateTask(project string, task state.Task) Task {
 		ClonePath:    task.ClonePath,
 		Branch:       firstNonEmpty(task.Branch, task.Issue),
 		AgentProfile: task.Agent,
+		PRRepo:       task.PRRepo,
 		CreatedAt:    task.CreatedAt,
 		UpdatedAt:    task.UpdatedAt,
 	}
@@ -170,6 +171,7 @@ func (a *sqliteStateAdapter) PutTask(ctx context.Context, task Task) error {
 		ClonePath:     task.ClonePath,
 		Branch:        task.Branch,
 		PRNumber:      prNumber,
+		PRRepo:        task.PRRepo,
 		CreatedAt:     task.CreatedAt,
 		UpdatedAt:     task.UpdatedAt,
 	})
@@ -204,6 +206,10 @@ func (a *sqliteStateAdapter) TaskByIssueAllHosts(ctx context.Context, project, i
 	return convertStateTask(project, status.Task), nil
 }
 
+func (a *sqliteStateAdapter) KnownProjects(ctx context.Context) ([]string, error) {
+	return a.store.KnownProjects(ctx)
+}
+
 func (a *sqliteStateAdapter) ClaimTask(ctx context.Context, task Task) (*Task, error) {
 	var prNumber *int
 	if task.PRNumber > 0 {
@@ -223,6 +229,7 @@ func (a *sqliteStateAdapter) ClaimTask(ctx context.Context, task Task) (*Task, e
 		ClonePath:     task.ClonePath,
 		Branch:        task.Branch,
 		PRNumber:      prNumber,
+		PRRepo:        task.PRRepo,
 		CreatedAt:     task.CreatedAt,
 		UpdatedAt:     task.UpdatedAt,
 	})
@@ -523,6 +530,7 @@ func convertAssignment(project string, assignment state.Assignment) ActiveAssign
 		ClonePath:    assignment.Task.ClonePath,
 		Branch:       firstNonEmpty(assignment.Task.Branch, assignment.Task.Issue),
 		AgentProfile: assignment.Task.Agent,
+		PRRepo:       assignment.Task.PRRepo,
 		CreatedAt:    assignment.Task.CreatedAt,
 		UpdatedAt:    assignment.Task.UpdatedAt,
 	}
