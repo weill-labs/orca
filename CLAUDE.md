@@ -29,6 +29,18 @@ make test     # run all tests
 make coverage # test coverage report
 ```
 
+### Redeploy
+
+Always run `make install` before restarting the daemon when there are new commits on `main` to deploy. `orca stop && orca start` re-execs the existing binary at `~/.local/bin/orca`; only `make install` rebuilds with the latest commit. Skipping the rebuild is invisible until a concurrent-merge edge case hits a bug that has already been fixed in `main` — at which point the daemon wedges or panics on a fix you thought was deployed days ago.
+
+Prefer the chained one-liner so the build never gets skipped:
+
+```bash
+make install && orca stop && orca start
+```
+
+To check what the running daemon is on, compare `orca version` against `git rev-parse HEAD` (or `git log -1 --oneline origin/main`). If they diverge, redeploy.
+
 ### TDD Workflow
 
 All development follows red-green-refactor with **separate commits** for each phase:
