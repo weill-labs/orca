@@ -374,6 +374,11 @@ func noAvailableQuarantinedClonesError(clones []Clone, activeCWDs map[string]str
 	if len(names) == 0 {
 		return nil
 	}
+	for _, clone := range clones {
+		if clone.Status != StatusQuarantined {
+			return nil
+		}
+	}
 	return NoAvailableClonesError{Quarantined: names}
 }
 

@@ -209,6 +209,40 @@ func TestSQLiteCloneStore(t *testing.T) {
 				if got, want := record.FailureCount, 0; got != want {
 					t.Fatalf("record.FailureCount after unquarantine = %d, want %d", got, want)
 				}
+				if err := store.UnquarantineClone(context.Background(), project, path); err != state.ErrCloneNotQuarantined {
+					t.Fatalf("UnquarantineClone() free error = %v, want ErrCloneNotQuarantined", err)
+				}
+
+				ok, err := store.TryOccupyClone(context.Background(), project, path, "LAB-1697", "LAB-1697")
+				if err != nil {
+					t.Fatalf("TryOccupyClone() occupied setup error = %v", err)
+				}
+				if !ok {
+					t.Fatal("TryOccupyClone() occupied setup = false, want true")
+				}
+				record, err = store.RecordCloneFailure(context.Background(), project, path, 0)
+				if err != nil {
+					t.Fatalf("RecordCloneFailure() occupied error = %v", err)
+				}
+				if got, want := record.Status, state.CloneStatusOccupied; got != want {
+					t.Fatalf("record.Status after occupied failure = %q, want %q", got, want)
+				}
+				if got, want := record.CurrentBranch, "LAB-1697"; got != want {
+					t.Fatalf("record.CurrentBranch after occupied failure = %q, want %q", got, want)
+				}
+				if got, want := record.FailureCount, 0; got != want {
+					t.Fatalf("record.FailureCount after occupied failure = %d, want %d", got, want)
+				}
+				if err := store.UnquarantineClone(context.Background(), project, path); err != state.ErrCloneNotQuarantined {
+					t.Fatalf("UnquarantineClone() occupied error = %v, want ErrCloneNotQuarantined", err)
+				}
+				record, err = store.EnsureClone(context.Background(), project, path)
+				if err != nil {
+					t.Fatalf("EnsureClone() after occupied unquarantine error = %v", err)
+				}
+				if got, want := record.Status, state.CloneStatusOccupied; got != want {
+					t.Fatalf("record.Status after occupied unquarantine = %q, want %q", got, want)
+				}
 
 				missingPath := filepath.Join(t.TempDir(), "missing")
 				if _, err := store.RecordCloneFailure(context.Background(), project, missingPath, 3); err != state.ErrCloneNotFound {

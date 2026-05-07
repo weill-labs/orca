@@ -1408,7 +1408,7 @@ func (s *SQLiteStore) RecordCloneFailure(ctx context.Context, project, path stri
 		    issue = CASE WHEN failure_count + 1 >= ? THEN '' ELSE issue END,
 		    branch = CASE WHEN failure_count + 1 >= ? THEN '' ELSE branch END,
 		    updated_at = ?
-		WHERE project = ? AND path = ? AND `+sqliteHostMatch("host")+`
+		WHERE project = ? AND path = ? AND status != 'occupied' AND `+sqliteHostMatch("host")+`
 	`, s.host, threshold, threshold, threshold, formatTime(s.now()), project, path, s.host)
 	if err != nil {
 		return legacy.CloneRecord{}, fmt.Errorf("record clone failure: %w", err)
@@ -1418,6 +1418,13 @@ func (s *SQLiteStore) RecordCloneFailure(ctx context.Context, project, path stri
 		return legacy.CloneRecord{}, fmt.Errorf("record clone failure rows affected: %w", err)
 	}
 	if rowsAffected == 0 {
+		record, loadErr := s.lookupCloneRecord(ctx, project, path)
+		if loadErr != nil {
+			return legacy.CloneRecord{}, loadErr
+		}
+		if record.Status == legacy.CloneStatusOccupied {
+			return record, nil
+		}
 		return legacy.CloneRecord{}, legacy.ErrCloneNotFound
 	}
 	return s.lookupCloneRecord(ctx, project, path)
@@ -1446,7 +1453,7 @@ func (s *SQLiteStore) UnquarantineClone(ctx context.Context, project, path strin
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE clones
 		SET host = ?, status = 'free', issue = '', branch = '', failure_count = 0, updated_at = ?
-		WHERE project = ? AND path = ? AND `+sqliteHostMatch("host")+`
+		WHERE project = ? AND path = ? AND status = 'quarantined' AND `+sqliteHostMatch("host")+`
 	`, s.host, formatTime(s.now()), project, path, s.host)
 	if err != nil {
 		return fmt.Errorf("unquarantine clone: %w", err)
@@ -1456,7 +1463,10 @@ func (s *SQLiteStore) UnquarantineClone(ctx context.Context, project, path strin
 		return fmt.Errorf("unquarantine clone rows affected: %w", err)
 	}
 	if rowsAffected == 0 {
-		return legacy.ErrCloneNotFound
+		if _, loadErr := s.lookupCloneRecord(ctx, project, path); loadErr != nil {
+			return loadErr
+		}
+		return legacy.ErrCloneNotQuarantined
 	}
 	return nil
 }

@@ -114,7 +114,7 @@ Resume a task in its existing pane.`,
 	"workers": `usage: orca workers [--project PATH] [--json]
 
 List workers and their state.`,
-	"pool": `usage: orca pool [unquarantine CLONE] [--project PATH] [--json]
+	"pool": `usage: orca pool [--project PATH] [--json] [unquarantine|reset CLONE]
 
 List clone pool status or restore a quarantined clone.`,
 	"events": `usage: orca events [--project PATH]
@@ -872,7 +872,7 @@ type cloneUnquarantineStore interface {
 
 func (a *App) runPoolUnquarantine(ctx context.Context, projectPath string, jsonOutput bool, args []string) error {
 	if len(args) != 1 {
-		return fmt.Errorf("usage: orca pool unquarantine CLONE [--project PATH]")
+		return fmt.Errorf("usage: orca pool [--project PATH] unquarantine CLONE")
 	}
 	store, ok := a.state.(cloneUnquarantineStore)
 	if !ok {
@@ -890,6 +890,9 @@ func (a *App) runPoolUnquarantine(ctx context.Context, projectPath string, jsonO
 	clone, err := resolvePoolClone(clones, args[0])
 	if err != nil {
 		return err
+	}
+	if clone.Status != "quarantined" {
+		return fmt.Errorf("clone %q is not quarantined (status: %s)", filepath.Base(clone.Path), clone.Status)
 	}
 	if err := store.UnquarantineClone(ctx, projectPath, clone.Path); err != nil {
 		return err

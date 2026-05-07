@@ -15,7 +15,10 @@ const (
 	sqliteDriver = "sqlite"
 )
 
-var ErrCloneNotFound = errors.New("state: clone not found")
+var (
+	ErrCloneNotFound       = errors.New("state: clone not found")
+	ErrCloneNotQuarantined = errors.New("state: clone not quarantined")
+)
 
 type CloneStatus string
 
@@ -157,13 +160,14 @@ func (s *SQLiteStore) RecordCloneFailure(ctx context.Context, project, path stri
 		     status = CASE WHEN failure_count + 1 >= ? THEN ? ELSE status END,
 		     current_branch = CASE WHEN failure_count + 1 >= ? THEN '' ELSE current_branch END,
 		     assigned_task = CASE WHEN failure_count + 1 >= ? THEN '' ELSE assigned_task END
-		 WHERE project = ? AND path = ?`,
+		 WHERE project = ? AND path = ? AND status != ?`,
 		threshold,
 		CloneStatusQuarantined,
 		threshold,
 		threshold,
 		project,
 		path,
+		CloneStatusOccupied,
 	)
 	if err != nil {
 		return CloneRecord{}, fmt.Errorf("record clone failure: %w", err)
@@ -173,6 +177,13 @@ func (s *SQLiteStore) RecordCloneFailure(ctx context.Context, project, path stri
 		return CloneRecord{}, fmt.Errorf("read affected rows: %w", err)
 	}
 	if rows == 0 {
+		record, loadErr := s.clone(ctx, project, path)
+		if loadErr != nil {
+			return CloneRecord{}, loadErr
+		}
+		if record.Status == CloneStatusOccupied {
+			return record, nil
+		}
 		return CloneRecord{}, ErrCloneNotFound
 	}
 	return s.clone(ctx, project, path)
@@ -205,10 +216,11 @@ func (s *SQLiteStore) UnquarantineClone(ctx context.Context, project, path strin
 		ctx,
 		`UPDATE clones
 		 SET status = ?, current_branch = '', assigned_task = '', failure_count = 0
-		 WHERE project = ? AND path = ?`,
+		 WHERE project = ? AND path = ? AND status = ?`,
 		CloneStatusFree,
 		project,
 		path,
+		CloneStatusQuarantined,
 	)
 	if err != nil {
 		return fmt.Errorf("unquarantine clone: %w", err)
@@ -218,7 +230,10 @@ func (s *SQLiteStore) UnquarantineClone(ctx context.Context, project, path strin
 		return fmt.Errorf("read affected rows: %w", err)
 	}
 	if rows == 0 {
-		return ErrCloneNotFound
+		if _, loadErr := s.clone(ctx, project, path); loadErr != nil {
+			return loadErr
+		}
+		return ErrCloneNotQuarantined
 	}
 	return nil
 }

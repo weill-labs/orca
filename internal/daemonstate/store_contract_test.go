@@ -382,6 +382,40 @@ func testStoreCloneFailureQuarantine(t *testing.T, h storeContractHarness) {
 	if got, want := record.FailureCount, 0; got != want {
 		t.Fatalf("record.FailureCount after unquarantine = %d, want %d", got, want)
 	}
+	if err := h.store.UnquarantineClone(ctx, project, clonePath); !errors.Is(err, legacy.ErrCloneNotQuarantined) {
+		t.Fatalf("UnquarantineClone() free error = %v, want ErrCloneNotQuarantined", err)
+	}
+
+	ok, err := h.store.TryOccupyClone(ctx, project, clonePath, "LAB-1697", "LAB-1697")
+	if err != nil {
+		t.Fatalf("TryOccupyClone() occupied setup error = %v", err)
+	}
+	if !ok {
+		t.Fatal("TryOccupyClone() occupied setup = false, want true")
+	}
+	record, err = h.store.RecordCloneFailure(ctx, project, clonePath, 0)
+	if err != nil {
+		t.Fatalf("RecordCloneFailure() occupied error = %v", err)
+	}
+	if got, want := record.Status, legacy.CloneStatusOccupied; got != want {
+		t.Fatalf("record.Status after occupied failure = %q, want %q", got, want)
+	}
+	if got, want := record.CurrentBranch, "LAB-1697"; got != want {
+		t.Fatalf("record.CurrentBranch after occupied failure = %q, want %q", got, want)
+	}
+	if got, want := record.FailureCount, 0; got != want {
+		t.Fatalf("record.FailureCount after occupied failure = %d, want %d", got, want)
+	}
+	if err := h.store.UnquarantineClone(ctx, project, clonePath); !errors.Is(err, legacy.ErrCloneNotQuarantined) {
+		t.Fatalf("UnquarantineClone() occupied error = %v, want ErrCloneNotQuarantined", err)
+	}
+	record, err = h.store.lookupCloneRecord(ctx, project, clonePath)
+	if err != nil {
+		t.Fatalf("lookupCloneRecord() after occupied unquarantine error = %v", err)
+	}
+	if got, want := record.Status, legacy.CloneStatusOccupied; got != want {
+		t.Fatalf("record.Status after occupied unquarantine = %q, want %q", got, want)
+	}
 }
 
 func testStoreAllActiveQueriesAcrossProjects(t *testing.T, h storeContractHarness) {

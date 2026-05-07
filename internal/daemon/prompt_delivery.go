@@ -288,7 +288,7 @@ func promptDeliveryReturnedToShell(profile AgentProfile, snapshot PaneCapture) b
 func commandNotFoundInOutput(output string) bool {
 	lower := strings.ToLower(output)
 	return strings.Contains(lower, "command not found") ||
-		(strings.Contains(lower, "command ") && strings.Contains(lower, " not found"))
+		strings.Contains(lower, ": not found")
 }
 
 func promptDeliveryFailure(profile AgentProfile, message string, snapshot PaneCapture) error {

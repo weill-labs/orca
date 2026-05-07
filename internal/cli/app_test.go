@@ -1712,6 +1712,17 @@ func TestAppRunOutputModes(t *testing.T) {
 			},
 		},
 		{
+			name:   "pool unquarantine rejects occupied clone",
+			args:   []string{"pool", "unquarantine", "clone-08"},
+			daemon: &fakeDaemon{},
+			state: &fakeState{
+				clones: []state.Clone{
+					{Path: "/repo/.orca/pool/clone-08", Status: "occupied", Issue: "LAB-1697", Branch: "LAB-1697", UpdatedAt: now},
+				},
+			},
+			wantErr: `clone "clone-08" is not quarantined (status: occupied)`,
+		},
+		{
 			name:    "events extra arg",
 			args:    []string{"events", "extra"},
 			daemon:  &fakeDaemon{},

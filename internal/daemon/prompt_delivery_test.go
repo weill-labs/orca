@@ -90,6 +90,43 @@ func TestPaneRunsCodex(t *testing.T) {
 	}
 }
 
+func TestCommandNotFoundInOutput(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		output string
+		want   bool
+	}{
+		{
+			name:   "bash command not found",
+			output: "bash: Command Verify: command not found",
+			want:   true,
+		},
+		{
+			name:   "shell not found shorthand",
+			output: "zsh: verify: not found",
+			want:   true,
+		},
+		{
+			name:   "disjoint command discussion",
+			output: "Codex says command execution succeeded but artifact not found",
+			want:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := commandNotFoundInOutput(tt.output); got != tt.want {
+				t.Fatalf("commandNotFoundInOutput(%q) = %t, want %t", tt.output, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestConfirmPromptDeliveryReturnsWaitContentError(t *testing.T) {
 	t.Parallel()
 

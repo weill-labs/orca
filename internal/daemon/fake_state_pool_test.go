@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/weill-labs/orca/internal/pool"
 )
 
 type fakeState struct {
@@ -723,7 +725,7 @@ func (p *fakePool) RecordCloneFailure(ctx context.Context, project string, clone
 		p.quarantined = make(map[string]bool)
 	}
 	p.failureCounts[clone.Path]++
-	if p.failureCounts[clone.Path] >= 3 {
+	if p.failureCounts[clone.Path] >= pool.CloneQuarantineFailureThreshold {
 		p.quarantined[clone.Path] = true
 	}
 	return nil
