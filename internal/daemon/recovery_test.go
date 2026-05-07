@@ -168,6 +168,108 @@ func TestDaemonStartReleasesStaleOccupiedClones(t *testing.T) {
 	}
 }
 
+func TestDaemonStartReconcilesStrandedMergedTasks(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		issue    string
+		state    string
+		prNumber int
+	}{
+		{name: "merged state", issue: "LAB-1320", state: TaskStateMerged, prNumber: 1320},
+		{name: "done state", issue: "LAB-1321", state: TaskStateDone, prNumber: 1321},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			deps := newTestDeps(t)
+			setLifecyclePromptActiveAfterIdleProbes(deps, 0)
+			seedActiveAssignment(t, deps, tt.issue, "pane-1")
+			task, ok := deps.state.task(tt.issue)
+			if !ok {
+				t.Fatalf("task %q missing before startup", tt.issue)
+			}
+			task.State = tt.state
+			task.PRNumber = tt.prNumber
+			deps.state.putTaskForTest(task)
+			seedMergeEntryForTest(t, deps, tt.issue, tt.prNumber)
+
+			workerID := task.WorkerID
+			d := deps.newDaemon(t)
+			ctx := context.Background()
+			if err := d.Start(ctx); err != nil {
+				t.Fatalf("Start() error = %v", err)
+			}
+			t.Cleanup(func() {
+				_ = d.Stop(context.Background())
+			})
+
+			waitFor(t, "stranded merged task cleanup", func() bool {
+				task, ok := deps.state.task(tt.issue)
+				return ok && task.Status == TaskStatusDone && task.State == TaskStateDone
+			})
+
+			task, ok = deps.state.task(tt.issue)
+			if !ok {
+				t.Fatal("task missing after startup reconciliation")
+			}
+			if got, want := task.Status, TaskStatusDone; got != want {
+				t.Fatalf("task.Status = %q, want %q", got, want)
+			}
+			if got, want := task.State, TaskStateDone; got != want {
+				t.Fatalf("task.State = %q, want %q", got, want)
+			}
+
+			worker, ok := deps.state.worker(workerID)
+			if !ok {
+				t.Fatalf("worker %q missing after startup reconciliation", workerID)
+			}
+			if worker.Issue != "" || worker.PaneID != "" {
+				t.Fatalf("worker claim = issue %q pane %q, want released", worker.Issue, worker.PaneID)
+			}
+			if got, want := deps.pool.releasedClones(), []Clone{{
+				Name:          deps.pool.clone.Name,
+				Path:          deps.pool.clone.Path,
+				CurrentBranch: tt.issue,
+				AssignedTask:  tt.issue,
+			}}; !reflect.DeepEqual(got, want) {
+				t.Fatalf("released clones = %#v, want %#v", got, want)
+			}
+			entry, err := deps.state.MergeEntry(context.Background(), "/tmp/project", tt.prNumber)
+			if err != nil {
+				t.Fatalf("MergeEntry() error = %v", err)
+			}
+			if entry != nil {
+				t.Fatalf("MergeEntry() = %#v, want nil after startup cleanup", entry)
+			}
+
+			deps.amux.requireSentKeys(t, "pane-1", []string{
+				mergedWrapUpPrompt + "\n",
+				postmortemCommand + "\n",
+			})
+			deps.events.requireTypes(t, EventWorkerPostmortem, EventTaskCompleted)
+
+			wrapUpPromptCount := deps.amux.countKey("pane-1", mergedWrapUpPrompt+"\n")
+			postmortemPromptCount := deps.amux.countKey("pane-1", postmortemCommand+"\n")
+			completedEventCount := deps.events.countType(EventTaskCompleted)
+			d.reconcileStrandedMergedTasks(ctx)
+			if got := deps.amux.countKey("pane-1", mergedWrapUpPrompt+"\n"); got != wrapUpPromptCount {
+				t.Fatalf("merged wrap-up prompt count after second recovery = %d, want %d", got, wrapUpPromptCount)
+			}
+			if got := deps.amux.countKey("pane-1", postmortemCommand+"\n"); got != postmortemPromptCount {
+				t.Fatalf("postmortem prompt count after second recovery = %d, want %d", got, postmortemPromptCount)
+			}
+			if got := deps.events.countType(EventTaskCompleted); got != completedEventCount {
+				t.Fatalf("task completed event count after second recovery = %d, want %d", got, completedEventCount)
+			}
+		})
+	}
+}
+
 func TestGlobalDaemonStartUsesTaskProjectForWorkerLookup(t *testing.T) {
 	t.Parallel()
 
