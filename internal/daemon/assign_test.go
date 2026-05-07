@@ -844,6 +844,37 @@ func TestAssignQuarantinesCloneAfterConsecutivePromptDeliveryFailures(t *testing
 	}
 }
 
+func TestAssignSuccessResetsCloneFailureCount(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	deps.pool.failureCounts = map[string]int{
+		deps.pool.clone.Path: 2,
+	}
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-1701", "Verify clone failure reset", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	waitFor(t, "task registration", func() bool {
+		task, ok := deps.state.task("LAB-1701")
+		return ok && task.Status == TaskStatusActive
+	})
+	if got := deps.pool.cloneFailureCount(deps.pool.clone.Path); got != 0 {
+		t.Fatalf("clone failure count = %d, want reset after successful assign", got)
+	}
+}
+
 func TestAssignRollsBackOnIssueStatusFailureAfterPersistingStartingState(t *testing.T) {
 	t.Parallel()
 
