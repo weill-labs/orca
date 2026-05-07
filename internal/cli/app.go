@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -113,9 +114,9 @@ Resume a task in its existing pane.`,
 	"workers": `usage: orca workers [--project PATH] [--json]
 
 List workers and their state.`,
-	"pool": `usage: orca pool [--project PATH] [--json]
+	"pool": `usage: orca pool [--project PATH] [--json] [unquarantine|reset CLONE]
 
-List clone pool status.`,
+List clone pool status or restore a quarantined clone.`,
 	"events": `usage: orca events [--project PATH]
 
 Stream orchestration events as NDJSON.`,
@@ -840,8 +841,14 @@ func (a *App) runPool(ctx context.Context, args []string) error {
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
-	if len(fs.Args()) > 0 {
-		return fmt.Errorf("pool does not accept positional arguments")
+	positionals := fs.Args()
+	if len(positionals) > 0 {
+		switch positionals[0] {
+		case "unquarantine", "reset":
+			return a.runPoolUnquarantine(ctx, projectPath, jsonOutput, positionals[1:])
+		default:
+			return fmt.Errorf("unknown pool subcommand %q", positionals[0])
+		}
 	}
 
 	projectPath, err := a.resolveProject(projectPath)
@@ -857,6 +864,62 @@ func (a *App) runPool(ctx context.Context, args []string) error {
 		return writeJSON(a.stdout, clones)
 	}
 	return writeClones(a.stdout, clones)
+}
+
+type cloneUnquarantineStore interface {
+	UnquarantineClone(ctx context.Context, project, path string) error
+}
+
+func (a *App) runPoolUnquarantine(ctx context.Context, projectPath string, jsonOutput bool, args []string) error {
+	if len(args) != 1 {
+		return fmt.Errorf("usage: orca pool [--project PATH] unquarantine CLONE")
+	}
+	store, ok := a.state.(cloneUnquarantineStore)
+	if !ok {
+		return fmt.Errorf("state store does not support clone unquarantine")
+	}
+
+	projectPath, err := a.resolveProject(projectPath)
+	if err != nil {
+		return err
+	}
+	clones, err := a.state.ListClones(ctx, projectPath)
+	if err != nil {
+		return err
+	}
+	clone, err := resolvePoolClone(clones, args[0])
+	if err != nil {
+		return err
+	}
+	if clone.Status != "quarantined" {
+		return fmt.Errorf("clone %q is not quarantined (status: %s)", filepath.Base(clone.Path), clone.Status)
+	}
+	if err := store.UnquarantineClone(ctx, projectPath, clone.Path); err != nil {
+		return err
+	}
+
+	clone.Status = "free"
+	clone.Issue = ""
+	clone.Branch = ""
+	clone.FailureCount = 0
+	if jsonOutput {
+		return writeJSON(a.stdout, clone)
+	}
+	_, err = fmt.Fprintf(a.stdout, "unquarantined %s\n", filepath.Base(clone.Path))
+	return err
+}
+
+func resolvePoolClone(clones []state.Clone, ref string) (state.Clone, error) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return state.Clone{}, fmt.Errorf("clone is required")
+	}
+	for _, clone := range clones {
+		if clone.Path == ref || filepath.Base(clone.Path) == ref {
+			return clone, nil
+		}
+	}
+	return state.Clone{}, fmt.Errorf("clone %q not found in pool", ref)
 }
 
 func (a *App) runEvents(ctx context.Context, args []string) error {
@@ -1239,11 +1302,11 @@ func writeClones(w io.Writer, clones []state.Clone) error {
 	}
 
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	if _, err := fmt.Fprintln(tw, "PATH\tSTATUS\tISSUE\tBRANCH\tUPDATED"); err != nil {
+	if _, err := fmt.Fprintln(tw, "PATH\tSTATUS\tFAILURES\tISSUE\tBRANCH\tUPDATED"); err != nil {
 		return err
 	}
 	for _, clone := range clones {
-		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", clone.Path, fallback(clone.Status), fallback(clone.Issue), fallback(clone.Branch), formatTimestamp(clone.UpdatedAt)); err != nil {
+		if _, err := fmt.Fprintf(tw, "%s\t%s\t%d\t%s\t%s\t%s\n", clone.Path, fallback(clone.Status), clone.FailureCount, fallback(clone.Issue), fallback(clone.Branch), formatTimestamp(clone.UpdatedAt)); err != nil {
 			return err
 		}
 	}

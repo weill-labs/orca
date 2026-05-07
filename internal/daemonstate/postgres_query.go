@@ -344,7 +344,7 @@ func (s *PostgresStore) ListClones(ctx context.Context, project string) ([]Clone
 	}
 
 	rows, err := s.pool.Query(ctx, `
-		SELECT path, status, issue, branch, updated_at
+		SELECT path, status, issue, branch, failure_count, updated_at
 		FROM clones
 		WHERE project = $1 AND `+postgresHostMatch("host", 2)+`
 		ORDER BY updated_at DESC, path ASC
@@ -357,7 +357,7 @@ func (s *PostgresStore) ListClones(ctx context.Context, project string) ([]Clone
 	clones := make([]Clone, 0)
 	for rows.Next() {
 		var clone Clone
-		if err := rows.Scan(&clone.Path, &clone.Status, &clone.Issue, &clone.Branch, &clone.UpdatedAt); err != nil {
+		if err := rows.Scan(&clone.Path, &clone.Status, &clone.Issue, &clone.Branch, &clone.FailureCount, &clone.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan clone: %w", err)
 		}
 		clone.UpdatedAt = normalizeTime(clone.UpdatedAt)
@@ -990,13 +990,13 @@ func (s *PostgresStore) queryEvents(ctx context.Context, project, issue string, 
 
 func (s *PostgresStore) lookupCloneRecord(ctx context.Context, project, path string) (legacy.CloneRecord, error) {
 	row := s.pool.QueryRow(ctx, `
-		SELECT project, path, status, branch, issue
+		SELECT project, path, status, branch, issue, failure_count
 		FROM clones
 		WHERE project = $1 AND path = $2 AND `+postgresHostMatch("host", 3)+`
 	`, project, path, s.host)
 
 	var record legacy.CloneRecord
-	if err := row.Scan(&record.Project, &record.Path, &record.Status, &record.CurrentBranch, &record.AssignedTask); err != nil {
+	if err := row.Scan(&record.Project, &record.Path, &record.Status, &record.CurrentBranch, &record.AssignedTask, &record.FailureCount); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return legacy.CloneRecord{}, legacy.ErrCloneNotFound
 		}
@@ -1168,7 +1168,7 @@ func (s *PostgresStore) allWorkers(ctx context.Context) ([]Worker, error) {
 
 func (s *PostgresStore) hostClones(ctx context.Context) ([]Clone, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT path, status, issue, branch, updated_at
+		SELECT path, status, issue, branch, failure_count, updated_at
 		FROM clones
 		WHERE `+postgresHostMatch("host", 1)+`
 		ORDER BY updated_at DESC, path ASC
@@ -1181,7 +1181,7 @@ func (s *PostgresStore) hostClones(ctx context.Context) ([]Clone, error) {
 	clones := make([]Clone, 0)
 	for rows.Next() {
 		var clone Clone
-		if err := rows.Scan(&clone.Path, &clone.Status, &clone.Issue, &clone.Branch, &clone.UpdatedAt); err != nil {
+		if err := rows.Scan(&clone.Path, &clone.Status, &clone.Issue, &clone.Branch, &clone.FailureCount, &clone.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan host clone: %w", err)
 		}
 		clone.UpdatedAt = normalizeTime(clone.UpdatedAt)
@@ -1195,7 +1195,7 @@ func (s *PostgresStore) hostClones(ctx context.Context) ([]Clone, error) {
 
 func (s *PostgresStore) listClonesAllHostsForProject(ctx context.Context, project string) ([]Clone, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT path, status, issue, branch, updated_at
+		SELECT path, status, issue, branch, failure_count, updated_at
 		FROM clones
 		WHERE project = $1
 		ORDER BY updated_at DESC, path ASC
@@ -1208,7 +1208,7 @@ func (s *PostgresStore) listClonesAllHostsForProject(ctx context.Context, projec
 	clones := make([]Clone, 0)
 	for rows.Next() {
 		var clone Clone
-		if err := rows.Scan(&clone.Path, &clone.Status, &clone.Issue, &clone.Branch, &clone.UpdatedAt); err != nil {
+		if err := rows.Scan(&clone.Path, &clone.Status, &clone.Issue, &clone.Branch, &clone.FailureCount, &clone.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan all-host clone: %w", err)
 		}
 		clone.UpdatedAt = normalizeTime(clone.UpdatedAt)
@@ -1222,7 +1222,7 @@ func (s *PostgresStore) listClonesAllHostsForProject(ctx context.Context, projec
 
 func (s *PostgresStore) allClones(ctx context.Context) ([]Clone, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT path, status, issue, branch, updated_at
+		SELECT path, status, issue, branch, failure_count, updated_at
 		FROM clones
 		ORDER BY updated_at DESC, path ASC
 	`)
@@ -1234,7 +1234,7 @@ func (s *PostgresStore) allClones(ctx context.Context) ([]Clone, error) {
 	clones := make([]Clone, 0)
 	for rows.Next() {
 		var clone Clone
-		if err := rows.Scan(&clone.Path, &clone.Status, &clone.Issue, &clone.Branch, &clone.UpdatedAt); err != nil {
+		if err := rows.Scan(&clone.Path, &clone.Status, &clone.Issue, &clone.Branch, &clone.FailureCount, &clone.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan all clone: %w", err)
 		}
 		clone.UpdatedAt = normalizeTime(clone.UpdatedAt)

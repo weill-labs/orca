@@ -57,6 +57,22 @@ func (p *multiProjectPool) Release(ctx context.Context, projectPath string, clon
 	return manager.Release(ctx, clone.Path, branch)
 }
 
+func (p *multiProjectPool) RecordCloneFailure(ctx context.Context, projectPath string, clone Clone) error {
+	manager, err := p.manager(projectPath)
+	if err != nil {
+		return err
+	}
+	return manager.RecordCloneFailure(ctx, clone.Path)
+}
+
+func (p *multiProjectPool) RecordCloneSuccess(ctx context.Context, projectPath string, clone Clone) error {
+	manager, err := p.manager(projectPath)
+	if err != nil {
+		return err
+	}
+	return manager.RecordCloneSuccess(ctx, clone.Path)
+}
+
 func (p *multiProjectPool) manager(projectPath string) (*pool.Manager, error) {
 	projectPath, err := project.CanonicalPath(projectPath)
 	if err != nil {

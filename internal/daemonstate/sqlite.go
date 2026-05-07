@@ -99,6 +99,7 @@ CREATE TABLE IF NOT EXISTS clones (
 	status TEXT NOT NULL,
 	issue TEXT NOT NULL DEFAULT '',
 	branch TEXT NOT NULL DEFAULT '',
+	failure_count INTEGER NOT NULL DEFAULT 0,
 	updated_at TEXT NOT NULL,
 	PRIMARY KEY (project, path)
 );
@@ -206,6 +207,7 @@ CREATE TABLE IF NOT EXISTS clones (
 	status TEXT NOT NULL,
 	issue TEXT NOT NULL DEFAULT '',
 	branch TEXT NOT NULL DEFAULT '',
+	failure_count INTEGER NOT NULL DEFAULT 0,
 	updated_at TEXT NOT NULL,
 	PRIMARY KEY (project, path)
 );
@@ -295,6 +297,9 @@ func (s *SQLiteStore) EnsureSchema(ctx context.Context) error {
 		return err
 	}
 	if err := s.ensureHostSchema(ctx); err != nil {
+		return err
+	}
+	if err := s.ensureCloneFailureSchema(ctx); err != nil {
 		return err
 	}
 	if err := s.ensureDaemonStatusSchema(ctx); err != nil {
@@ -644,7 +649,7 @@ func (s *SQLiteStore) ListClones(ctx context.Context, project string) ([]Clone, 
 	}
 
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT path, status, issue, branch, updated_at
+		SELECT path, status, issue, branch, failure_count, updated_at
 		FROM clones
 		WHERE project = ? AND `+sqliteHostMatch("host")+`
 		ORDER BY updated_at DESC, path ASC
@@ -658,7 +663,7 @@ func (s *SQLiteStore) ListClones(ctx context.Context, project string) ([]Clone, 
 	for rows.Next() {
 		var clone Clone
 		var updatedAt string
-		if err := rows.Scan(&clone.Path, &clone.Status, &clone.Issue, &clone.Branch, &updatedAt); err != nil {
+		if err := rows.Scan(&clone.Path, &clone.Status, &clone.Issue, &clone.Branch, &clone.FailureCount, &updatedAt); err != nil {
 			return nil, fmt.Errorf("scan clone: %w", err)
 		}
 		clone.UpdatedAt = parseTime(updatedAt)
@@ -1391,6 +1396,81 @@ func (s *SQLiteStore) TryOccupyClone(ctx context.Context, project, path, branch,
 	return rowsAffected == 1, nil
 }
 
+func (s *SQLiteStore) RecordCloneFailure(ctx context.Context, project, path string, threshold int) (legacy.CloneRecord, error) {
+	if threshold <= 0 {
+		threshold = 1
+	}
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE clones
+		SET host = ?,
+		    failure_count = failure_count + 1,
+		    status = CASE WHEN failure_count + 1 >= ? THEN 'quarantined' ELSE status END,
+		    issue = CASE WHEN failure_count + 1 >= ? THEN '' ELSE issue END,
+		    branch = CASE WHEN failure_count + 1 >= ? THEN '' ELSE branch END,
+		    updated_at = ?
+		WHERE project = ? AND path = ? AND status != 'occupied' AND `+sqliteHostMatch("host")+`
+	`, s.host, threshold, threshold, threshold, formatTime(s.now()), project, path, s.host)
+	if err != nil {
+		return legacy.CloneRecord{}, fmt.Errorf("record clone failure: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return legacy.CloneRecord{}, fmt.Errorf("record clone failure rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		record, loadErr := s.lookupCloneRecord(ctx, project, path)
+		if loadErr != nil {
+			return legacy.CloneRecord{}, loadErr
+		}
+		if record.Status == legacy.CloneStatusOccupied {
+			return record, nil
+		}
+		return legacy.CloneRecord{}, legacy.ErrCloneNotFound
+	}
+	return s.lookupCloneRecord(ctx, project, path)
+}
+
+func (s *SQLiteStore) ResetCloneFailures(ctx context.Context, project, path string) error {
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE clones
+		SET host = ?, failure_count = 0, updated_at = ?
+		WHERE project = ? AND path = ? AND `+sqliteHostMatch("host")+`
+	`, s.host, formatTime(s.now()), project, path, s.host)
+	if err != nil {
+		return fmt.Errorf("reset clone failures: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("reset clone failures rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		return legacy.ErrCloneNotFound
+	}
+	return nil
+}
+
+func (s *SQLiteStore) UnquarantineClone(ctx context.Context, project, path string) error {
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE clones
+		SET host = ?, status = 'free', issue = '', branch = '', failure_count = 0, updated_at = ?
+		WHERE project = ? AND path = ? AND status = 'quarantined' AND `+sqliteHostMatch("host")+`
+	`, s.host, formatTime(s.now()), project, path, s.host)
+	if err != nil {
+		return fmt.Errorf("unquarantine clone: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("unquarantine clone rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		if _, loadErr := s.lookupCloneRecord(ctx, project, path); loadErr != nil {
+			return loadErr
+		}
+		return legacy.ErrCloneNotQuarantined
+	}
+	return nil
+}
+
 func (s *SQLiteStore) MarkCloneFree(ctx context.Context, project, path string) error {
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE clones
@@ -1602,7 +1682,7 @@ func (s *SQLiteStore) hostWorkers(ctx context.Context) ([]Worker, error) {
 
 func (s *SQLiteStore) allClones(ctx context.Context) ([]Clone, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT path, status, issue, branch, updated_at
+		SELECT path, status, issue, branch, failure_count, updated_at
 		FROM clones
 		ORDER BY updated_at DESC, path ASC
 	`)
@@ -1615,7 +1695,7 @@ func (s *SQLiteStore) allClones(ctx context.Context) ([]Clone, error) {
 	for rows.Next() {
 		var clone Clone
 		var updatedAt string
-		if err := rows.Scan(&clone.Path, &clone.Status, &clone.Issue, &clone.Branch, &updatedAt); err != nil {
+		if err := rows.Scan(&clone.Path, &clone.Status, &clone.Issue, &clone.Branch, &clone.FailureCount, &updatedAt); err != nil {
 			return nil, fmt.Errorf("scan all clone: %w", err)
 		}
 		clone.UpdatedAt = parseTime(updatedAt)
@@ -1629,7 +1709,7 @@ func (s *SQLiteStore) allClones(ctx context.Context) ([]Clone, error) {
 
 func (s *SQLiteStore) hostClones(ctx context.Context) ([]Clone, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT path, status, issue, branch, updated_at
+		SELECT path, status, issue, branch, failure_count, updated_at
 		FROM clones
 		WHERE `+sqliteHostMatch("host")+`
 		ORDER BY updated_at DESC, path ASC
@@ -1643,7 +1723,7 @@ func (s *SQLiteStore) hostClones(ctx context.Context) ([]Clone, error) {
 	for rows.Next() {
 		var clone Clone
 		var updatedAt string
-		if err := rows.Scan(&clone.Path, &clone.Status, &clone.Issue, &clone.Branch, &updatedAt); err != nil {
+		if err := rows.Scan(&clone.Path, &clone.Status, &clone.Issue, &clone.Branch, &clone.FailureCount, &updatedAt); err != nil {
 			return nil, fmt.Errorf("scan host clone: %w", err)
 		}
 		clone.UpdatedAt = parseTime(updatedAt)
@@ -1657,7 +1737,7 @@ func (s *SQLiteStore) hostClones(ctx context.Context) ([]Clone, error) {
 
 func (s *SQLiteStore) listClonesAllHostsForProject(ctx context.Context, project string) ([]Clone, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT path, status, issue, branch, updated_at
+		SELECT path, status, issue, branch, failure_count, updated_at
 		FROM clones
 		WHERE project = ?
 		ORDER BY updated_at DESC, path ASC
@@ -1671,7 +1751,7 @@ func (s *SQLiteStore) listClonesAllHostsForProject(ctx context.Context, project 
 	for rows.Next() {
 		var clone Clone
 		var updatedAt string
-		if err := rows.Scan(&clone.Path, &clone.Status, &clone.Issue, &clone.Branch, &updatedAt); err != nil {
+		if err := rows.Scan(&clone.Path, &clone.Status, &clone.Issue, &clone.Branch, &clone.FailureCount, &updatedAt); err != nil {
 			return nil, fmt.Errorf("scan all-host clone: %w", err)
 		}
 		clone.UpdatedAt = parseTime(updatedAt)
@@ -2134,13 +2214,13 @@ func (s *SQLiteStore) queryEvents(ctx context.Context, project, issue string, af
 
 func (s *SQLiteStore) lookupCloneRecord(ctx context.Context, project, path string) (legacy.CloneRecord, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT project, path, status, branch, issue
+		SELECT project, path, status, branch, issue, failure_count
 		FROM clones
 		WHERE project = ? AND path = ? AND `+sqliteHostMatch("host")+`
 	`, project, path, s.host)
 
 	var record legacy.CloneRecord
-	if err := row.Scan(&record.Project, &record.Path, &record.Status, &record.CurrentBranch, &record.AssignedTask); err != nil {
+	if err := row.Scan(&record.Project, &record.Path, &record.Status, &record.CurrentBranch, &record.AssignedTask, &record.FailureCount); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return legacy.CloneRecord{}, legacy.ErrCloneNotFound
 		}
@@ -2488,6 +2568,10 @@ func (s *SQLiteStore) ensureHostSchema(ctx context.Context) error {
 		return err
 	}
 	return s.addColumnIfMissing(ctx, "clones", "host", "TEXT NOT NULL DEFAULT ''")
+}
+
+func (s *SQLiteStore) ensureCloneFailureSchema(ctx context.Context) error {
+	return s.addColumnIfMissing(ctx, "clones", "failure_count", "INTEGER NOT NULL DEFAULT 0")
 }
 
 func (s *SQLiteStore) ensureDaemonStatusSchema(ctx context.Context) error {

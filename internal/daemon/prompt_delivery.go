@@ -269,6 +269,9 @@ func promptDeliveryReturnedToShell(profile AgentProfile, snapshot PaneCapture) b
 	if !strings.EqualFold(profile.Name, "codex") {
 		return false
 	}
+	if commandNotFoundInOutput(snapshot.Output()) {
+		return true
+	}
 	command := strings.TrimSpace(snapshot.CurrentCommand)
 	if command == "" {
 		return false
@@ -280,6 +283,12 @@ func promptDeliveryReturnedToShell(profile AgentProfile, snapshot PaneCapture) b
 	default:
 		return false
 	}
+}
+
+func commandNotFoundInOutput(output string) bool {
+	lower := strings.ToLower(output)
+	return strings.Contains(lower, "command not found") ||
+		strings.Contains(lower, ": not found")
 }
 
 func promptDeliveryFailure(profile AgentProfile, message string, snapshot PaneCapture) error {

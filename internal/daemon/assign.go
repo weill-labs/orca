@@ -227,6 +227,7 @@ func (d *Daemon) assign(ctx context.Context, projectPath, issue, prompt, agentPr
 		failSpawnedAssignment(pane, worker, err)
 		return fmt.Errorf("store worker: %w", err)
 	}
+	d.recordCloneAssignmentSuccess(ctx, projectPath, clone)
 	d.ensureTaskMonitorForProject(projectPath, issue)
 	d.requestRelayReconnect()
 
@@ -341,8 +342,43 @@ func promptMentionsDifferentIssue(prompt, issue string) bool {
 func (d *Daemon) failPendingAssignment(ctx context.Context, projectPath, issue string, clone Clone, pane Pane, worker Worker, profile AgentProfile, prNumber int, err error, releaseReservation func()) {
 	d.emitAssignFailure(ctx, projectPath, issue, worker.WorkerID, profile.Name, clone, pane, prNumber, err)
 	_ = d.rollbackAssignmentForProject(ctx, projectPath, clone, pane, issue)
+	if assignmentStartupFailureCountsTowardQuarantine(err) {
+		d.recordCloneAssignmentFailure(context.WithoutCancel(ctx), projectPath, clone)
+	}
 	if releaseErr := d.releaseWorkerClaim(context.WithoutCancel(ctx), worker); releaseErr != nil && !errors.Is(releaseErr, ErrWorkerNotFound) {
 		_ = releaseErr
 	}
 	releaseReservation()
+}
+
+type cloneAssignmentTracker interface {
+	RecordCloneFailure(ctx context.Context, project string, clone Clone) error
+	RecordCloneSuccess(ctx context.Context, project string, clone Clone) error
+}
+
+func assignmentStartupFailureCountsTowardQuarantine(err error) bool {
+	if errors.Is(err, ErrCodexUpdateRequired) {
+		return false
+	}
+	return errors.Is(err, ErrPromptDeliveryNotConfirmed) || errors.Is(err, ErrAgentStartupNotReady)
+}
+
+func (d *Daemon) recordCloneAssignmentFailure(ctx context.Context, projectPath string, clone Clone) {
+	tracker, ok := d.pool.(cloneAssignmentTracker)
+	if !ok || strings.TrimSpace(clone.Path) == "" {
+		return
+	}
+	if err := tracker.RecordCloneFailure(ctx, projectPath, clone); err != nil && d.logf != nil {
+		d.logf("record clone assignment failure failed: project=%s clone=%s error=%v", projectPath, clone.Path, err)
+	}
+}
+
+func (d *Daemon) recordCloneAssignmentSuccess(ctx context.Context, projectPath string, clone Clone) {
+	tracker, ok := d.pool.(cloneAssignmentTracker)
+	if !ok || strings.TrimSpace(clone.Path) == "" {
+		return
+	}
+	if err := tracker.RecordCloneSuccess(ctx, projectPath, clone); err != nil && d.logf != nil {
+		d.logf("record clone assignment success failed: project=%s clone=%s error=%v", projectPath, clone.Path, err)
+	}
 }

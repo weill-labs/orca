@@ -42,6 +42,11 @@ func TestPostgresStoreLifecycleAndQueries(t *testing.T) {
 	testStoreLifecycleAndQueries(t, newPostgresContractHarness(t))
 }
 
+func TestPostgresStoreCloneFailureQuarantine(t *testing.T) {
+	t.Parallel()
+	testStoreCloneFailureQuarantine(t, newPostgresContractHarness(t))
+}
+
 func TestPostgresStoreNotFoundAndHelpers(t *testing.T) {
 	t.Parallel()
 

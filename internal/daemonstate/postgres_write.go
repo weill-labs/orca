@@ -400,6 +400,69 @@ func (s *PostgresStore) TryOccupyClone(ctx context.Context, project, path, branc
 	return tag.RowsAffected() == 1, nil
 }
 
+func (s *PostgresStore) RecordCloneFailure(ctx context.Context, project, path string, threshold int) (legacy.CloneRecord, error) {
+	if threshold <= 0 {
+		threshold = 1
+	}
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE clones
+		SET host = $1,
+		    failure_count = failure_count + 1,
+		    status = CASE WHEN failure_count + 1 >= $2 THEN 'quarantined' ELSE status END,
+		    issue = CASE WHEN failure_count + 1 >= $2 THEN '' ELSE issue END,
+		    branch = CASE WHEN failure_count + 1 >= $2 THEN '' ELSE branch END,
+		    updated_at = $3
+		WHERE project = $4 AND path = $5 AND status != 'occupied' AND `+postgresHostMatch("host", 6)+`
+	`, s.host, threshold, normalizeTime(s.now()), project, path, s.host)
+	if err != nil {
+		return legacy.CloneRecord{}, fmt.Errorf("record clone failure: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		record, loadErr := s.lookupCloneRecord(ctx, project, path)
+		if loadErr != nil {
+			return legacy.CloneRecord{}, loadErr
+		}
+		if record.Status == legacy.CloneStatusOccupied {
+			return record, nil
+		}
+		return legacy.CloneRecord{}, legacy.ErrCloneNotFound
+	}
+	return s.lookupCloneRecord(ctx, project, path)
+}
+
+func (s *PostgresStore) ResetCloneFailures(ctx context.Context, project, path string) error {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE clones
+		SET host = $1, failure_count = 0, updated_at = $2
+		WHERE project = $3 AND path = $4 AND `+postgresHostMatch("host", 5)+`
+	`, s.host, normalizeTime(s.now()), project, path, s.host)
+	if err != nil {
+		return fmt.Errorf("reset clone failures: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return legacy.ErrCloneNotFound
+	}
+	return nil
+}
+
+func (s *PostgresStore) UnquarantineClone(ctx context.Context, project, path string) error {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE clones
+		SET host = $1, status = 'free', issue = '', branch = '', failure_count = 0, updated_at = $2
+		WHERE project = $3 AND path = $4 AND status = 'quarantined' AND `+postgresHostMatch("host", 5)+`
+	`, s.host, normalizeTime(s.now()), project, path, s.host)
+	if err != nil {
+		return fmt.Errorf("unquarantine clone: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		if _, loadErr := s.lookupCloneRecord(ctx, project, path); loadErr != nil {
+			return loadErr
+		}
+		return legacy.ErrCloneNotQuarantined
+	}
+	return nil
+}
+
 func (s *PostgresStore) MarkCloneFree(ctx context.Context, project, path string) error {
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE clones

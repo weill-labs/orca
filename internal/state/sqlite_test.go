@@ -129,6 +129,133 @@ func TestSQLiteCloneStore(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "record clone failure quarantines at threshold",
+			run: func(t *testing.T, store *state.SQLiteStore, project string) {
+				t.Helper()
+
+				path := filepath.Join(t.TempDir(), "orca01")
+				if _, err := store.EnsureClone(context.Background(), project, path); err != nil {
+					t.Fatalf("EnsureClone() setup error = %v", err)
+				}
+
+				record, err := store.RecordCloneFailure(context.Background(), project, path, 0)
+				if err != nil {
+					t.Fatalf("RecordCloneFailure() default threshold error = %v", err)
+				}
+				if got, want := record.FailureCount, 1; got != want {
+					t.Fatalf("record.FailureCount after default threshold failure = %d, want %d", got, want)
+				}
+				if got, want := record.Status, state.CloneStatusQuarantined; got != want {
+					t.Fatalf("record.Status after default threshold failure = %q, want %q", got, want)
+				}
+				if err := store.UnquarantineClone(context.Background(), project, path); err != nil {
+					t.Fatalf("UnquarantineClone() after default threshold error = %v", err)
+				}
+
+				record, err = store.RecordCloneFailure(context.Background(), project, path, 3)
+				if err != nil {
+					t.Fatalf("RecordCloneFailure() first error = %v", err)
+				}
+				if got, want := record.FailureCount, 1; got != want {
+					t.Fatalf("record.FailureCount after first failure = %d, want %d", got, want)
+				}
+				if got, want := record.Status, state.CloneStatusFree; got != want {
+					t.Fatalf("record.Status after first failure = %q, want %q", got, want)
+				}
+
+				records, err := store.ListClones(context.Background(), project)
+				if err != nil {
+					t.Fatalf("ListClones() error = %v", err)
+				}
+				if got, want := records[0].FailureCount, 1; got != want {
+					t.Fatalf("ListClones()[0].FailureCount = %d, want %d", got, want)
+				}
+
+				if err := store.ResetCloneFailures(context.Background(), project, path); err != nil {
+					t.Fatalf("ResetCloneFailures() error = %v", err)
+				}
+				record, err = store.RecordCloneFailure(context.Background(), project, path, 3)
+				if err != nil {
+					t.Fatalf("RecordCloneFailure() after reset error = %v", err)
+				}
+				if got, want := record.FailureCount, 1; got != want {
+					t.Fatalf("record.FailureCount after reset failure = %d, want %d", got, want)
+				}
+
+				for i := 0; i < 2; i++ {
+					record, err = store.RecordCloneFailure(context.Background(), project, path, 3)
+					if err != nil {
+						t.Fatalf("RecordCloneFailure() threshold call %d error = %v", i+1, err)
+					}
+				}
+				if got, want := record.Status, state.CloneStatusQuarantined; got != want {
+					t.Fatalf("record.Status after threshold = %q, want %q", got, want)
+				}
+				if got, want := record.FailureCount, 3; got != want {
+					t.Fatalf("record.FailureCount after threshold = %d, want %d", got, want)
+				}
+
+				if err := store.UnquarantineClone(context.Background(), project, path); err != nil {
+					t.Fatalf("UnquarantineClone() error = %v", err)
+				}
+				record, err = store.EnsureClone(context.Background(), project, path)
+				if err != nil {
+					t.Fatalf("EnsureClone() after unquarantine error = %v", err)
+				}
+				if got, want := record.Status, state.CloneStatusFree; got != want {
+					t.Fatalf("record.Status after unquarantine = %q, want %q", got, want)
+				}
+				if got, want := record.FailureCount, 0; got != want {
+					t.Fatalf("record.FailureCount after unquarantine = %d, want %d", got, want)
+				}
+				if err := store.UnquarantineClone(context.Background(), project, path); err != state.ErrCloneNotQuarantined {
+					t.Fatalf("UnquarantineClone() free error = %v, want ErrCloneNotQuarantined", err)
+				}
+
+				ok, err := store.TryOccupyClone(context.Background(), project, path, "LAB-1697", "LAB-1697")
+				if err != nil {
+					t.Fatalf("TryOccupyClone() occupied setup error = %v", err)
+				}
+				if !ok {
+					t.Fatal("TryOccupyClone() occupied setup = false, want true")
+				}
+				record, err = store.RecordCloneFailure(context.Background(), project, path, 0)
+				if err != nil {
+					t.Fatalf("RecordCloneFailure() occupied error = %v", err)
+				}
+				if got, want := record.Status, state.CloneStatusOccupied; got != want {
+					t.Fatalf("record.Status after occupied failure = %q, want %q", got, want)
+				}
+				if got, want := record.CurrentBranch, "LAB-1697"; got != want {
+					t.Fatalf("record.CurrentBranch after occupied failure = %q, want %q", got, want)
+				}
+				if got, want := record.FailureCount, 0; got != want {
+					t.Fatalf("record.FailureCount after occupied failure = %d, want %d", got, want)
+				}
+				if err := store.UnquarantineClone(context.Background(), project, path); err != state.ErrCloneNotQuarantined {
+					t.Fatalf("UnquarantineClone() occupied error = %v, want ErrCloneNotQuarantined", err)
+				}
+				record, err = store.EnsureClone(context.Background(), project, path)
+				if err != nil {
+					t.Fatalf("EnsureClone() after occupied unquarantine error = %v", err)
+				}
+				if got, want := record.Status, state.CloneStatusOccupied; got != want {
+					t.Fatalf("record.Status after occupied unquarantine = %q, want %q", got, want)
+				}
+
+				missingPath := filepath.Join(t.TempDir(), "missing")
+				if _, err := store.RecordCloneFailure(context.Background(), project, missingPath, 3); err != state.ErrCloneNotFound {
+					t.Fatalf("RecordCloneFailure() missing error = %v, want ErrCloneNotFound", err)
+				}
+				if err := store.ResetCloneFailures(context.Background(), project, missingPath); err != state.ErrCloneNotFound {
+					t.Fatalf("ResetCloneFailures() missing error = %v, want ErrCloneNotFound", err)
+				}
+				if err := store.UnquarantineClone(context.Background(), project, missingPath); err != state.ErrCloneNotFound {
+					t.Fatalf("UnquarantineClone() missing error = %v, want ErrCloneNotFound", err)
+				}
+			},
+		},
 	}
 
 	for _, tc := range cases {
