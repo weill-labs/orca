@@ -19,6 +19,48 @@ type prReviewComment struct {
 	} `json:"user"`
 }
 
+type prReviewThread struct {
+	ID         string
+	IsResolved bool
+	Path       string
+	Line       int
+	Comments   []prReviewThreadComment
+}
+
+type prReviewThreadComment struct {
+	ID        string
+	Body      string
+	Author    string
+	CreatedAt time.Time
+}
+
+type prReviewThreadsGraphQLPayload struct {
+	Data struct {
+		Repository struct {
+			PullRequest *struct {
+				ReviewThreads struct {
+					Nodes []struct {
+						ID         string `json:"id"`
+						IsResolved bool   `json:"isResolved"`
+						Path       string `json:"path"`
+						Line       int    `json:"line"`
+						Comments   struct {
+							Nodes []struct {
+								ID        string    `json:"id"`
+								Body      string    `json:"body"`
+								CreatedAt time.Time `json:"createdAt"`
+								Author    struct {
+									Login string `json:"login"`
+								} `json:"author"`
+							} `json:"nodes"`
+						} `json:"comments"`
+					} `json:"nodes"`
+				} `json:"reviewThreads"`
+			} `json:"pullRequest"`
+		} `json:"repository"`
+	} `json:"data"`
+}
+
 type prReviewItem struct {
 	Author          string
 	Body            string
@@ -91,6 +133,29 @@ func blockingReviewFeedback(reviewDecision string, items []prReviewItem, comment
 		})
 	}
 	return blocking
+}
+
+func reviewThreadFeedback(thread prReviewThread) prFeedback {
+	comment, ok := latestReviewThreadComment(thread)
+	body := "unresolved review thread."
+	author := ""
+	if ok {
+		body = comment.Body
+		author = comment.Author
+	}
+	return prFeedback{
+		Author: author,
+		Path:   thread.Path,
+		Line:   thread.Line,
+		Body:   body,
+	}
+}
+
+func latestReviewThreadComment(thread prReviewThread) (prReviewThreadComment, bool) {
+	if len(thread.Comments) == 0 {
+		return prReviewThreadComment{}, false
+	}
+	return thread.Comments[len(thread.Comments)-1], true
 }
 
 func reviewCommentLine(comment prReviewComment) int {
