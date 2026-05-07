@@ -790,6 +790,60 @@ func TestAssignRollsBackWhenCodexPromptNeverShowsWorking(t *testing.T) {
 	deps.events.requireTypes(t, EventDaemonStarted, EventTaskAssignFailed)
 }
 
+func TestAssignQuarantinesCloneAfterConsecutivePromptDeliveryFailures(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	for i := 1; i <= 9; i++ {
+		paneID := fmt.Sprintf("pane-%d", i)
+		deps.amux.spawnPanes = append(deps.amux.spawnPanes, Pane{ID: paneID, Name: fmt.Sprintf("worker-%d", i)})
+		deps.amux.waitContentResults = append(deps.amux.waitContentResults,
+			amuxapi.ErrWaitContentTimeout,
+			amuxapi.ErrWaitContentTimeout,
+		)
+		deps.amux.captureSequence(paneID, []string{"OpenAI Codex\n›"})
+		deps.amux.capturePaneSequence(paneID, []PaneCapture{{
+			Content:        []string{"bash-5.2$", "bash: Command Verify: command not found"},
+			CurrentCommand: "bash",
+		}})
+	}
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	for _, issue := range []string{"LAB-1697", "LAB-1698", "LAB-1699"} {
+		err := d.Assign(ctx, issue, "Verify prompt delivery quarantine", "codex")
+		if err == nil {
+			t.Fatalf("Assign(%s) succeeded, want prompt delivery failure", issue)
+		}
+		if !strings.Contains(err.Error(), "prompt delivery failed after 3 attempts") {
+			t.Fatalf("Assign(%s) error = %v, want prompt retry exhaustion", issue, err)
+		}
+	}
+
+	if got, want := deps.pool.cloneFailureCount(deps.pool.clone.Path), 3; got != want {
+		t.Fatalf("clone failure count = %d, want %d", got, want)
+	}
+	if !deps.pool.cloneQuarantined(deps.pool.clone.Path) {
+		t.Fatalf("clone %q is not quarantined", deps.pool.clone.Path)
+	}
+
+	err := d.Assign(ctx, "LAB-1700", "Verify quarantined clone exclusion", "codex")
+	if err == nil {
+		t.Fatal("Assign() succeeded, want quarantined clone error")
+	}
+	if !strings.Contains(err.Error(), "acquire clone: no available clones; 1 are quarantined: clone-01") {
+		t.Fatalf("Assign() error = %v, want quarantined clone error", err)
+	}
+}
+
 func TestAssignRollsBackOnIssueStatusFailureAfterPersistingStartingState(t *testing.T) {
 	t.Parallel()
 

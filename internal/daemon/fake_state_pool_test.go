@@ -3,6 +3,8 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -648,6 +650,8 @@ type fakePool struct {
 	acquired              map[string]bool
 	released              []Clone
 	releaseErr            error
+	failureCounts         map[string]int
+	quarantined           map[string]bool
 }
 
 func (p *fakePool) Acquire(ctx context.Context, project, issue string) (Clone, error) {
@@ -672,6 +676,9 @@ func (p *fakePool) Acquire(ctx context.Context, project, issue string) (Clone, e
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for _, clone := range p.availableClones() {
+		if p.quarantined[clone.Path] {
+			continue
+		}
 		if p.acquired == nil {
 			p.acquired = make(map[string]bool)
 		}
@@ -680,6 +687,9 @@ func (p *fakePool) Acquire(ctx context.Context, project, issue string) (Clone, e
 		}
 		p.acquired[clone.Path] = true
 		return clone, nil
+	}
+	if len(p.quarantined) > 0 {
+		return Clone{}, fmt.Errorf("no available clones; %d are quarantined: %s", len(p.quarantined), strings.Join(p.quarantinedCloneNamesLocked(), ", "))
 	}
 	return Clone{}, errors.New("clone already acquired")
 }
@@ -697,6 +707,37 @@ func (p *fakePool) Release(ctx context.Context, project string, clone Clone) err
 		delete(p.acquired, clone.Path)
 	}
 	p.released = append(p.released, clone)
+	return nil
+}
+
+func (p *fakePool) RecordCloneFailure(ctx context.Context, project string, clone Clone) error {
+	if p.rejectCanceledContext && ctx.Err() != nil {
+		return ctx.Err()
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.failureCounts == nil {
+		p.failureCounts = make(map[string]int)
+	}
+	if p.quarantined == nil {
+		p.quarantined = make(map[string]bool)
+	}
+	p.failureCounts[clone.Path]++
+	if p.failureCounts[clone.Path] >= 3 {
+		p.quarantined[clone.Path] = true
+	}
+	return nil
+}
+
+func (p *fakePool) RecordCloneSuccess(ctx context.Context, project string, clone Clone) error {
+	if p.rejectCanceledContext && ctx.Err() != nil {
+		return ctx.Err()
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.failureCounts != nil {
+		p.failureCounts[clone.Path] = 0
+	}
 	return nil
 }
 
@@ -719,4 +760,38 @@ func (p *fakePool) releasedClones() []Clone {
 	out := make([]Clone, len(p.released))
 	copy(out, p.released)
 	return out
+}
+
+func (p *fakePool) cloneFailureCount(path string) int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.failureCounts[path]
+}
+
+func (p *fakePool) cloneQuarantined(path string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.quarantined[path]
+}
+
+func (p *fakePool) quarantinedCloneNames() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.quarantinedCloneNamesLocked()
+}
+
+func (p *fakePool) quarantinedCloneNamesLocked() []string {
+	names := make([]string, 0, len(p.quarantined))
+	for path := range p.quarantined {
+		name := filepath.Base(path)
+		for _, clone := range p.availableClones() {
+			if clone.Path == path && strings.TrimSpace(clone.Name) != "" {
+				name = clone.Name
+				break
+			}
+		}
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }

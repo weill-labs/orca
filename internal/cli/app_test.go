@@ -1690,6 +1690,28 @@ func TestAppRunOutputModes(t *testing.T) {
 			},
 		},
 		{
+			name:   "pool unquarantine",
+			args:   []string{"pool", "unquarantine", "clone-08"},
+			daemon: &fakeDaemon{},
+			state: &fakeState{
+				clones: []state.Clone{
+					{Path: "/repo/.orca/pool/clone-08", Status: "quarantined", UpdatedAt: now},
+				},
+			},
+			assert: func(t *testing.T, stdout string, _ *fakeDaemon, s *fakeState) {
+				t.Helper()
+				if got, want := s.unquarantineProject, repoRoot; got != want {
+					t.Fatalf("unquarantine project = %q, want %q", got, want)
+				}
+				if got, want := s.unquarantinePath, "/repo/.orca/pool/clone-08"; got != want {
+					t.Fatalf("unquarantine path = %q, want %q", got, want)
+				}
+				if !strings.Contains(stdout, "unquarantined clone-08") {
+					t.Fatalf("stdout = %q, want unquarantine confirmation", stdout)
+				}
+			},
+		},
+		{
 			name:    "events extra arg",
 			args:    []string{"events", "extra"},
 			daemon:  &fakeDaemon{},
@@ -2456,6 +2478,8 @@ type fakeState struct {
 	taskStatusIssue              string
 	workersProject               string
 	clonesProject                string
+	unquarantineProject          string
+	unquarantinePath             string
 	eventsProject                string
 	allHostsProjectStatusProject string
 	allHostsTaskStatusProject    string
@@ -2531,6 +2555,15 @@ func (f *fakeState) ListClones(_ context.Context, project string) ([]state.Clone
 	}
 	f.clonesProject = project
 	return f.clones, nil
+}
+
+func (f *fakeState) UnquarantineClone(_ context.Context, project, path string) error {
+	if f.err != nil {
+		return f.err
+	}
+	f.unquarantineProject = project
+	f.unquarantinePath = path
+	return nil
 }
 
 func (f *fakeState) Events(_ context.Context, project string, _ int64) (<-chan state.Event, <-chan error) {
