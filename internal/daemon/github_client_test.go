@@ -907,6 +907,7 @@ func TestIsGitHubRateLimitError(t *testing.T) {
 		{name: "nil error"},
 		{name: "auth error", err: errors.New("authentication failed")},
 		{name: "secondary rate limit in error", err: errors.New("Secondary Rate Limit"), want: true},
+		{name: "already exceeded rate limit in error", err: errors.New("GraphQL: API rate limit already exceeded"), want: true},
 		{name: "rate limit in output", err: errors.New("gh failed"), output: []byte("API rate limit exceeded"), want: true},
 		{name: "http 403 rate limit", err: errors.New("gh: HTTP 403"), output: []byte("rate limit exceeded"), want: true},
 		{name: "http 429 retry after", err: errors.New("gh: HTTP 429"), output: []byte("Retry-After: 120"), want: true},

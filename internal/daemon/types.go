@@ -33,46 +33,47 @@ const (
 	MergeQueueStatusRebasing       = "rebasing"
 	MergeQueueStatusMerging        = "merging"
 
-	EventDaemonStarted             = "daemon.started"
-	EventDaemonStopped             = "daemon.stopped"
-	EventDaemonCircuitOpened       = "daemon.circuit_opened"
-	EventDaemonCircuitClosed       = "daemon.circuit_closed"
-	EventIssueStatusSkipped        = "issue.status_skipped"
-	EventTaskAssigned              = "task.assigned"
-	EventTaskAssignFailed          = "task.assign_failed"
-	EventTaskCancelled             = "task.cancelled"
-	EventTaskCompleted             = "task.completed"
-	EventTaskFailed                = "task.failed"
-	EventTaskCompletionFailed      = "task.completion_failed"
-	EventTaskMonitorPanicked       = "task_monitor.panicked"
-	EventWorkerHandshake           = "worker.handshake"
-	EventWorkerHandshakeRetry      = "worker.handshake_retry"
-	EventWorkerStartupTransition   = "worker.startup_transition"
-	EventWorkerMergeNotifyFailed   = "worker.merge_notify_failed"
-	EventWorkerPromptDeliveryRetry = "worker.prompt_delivery_retry"
-	EventWorkerNudged              = "worker.nudged"
-	EventWorkerNudgedCI            = "worker.nudged_ci"
-	EventWorkerCIEscalated         = "worker.ci_escalated"
-	EventWorkerNudgedConflict      = "worker.nudged_conflict"
-	EventWorkerNudgedReview        = "worker.nudged_review"
-	EventWorkerReviewEscalated     = "worker.review_escalated"
-	EventWorkerEscalated           = "worker.escalated"
-	EventWorkerCrashReport         = "worker.crash_report"
-	EventWorkerRecovered           = "worker.recovered"
-	EventWorkerPostmortem          = "worker.postmortem"
-	EventCIPollTrace               = "ci.poll_trace"
-	EventReviewApproved            = "review.approved"
-	EventReviewPollTrace           = "review.poll_trace"
-	EventPRPollTrace               = "pr.poll_trace"
-	EventPRDetected                = "pr.detected"
-	EventPREnqueued                = "pr.enqueued"
-	EventPRLandingStarted          = "pr.landing_started"
-	EventPRLandingFailed           = "pr.landing_failed"
-	EventPRRateLimited             = "pr.rate_limited"
-	EventPRClosedWithoutMerge      = "pr.closed_without_merge"
-	EventPRMerged                  = "pr.merged"
-	EventPRClosed                  = "pr.closed"
-	EventReconcileFinding          = "reconcile.finding"
+	EventDaemonStarted              = "daemon.started"
+	EventDaemonStopped              = "daemon.stopped"
+	EventDaemonCircuitOpened        = "daemon.circuit_opened"
+	EventDaemonCircuitClosed        = "daemon.circuit_closed"
+	EventIssueStatusSkipped         = "issue.status_skipped"
+	EventTaskAssigned               = "task.assigned"
+	EventTaskAssignPreflightSkipped = "task.assign_preflight_skipped"
+	EventTaskAssignFailed           = "task.assign_failed"
+	EventTaskCancelled              = "task.cancelled"
+	EventTaskCompleted              = "task.completed"
+	EventTaskFailed                 = "task.failed"
+	EventTaskCompletionFailed       = "task.completion_failed"
+	EventTaskMonitorPanicked        = "task_monitor.panicked"
+	EventWorkerHandshake            = "worker.handshake"
+	EventWorkerHandshakeRetry       = "worker.handshake_retry"
+	EventWorkerStartupTransition    = "worker.startup_transition"
+	EventWorkerMergeNotifyFailed    = "worker.merge_notify_failed"
+	EventWorkerPromptDeliveryRetry  = "worker.prompt_delivery_retry"
+	EventWorkerNudged               = "worker.nudged"
+	EventWorkerNudgedCI             = "worker.nudged_ci"
+	EventWorkerCIEscalated          = "worker.ci_escalated"
+	EventWorkerNudgedConflict       = "worker.nudged_conflict"
+	EventWorkerNudgedReview         = "worker.nudged_review"
+	EventWorkerReviewEscalated      = "worker.review_escalated"
+	EventWorkerEscalated            = "worker.escalated"
+	EventWorkerCrashReport          = "worker.crash_report"
+	EventWorkerRecovered            = "worker.recovered"
+	EventWorkerPostmortem           = "worker.postmortem"
+	EventCIPollTrace                = "ci.poll_trace"
+	EventReviewApproved             = "review.approved"
+	EventReviewPollTrace            = "review.poll_trace"
+	EventPRPollTrace                = "pr.poll_trace"
+	EventPRDetected                 = "pr.detected"
+	EventPREnqueued                 = "pr.enqueued"
+	EventPRLandingStarted           = "pr.landing_started"
+	EventPRLandingFailed            = "pr.landing_failed"
+	EventPRRateLimited              = "pr.rate_limited"
+	EventPRClosedWithoutMerge       = "pr.closed_without_merge"
+	EventPRMerged                   = "pr.merged"
+	EventPRClosed                   = "pr.closed"
+	EventReconcileFinding           = "reconcile.finding"
 )
 
 var (
@@ -210,23 +211,24 @@ type CloneOccupancy struct {
 }
 
 type Task struct {
-	Project      string    `json:"project,omitempty"`
-	Issue        string    `json:"issue,omitempty"`
-	Status       string    `json:"status,omitempty"`
-	State        string    `json:"state,omitempty"`
-	Prompt       string    `json:"prompt,omitempty"`
-	CallerPane   string    `json:"caller_pane,omitempty"`
-	WorkerID     string    `json:"worker_id,omitempty"`
-	PaneID       string    `json:"pane_id,omitempty"`
-	PaneName     string    `json:"pane_name,omitempty"`
-	CloneName    string    `json:"clone_name,omitempty"`
-	ClonePath    string    `json:"clone_path,omitempty"`
-	Branch       string    `json:"branch,omitempty"`
-	AgentProfile string    `json:"agent_profile,omitempty"`
-	PRNumber     int       `json:"pr_number,omitempty"`
-	PRRepo       string    `json:"pr_repo,omitempty"`
-	CreatedAt    time.Time `json:"created_at,omitempty"`
-	UpdatedAt    time.Time `json:"updated_at,omitempty"`
+	Project          string    `json:"project,omitempty"`
+	Issue            string    `json:"issue,omitempty"`
+	Status           string    `json:"status,omitempty"`
+	State            string    `json:"state,omitempty"`
+	Prompt           string    `json:"prompt,omitempty"`
+	CallerPane       string    `json:"caller_pane,omitempty"`
+	WorkerID         string    `json:"worker_id,omitempty"`
+	PaneID           string    `json:"pane_id,omitempty"`
+	PaneName         string    `json:"pane_name,omitempty"`
+	CloneName        string    `json:"clone_name,omitempty"`
+	ClonePath        string    `json:"clone_path,omitempty"`
+	Branch           string    `json:"branch,omitempty"`
+	AgentProfile     string    `json:"agent_profile,omitempty"`
+	PRNumber         int       `json:"pr_number,omitempty"`
+	PRRepo           string    `json:"pr_repo,omitempty"`
+	PreflightSkipped bool      `json:"preflight_skipped,omitempty"`
+	CreatedAt        time.Time `json:"created_at,omitempty"`
+	UpdatedAt        time.Time `json:"updated_at,omitempty"`
 }
 
 type Worker struct {
@@ -308,4 +310,5 @@ type Event struct {
 	Scrollback             []string  `json:"scrollback,omitempty"`
 	Message                string    `json:"message,omitempty"`
 	GitHubRateLimitedUntil time.Time `json:"github_rate_limited_until,omitempty"`
+	PreflightSkipped       bool      `json:"preflight_skipped,omitempty"`
 }

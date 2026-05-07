@@ -68,7 +68,7 @@ func (d *Daemon) startAssignmentWorker(ctx context.Context, projectPath string, 
 			worker: attemptWorker,
 		}
 
-		metadata, err := d.assignmentPaneMetadata(ctx, projectPath, pane.ID, profile.Name, attemptTask.Branch, attemptTask.Issue, paneTitle, attemptTask.PRNumber)
+		metadata, err := d.assignmentPaneMetadata(ctx, projectPath, pane.ID, profile.Name, attemptTask.Branch, attemptTask.Issue, paneTitle, attemptTask.PRNumber, attemptTask.PreflightSkipped)
 		if err != nil {
 			return result, fmt.Errorf("build pane metadata: %w", err)
 		}

@@ -1012,7 +1012,7 @@ func seedFinishAssignmentState(t *testing.T, deps *testDeps, active ActiveAssign
 	if err := deps.state.PutWorker(context.Background(), active.Worker); err != nil {
 		t.Fatalf("PutWorker() error = %v", err)
 	}
-	initialMetadata := assignmentMetadata(active.Task.AgentProfile, active.Task.Branch, active.Task.Issue)
+	initialMetadata := assignmentMetadata(active.Task.AgentProfile, active.Task.Branch, active.Task.Issue, false)
 	initialMetadata["tracked_issues"] = `[{"id":"` + active.Task.Issue + `","status":"active"}]`
 	if err := deps.amux.SetMetadata(context.Background(), active.Task.PaneID, initialMetadata); err != nil {
 		t.Fatalf("SetMetadata() error = %v", err)
