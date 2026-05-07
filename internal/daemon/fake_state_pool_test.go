@@ -21,6 +21,7 @@ type fakeState struct {
 	cloneOccupancies      []CloneOccupancy
 	mergeQueue            []MergeQueueEntry
 	knownProjectsErr      error
+	nonTerminalErr        error
 	updateMergeErr        error
 	deleteMergeErr        error
 	events                []Event
@@ -242,6 +243,9 @@ func (s *fakeState) ListWorkers(ctx context.Context, project string) ([]Worker, 
 func (s *fakeState) NonTerminalTasks(ctx context.Context, project string) ([]Task, error) {
 	if s.rejectCanceledContext && ctx.Err() != nil {
 		return nil, ctx.Err()
+	}
+	if s.nonTerminalErr != nil {
+		return nil, s.nonTerminalErr
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()

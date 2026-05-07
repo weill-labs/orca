@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -168,6 +169,225 @@ func TestDaemonStartReleasesStaleOccupiedClones(t *testing.T) {
 	}
 }
 
+func TestDaemonStartReconcilesStrandedMergedTasks(t *testing.T) {
+	t.Parallel()
+
+	const (
+		issue    = "LAB-1320"
+		prNumber = 1320
+	)
+
+	deps := newTestDeps(t)
+	setLifecyclePromptActiveAfterIdleProbes(deps, 0)
+	seedActiveAssignment(t, deps, issue, "pane-1")
+	task, ok := deps.state.task(issue)
+	if !ok {
+		t.Fatalf("task %q missing before startup", issue)
+	}
+	task.State = TaskStateMerged
+	task.PRNumber = prNumber
+	deps.state.putTaskForTest(task)
+	seedMergeEntryForTest(t, deps, issue, prNumber)
+
+	workerID := task.WorkerID
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	waitFor(t, "stranded merged task cleanup", func() bool {
+		task, ok := deps.state.task(issue)
+		return ok && task.Status == TaskStatusDone && task.State == TaskStateDone
+	})
+
+	task, ok = deps.state.task(issue)
+	if !ok {
+		t.Fatal("task missing after startup reconciliation")
+	}
+	if got, want := task.Status, TaskStatusDone; got != want {
+		t.Fatalf("task.Status = %q, want %q", got, want)
+	}
+	if got, want := task.State, TaskStateDone; got != want {
+		t.Fatalf("task.State = %q, want %q", got, want)
+	}
+
+	worker, ok := deps.state.worker(workerID)
+	if !ok {
+		t.Fatalf("worker %q missing after startup reconciliation", workerID)
+	}
+	if worker.Issue != "" || worker.PaneID != "" {
+		t.Fatalf("worker claim = issue %q pane %q, want released", worker.Issue, worker.PaneID)
+	}
+	if got, want := deps.pool.releasedClones(), []Clone{{
+		Name:          deps.pool.clone.Name,
+		Path:          deps.pool.clone.Path,
+		CurrentBranch: issue,
+		AssignedTask:  issue,
+	}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("released clones = %#v, want %#v", got, want)
+	}
+	entry, err := deps.state.MergeEntry(context.Background(), "/tmp/project", prNumber)
+	if err != nil {
+		t.Fatalf("MergeEntry() error = %v", err)
+	}
+	if entry != nil {
+		t.Fatalf("MergeEntry() = %#v, want nil after startup cleanup", entry)
+	}
+
+	deps.amux.requireSentKeys(t, "pane-1", []string{
+		mergedWrapUpPrompt + "\n",
+		postmortemCommand + "\n",
+	})
+	deps.events.requireTypes(t, EventWorkerPostmortem, EventTaskCompleted)
+
+	wrapUpPromptCount := deps.amux.countKey("pane-1", mergedWrapUpPrompt+"\n")
+	postmortemPromptCount := deps.amux.countKey("pane-1", postmortemCommand+"\n")
+	completedEventCount := deps.events.countType(EventTaskCompleted)
+	d.reconcileStrandedMergedTasks(ctx)
+	if got := deps.amux.countKey("pane-1", mergedWrapUpPrompt+"\n"); got != wrapUpPromptCount {
+		t.Fatalf("merged wrap-up prompt count after second recovery = %d, want %d", got, wrapUpPromptCount)
+	}
+	if got := deps.amux.countKey("pane-1", postmortemCommand+"\n"); got != postmortemPromptCount {
+		t.Fatalf("postmortem prompt count after second recovery = %d, want %d", got, postmortemPromptCount)
+	}
+	if got := deps.events.countType(EventTaskCompleted); got != completedEventCount {
+		t.Fatalf("task completed event count after second recovery = %d, want %d", got, completedEventCount)
+	}
+}
+
+func TestIsStrandedMergedTaskOnlyMatchesNonTerminalMergedState(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		task Task
+		want bool
+	}{
+		{
+			name: "active merged",
+			task: Task{Status: TaskStatusActive, State: TaskStateMerged},
+			want: true,
+		},
+		{
+			name: "active done",
+			task: Task{Status: TaskStatusActive, State: TaskStateDone},
+			want: false,
+		},
+		{
+			name: "active assigned",
+			task: Task{Status: TaskStatusActive, State: TaskStateAssigned},
+			want: false,
+		},
+		{
+			name: "terminal merged",
+			task: Task{Status: TaskStatusDone, State: TaskStateMerged},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := isStrandedMergedTask(tt.task); got != tt.want {
+				t.Fatalf("isStrandedMergedTask(%#v) = %t, want %t", tt.task, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestReconcileStrandedMergedTasksSkipsOnStateError(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	seedStrandedMergedTask(t, deps, "LAB-1322", "pane-1", 1322)
+	deps.state.nonTerminalErr = errors.New("postgres unavailable")
+
+	var logs []string
+	d := deps.newDaemonWithOptions(t, func(opts *Options) {
+		opts.Logf = func(format string, args ...any) {
+			logs = append(logs, fmt.Sprintf(format, args...))
+		}
+	})
+	d.reconcileStrandedMergedTasks(context.Background())
+
+	task, ok := deps.state.task("LAB-1322")
+	if !ok {
+		t.Fatal("task missing after skipped reconciliation")
+	}
+	if got, want := task.Status, TaskStatusActive; got != want {
+		t.Fatalf("task.Status = %q, want %q", got, want)
+	}
+	deps.amux.requireSentKeys(t, "pane-1", nil)
+	if got := deps.events.countType(EventTaskCompleted); got != 0 {
+		t.Fatalf("task completed events = %d, want 0", got)
+	}
+	if got, want := logs, []string{"stranded merged task reconciliation failed: postgres unavailable"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("logs = %#v, want %#v", got, want)
+	}
+}
+
+func TestReconcileStrandedMergedTasksRespectsContextCancellation(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	seedStrandedMergedTask(t, deps, "LAB-1323", "pane-1", 1323)
+
+	d := deps.newDaemon(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	d.reconcileStrandedMergedTasks(ctx)
+
+	task, ok := deps.state.task("LAB-1323")
+	if !ok {
+		t.Fatal("task missing after cancelled reconciliation")
+	}
+	if got, want := task.Status, TaskStatusActive; got != want {
+		t.Fatalf("task.Status = %q, want %q", got, want)
+	}
+	deps.amux.requireSentKeys(t, "pane-1", nil)
+	if got := deps.events.countType(EventTaskCompleted); got != 0 {
+		t.Fatalf("task completed events = %d, want 0", got)
+	}
+}
+
+func TestReconcileStrandedMergedTasksLogsCleanupError(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	setLifecyclePromptActiveAfterIdleProbes(deps, 0)
+	seedStrandedMergedTask(t, deps, "LAB-1324", "pane-1", 1324)
+	deps.pool.releaseErr = errors.New("release failed")
+
+	var logs []string
+	d := deps.newDaemonWithOptions(t, func(opts *Options) {
+		opts.Logf = func(format string, args ...any) {
+			logs = append(logs, fmt.Sprintf(format, args...))
+		}
+	})
+	d.reconcileStrandedMergedTasks(context.Background())
+
+	task, ok := deps.state.task("LAB-1324")
+	if !ok {
+		t.Fatal("task missing after cleanup error reconciliation")
+	}
+	if got, want := task.Status, TaskStatusDone; got != want {
+		t.Fatalf("task.Status = %q, want %q", got, want)
+	}
+	deps.amux.requireSentKeys(t, "pane-1", []string{
+		mergedWrapUpPrompt + "\n",
+		postmortemCommand + "\n",
+	})
+	if got, want := logs, []string{"stranded merged task cleanup failed for LAB-1324: release failed"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("logs = %#v, want %#v", got, want)
+	}
+}
+
 func TestGlobalDaemonStartUsesTaskProjectForWorkerLookup(t *testing.T) {
 	t.Parallel()
 
@@ -232,6 +452,20 @@ func TestGlobalDaemonStartUsesTaskProjectForWorkerLookup(t *testing.T) {
 	if got, want := deps.amux.captureCount("pane-1"), 1; got != want {
 		t.Fatalf("capture count = %d, want %d", got, want)
 	}
+}
+
+func seedStrandedMergedTask(t *testing.T, deps *testDeps, issue, paneID string, prNumber int) {
+	t.Helper()
+
+	seedActiveAssignment(t, deps, issue, paneID)
+	task, ok := deps.state.task(issue)
+	if !ok {
+		t.Fatalf("task %q missing after seed", issue)
+	}
+	task.State = TaskStateMerged
+	task.PRNumber = prNumber
+	deps.state.putTaskForTest(task)
+	seedMergeEntryForTest(t, deps, issue, prNumber)
 }
 
 func TestDaemonStartNormalizesLegacyNumericPaneRefs(t *testing.T) {

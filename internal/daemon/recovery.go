@@ -22,6 +22,43 @@ func (d *Daemon) reconcileNonTerminalAssignments(ctx context.Context) {
 	}
 }
 
+func (d *Daemon) reconcileStrandedMergedTasks(ctx context.Context) {
+	tasks, err := d.state.NonTerminalTasks(ctx, d.project)
+	if err != nil {
+		if d.logf != nil {
+			d.logf("stranded merged task reconciliation failed: %v", err)
+		}
+		return
+	}
+
+	for _, task := range tasks {
+		if ctx.Err() != nil {
+			return
+		}
+		if !isStrandedMergedTask(task) {
+			continue
+		}
+
+		active := d.reconcileActiveAssignment(ctx, task)
+		if err := d.finishAssignmentWithMessage(ctx, active, TaskStatusDone, EventTaskCompleted, true, "task finished"); err != nil && d.logf != nil {
+			d.logf("stranded merged task cleanup failed for %s: %v", task.Issue, err)
+		}
+	}
+}
+
+func isStrandedMergedTask(task Task) bool {
+	if !taskBlocksAssignment(task.Status) {
+		return false
+	}
+
+	switch strings.TrimSpace(task.State) {
+	case TaskStateMerged:
+		return true
+	default:
+		return false
+	}
+}
+
 func (d *Daemon) releaseStalePoolClones(ctx context.Context) {
 	occupancies, err := d.state.StaleCloneOccupancies(ctx, d.project)
 	if err != nil {
