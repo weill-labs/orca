@@ -681,7 +681,8 @@ func (p *fakePool) Acquire(ctx context.Context, project, issue string) (Clone, e
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	for _, clone := range p.availableClones() {
+	for _, candidate := range p.availableClones() {
+		clone := fakePoolCloneForProject(project, candidate)
 		if p.quarantined[clone.Path] {
 			continue
 		}
@@ -692,6 +693,7 @@ func (p *fakePool) Acquire(ctx context.Context, project, issue string) (Clone, e
 			continue
 		}
 		p.acquired[clone.Path] = true
+		p.rememberClonePath(clone)
 		return clone, nil
 	}
 	if len(p.quarantined) > 0 {
@@ -752,6 +754,43 @@ func (p *fakePool) availableClones() []Clone {
 		return p.clones
 	}
 	return []Clone{p.clone}
+}
+
+func fakePoolCloneForProject(project string, clone Clone) Clone {
+	if strings.TrimSpace(project) == "" {
+		return clone
+	}
+
+	poolDir := filepath.Join(project, orcaPoolSubdir)
+	if cleaned, err := pool.ValidateClonePath(poolDir, clone.Path); err == nil {
+		clone.Path = cleaned
+		if strings.TrimSpace(clone.Name) == "" {
+			clone.Name = filepath.Base(cleaned)
+		}
+		return clone
+	}
+
+	name := strings.TrimSpace(clone.Name)
+	if name == "" {
+		name = filepath.Base(filepath.Clean(clone.Path))
+	}
+	if name == "" || name == "." || name == string(filepath.Separator) {
+		name = "clone-01"
+	}
+	clone.Name = name
+	clone.Path = filepath.Join(poolDir, name)
+	return clone
+}
+
+func (p *fakePool) rememberClonePath(clone Clone) {
+	if p.clone.Name == clone.Name {
+		p.clone = clone
+	}
+	for i := range p.clones {
+		if p.clones[i].Name == clone.Name {
+			p.clones[i] = clone
+		}
+	}
 }
 
 func (p *fakePool) acquireCallCount() int {

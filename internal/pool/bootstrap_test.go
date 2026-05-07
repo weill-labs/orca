@@ -25,6 +25,7 @@ func TestManagerCreateCloneSetupHook(t *testing.T) {
 set -euo pipefail
 echo "hook parent: $1"
 printf '%s' "$1" > .setup-parent
+pwd > .setup-pwd
 count=0
 if [[ -f .setup-count ]]; then
   count=$(cat .setup-count)
@@ -37,6 +38,9 @@ printf '%s' "$count" > .setup-count
 
 				if got, want := readTrimmedFile(t, filepath.Join(clonePath, ".setup-parent")), project; got != want {
 					t.Fatalf("setup parent = %q, want %q", got, want)
+				}
+				if got, want := readTrimmedFile(t, filepath.Join(clonePath, ".setup-pwd")), clonePath; got != want {
+					t.Fatalf("setup cwd = %q, want %q", got, want)
 				}
 				if got, want := readTrimmedFile(t, filepath.Join(clonePath, ".setup-count")), "1"; got != want {
 					t.Fatalf("setup count after CreateClone() = %q, want %q", got, want)
@@ -119,7 +123,7 @@ func newOriginWithSetupHook(t *testing.T, baseBranch, script string) string {
 	mustRun(t, source, "git", "config", "user.email", "orca-tests@example.com")
 	mustMkdir(t, filepath.Join(source, ".orca"))
 	mustWriteFile(t, filepath.Join(source, "README.md"), "hello")
-	mustWriteFile(t, filepath.Join(source, ".gitignore"), ".setup-count\n.setup-parent\n")
+	mustWriteFile(t, filepath.Join(source, ".gitignore"), ".setup-count\n.setup-parent\n.setup-pwd\n")
 	mustWriteFile(t, filepath.Join(source, ".orca", "setup.sh"), script)
 	mustRun(t, source, "git", "add", "README.md", ".gitignore", ".orca/setup.sh")
 	mustRun(t, source, "git", "commit", "-m", "initial commit")

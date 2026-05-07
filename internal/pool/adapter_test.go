@@ -115,6 +115,7 @@ func TestAdapterRecordsCloneFailureAndSuccess(t *testing.T) {
 	poolDir := filepath.Join(root, "pool")
 	clonePath := filepath.Join(poolDir, "clone-01")
 	mustMkdir(t, clonePath)
+	markClone(t, clonePath)
 	store := newStore(t)
 	manager := newManager(t, project, staticConfig{
 		poolDir: poolDir,

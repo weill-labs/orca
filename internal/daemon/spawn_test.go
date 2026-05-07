@@ -519,6 +519,52 @@ func TestWorkerPaneSpawnName(t *testing.T) {
 	}
 }
 
+func TestValidateAllocatedSpawnCWDRejectsInvalidClonePath(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		releaseErr error
+		wantErrs   []string
+	}{
+		{
+			name:     "releases invalid clone path",
+			wantErrs: []string{"validate spawn cwd", "must stay inside pool root"},
+		},
+		{
+			name:       "joins release errors",
+			releaseErr: errors.New("release failed"),
+			wantErrs:   []string{"validate spawn cwd", "must stay inside pool root", "release failed"},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			releaser := &fakeAllocatedCloneReleaser{err: tt.releaseErr}
+			clone := pool.Clone{
+				Path:          filepath.Join(t.TempDir(), "outside", "clone-01"),
+				CurrentBranch: "LAB-1511",
+			}
+
+			_, err := validateAllocatedSpawnCWD(context.Background(), "/tmp/project", releaser, clone)
+			if err == nil {
+				t.Fatal("validateAllocatedSpawnCWD() error = nil, want invalid clone path error")
+			}
+			for _, want := range tt.wantErrs {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("validateAllocatedSpawnCWD() error = %v, want substring %q", err, want)
+				}
+			}
+			if got, want := releaser.calls, []releaseCall{{path: clone.Path, branch: clone.CurrentBranch}}; !slices.Equal(got, want) {
+				t.Fatalf("release calls = %#v, want %#v", got, want)
+			}
+		})
+	}
+}
+
 func TestSpawnWorkerPaneKillsOrphanPaneWithTargetName(t *testing.T) {
 	t.Parallel()
 
@@ -606,8 +652,80 @@ func TestSpawnWorkerPaneFailsWhenTargetNameBelongsToActiveTask(t *testing.T) {
 	}
 }
 
+func TestSpawnWorkerPaneRejectsInvalidClonePath(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		clonePath string
+		wantErr   string
+	}{
+		{
+			name:      "empty",
+			clonePath: "",
+			wantErr:   "clone path is required",
+		},
+		{
+			name:      "relative",
+			clonePath: "clone-01",
+			wantErr:   "clone path must be absolute",
+		},
+		{
+			name:      "parent traversal",
+			clonePath: "/tmp/project/.orca/pool/../escape",
+			wantErr:   "contains parent traversal",
+		},
+		{
+			name:      "filesystem root",
+			clonePath: string(filepath.Separator),
+			wantErr:   "must stay inside pool root",
+		},
+		{
+			name:      "outside pool",
+			clonePath: filepath.Join("/tmp", "outside-orca-pool", "clone-01"),
+			wantErr:   "must stay inside pool root",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			deps := newTestDeps(t)
+			d := deps.newDaemon(t)
+
+			_, err := d.spawnWorkerPane(context.Background(), Task{Project: "/tmp/project", Issue: "LAB-1511"}, "worker-01", tt.clonePath, deps.config.profiles["codex"])
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("spawnWorkerPane() error = %v, want substring %q", err, tt.wantErr)
+			}
+			if got := len(deps.amux.killCalls); got != 0 {
+				t.Fatalf("kill calls = %d, want 0", got)
+			}
+			if got := len(deps.amux.spawnRequests); got != 0 {
+				t.Fatalf("spawn requests = %d, want 0", got)
+			}
+		})
+	}
+}
+
 type spawnFailingRunner struct {
 	err error
+}
+
+type releaseCall struct {
+	path   string
+	branch string
+}
+
+type fakeAllocatedCloneReleaser struct {
+	err   error
+	calls []releaseCall
+}
+
+func (r *fakeAllocatedCloneReleaser) Release(_ context.Context, path, taskBranch string) error {
+	r.calls = append(r.calls, releaseCall{path: path, branch: taskBranch})
+	return r.err
 }
 
 func stringPtr(value string) *string {
