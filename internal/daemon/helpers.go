@@ -212,11 +212,14 @@ func stableWorkerRef(task Task, worker Worker) string {
 	return ""
 }
 
-func assignmentMetadata(agentProfile, branch, task string) map[string]string {
+func assignmentMetadata(agentProfile, branch, task string, preflightSkipped bool) map[string]string {
 	metadata := map[string]string{
 		"agent_profile": agentProfile,
 		"branch":        branch,
 		"task":          task,
+	}
+	if preflightSkipped {
+		metadata["preflight_skipped"] = "true"
 	}
 	return metadata
 }
@@ -448,7 +451,7 @@ func (d *Daemon) trackedPaneMetadata(ctx context.Context, projectPath, paneID, c
 	return metadata, nil
 }
 
-func (d *Daemon) assignmentPaneMetadata(ctx context.Context, projectPath, paneID, agentProfile, branch, issue, task string, prNumber int) (map[string]string, error) {
+func (d *Daemon) assignmentPaneMetadata(ctx context.Context, projectPath, paneID, agentProfile, branch, issue, task string, prNumber int, preflightSkipped bool) (map[string]string, error) {
 	var prStatus *trackedStatus
 	if prNumber > 0 {
 		status := trackedStatusActive
@@ -459,7 +462,7 @@ func (d *Daemon) assignmentPaneMetadata(ctx context.Context, projectPath, paneID
 	if err != nil {
 		return nil, err
 	}
-	return mergeMetadata(assignmentMetadata(agentProfile, branch, task), tracked), nil
+	return mergeMetadata(assignmentMetadata(agentProfile, branch, task, preflightSkipped), tracked), nil
 }
 
 func (d *Daemon) prPaneMetadata(ctx context.Context, active ActiveAssignment, prNumber int) (map[string]string, error) {

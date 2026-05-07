@@ -672,7 +672,9 @@ func isGitHubRateLimitError(err error, output []byte) bool {
 
 	message := strings.ToLower(err.Error() + " " + string(output))
 	return strings.Contains(message, "secondary rate limit") ||
+		strings.Contains(message, "api rate limit already exceeded") ||
 		strings.Contains(message, "api rate limit exceeded") ||
+		strings.Contains(message, "rate limit already exceeded") ||
 		strings.Contains(message, "rate limit exceeded") ||
 		strings.Contains(message, "http 429") ||
 		(strings.Contains(message, "http 403") && (strings.Contains(message, "rate limit") || strings.Contains(message, "retry-after")))

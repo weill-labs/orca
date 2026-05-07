@@ -65,11 +65,20 @@ func (d *Daemon) assign(ctx context.Context, projectPath, issue, prompt, agentPr
 	prompt = wrapAssignmentPrompt(profile, issue, prompt)
 
 	assignmentBranch := issue
+	preflightSkipped := false
+	var preflightRateLimitedUntil time.Time
 	prNumber, err := d.lookupOpenPRNumber(ctx, projectPath, assignmentBranch)
 	if err != nil {
-		err = fmt.Errorf("check open PRs for %s: %w", issue, err)
-		d.emitAssignFailure(ctx, projectPath, issue, "", profile.Name, Clone{}, Pane{}, 0, err)
-		return err
+		if until, ok := gitHubRateLimitUntil(err); ok {
+			preflightSkipped = true
+			preflightRateLimitedUntil = until
+			prompt = withAssignPreflightSkippedPrompt(prompt, issue)
+			d.emitAssignPreflightSkipped(ctx, projectPath, issue, profile.Name, assignmentBranch, until)
+		} else {
+			err = fmt.Errorf("check open PRs for %s: %w", issue, err)
+			d.emitAssignFailure(ctx, projectPath, issue, "", profile.Name, Clone{}, Pane{}, 0, err)
+			return err
+		}
 	}
 	adoptingOpenPR := prNumber > 0
 
@@ -197,7 +206,7 @@ func (d *Daemon) assign(ctx context.Context, projectPath, issue, prompt, agentPr
 	if strings.TrimSpace(resolvedTitle) == "" && hasGitHubIssue {
 		resolvedTitle = gitHubIssue.Title
 	}
-	startup, err := d.startAssignmentWorker(ctx, projectPath, clone, task, worker, profile, prompt, d.resolveAssignmentTitle(ctx, issue, resolvedTitle))
+	startup, err := d.startAssignmentWorker(ctx, projectPath, clone, task, worker, profile, prompt, d.resolveAssignmentTitle(ctx, issue, resolvedTitle), preflightSkipped)
 	if err != nil {
 		if startup.pane.ID == "" && startup.pane.Name == "" {
 			failUnspawnedAssignment(err)
@@ -232,19 +241,21 @@ func (d *Daemon) assign(ctx context.Context, projectPath, issue, prompt, agentPr
 	d.requestRelayReconnect()
 
 	d.emit(ctx, Event{
-		Time:         now,
-		Type:         EventTaskAssigned,
-		Project:      projectPath,
-		Issue:        issue,
-		WorkerID:     claimedWorker.WorkerID,
-		PaneID:       pane.ID,
-		PaneName:     workerPaneName(issue, claimedWorker.WorkerID),
-		CloneName:    clone.Name,
-		ClonePath:    clone.Path,
-		Branch:       assignmentBranch,
-		AgentProfile: profile.Name,
-		PRNumber:     prNumber,
-		Message:      taskAssignedMessage(pane),
+		Time:                   now,
+		Type:                   EventTaskAssigned,
+		Project:                projectPath,
+		Issue:                  issue,
+		WorkerID:               claimedWorker.WorkerID,
+		PaneID:                 pane.ID,
+		PaneName:               workerPaneName(issue, claimedWorker.WorkerID),
+		CloneName:              clone.Name,
+		ClonePath:              clone.Path,
+		Branch:                 assignmentBranch,
+		AgentProfile:           profile.Name,
+		PRNumber:               prNumber,
+		GitHubRateLimitedUntil: preflightRateLimitedUntil,
+		PreflightSkipped:       preflightSkipped,
+		Message:                taskAssignedMessage(pane),
 	})
 	return nil
 }
@@ -291,6 +302,20 @@ func (d *Daemon) emitAssignFailure(ctx context.Context, projectPath, issue, work
 		AgentProfile: profileName,
 		PRNumber:     prNumber,
 		Message:      err.Error(),
+	})
+}
+
+func (d *Daemon) emitAssignPreflightSkipped(ctx context.Context, projectPath, issue, profileName, branch string, until time.Time) {
+	d.emit(ctx, Event{
+		Time:                   d.now(),
+		Type:                   EventTaskAssignPreflightSkipped,
+		Project:                projectPath,
+		Issue:                  issue,
+		Branch:                 branch,
+		AgentProfile:           profileName,
+		GitHubRateLimitedUntil: until,
+		PreflightSkipped:       true,
+		Message:                fmt.Sprintf("open PR preflight skipped: %s; worker will check for an existing PR on first run", formatGitHubRateLimitWarning(until)),
 	})
 }
 

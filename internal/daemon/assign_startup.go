@@ -47,7 +47,7 @@ func (e assignStartupAttemptError) Unwrap() error {
 	return e.err
 }
 
-func (d *Daemon) startAssignmentWorker(ctx context.Context, projectPath string, clone Clone, task Task, worker Worker, profile AgentProfile, prompt, paneTitle string) (assignStartupResult, error) {
+func (d *Daemon) startAssignmentWorker(ctx context.Context, projectPath string, clone Clone, task Task, worker Worker, profile AgentProfile, prompt, paneTitle string, preflightSkipped bool) (assignStartupResult, error) {
 	result := assignStartupResult{task: task, worker: worker}
 	maxAttempts := 1
 	if strings.EqualFold(profile.Name, "codex") {
@@ -68,7 +68,7 @@ func (d *Daemon) startAssignmentWorker(ctx context.Context, projectPath string, 
 			worker: attemptWorker,
 		}
 
-		metadata, err := d.assignmentPaneMetadata(ctx, projectPath, pane.ID, profile.Name, attemptTask.Branch, attemptTask.Issue, paneTitle, attemptTask.PRNumber)
+		metadata, err := d.assignmentPaneMetadata(ctx, projectPath, pane.ID, profile.Name, attemptTask.Branch, attemptTask.Issue, paneTitle, attemptTask.PRNumber, preflightSkipped)
 		if err != nil {
 			return result, fmt.Errorf("build pane metadata: %w", err)
 		}

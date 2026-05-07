@@ -1364,6 +1364,111 @@ func TestAssignAdoptsOpenPRAndPrepopulatesTask(t *testing.T) {
 	}
 }
 
+func TestAssignSkipsOpenPRPreflightOnGitHubRateLimit(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	lookupArgs := []string{"pr", "list", "--head", "LAB-1376", "--state", "open", "--json", "number"}
+	resetAt := time.Date(2026, 4, 2, 9, 2, 0, 0, time.UTC)
+	deps.commands.queue(
+		"gh",
+		lookupArgs,
+		fmt.Sprintf("GraphQL: API rate limit already exceeded.\nX-RateLimit-Reset: %d\n", resetAt.Unix()),
+		errors.New("GraphQL: API rate limit already exceeded"),
+	)
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-1376", "Implement daemon rate limit fallback", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	waitFor(t, "task registration", func() bool {
+		task, ok := deps.state.task("LAB-1376")
+		return ok && task.Status == TaskStatusActive
+	})
+
+	if got, want := deps.commands.countCalls("gh", lookupArgs), 1; got != want {
+		t.Fatalf("gh pr list calls = %d, want %d", got, want)
+	}
+	if got, want := deps.pool.acquireCallCount(), 1; got != want {
+		t.Fatalf("pool acquire calls = %d, want %d", got, want)
+	}
+	if got, want := len(deps.amux.spawnRequests), 1; got != want {
+		t.Fatalf("spawn requests = %d, want %d", got, want)
+	}
+
+	task, ok := deps.state.task("LAB-1376")
+	if !ok {
+		t.Fatal("task not stored in fake state")
+	}
+	if got, want := task.PRNumber, 0; got != want {
+		t.Fatalf("task.PRNumber = %d, want %d", got, want)
+	}
+	worker, ok := deps.state.worker("pane-1")
+	if !ok {
+		t.Fatal("worker not stored in fake state")
+	}
+	if got, want := worker.LastPRNumber, 0; got != want {
+		t.Fatalf("worker.LastPRNumber = %d, want %d", got, want)
+	}
+
+	wantGit := []commandCall{
+		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"fetch", "origin", "main"}},
+		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"checkout", "--detach", "origin/main"}},
+		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"reset", "--hard", "origin/main"}},
+		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"config", "user.name", "Orca worker-01"}},
+		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"config", "user.email", "worker-01@orca.local"}},
+		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"checkout", "-B", "LAB-1376"}},
+	}
+	if got := deps.commands.callsByName("git"); !reflect.DeepEqual(got, wantGit) {
+		t.Fatalf("git calls = %#v, want %#v", got, wantGit)
+	}
+
+	deps.amux.requireMetadata(t, "pane-1", map[string]string{
+		"agent_profile":     "codex",
+		"branch":            "LAB-1376",
+		"preflight_skipped": "true",
+		"task":              "LAB-1376",
+		"tracked_issues":    `[{"id":"LAB-1376","status":"active"}]`,
+	})
+
+	deps.amux.mu.Lock()
+	sentKeys := append([]string(nil), deps.amux.sentKeys["pane-1"]...)
+	deps.amux.mu.Unlock()
+	if got, want := len(sentKeys), 1; got != want {
+		t.Fatalf("sentKeys count = %d, want %d", got, want)
+	}
+	if !strings.Contains(sentKeys[0], "Orca skipped its open PR preflight because GitHub is rate limited.") {
+		t.Fatalf("assignment prompt = %q, want skipped preflight note", sentKeys[0])
+	}
+	if !strings.Contains(sentKeys[0], "Before editing, check whether an open PR already exists for LAB-1376.") {
+		t.Fatalf("assignment prompt = %q, want existing PR check instruction", sentKeys[0])
+	}
+
+	if got, want := deps.events.countType(EventTaskAssignFailed), 0; got != want {
+		t.Fatalf("assign failure events = %d, want %d", got, want)
+	}
+	event, ok := deps.events.lastEventOfType("task.assign_preflight_skipped")
+	if !ok {
+		t.Fatal("missing task.assign_preflight_skipped event")
+	}
+	if !event.GitHubRateLimitedUntil.Equal(resetAt) {
+		t.Fatalf("event.GitHubRateLimitedUntil = %v, want %v", event.GitHubRateLimitedUntil, resetAt)
+	}
+	if !strings.Contains(event.Message, "worker will check for an existing PR") {
+		t.Fatalf("event.Message = %q, want worker check context", event.Message)
+	}
+}
+
 func TestAssignAllowsReassigningInactiveStoredIssueWhenNoOpenPRExists(t *testing.T) {
 	t.Parallel()
 
