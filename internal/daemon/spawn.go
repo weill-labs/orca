@@ -50,12 +50,17 @@ func (c *LocalController) Spawn(ctx context.Context, req SpawnPaneRequest) (Spaw
 		return SpawnPaneResult{}, err
 	}
 
+	spawnCWD, err := validateAllocatedSpawnCWD(ctx, projectPath, manager, clone)
+	if err != nil {
+		return SpawnPaneResult{}, err
+	}
+
 	window := resolveWindowFromPane(ctx, amuxClient, req.LeadPane)
 	pane, err := amuxClient.Spawn(ctx, amux.SpawnRequest{
 		Session: req.Session,
 		Window:  window,
 		Name:    req.Title,
-		CWD:     clone.Path,
+		CWD:     spawnCWD,
 		Command: command,
 	})
 	if err != nil {
@@ -82,6 +87,22 @@ func (c *LocalController) Spawn(ctx context.Context, req SpawnPaneRequest) (Spaw
 		PaneName:  pane.Name,
 		ClonePath: clone.Path,
 	}, nil
+}
+
+type allocatedCloneReleaser interface {
+	Release(ctx context.Context, path, taskBranch string) error
+}
+
+func validateAllocatedSpawnCWD(ctx context.Context, projectPath string, releaser allocatedCloneReleaser, clone pool.Clone) (string, error) {
+	spawnCWD, err := pool.ValidateClonePath(filepath.Join(projectPath, orcaPoolSubdir), clone.Path)
+	if err != nil {
+		releaseErr := releaser.Release(ctx, clone.Path, clone.CurrentBranch)
+		if releaseErr != nil {
+			err = errors.Join(err, releaseErr)
+		}
+		return "", fmt.Errorf("validate spawn cwd: %w", err)
+	}
+	return spawnCWD, nil
 }
 
 func (c *LocalController) sendSpawnPrompt(ctx context.Context, amuxClient amux.Client, paneID string, profile AgentProfile, prompt string) error {
@@ -286,8 +307,14 @@ func workerPaneSpawnName(task Task, stableRef string) string {
 }
 
 func (d *Daemon) spawnWorkerPane(ctx context.Context, task Task, stableRef, clonePath string, profile AgentProfile) (Pane, error) {
+	projectPath := d.projectPathForTask(task)
+	spawnCWD, err := pool.ValidateClonePath(filepath.Join(projectPath, orcaPoolSubdir), clonePath)
+	if err != nil {
+		return Pane{}, fmt.Errorf("validate worker spawn cwd: %w", err)
+	}
+
 	paneName := workerPaneSpawnName(task, stableRef)
-	if err := d.prepareWorkerPaneSpawn(ctx, d.projectPathForTask(task), paneName); err != nil {
+	if err := d.prepareWorkerPaneSpawn(ctx, projectPath, paneName); err != nil {
 		return Pane{}, err
 	}
 
@@ -295,7 +322,7 @@ func (d *Daemon) spawnWorkerPane(ctx context.Context, task Task, stableRef, clon
 		Session: d.session,
 		Window:  d.spawnWindowTarget(ctx, task),
 		Name:    paneName,
-		CWD:     clonePath,
+		CWD:     spawnCWD,
 		Command: profile.StartCommand,
 	})
 }

@@ -32,7 +32,7 @@ func newTestDeps(t *testing.T) *testDeps {
 	t.Helper()
 
 	tmp := t.TempDir()
-	clonePath := filepath.Join(tmp, "clone-01")
+	clonePath := filepath.Join("/tmp/project", orcaPoolSubdir, "clone-01")
 	if err := os.MkdirAll(clonePath, 0o755); err != nil {
 		t.Fatalf("MkdirAll(%q) error = %v", clonePath, err)
 	}

@@ -12,29 +12,35 @@ import (
 
 const cloneSetupHookPath = ".orca/setup.sh"
 
-func (m *Manager) runCloneSetupHook(ctx context.Context, clonePath string) {
+func (m *Manager) runCloneSetupHook(ctx context.Context, clonePath string) error {
+	clonePath, err := m.markedClonePath(clonePath)
+	if err != nil {
+		return fmt.Errorf("validate clone bootstrap hook cwd: %w", err)
+	}
+
 	scriptPath := filepath.Join(clonePath, cloneSetupHookPath)
 	info, err := os.Stat(scriptPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return
+			return nil
 		}
 
 		m.logf("pool: inspect clone bootstrap hook %q: %v", scriptPath, err)
-		return
+		return nil
 	}
 	if info.IsDir() {
 		m.logf("pool: inspect clone bootstrap hook %q: path is a directory", scriptPath)
-		return
+		return nil
 	}
 
 	output, err := runCloneSetupHookCommand(ctx, clonePath, scriptPath, m.project)
 	if err != nil {
 		logCloneSetupHookResult(m.logf, clonePath, output, fmt.Errorf("bash %s %s: %w", cloneSetupHookPath, m.project, err))
-		return
+		return nil
 	}
 
 	logCloneSetupHookResult(m.logf, clonePath, output, nil)
+	return nil
 }
 
 func runCloneSetupHookCommand(ctx context.Context, clonePath, scriptPath, projectPath string) (string, error) {

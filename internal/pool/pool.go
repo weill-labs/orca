@@ -24,6 +24,8 @@ const (
 	StatusQuarantined Status = "quarantined"
 
 	CloneQuarantineFailureThreshold = 3
+
+	ClonePoolMarker = ".orca-pool"
 )
 
 type Clone struct {
@@ -89,18 +91,18 @@ func New(project string, cfg Config, store Store, opts ...Option) (*Manager, err
 	if store == nil {
 		return nil, errors.New("pool: store is required")
 	}
-	if strings.TrimSpace(cfg.PoolDir()) == "" {
-		return nil, errors.New("pool: pool directory is required")
-	}
-
 	absProject, err := filepath.Abs(project)
 	if err != nil {
 		return nil, fmt.Errorf("resolve project path: %w", err)
 	}
+	poolDir, err := normalizePoolRoot(cfg.PoolDir())
+	if err != nil {
+		return nil, err
+	}
 
 	manager := &Manager{
 		project:     filepath.Clean(absProject),
-		poolDir:     cfg.PoolDir(),
+		poolDir:     poolDir,
 		cloneOrigin: cfg.CloneOrigin(),
 		baseBranch:  defaultBaseBranch(cfg.BaseBranch()),
 		logf:        log.Printf,
@@ -158,6 +160,11 @@ func (m *Manager) Discover(ctx context.Context) ([]Clone, error) {
 		if err != nil {
 			return nil, fmt.Errorf("ensure clone %q: %w", path, err)
 		}
+		clonePath, err := m.markedClonePath(record.Path)
+		if err != nil {
+			return nil, fmt.Errorf("ensure clone %q returned invalid path %q: %w", path, record.Path, err)
+		}
+		record.Path = clonePath
 		clones = append(clones, fromState(record))
 	}
 
@@ -168,7 +175,7 @@ func (m *Manager) Discover(ctx context.Context) ([]Clone, error) {
 // from the local pool marker, and can still reach its remote. Unhealthy clones
 // are repaired before use.
 func (m *Manager) HealthCheck(ctx context.Context, path string) error {
-	clonePath, err := resolveClonePath(path)
+	clonePath, err := m.markedClonePath(path)
 	if err != nil {
 		return err
 	}
@@ -221,6 +228,11 @@ func (m *Manager) Allocate(ctx context.Context, taskID, issueBranch string) (Clo
 	if err != nil {
 		return Clone{}, fmt.Errorf("register new clone %q: %w", newPath, err)
 	}
+	recordPath, err := m.markedClonePath(record.Path)
+	if err != nil {
+		return Clone{}, fmt.Errorf("register new clone %q returned invalid path %q: %w", newPath, record.Path, err)
+	}
+	record.Path = recordPath
 
 	ok, err := m.store.TryOccupyClone(ctx, m.project, record.Path, issueBranch, taskID)
 	if err != nil {
@@ -249,7 +261,7 @@ func (m *Manager) RecordCloneFailure(ctx context.Context, path string) error {
 	if !ok {
 		return nil
 	}
-	clonePath, err := resolveClonePath(path)
+	clonePath, err := m.markedClonePath(path)
 	if err != nil {
 		return err
 	}
@@ -262,7 +274,7 @@ func (m *Manager) RecordCloneSuccess(ctx context.Context, path string) error {
 	if !ok {
 		return nil
 	}
-	clonePath, err := resolveClonePath(path)
+	clonePath, err := m.markedClonePath(path)
 	if err != nil {
 		return err
 	}
@@ -274,7 +286,7 @@ func (m *Manager) Unquarantine(ctx context.Context, path string) error {
 	if !ok {
 		return errors.New("pool store does not support clone quarantine")
 	}
-	clonePath, err := resolveClonePath(path)
+	clonePath, err := m.markedClonePath(path)
 	if err != nil {
 		return err
 	}
@@ -297,9 +309,12 @@ func (m *Manager) activeCWDSet(ctx context.Context) (map[string]struct{}, error)
 			continue
 		}
 
-		resolvedPath, err := resolveClonePath(path)
+		resolvedPath, err := normalizeAbsolutePath("active pane cwd", path, true)
 		if err != nil {
-			return nil, err
+			continue
+		}
+		if err := validateCloneContained(m.poolDir, resolvedPath); err != nil {
+			continue
 		}
 		set[resolvedPath] = struct{}{}
 	}
@@ -308,7 +323,7 @@ func (m *Manager) activeCWDSet(ctx context.Context) (map[string]struct{}, error)
 }
 
 func (m *Manager) Release(ctx context.Context, path, taskBranch string) error {
-	clonePath, err := resolveClonePath(path)
+	clonePath, err := m.markedClonePath(path)
 	if err != nil {
 		return err
 	}
@@ -426,20 +441,22 @@ func (m *Manager) CreateClone(ctx context.Context) (string, error) {
 		return "", err
 	}
 
-	clonePath := filepath.Join(m.poolDir, next)
+	clonePath, err := m.clonePath(filepath.Join(m.poolDir, next))
+	if err != nil {
+		return "", err
+	}
 	if err := m.runner.Run(ctx, m.poolDir, "git", "clone", m.cloneOrigin, clonePath); err != nil {
 		return "", fmt.Errorf("git clone into %q: %w", clonePath, err)
 	}
 
-	absPath, err := filepath.Abs(clonePath)
-	if err != nil {
-		return "", fmt.Errorf("resolve clone path %q: %w", clonePath, err)
+	if err := ensureCloneMarker(clonePath); err != nil {
+		return "", err
+	}
+	if err := m.runCloneSetupHook(ctx, clonePath); err != nil {
+		return "", err
 	}
 
-	resolvedPath := filepath.Clean(absPath)
-	m.runCloneSetupHook(ctx, resolvedPath)
-
-	return resolvedPath, nil
+	return clonePath, nil
 }
 
 func (m *Manager) nextCloneName() (string, error) {
@@ -485,31 +502,157 @@ func (m *Manager) eligibleClonePaths() ([]string, error) {
 			continue
 		}
 
-		absPath, err := filepath.Abs(filepath.Join(m.poolDir, entry.Name()))
+		absPath, err := m.clonePath(filepath.Join(m.poolDir, entry.Name()))
 		if err != nil {
 			return nil, fmt.Errorf("resolve clone path %q: %w", entry.Name(), err)
 		}
-		paths = append(paths, filepath.Clean(absPath))
+		hasMarker, err := cloneHasMarker(absPath)
+		if err != nil {
+			return nil, err
+		}
+		if !hasMarker {
+			continue
+		}
+		paths = append(paths, absPath)
 	}
 
 	sort.Strings(paths)
 	return paths, nil
 }
 
-func resolveClonePath(path string) (string, error) {
-	clonePath, err := filepath.Abs(path)
+func normalizePoolRoot(path string) (string, error) {
+	poolDir, err := normalizeAbsolutePath("pool directory", path, false)
 	if err != nil {
-		return "", fmt.Errorf("resolve clone path: %w", err)
+		return "", err
+	}
+	if filepath.Dir(poolDir) == poolDir {
+		return "", fmt.Errorf("pool: pool directory %q resolves to filesystem root", path)
+	}
+	return poolDir, nil
+}
+
+func (m *Manager) clonePath(path string) (string, error) {
+	return ValidateClonePath(m.poolDir, path)
+}
+
+func (m *Manager) markedClonePath(path string) (string, error) {
+	clonePath, err := m.clonePath(path)
+	if err != nil {
+		return "", err
+	}
+	if err := requireCloneMarker(clonePath); err != nil {
+		return "", err
+	}
+	return clonePath, nil
+}
+
+func ValidateClonePath(poolRoot, path string) (string, error) {
+	root, err := normalizePoolRoot(poolRoot)
+	if err != nil {
+		return "", err
+	}
+	clonePath, err := normalizeAbsolutePath("clone", path, true)
+	if err != nil {
+		return "", err
+	}
+	if err := validateCloneContained(root, clonePath); err != nil {
+		return "", err
+	}
+	return clonePath, nil
+}
+
+func normalizeAbsolutePath(kind, path string, requireAlreadyAbsolute bool) (string, error) {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return "", fmt.Errorf("pool: %s path is required", kind)
+	}
+	if strings.ContainsRune(trimmed, 0) {
+		return "", fmt.Errorf("pool: %s path %q is invalid: contains NUL byte", kind, path)
+	}
+	if requireAlreadyAbsolute && !filepath.IsAbs(trimmed) {
+		return "", fmt.Errorf("pool: %s path must be absolute: %q", kind, path)
+	}
+	if containsParentTraversal(trimmed) {
+		return "", fmt.Errorf("pool: %s path %q contains parent traversal", kind, path)
 	}
 
-	return filepath.Clean(clonePath), nil
+	absPath := trimmed
+	if !filepath.IsAbs(absPath) {
+		resolved, err := filepath.Abs(absPath)
+		if err != nil {
+			return "", fmt.Errorf("pool: resolve %s path %q: %w", kind, path, err)
+		}
+		absPath = resolved
+	}
+	return filepath.Clean(absPath), nil
+}
+
+func containsParentTraversal(path string) bool {
+	for _, element := range strings.Split(filepath.ToSlash(path), "/") {
+		if element == ".." {
+			return true
+		}
+	}
+	return false
+}
+
+func validateCloneContained(poolRoot, clonePath string) error {
+	if clonePath == poolRoot {
+		return fmt.Errorf("pool: clone path %q must be a child of pool root %q", clonePath, poolRoot)
+	}
+	rel, err := filepath.Rel(poolRoot, clonePath)
+	if err != nil {
+		return fmt.Errorf("pool: compare clone path %q with pool root %q: %w", clonePath, poolRoot, err)
+	}
+	if rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return fmt.Errorf("pool: clone path %q must stay inside pool root %q", clonePath, poolRoot)
+	}
+	return nil
+}
+
+func cloneHasMarker(clonePath string) (bool, error) {
+	markerPath := filepath.Join(clonePath, ClonePoolMarker)
+	info, err := os.Lstat(markerPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, fmt.Errorf("pool: inspect clone marker %q: %w", markerPath, err)
+	}
+	if !info.Mode().IsRegular() {
+		return false, fmt.Errorf("pool: clone marker %q must be a regular file", markerPath)
+	}
+	return true, nil
+}
+
+func requireCloneMarker(clonePath string) error {
+	hasMarker, err := cloneHasMarker(clonePath)
+	if err != nil {
+		return err
+	}
+	if !hasMarker {
+		return fmt.Errorf("pool: clone path %q is missing %s marker", clonePath, ClonePoolMarker)
+	}
+	return nil
+}
+
+func ensureCloneMarker(clonePath string) error {
+	markerPath := filepath.Join(clonePath, ClonePoolMarker)
+	if err := os.WriteFile(markerPath, []byte("orca clone pool\n"), 0o644); err != nil {
+		return fmt.Errorf("pool: write clone marker %q: %w", markerPath, err)
+	}
+	return nil
 }
 
 func (m *Manager) prepareClone(ctx context.Context, path, issueBranch string) error {
+	clonePath, err := m.markedClonePath(path)
+	if err != nil {
+		return err
+	}
 	commands := append(m.resetToOriginBaseCommands(), []string{"checkout", "-B", issueBranch})
 
 	for _, args := range commands {
-		if err := m.runner.Run(ctx, path, "git", args...); err != nil {
+		if err := m.runner.Run(ctx, clonePath, "git", args...); err != nil {
 			return err
 		}
 	}
@@ -518,11 +661,15 @@ func (m *Manager) prepareClone(ctx context.Context, path, issueBranch string) er
 }
 
 func (m *Manager) cleanupClone(ctx context.Context, path, taskBranch string) error {
+	clonePath, err := m.markedClonePath(path)
+	if err != nil {
+		return err
+	}
 	commands := append([][]string{{"reset", "--hard"}}, m.resetToOriginBaseCommands()...)
-	commands = append(commands, []string{"clean", "-fdx"})
+	commands = append(commands, []string{"clean", "-fdx", "-e", ClonePoolMarker})
 
 	for _, args := range commands {
-		if err := m.runner.Run(ctx, path, "git", args...); err != nil {
+		if err := m.runner.Run(ctx, clonePath, "git", args...); err != nil {
 			return err
 		}
 	}
@@ -532,7 +679,7 @@ func (m *Manager) cleanupClone(ctx context.Context, path, taskBranch string) err
 		return nil
 	}
 
-	exists, err := branchExists(ctx, path, taskBranch)
+	exists, err := branchExists(ctx, clonePath, taskBranch)
 	if err != nil {
 		return err
 	}
@@ -540,7 +687,7 @@ func (m *Manager) cleanupClone(ctx context.Context, path, taskBranch string) err
 		return nil
 	}
 
-	if err := m.runner.Run(ctx, path, "git", "branch", "-D", taskBranch); err != nil {
+	if err := m.runner.Run(ctx, clonePath, "git", "branch", "-D", taskBranch); err != nil {
 		return err
 	}
 
@@ -636,10 +783,20 @@ func statusClean(status string) bool {
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
+		if statusLinePath(line) == ClonePoolMarker {
+			continue
+		}
 		return false
 	}
 
 	return true
+}
+
+func statusLinePath(line string) string {
+	if len(line) < 4 {
+		return strings.TrimSpace(line)
+	}
+	return strings.TrimSpace(line[3:])
 }
 
 func gitOutput(ctx context.Context, path string, args ...string) (string, error) {

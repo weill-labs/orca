@@ -10,6 +10,7 @@ import (
 	"time"
 
 	state "github.com/weill-labs/orca/internal/daemonstate"
+	"github.com/weill-labs/orca/internal/pool"
 	"github.com/weill-labs/orca/internal/project"
 )
 
@@ -358,7 +359,10 @@ daemonReady:
 
 type stubPoolRunner struct{}
 
-func (stubPoolRunner) Run(context.Context, string, string, ...string) error {
+func (stubPoolRunner) Run(_ context.Context, _ string, name string, args ...string) error {
+	if name == "git" && len(args) >= 3 && args[0] == "clone" {
+		return os.MkdirAll(args[len(args)-1], 0o755)
+	}
 	return nil
 }
 
@@ -368,6 +372,9 @@ func initPoolClone(t *testing.T, root, name string) string {
 	clonePath := filepath.Join(root, name)
 	if err := os.MkdirAll(clonePath, 0o755); err != nil {
 		t.Fatalf("MkdirAll(%q) error = %v", clonePath, err)
+	}
+	if err := os.WriteFile(filepath.Join(clonePath, pool.ClonePoolMarker), []byte("orca clone pool\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(%s) error = %v", pool.ClonePoolMarker, err)
 	}
 	runGit(t, "", "init", clonePath)
 	runGit(t, clonePath, "checkout", "-b", "main")
