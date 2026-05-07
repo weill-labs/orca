@@ -139,11 +139,12 @@ type MergeQueueEntry struct {
 }
 
 type Clone struct {
-	Path      string    `json:"path"`
-	Status    string    `json:"status"`
-	Issue     string    `json:"issue,omitempty"`
-	Branch    string    `json:"branch,omitempty"`
-	UpdatedAt time.Time `json:"updated_at"`
+	Path         string    `json:"path"`
+	Status       string    `json:"status"`
+	Issue        string    `json:"issue,omitempty"`
+	Branch       string    `json:"branch,omitempty"`
+	FailureCount int       `json:"failure_count,omitempty"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 type CloneOccupancy struct {

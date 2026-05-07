@@ -70,6 +70,45 @@ func TestAllocateSkipsQuarantinedClone(t *testing.T) {
 	}
 }
 
+func TestUnquarantineRestoresCloneEligibility(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	project := root + "/project"
+	poolDir := root + "/pool"
+	mustMkdir(t, poolDir)
+	origin := newOrigin(t, "main")
+	clonePath := newClone(t, origin, poolDir+"/clone-01")
+	store := newStore(t)
+	manager := newManager(t, project, staticConfig{
+		poolDir:     poolDir,
+		cloneOrigin: origin,
+	}, store)
+
+	if _, err := store.EnsureClone(context.Background(), project, clonePath); err != nil {
+		t.Fatalf("EnsureClone() error = %v", err)
+	}
+	for i := 0; i < pool.CloneQuarantineFailureThreshold; i++ {
+		if _, err := store.RecordCloneFailure(context.Background(), project, clonePath, pool.CloneQuarantineFailureThreshold); err != nil {
+			t.Fatalf("RecordCloneFailure() error = %v", err)
+		}
+	}
+	if _, err := manager.Allocate(context.Background(), "LAB-1697", "LAB-1697"); err == nil {
+		t.Fatal("Allocate() succeeded, want quarantined clone error")
+	}
+
+	if err := store.UnquarantineClone(context.Background(), project, clonePath); err != nil {
+		t.Fatalf("UnquarantineClone() error = %v", err)
+	}
+	clone, err := manager.Allocate(context.Background(), "LAB-1697", "LAB-1697")
+	if err != nil {
+		t.Fatalf("Allocate() after unquarantine error = %v", err)
+	}
+	if clone.Path != clonePath {
+		t.Fatalf("allocated clone = %q, want %q", clone.Path, clonePath)
+	}
+}
+
 type quarantineStore struct {
 	mu      sync.Mutex
 	records map[string]state.CloneRecord

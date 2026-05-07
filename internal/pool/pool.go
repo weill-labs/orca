@@ -19,8 +19,11 @@ var ErrNoFreeClones = errors.New("pool: no free clones available")
 type Status string
 
 const (
-	StatusFree     Status = "free"
-	StatusOccupied Status = "occupied"
+	StatusFree        Status = "free"
+	StatusOccupied    Status = "occupied"
+	StatusQuarantined Status = "quarantined"
+
+	CloneQuarantineFailureThreshold = 3
 )
 
 type Clone struct {
@@ -29,6 +32,7 @@ type Clone struct {
 	Status        Status
 	CurrentBranch string
 	AssignedTask  string
+	FailureCount  int
 }
 
 type Config interface {
@@ -41,6 +45,20 @@ type Store interface {
 	EnsureClone(ctx context.Context, project, path string) (state.CloneRecord, error)
 	TryOccupyClone(ctx context.Context, project, path, branch, task string) (bool, error)
 	MarkCloneFree(ctx context.Context, project, path string) error
+}
+
+type CloneFailureStore interface {
+	RecordCloneFailure(ctx context.Context, project, path string, threshold int) (state.CloneRecord, error)
+	ResetCloneFailures(ctx context.Context, project, path string) error
+	UnquarantineClone(ctx context.Context, project, path string) error
+}
+
+type NoAvailableClonesError struct {
+	Quarantined []string
+}
+
+func (e NoAvailableClonesError) Error() string {
+	return fmt.Sprintf("no available clones; %d are quarantined: %s", len(e.Quarantined), strings.Join(e.Quarantined, ", "))
 }
 
 type Runner interface {
@@ -190,6 +208,9 @@ func (m *Manager) Allocate(ctx context.Context, taskID, issueBranch string) (Clo
 	if clone != nil {
 		return *clone, nil
 	}
+	if err := noAvailableQuarantinedClonesError(clones, activeCWDs); err != nil {
+		return Clone{}, err
+	}
 
 	newPath, err := m.CreateClone(ctx)
 	if err != nil {
@@ -221,6 +242,43 @@ func (m *Manager) Allocate(ctx context.Context, taskID, issueBranch string) (Clo
 		CurrentBranch: issueBranch,
 		AssignedTask:  taskID,
 	}, nil
+}
+
+func (m *Manager) RecordCloneFailure(ctx context.Context, path string) error {
+	store, ok := m.store.(CloneFailureStore)
+	if !ok {
+		return nil
+	}
+	clonePath, err := resolveClonePath(path)
+	if err != nil {
+		return err
+	}
+	_, err = store.RecordCloneFailure(ctx, m.project, clonePath, CloneQuarantineFailureThreshold)
+	return err
+}
+
+func (m *Manager) RecordCloneSuccess(ctx context.Context, path string) error {
+	store, ok := m.store.(CloneFailureStore)
+	if !ok {
+		return nil
+	}
+	clonePath, err := resolveClonePath(path)
+	if err != nil {
+		return err
+	}
+	return store.ResetCloneFailures(ctx, m.project, clonePath)
+}
+
+func (m *Manager) Unquarantine(ctx context.Context, path string) error {
+	store, ok := m.store.(CloneFailureStore)
+	if !ok {
+		return errors.New("pool store does not support clone quarantine")
+	}
+	clonePath, err := resolveClonePath(path)
+	if err != nil {
+		return err
+	}
+	return store.UnquarantineClone(ctx, m.project, clonePath)
 }
 
 func (m *Manager) activeCWDSet(ctx context.Context) (map[string]struct{}, error) {
@@ -306,6 +364,46 @@ func (m *Manager) tryAllocateExisting(ctx context.Context, clones []Clone, activ
 	}
 
 	return nil, nil
+}
+
+func noAvailableQuarantinedClonesError(clones []Clone, activeCWDs map[string]struct{}) error {
+	if selectableFreeCloneExists(clones, activeCWDs) {
+		return nil
+	}
+	names := quarantinedCloneNames(clones)
+	if len(names) == 0 {
+		return nil
+	}
+	return NoAvailableClonesError{Quarantined: names}
+}
+
+func selectableFreeCloneExists(clones []Clone, activeCWDs map[string]struct{}) bool {
+	for _, clone := range clones {
+		if clone.Status != StatusFree {
+			continue
+		}
+		if _, ok := activeCWDs[clone.Path]; ok {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func quarantinedCloneNames(clones []Clone) []string {
+	names := make([]string, 0)
+	for _, clone := range clones {
+		if clone.Status != StatusQuarantined {
+			continue
+		}
+		name := strings.TrimSpace(clone.Name)
+		if name == "" {
+			name = filepath.Base(clone.Path)
+		}
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // CreateClone creates a new clone in the pool directory by cloning the origin.
@@ -570,6 +668,7 @@ func fromState(record state.CloneRecord) Clone {
 		Status:        Status(record.Status),
 		CurrentBranch: record.CurrentBranch,
 		AssignedTask:  record.AssignedTask,
+		FailureCount:  record.FailureCount,
 	}
 }
 

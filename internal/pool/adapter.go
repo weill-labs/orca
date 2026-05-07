@@ -33,3 +33,11 @@ func (a *poolAdapter) Release(ctx context.Context, project string, clone Clone) 
 	}
 	return a.manager.Release(ctx, clone.Path, branch)
 }
+
+func (a *poolAdapter) RecordCloneFailure(ctx context.Context, project string, clone Clone) error {
+	return a.manager.RecordCloneFailure(ctx, clone.Path)
+}
+
+func (a *poolAdapter) RecordCloneSuccess(ctx context.Context, project string, clone Clone) error {
+	return a.manager.RecordCloneSuccess(ctx, clone.Path)
+}
