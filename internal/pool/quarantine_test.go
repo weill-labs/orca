@@ -109,6 +109,25 @@ func TestUnquarantineRestoresCloneEligibility(t *testing.T) {
 	}
 }
 
+func TestCloneFailureTrackingHandlesStoreWithoutQuarantineSupport(t *testing.T) {
+	t.Parallel()
+
+	manager, err := pool.New("/project", staticConfig{poolDir: t.TempDir()}, newQuarantineStore(nil))
+	if err != nil {
+		t.Fatalf("pool.New() error = %v", err)
+	}
+
+	if err := manager.RecordCloneFailure(context.Background(), "clone-01"); err != nil {
+		t.Fatalf("RecordCloneFailure() error = %v", err)
+	}
+	if err := manager.RecordCloneSuccess(context.Background(), "clone-01"); err != nil {
+		t.Fatalf("RecordCloneSuccess() error = %v", err)
+	}
+	if err := manager.Unquarantine(context.Background(), "clone-01"); err == nil || !strings.Contains(err.Error(), "does not support clone quarantine") {
+		t.Fatalf("Unquarantine() error = %v, want unsupported quarantine error", err)
+	}
+}
+
 type quarantineStore struct {
 	mu      sync.Mutex
 	records map[string]state.CloneRecord
