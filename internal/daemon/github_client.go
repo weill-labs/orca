@@ -20,6 +20,7 @@ const (
 	issueIDPRSearchJSONFields      = "number,state,headRefName,title"
 	prSnapshotJSONFields           = "mergedAt,state,closedAt,mergeable,mergeStateStatus,updatedAt,reviews,reviewDecision,comments"
 	prReviewJSONFields             = "reviews,reviewDecision,comments,updatedAt"
+	prReviewThreadsGraphQLQuery    = `query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewThreads(first:100){nodes{id isResolved path line comments(first:50){nodes{id body createdAt author{login}}}}}}}}`
 )
 
 var (
@@ -38,6 +39,7 @@ type gitHubClient interface {
 	isPRMerged(ctx context.Context, prNumber int) (bool, error)
 	lookupPRReviews(ctx context.Context, prNumber int) (prReviewPayload, bool, error)
 	lookupPRReviewComments(ctx context.Context, prNumber int) ([]prReviewComment, error)
+	lookupPRReviewThreads(ctx context.Context, prNumber int) ([]prReviewThread, error)
 }
 
 type prTerminalState struct {
@@ -463,6 +465,57 @@ func (c *gitHubCLIClient) lookupPRReviewComments(ctx context.Context, prNumber i
 		return nil, err
 	}
 	return comments, nil
+}
+
+func (c *gitHubCLIClient) lookupPRReviewThreads(ctx context.Context, prNumber int) ([]prReviewThread, error) {
+	output, err := c.run(ctx, prReviewThreadsGraphQLArgs(prNumber)...)
+	if err != nil {
+		return nil, err
+	}
+	if len(output) == 0 {
+		return nil, nil
+	}
+
+	var payload prReviewThreadsGraphQLPayload
+	if err := json.Unmarshal(output, &payload); err != nil {
+		return nil, err
+	}
+	if payload.Data.Repository.PullRequest == nil {
+		return nil, nil
+	}
+
+	nodes := payload.Data.Repository.PullRequest.ReviewThreads.Nodes
+	threads := make([]prReviewThread, 0, len(nodes))
+	for _, node := range nodes {
+		thread := prReviewThread{
+			ID:         strings.TrimSpace(node.ID),
+			IsResolved: node.IsResolved,
+			Path:       strings.TrimSpace(node.Path),
+			Line:       node.Line,
+			Comments:   make([]prReviewThreadComment, 0, len(node.Comments.Nodes)),
+		}
+		for _, comment := range node.Comments.Nodes {
+			thread.Comments = append(thread.Comments, prReviewThreadComment{
+				ID:        strings.TrimSpace(comment.ID),
+				Body:      comment.Body,
+				Author:    strings.TrimSpace(comment.Author.Login),
+				CreatedAt: comment.CreatedAt,
+			})
+		}
+		threads = append(threads, thread)
+	}
+	return threads, nil
+}
+
+func prReviewThreadsGraphQLArgs(prNumber int) []string {
+	return []string{
+		"api",
+		"graphql",
+		"-F", "owner={owner}",
+		"-F", "repo={repo}",
+		"-F", fmt.Sprintf("number=%d", prNumber),
+		"-f", "query=" + prReviewThreadsGraphQLQuery,
+	}
 }
 
 func (c *gitHubCLIClient) lookupPRSnapshot(ctx context.Context, prNumber int) (prSnapshotPayload, bool, error) {

@@ -469,6 +469,12 @@ func (c *circuitGitHubClient) lookupPRReviewComments(ctx context.Context, prNumb
 	})
 }
 
+func (c *circuitGitHubClient) lookupPRReviewThreads(ctx context.Context, prNumber int) ([]prReviewThread, error) {
+	return withCircuit(c.breaker, func() ([]prReviewThread, error) {
+		return c.base.lookupPRReviewThreads(ctx, prNumber)
+	})
+}
+
 func withAmuxCircuit[T any](breaker *CircuitBreaker, call func() (T, error)) (T, error) {
 	return withCircuitPredicate(breaker, shouldRecordAmuxCircuitFailure, call)
 }

@@ -29,6 +29,7 @@ type prReviewPayload struct {
 	ReviewDecision string     `json:"reviewDecision"`
 	Reviews        []prReview `json:"reviews"`
 	ReviewComments []prReviewComment
+	ReviewThreads  []prReviewThread
 	Comments       []prComment `json:"comments"`
 	UpdatedAt      time.Time   `json:"updatedAt"`
 }
@@ -107,7 +108,9 @@ func (d *Daemon) checkTaskReviewPoll(ctx context.Context, active ActiveAssignmen
 		reviewCount:        active.Worker.LastReviewCount,
 		inlineCommentCount: active.Worker.LastInlineReviewCommentCount,
 		commentCount:       active.Worker.LastIssueCommentCount,
+		commentWatermark:   active.Worker.LastIssueCommentWatermark,
 		reviewNudgeCount:   active.Worker.ReviewNudgeCount,
+		reviewApproved:     active.Worker.ReviewApproved,
 		updatedAt:          active.Worker.LastReviewUpdatedAt,
 	}
 	traceAndReturn := func(current *reviewWorkerState, blockingCount int, idleResult, action string, persisted bool) TaskStateUpdate {
@@ -131,13 +134,12 @@ func (d *Daemon) checkTaskReviewPoll(ctx context.Context, active ActiveAssignmen
 	previousCommentCount := update.Active.Worker.LastIssueCommentCount
 	previousCommentWatermark := update.Active.Worker.LastIssueCommentWatermark
 	previousReviewApproved := update.Active.Worker.ReviewApproved
-	reviewApproved := payload.ReviewDecision == "APPROVED" || latestReviewContainsLGTM(payload.Reviews)
+	rawReviewApproved := payload.ReviewDecision == "APPROVED" || latestReviewContainsLGTM(payload.Reviews)
 	nextReviewState := reviewWorkerState{
 		reviewCount:      reviewCount,
 		commentCount:     commentCount,
-		commentWatermark: issueCommentWatermark(payload.Comments),
 		reviewNudgeCount: update.Active.Worker.ReviewNudgeCount,
-		reviewApproved:   reviewApproved,
+		reviewApproved:   rawReviewApproved,
 		updatedAt:        payload.UpdatedAt,
 	}
 	if reviewPollNeedsInlineCommentLookup(previousReviewState, nextReviewState, payload) {
@@ -151,10 +153,41 @@ func (d *Daemon) checkTaskReviewPoll(ctx context.Context, active ActiveAssignmen
 	} else {
 		nextReviewState.inlineCommentCount = previousReviewState.inlineCommentCount
 	}
+	if reviewPollNeedsThreadLookup(previousReviewState, nextReviewState, payload) {
+		reviewThreads, err := d.lookupPRReviewThreads(ctx, prProjectForTask(active.Task), active.Task.PRNumber)
+		if err != nil {
+			d.appendGitHubRateLimitEvent(&update, profile, err)
+			return traceAndReturn(nil, 0, reviewPollIdleNotChecked, "lookup_review_threads_error", false)
+		}
+		payload.ReviewThreads = reviewThreads
+	}
+	nextReviewState.commentWatermark = reviewFeedbackWatermark(payload.Comments, payload.ReviewThreads)
 	items := reviewItems(payload.Reviews, payload.ReviewComments)
 	if payload.ReviewDecision != "CHANGES_REQUESTED" && nextReviewState.reviewNudgeCount != 0 {
 		nextReviewState.reviewNudgeCount = 0
 	}
+
+	reviewStart := clampedSliceStart(previousReviewCount, len(payload.Reviews))
+	inlineCommentStart := clampedSliceStart(previousInlineCommentCount, len(payload.ReviewComments))
+	newReviews := reviewItems(payload.Reviews[reviewStart:], payload.ReviewComments[inlineCommentStart:])
+	newComments := changedIssueComments(payload.Comments, previousCommentWatermark)
+	newThreads := changedReviewThreads(payload.ReviewThreads, previousCommentWatermark)
+	blockingReviewDecision := payload.ReviewDecision
+	blockingReviews := newReviews
+	blockingComments := newComments
+	if rawReviewApproved {
+		blockingReviewDecision = ""
+		blockingReviews = nil
+		blockingComments = nil
+	}
+	blocking := blockingReviewFeedback(blockingReviewDecision, blockingReviews, blockingComments)
+	for _, thread := range newThreads {
+		blocking = append(blocking, reviewThreadFeedback(thread))
+	}
+	if len(blocking) > 0 && rawReviewApproved {
+		nextReviewState.reviewApproved = false
+	}
+
 	if previousReviewCount > reviewCount || previousInlineCommentCount > nextReviewState.inlineCommentCount || previousCommentCount > commentCount {
 		d.persistReviewWorkerState(&update.Active.Worker, nextReviewState, now)
 		update.WorkerChanged = true
@@ -176,11 +209,11 @@ func (d *Daemon) checkTaskReviewPoll(ctx context.Context, active ActiveAssignmen
 		}
 		return traceAndReturn(&nextReviewState, 0, reviewPollIdleNotChecked, action, persisted)
 	}
-	if !reviewApproved && previousReviewApproved {
+	if !nextReviewState.reviewApproved && previousReviewApproved {
 		update.Active.Worker.ReviewApproved = false
 		update.WorkerChanged = true
 	}
-	if reviewApproved {
+	if nextReviewState.reviewApproved {
 		d.persistReviewWorkerState(&update.Active.Worker, nextReviewState, now)
 		update.WorkerChanged = true
 		if !previousReviewApproved {
@@ -188,12 +221,6 @@ func (d *Daemon) checkTaskReviewPoll(ctx context.Context, active ActiveAssignmen
 		}
 		return traceAndReturn(&nextReviewState, 0, reviewPollIdleNotChecked, "persist_approved_review_feedback", true)
 	}
-
-	reviewStart := clampedSliceStart(previousReviewCount, len(payload.Reviews))
-	inlineCommentStart := clampedSliceStart(previousInlineCommentCount, len(payload.ReviewComments))
-	newReviews := reviewItems(payload.Reviews[reviewStart:], payload.ReviewComments[inlineCommentStart:])
-	newComments := changedIssueComments(payload.Comments, previousCommentWatermark)
-	blocking := blockingReviewFeedback(payload.ReviewDecision, newReviews, newComments)
 	if len(blocking) == 0 {
 		d.persistReviewWorkerState(&update.Active.Worker, nextReviewState, now)
 		update.WorkerChanged = true
@@ -202,7 +229,7 @@ func (d *Daemon) checkTaskReviewPoll(ctx context.Context, active ActiveAssignmen
 	if nextReviewState.reviewNudgeCount >= maxReviewNudges {
 		d.persistReviewWorkerState(&update.Active.Worker, nextReviewState, now)
 		update.WorkerChanged = true
-		d.notifyCallerPaneReviewEscalation(ctx, update.Active, blockingReviewFeedback(payload.ReviewDecision, items, payload.Comments))
+		d.notifyCallerPaneReviewEscalation(ctx, update.Active, unresolvedReviewFeedback(payload.ReviewDecision, items, payload.Comments, payload.ReviewThreads))
 
 		event := d.assignmentEvent(update.Active, profile, EventWorkerReviewEscalated, fmt.Sprintf("review nudges exhausted after %d attempts; lead intervention required", nextReviewState.reviewNudgeCount))
 		event.Retry = nextReviewState.reviewNudgeCount
@@ -231,6 +258,14 @@ func (d *Daemon) checkTaskReviewPoll(ctx context.Context, active ActiveAssignmen
 		update.Events = append(update.Events, d.assignmentEvent(update.Active, profile, EventWorkerNudgedReview, fmt.Sprintf("sent %d new blocking review(s) to worker", len(blocking))))
 	})
 	return traceAndReturn(&nextReviewState, len(blocking), idleResult, "queue_review_nudge", false)
+}
+
+func unresolvedReviewFeedback(reviewDecision string, items []prReviewItem, comments []prComment, threads []prReviewThread) []prFeedback {
+	feedback := blockingReviewFeedback(reviewDecision, items, comments)
+	for _, thread := range changedReviewThreads(threads, "") {
+		feedback = append(feedback, reviewThreadFeedback(thread))
+	}
+	return feedback
 }
 
 func clampedSliceStart(previousCount, length int) int {
@@ -279,6 +314,19 @@ func reviewPollNeedsInlineCommentLookup(previous, next reviewWorkerState, payloa
 		next.reviewCount != previous.reviewCount ||
 		next.commentCount != previous.commentCount ||
 		next.reviewApproved != previous.reviewApproved
+}
+
+func reviewPollNeedsThreadLookup(previous, next reviewWorkerState, payload prReviewPayload) bool {
+	if strings.Contains(previous.commentWatermark, reviewThreadSignaturePrefix) {
+		return true
+	}
+	if payload.ReviewDecision != "" {
+		return true
+	}
+	if !payload.UpdatedAt.IsZero() && !previous.updatedAt.IsZero() && payload.UpdatedAt.After(previous.updatedAt) {
+		return true
+	}
+	return next.reviewCount != previous.reviewCount || next.commentCount != previous.commentCount
 }
 
 const (
@@ -410,6 +458,10 @@ func (d *Daemon) lookupPRReviewComments(ctx context.Context, projectPath string,
 	return d.gitHubClientForContext(ctx, projectPath).lookupPRReviewComments(ctx, prNumber)
 }
 
+func (d *Daemon) lookupPRReviewThreads(ctx context.Context, projectPath string, prNumber int) ([]prReviewThread, error) {
+	return d.gitHubClientForContext(ctx, projectPath).lookupPRReviewThreads(ctx, prNumber)
+}
+
 func latestReviewContainsLGTM(reviews []prReview) bool {
 	if len(reviews) == 0 {
 		return false
@@ -482,14 +534,23 @@ func formatLeadReviewEscalation(active ActiveAssignment, feedback []prFeedback) 
 }
 
 func isBlockingIssueComment(comment prComment) bool {
-	login := strings.ToLower(strings.TrimSpace(comment.Author.Login))
-	switch login {
-	case "github-actions", "github-actions[bot]":
-	default:
+	if !isReviewBotLogin(comment.Author.Login) {
 		return false
 	}
 
 	return !bodyContainsStandaloneLGTM(comment.Body) && !isReviewProgressIssueComment(comment.Body)
+}
+
+func isReviewBotLogin(login string) bool {
+	login = strings.ToLower(strings.TrimSpace(login))
+	login = strings.TrimSuffix(login, "[bot]")
+	login = strings.TrimSpace(strings.TrimSuffix(login, "-bot"))
+	switch login {
+	case "github-actions", "claude-review", "coderabbitai", "coderabbit":
+		return true
+	default:
+		return strings.Contains(login, "claude-review") || strings.Contains(login, "coderabbit")
+	}
 }
 
 func isReviewProgressIssueComment(body string) bool {

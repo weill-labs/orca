@@ -789,6 +789,73 @@ func TestGitHubCLIClientLookupPRReviewCommentsIncludesInlineReviewComments(t *te
 	}
 }
 
+func TestGitHubCLIClientLookupPRReviewThreads(t *testing.T) {
+	t.Parallel()
+
+	commands := newFakeCommands()
+	client := newGitHubCLIClient(gitHubCLIClientConfig{
+		project:     "/tmp/project",
+		commands:    commands,
+		sleep:       noSleep,
+		maxAttempts: 1,
+	})
+	args := prReviewThreadsGraphQLArgs(42)
+	commands.queue("gh", args, `{
+		"data": {
+			"repository": {
+				"pullRequest": {
+					"reviewThreads": {
+						"nodes": [{
+							"id": "thread-1",
+							"isResolved": false,
+							"path": "internal/daemon/review.go",
+							"line": 174,
+							"comments": {
+								"nodes": [{
+									"id": "comment-1",
+									"body": "Include reviewer details in the worker nudge.",
+									"createdAt": "2026-04-02T09:05:00Z",
+									"author": {"login": "alice"}
+								}]
+							}
+						}]
+					}
+				}
+			}
+		}
+	}`, nil)
+
+	threads, err := client.lookupPRReviewThreads(context.Background(), 42)
+	if err != nil {
+		t.Fatalf("lookupPRReviewThreads() error = %v", err)
+	}
+	if got, want := len(threads), 1; got != want {
+		t.Fatalf("len(threads) = %d, want %d", got, want)
+	}
+	thread := threads[0]
+	if got, want := thread.ID, "thread-1"; got != want {
+		t.Fatalf("thread.ID = %q, want %q", got, want)
+	}
+	if thread.IsResolved {
+		t.Fatal("thread.IsResolved = true, want false")
+	}
+	if got, want := thread.Path, "internal/daemon/review.go"; got != want {
+		t.Fatalf("thread.Path = %q, want %q", got, want)
+	}
+	if got, want := thread.Line, 174; got != want {
+		t.Fatalf("thread.Line = %d, want %d", got, want)
+	}
+	if got, want := len(thread.Comments), 1; got != want {
+		t.Fatalf("len(thread.Comments) = %d, want %d", got, want)
+	}
+	if got, want := thread.Comments[0].Author, "alice"; got != want {
+		t.Fatalf("thread.Comments[0].Author = %q, want %q", got, want)
+	}
+	if got, want := commands.countCalls("gh", args), 1; got != want {
+		t.Fatalf("review thread lookup count = %d, want %d", got, want)
+	}
+}
+
 func TestGitHubCLIClientStopsWhenBackoffSleepFails(t *testing.T) {
 	t.Parallel()
 

@@ -597,3 +597,7 @@ func (c staticGitHubClient) lookupPRReviews(context.Context, int) (prReviewPaylo
 func (c staticGitHubClient) lookupPRReviewComments(context.Context, int) ([]prReviewComment, error) {
 	return nil, nil
 }
+
+func (c staticGitHubClient) lookupPRReviewThreads(context.Context, int) ([]prReviewThread, error) {
+	return nil, nil
+}

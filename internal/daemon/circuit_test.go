@@ -656,3 +656,7 @@ func (c circuitGitHubClientStub) lookupPRReviews(context.Context, int) (prReview
 func (c circuitGitHubClientStub) lookupPRReviewComments(context.Context, int) ([]prReviewComment, error) {
 	return nil, c.err
 }
+
+func (c circuitGitHubClientStub) lookupPRReviewThreads(context.Context, int) ([]prReviewThread, error) {
+	return nil, c.err
+}
