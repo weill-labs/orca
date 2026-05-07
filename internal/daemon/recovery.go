@@ -52,7 +52,7 @@ func isStrandedMergedTask(task Task) bool {
 	}
 
 	switch strings.TrimSpace(task.State) {
-	case TaskStateMerged, TaskStateDone:
+	case TaskStateMerged:
 		return true
 	default:
 		return false
