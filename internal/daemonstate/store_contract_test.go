@@ -312,6 +312,20 @@ func testStoreCloneFailureQuarantine(t *testing.T, h storeContractHarness) {
 		t.Fatalf("record.FailureCount = %d, want %d", got, want)
 	}
 
+	record, err = h.store.RecordCloneFailure(ctx, project, clonePath, 0)
+	if err != nil {
+		t.Fatalf("RecordCloneFailure() default threshold error = %v", err)
+	}
+	if got, want := record.FailureCount, 1; got != want {
+		t.Fatalf("record.FailureCount after default threshold failure = %d, want %d", got, want)
+	}
+	if got, want := record.Status, legacy.CloneStatusQuarantined; got != want {
+		t.Fatalf("record.Status after default threshold failure = %q, want %q", got, want)
+	}
+	if err := h.store.UnquarantineClone(ctx, project, clonePath); err != nil {
+		t.Fatalf("UnquarantineClone() after default threshold error = %v", err)
+	}
+
 	record, err = h.store.RecordCloneFailure(ctx, project, clonePath, 3)
 	if err != nil {
 		t.Fatalf("RecordCloneFailure() first error = %v", err)

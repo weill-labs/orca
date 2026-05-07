@@ -139,7 +139,21 @@ func TestSQLiteCloneStore(t *testing.T) {
 					t.Fatalf("EnsureClone() setup error = %v", err)
 				}
 
-				record, err := store.RecordCloneFailure(context.Background(), project, path, 3)
+				record, err := store.RecordCloneFailure(context.Background(), project, path, 0)
+				if err != nil {
+					t.Fatalf("RecordCloneFailure() default threshold error = %v", err)
+				}
+				if got, want := record.FailureCount, 1; got != want {
+					t.Fatalf("record.FailureCount after default threshold failure = %d, want %d", got, want)
+				}
+				if got, want := record.Status, state.CloneStatusQuarantined; got != want {
+					t.Fatalf("record.Status after default threshold failure = %q, want %q", got, want)
+				}
+				if err := store.UnquarantineClone(context.Background(), project, path); err != nil {
+					t.Fatalf("UnquarantineClone() after default threshold error = %v", err)
+				}
+
+				record, err = store.RecordCloneFailure(context.Background(), project, path, 3)
 				if err != nil {
 					t.Fatalf("RecordCloneFailure() first error = %v", err)
 				}
@@ -194,6 +208,17 @@ func TestSQLiteCloneStore(t *testing.T) {
 				}
 				if got, want := record.FailureCount, 0; got != want {
 					t.Fatalf("record.FailureCount after unquarantine = %d, want %d", got, want)
+				}
+
+				missingPath := filepath.Join(t.TempDir(), "missing")
+				if _, err := store.RecordCloneFailure(context.Background(), project, missingPath, 3); err != state.ErrCloneNotFound {
+					t.Fatalf("RecordCloneFailure() missing error = %v, want ErrCloneNotFound", err)
+				}
+				if err := store.ResetCloneFailures(context.Background(), project, missingPath); err != state.ErrCloneNotFound {
+					t.Fatalf("ResetCloneFailures() missing error = %v, want ErrCloneNotFound", err)
+				}
+				if err := store.UnquarantineClone(context.Background(), project, missingPath); err != state.ErrCloneNotFound {
+					t.Fatalf("UnquarantineClone() missing error = %v, want ErrCloneNotFound", err)
 				}
 			},
 		},
