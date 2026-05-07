@@ -28,6 +28,9 @@ type storeContract interface {
 	ListWorkers(context.Context, string) ([]Worker, error)
 	ListClones(context.Context, string) ([]Clone, error)
 	Events(context.Context, string, int64) (<-chan Event, <-chan error)
+	RecordCloneFailure(context.Context, string, string, int) (legacy.CloneRecord, error)
+	ResetCloneFailures(context.Context, string, string) error
+	UnquarantineClone(context.Context, string, string) error
 	UpdateTaskStatus(context.Context, string, string, string, time.Time) (Task, error)
 	DeleteWorker(context.Context, string, string) error
 	DeleteTask(context.Context, string, string) error
@@ -282,6 +285,88 @@ func testStoreNotFoundBehavior(t *testing.T, h storeContractHarness) {
 	}
 	if _, err := h.store.lookupCloneRecord(context.Background(), project, "missing"); !errors.Is(err, legacy.ErrCloneNotFound) {
 		t.Fatalf("lookupCloneRecord() missing error = %v, want ErrCloneNotFound", err)
+	}
+	if _, err := h.store.RecordCloneFailure(context.Background(), project, "missing", 3); !errors.Is(err, legacy.ErrCloneNotFound) {
+		t.Fatalf("RecordCloneFailure() missing error = %v, want ErrCloneNotFound", err)
+	}
+	if err := h.store.ResetCloneFailures(context.Background(), project, "missing"); !errors.Is(err, legacy.ErrCloneNotFound) {
+		t.Fatalf("ResetCloneFailures() missing error = %v, want ErrCloneNotFound", err)
+	}
+	if err := h.store.UnquarantineClone(context.Background(), project, "missing"); !errors.Is(err, legacy.ErrCloneNotFound) {
+		t.Fatalf("UnquarantineClone() missing error = %v, want ErrCloneNotFound", err)
+	}
+}
+
+func testStoreCloneFailureQuarantine(t *testing.T, h storeContractHarness) {
+	t.Helper()
+
+	ctx := context.Background()
+	project := "/repo"
+	clonePath := filepath.Join(t.TempDir(), "clone-01")
+
+	record, err := h.store.EnsureClone(ctx, project, clonePath)
+	if err != nil {
+		t.Fatalf("EnsureClone() error = %v", err)
+	}
+	if got, want := record.FailureCount, 0; got != want {
+		t.Fatalf("record.FailureCount = %d, want %d", got, want)
+	}
+
+	record, err = h.store.RecordCloneFailure(ctx, project, clonePath, 3)
+	if err != nil {
+		t.Fatalf("RecordCloneFailure() first error = %v", err)
+	}
+	if got, want := record.FailureCount, 1; got != want {
+		t.Fatalf("record.FailureCount after first failure = %d, want %d", got, want)
+	}
+	if got, want := record.Status, legacy.CloneStatusFree; got != want {
+		t.Fatalf("record.Status after first failure = %q, want %q", got, want)
+	}
+
+	clones, err := h.store.ListClones(ctx, project)
+	if err != nil {
+		t.Fatalf("ListClones() error = %v", err)
+	}
+	if got, want := clones[0].FailureCount, 1; got != want {
+		t.Fatalf("ListClones()[0].FailureCount = %d, want %d", got, want)
+	}
+
+	if err := h.store.ResetCloneFailures(ctx, project, clonePath); err != nil {
+		t.Fatalf("ResetCloneFailures() error = %v", err)
+	}
+	record, err = h.store.RecordCloneFailure(ctx, project, clonePath, 3)
+	if err != nil {
+		t.Fatalf("RecordCloneFailure() after reset error = %v", err)
+	}
+	if got, want := record.FailureCount, 1; got != want {
+		t.Fatalf("record.FailureCount after reset failure = %d, want %d", got, want)
+	}
+
+	for i := 0; i < 2; i++ {
+		record, err = h.store.RecordCloneFailure(ctx, project, clonePath, 3)
+		if err != nil {
+			t.Fatalf("RecordCloneFailure() threshold call %d error = %v", i+1, err)
+		}
+	}
+	if got, want := record.FailureCount, 3; got != want {
+		t.Fatalf("record.FailureCount after threshold = %d, want %d", got, want)
+	}
+	if got, want := record.Status, legacy.CloneStatusQuarantined; got != want {
+		t.Fatalf("record.Status after threshold = %q, want %q", got, want)
+	}
+
+	if err := h.store.UnquarantineClone(ctx, project, clonePath); err != nil {
+		t.Fatalf("UnquarantineClone() error = %v", err)
+	}
+	record, err = h.store.lookupCloneRecord(ctx, project, clonePath)
+	if err != nil {
+		t.Fatalf("lookupCloneRecord() after unquarantine error = %v", err)
+	}
+	if got, want := record.Status, legacy.CloneStatusFree; got != want {
+		t.Fatalf("record.Status after unquarantine = %q, want %q", got, want)
+	}
+	if got, want := record.FailureCount, 0; got != want {
+		t.Fatalf("record.FailureCount after unquarantine = %d, want %d", got, want)
 	}
 }
 

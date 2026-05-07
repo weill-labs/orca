@@ -89,7 +89,7 @@ func TestUnquarantineRestoresCloneEligibility(t *testing.T) {
 		t.Fatalf("EnsureClone() error = %v", err)
 	}
 	for i := 0; i < pool.CloneQuarantineFailureThreshold; i++ {
-		if _, err := store.RecordCloneFailure(context.Background(), project, clonePath, pool.CloneQuarantineFailureThreshold); err != nil {
+		if err := manager.RecordCloneFailure(context.Background(), clonePath); err != nil {
 			t.Fatalf("RecordCloneFailure() error = %v", err)
 		}
 	}
@@ -97,7 +97,7 @@ func TestUnquarantineRestoresCloneEligibility(t *testing.T) {
 		t.Fatal("Allocate() succeeded, want quarantined clone error")
 	}
 
-	if err := store.UnquarantineClone(context.Background(), project, clonePath); err != nil {
+	if err := manager.Unquarantine(context.Background(), clonePath); err != nil {
 		t.Fatalf("UnquarantineClone() error = %v", err)
 	}
 	clone, err := manager.Allocate(context.Background(), "LAB-1697", "LAB-1697")
