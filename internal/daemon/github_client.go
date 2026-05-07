@@ -20,7 +20,8 @@ const (
 	issueIDPRSearchJSONFields      = "number,state,headRefName,title"
 	prSnapshotJSONFields           = "mergedAt,state,closedAt,mergeable,mergeStateStatus,updatedAt,reviews,reviewDecision,comments"
 	prReviewJSONFields             = "reviews,reviewDecision,comments,updatedAt"
-	prReviewThreadsGraphQLQuery    = `query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewThreads(first:100){nodes{id isResolved path line comments(first:50){nodes{id body createdAt author{login}}}}}}}}`
+	// Keep this single-page to bound review polling cost; very large PRs may need a follow-up pagination pass.
+	prReviewThreadsGraphQLQuery = `query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewThreads(first:100){nodes{id isResolved path line comments(first:50){nodes{id body createdAt author{login}}}}}}}}`
 )
 
 var (

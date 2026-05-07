@@ -320,7 +320,7 @@ func reviewPollNeedsThreadLookup(previous, next reviewWorkerState, payload prRev
 	if strings.Contains(previous.commentWatermark, reviewThreadSignaturePrefix) {
 		return true
 	}
-	if payload.ReviewDecision != "" {
+	if payload.ReviewDecision == "CHANGES_REQUESTED" || payload.ReviewDecision == "APPROVED" {
 		return true
 	}
 	if !payload.UpdatedAt.IsZero() && !previous.updatedAt.IsZero() && payload.UpdatedAt.After(previous.updatedAt) {

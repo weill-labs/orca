@@ -166,6 +166,47 @@ func TestPRReviewPollingNudgesForHumanThreadAndBotIssueComment(t *testing.T) {
 	})
 }
 
+func TestPRReviewPollingTreatsUnresolvedThreadsAsBlockingAfterApproval(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	captureTicker := newFakeTicker()
+	prTicker := newFakeTicker()
+	deps.tickers.enqueue(captureTicker, prTicker)
+	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-1156", "--state", "open", "--json", "number"}, `[]`, nil)
+	deps.commands.queue("gh", []string{"pr", "list", "--head", "LAB-1156", "--json", "number"}, `[{"number":42}]`, nil)
+	queuePRReviewPayload(deps, 42, marshalReviewPayload(t, "APPROVED", []prReview{
+		testReview("alice", "APPROVED", "Looks good after this thread is handled."),
+	}, nil))
+	queuePRReviewThreadsPayload(deps, 42, reviewThreadsPayload(reviewThreadNode("thread-1", false, "internal/daemon/review.go", 42, "comment-1", "alice", "Please handle this before merge.")))
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-1156", "Implement review feedback polling", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+	makeWorkerIdleForReviewNudge(deps)
+
+	nudge := "New blocking PR review feedback on #42:\n- alice on internal/daemon/review.go:42: Please handle this before merge.\n\nAddress the feedback in the PR review and push an update."
+	nudgeSent := nudge + "\n"
+
+	tickAndWaitForHeartbeat(t, d, deps, prTicker, adaptivePRFastPollInterval, "approved unresolved review thread poll cycle completion")
+	waitFor(t, "approved unresolved review thread nudge", func() bool {
+		worker, ok := deps.state.worker("pane-1")
+		return ok &&
+			!worker.ReviewApproved &&
+			worker.LastIssueCommentWatermark != "" &&
+			deps.amux.countKey("pane-1", nudgeSent) == 1
+	})
+}
+
 func queuePRReviewThreadsPayload(deps *testDeps, prNumber int, payload string) {
 	deps.commands.queue("gh", prReviewThreadsGraphQLArgs(prNumber), payload, nil)
 }
