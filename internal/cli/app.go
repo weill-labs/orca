@@ -117,9 +117,16 @@ List workers and their state.`,
 	"pool": `usage: orca pool [--project PATH] [--json] [unquarantine|reset CLONE]
 
 List clone pool status or restore a quarantined clone.`,
-	"events": `usage: orca events [--project PATH]
+	"events": `usage: orca events [--project PATH] [--filter KIND|postmortem]
 
-Stream orchestration events as NDJSON.`,
+Stream orchestration events as NDJSON.
+
+Flags:
+  --project Project path
+  --filter  Event kind to include. Use "postmortem" to show worker.postmortem,
+            the expected task.completed/task.cancelled follow-on, and
+            worker.postmortem_suspicious warnings when a sent postmortem has no
+            follow-on within 5m.`,
 	"help": `usage: orca help [COMMAND]
 
 Show help for a command.`,
@@ -929,7 +936,9 @@ func (a *App) runEvents(ctx context.Context, args []string) error {
 
 	fs := newFlagSet("events")
 	var projectPath string
+	var filter string
 	fs.StringVar(&projectPath, "project", "", "project path")
+	fs.StringVar(&filter, "filter", "", "event kind filter")
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
@@ -944,6 +953,50 @@ func (a *App) runEvents(ctx context.Context, args []string) error {
 
 	eventsCh, errCh := a.state.Events(ctx, projectPath, 0)
 	encoder := json.NewEncoder(a.stdout)
+	view := newEventsView(filter)
+	var timer *time.Timer
+	var timerC <-chan time.Time
+	resetTimer := func() {
+		deadline, ok := view.nextDeadline()
+		if !ok {
+			if timer != nil {
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+			}
+			timerC = nil
+			return
+		}
+
+		now := time.Now().UTC()
+		delay := deadline.Sub(now)
+		if delay <= 0 {
+			delay = postmortemExpiredSettleDuration
+		}
+		if timer == nil {
+			timer = time.NewTimer(delay)
+		} else {
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			timer.Reset(delay)
+		}
+		timerC = timer.C
+	}
+	if view.postmortem != nil {
+		resetTimer()
+	}
+	defer func() {
+		if timer != nil {
+			timer.Stop()
+		}
+	}()
 
 	for eventsCh != nil || errCh != nil {
 		select {
@@ -952,9 +1005,12 @@ func (a *App) runEvents(ctx context.Context, args []string) error {
 				eventsCh = nil
 				continue
 			}
-			if err := encoder.Encode(event); err != nil {
-				return err
+			for _, out := range view.process(event, time.Now().UTC()) {
+				if err := encoder.Encode(out); err != nil {
+					return err
+				}
 			}
+			resetTimer()
 		case err, ok := <-errCh:
 			if !ok {
 				errCh = nil
@@ -963,11 +1019,23 @@ func (a *App) runEvents(ctx context.Context, args []string) error {
 			if err != nil {
 				return err
 			}
+		case <-timerC:
+			for _, out := range view.flushDue(time.Now().UTC()) {
+				if err := encoder.Encode(out); err != nil {
+					return err
+				}
+			}
+			resetTimer()
 		case <-ctx.Done():
 			return ctx.Err()
 		}
 	}
 
+	for _, out := range view.flushDue(time.Now().UTC()) {
+		if err := encoder.Encode(out); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
