@@ -211,24 +211,23 @@ type CloneOccupancy struct {
 }
 
 type Task struct {
-	Project          string    `json:"project,omitempty"`
-	Issue            string    `json:"issue,omitempty"`
-	Status           string    `json:"status,omitempty"`
-	State            string    `json:"state,omitempty"`
-	Prompt           string    `json:"prompt,omitempty"`
-	CallerPane       string    `json:"caller_pane,omitempty"`
-	WorkerID         string    `json:"worker_id,omitempty"`
-	PaneID           string    `json:"pane_id,omitempty"`
-	PaneName         string    `json:"pane_name,omitempty"`
-	CloneName        string    `json:"clone_name,omitempty"`
-	ClonePath        string    `json:"clone_path,omitempty"`
-	Branch           string    `json:"branch,omitempty"`
-	AgentProfile     string    `json:"agent_profile,omitempty"`
-	PRNumber         int       `json:"pr_number,omitempty"`
-	PRRepo           string    `json:"pr_repo,omitempty"`
-	PreflightSkipped bool      `json:"preflight_skipped,omitempty"`
-	CreatedAt        time.Time `json:"created_at,omitempty"`
-	UpdatedAt        time.Time `json:"updated_at,omitempty"`
+	Project      string    `json:"project,omitempty"`
+	Issue        string    `json:"issue,omitempty"`
+	Status       string    `json:"status,omitempty"`
+	State        string    `json:"state,omitempty"`
+	Prompt       string    `json:"prompt,omitempty"`
+	CallerPane   string    `json:"caller_pane,omitempty"`
+	WorkerID     string    `json:"worker_id,omitempty"`
+	PaneID       string    `json:"pane_id,omitempty"`
+	PaneName     string    `json:"pane_name,omitempty"`
+	CloneName    string    `json:"clone_name,omitempty"`
+	ClonePath    string    `json:"clone_path,omitempty"`
+	Branch       string    `json:"branch,omitempty"`
+	AgentProfile string    `json:"agent_profile,omitempty"`
+	PRNumber     int       `json:"pr_number,omitempty"`
+	PRRepo       string    `json:"pr_repo,omitempty"`
+	CreatedAt    time.Time `json:"created_at,omitempty"`
+	UpdatedAt    time.Time `json:"updated_at,omitempty"`
 }
 
 type Worker struct {

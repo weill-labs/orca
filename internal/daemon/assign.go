@@ -84,18 +84,17 @@ func (d *Daemon) assign(ctx context.Context, projectPath, issue, prompt, agentPr
 
 	now := d.now()
 	claimedTask := Task{
-		Project:          projectPath,
-		Issue:            issue,
-		Status:           TaskStatusStarting,
-		State:            initialTaskState(prNumber),
-		Prompt:           prompt,
-		CallerPane:       strings.TrimSpace(callerPane),
-		Branch:           assignmentBranch,
-		AgentProfile:     profile.Name,
-		PRNumber:         prNumber,
-		PreflightSkipped: preflightSkipped,
-		CreatedAt:        now,
-		UpdatedAt:        now,
+		Project:      projectPath,
+		Issue:        issue,
+		Status:       TaskStatusStarting,
+		State:        initialTaskState(prNumber),
+		Prompt:       prompt,
+		CallerPane:   strings.TrimSpace(callerPane),
+		Branch:       assignmentBranch,
+		AgentProfile: profile.Name,
+		PRNumber:     prNumber,
+		CreatedAt:    now,
+		UpdatedAt:    now,
 	}
 	previousTask, err := d.state.ClaimTask(ctx, claimedTask)
 	if err != nil {
@@ -207,7 +206,7 @@ func (d *Daemon) assign(ctx context.Context, projectPath, issue, prompt, agentPr
 	if strings.TrimSpace(resolvedTitle) == "" && hasGitHubIssue {
 		resolvedTitle = gitHubIssue.Title
 	}
-	startup, err := d.startAssignmentWorker(ctx, projectPath, clone, task, worker, profile, prompt, d.resolveAssignmentTitle(ctx, issue, resolvedTitle))
+	startup, err := d.startAssignmentWorker(ctx, projectPath, clone, task, worker, profile, prompt, d.resolveAssignmentTitle(ctx, issue, resolvedTitle), preflightSkipped)
 	if err != nil {
 		if startup.pane.ID == "" && startup.pane.Name == "" {
 			failUnspawnedAssignment(err)
