@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -1090,13 +1089,7 @@ func TestPRPollHandlesClonePathStatErrorWithoutGitHubLookup(t *testing.T) {
 	deps := newTestDeps(t)
 	const issue = "LAB-1809"
 	seedTaskMonitorAssignment(t, deps, issue, "pane-1", 0)
-	clonePath := filepath.Join(t.TempDir(), orcaPoolSubdir, "clone-loop")
-	if err := os.MkdirAll(filepath.Dir(clonePath), 0o755); err != nil {
-		t.Fatalf("MkdirAll(%q) error = %v", filepath.Dir(clonePath), err)
-	}
-	if err := os.Symlink(filepath.Base(clonePath), clonePath); err != nil {
-		t.Fatalf("Symlink(%q) error = %v", clonePath, err)
-	}
+	clonePath := selfReferencingPoolSymlink(t)
 
 	task, ok := deps.state.task(issue)
 	if !ok {
