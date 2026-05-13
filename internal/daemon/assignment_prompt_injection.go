@@ -44,9 +44,10 @@ func (d *Daemon) sendIdempotentAssignmentPromptCommand(ctx context.Context, pane
 	}
 
 	if !promptAlreadySent {
-		// Assignment prompt injection runs immediately after confirmPromptDelivery
-		// verified codex via the startup handshake; trust that proof rather than
-		// re-demanding the banner be in the current scrollback window.
+		// Assignment prompt injection runs immediately after agentHandshake
+		// verified codex via the startup readiness check; trust that proof
+		// rather than re-demanding the banner be in the current scrollback
+		// window.
 		if err := d.ensureCodexPromptTarget(ctx, paneID, "before assignment prompt delivery", true); err != nil {
 			return err
 		}
