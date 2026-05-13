@@ -67,6 +67,55 @@ func TestDaemonStartEscalatesMissingPaneAssignmentsAndKeepsClone(t *testing.T) {
 	}
 }
 
+func TestDaemonStartEscalatesMissingClonePathAssignment(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	const issue = "LAB-1809"
+	seedActiveAssignment(t, deps, issue, "pane-1")
+	missingClonePath := filepath.Join(t.TempDir(), "deleted-clone")
+	task, ok := deps.state.task(issue)
+	if !ok {
+		t.Fatal("task missing after seed")
+	}
+	task.ClonePath = missingClonePath
+	deps.state.putTaskForTest(task)
+	worker, ok := deps.state.worker(task.WorkerID)
+	if !ok {
+		t.Fatal("worker missing after seed")
+	}
+	worker.ClonePath = missingClonePath
+	if err := deps.state.PutWorker(context.Background(), worker); err != nil {
+		t.Fatalf("PutWorker() error = %v", err)
+	}
+	deps.amux.paneExists = map[string]bool{"pane-1": true}
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	waitFor(t, "startup missing clone reconciliation", func() bool {
+		task, ok := deps.state.task(issue)
+		if !ok || task.State != "clone_missing" {
+			return false
+		}
+		worker, ok := deps.state.worker(task.WorkerID)
+		return ok && worker.Health == WorkerHealthEscalated
+	})
+
+	if got, want := deps.events.countType("pr.poll_clone_missing"), 1; got != want {
+		t.Fatalf("clone missing event count = %d, want %d", got, want)
+	}
+	if got := len(deps.commands.callsByName("gh")); got != 0 {
+		t.Fatalf("gh call count = %d, want 0", got)
+	}
+}
+
 func TestDaemonStartResumesMonitoringLiveAssignments(t *testing.T) {
 	t.Parallel()
 
