@@ -21,9 +21,10 @@ func (d *Daemon) cancelStartingAssignment(ctx context.Context, projectPath strin
 			return fmt.Errorf("check pane %s: %w", paneID, err)
 		}
 		if exists {
-			killErr := ignorePaneAlreadyGoneError(d.amux.KillPane(d.cleanupContext(ctx), paneID))
-			clearErr := d.clearStartingAssignment(ctx, active, "starting task cancelled and cleared")
-			return errors.Join(killErr, clearErr)
+			if killErr := ignorePaneAlreadyGoneError(d.amux.KillPane(d.cleanupContext(ctx), paneID)); killErr != nil {
+				return fmt.Errorf("kill starting pane %s: %w", paneID, killErr)
+			}
+			return d.clearStartingAssignment(ctx, active, "starting task cancelled and cleared")
 		}
 	}
 

@@ -212,6 +212,8 @@ func startingTaskPastDriftThreshold(task Task, now time.Time) bool {
 		startedAt = task.CreatedAt
 	}
 	if startedAt.IsZero() {
+		// No timestamp recorded: treat as immediately stale so the zombie can
+		// be cleared, but only after the caller confirms there is no live pane.
 		return true
 	}
 	return !now.Before(startedAt.Add(startingTaskDriftThreshold))
@@ -354,7 +356,7 @@ func taskReconcileFinding(task Task, prInfo reconcilePRInfo) ReconcileFinding {
 }
 
 func reconcileFindingSafelyFixable(finding ReconcileFinding) bool {
-	if finding.Kind == ReconcileStartingZombie && finding.Status == TaskStatusStarting {
+	if finding.Kind == ReconcileStartingZombie {
 		return true
 	}
 	return finding.PRState == reconcilePRStateMerged &&
