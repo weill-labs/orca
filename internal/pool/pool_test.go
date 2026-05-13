@@ -3,6 +3,7 @@ package pool_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -142,6 +143,46 @@ func TestManagerDiscover(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestManagerDiscoverBackfillsLegacyCloneMarker(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	poolDir := filepath.Join(root, "pool")
+	origin := newOrigin(t, "main")
+	clonePath := newClone(t, origin, filepath.Join(poolDir, "clone-01"))
+	if err := os.Remove(filepath.Join(clonePath, pool.ClonePoolMarker)); err != nil {
+		t.Fatalf("Remove(%s) error = %v", pool.ClonePoolMarker, err)
+	}
+	store := newStore(t)
+	logs := []string(nil)
+	manager := newManager(t, project, staticConfig{poolDir: poolDir}, store, pool.WithLogf(func(format string, args ...any) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	}))
+
+	clones, err := manager.Discover(context.Background())
+	if err != nil {
+		t.Fatalf("Discover() error = %v", err)
+	}
+
+	if len(clones) != 1 {
+		t.Fatalf("len(clones) = %d, want 1", len(clones))
+	}
+	if got, want := clones[0].Path, clonePath; got != want {
+		t.Fatalf("clone.Path = %q, want %q", got, want)
+	}
+	if _, err := os.Stat(filepath.Join(clonePath, pool.ClonePoolMarker)); err != nil {
+		t.Fatalf("%s stat error after Discover() = %v", pool.ClonePoolMarker, err)
+	}
+	record := lookupClone(t, store, project, clonePath)
+	if got, want := record.Status, state.CloneStatusFree; got != want {
+		t.Fatalf("record.Status = %q, want %q", got, want)
+	}
+	if got := strings.Join(logs, "\n"); !strings.Contains(got, "backfilled .orca-pool marker") || !strings.Contains(got, clonePath) {
+		t.Fatalf("logs = %q, want backfill entry for clone", got)
 	}
 }
 
@@ -307,6 +348,43 @@ func TestManagerReleaseRejectsInvalidClonePathsBeforeCleanup(t *testing.T) {
 				t.Fatalf("record.Status = %q, want %q", got, want)
 			}
 		})
+	}
+}
+
+func TestManagerAllocateBackfillsLegacyCloneMarkerBeforeUse(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	poolDir := filepath.Join(root, "pool")
+	origin := newOrigin(t, "main")
+	clonePath := newClone(t, origin, filepath.Join(poolDir, "clone-01"))
+	if err := os.Remove(filepath.Join(clonePath, pool.ClonePoolMarker)); err != nil {
+		t.Fatalf("Remove(%s) error = %v", pool.ClonePoolMarker, err)
+	}
+	store := newStore(t)
+	manager := newManager(t, project, staticConfig{poolDir: poolDir}, store)
+
+	clone, err := manager.Allocate(context.Background(), "LAB-1808", "LAB-1808")
+	if err != nil {
+		t.Fatalf("Allocate() error = %v", err)
+	}
+
+	if got, want := clone.Path, clonePath; got != want {
+		t.Fatalf("clone.Path = %q, want %q", got, want)
+	}
+	if got, want := clone.Status, pool.StatusOccupied; got != want {
+		t.Fatalf("clone.Status = %q, want %q", got, want)
+	}
+	if _, err := os.Stat(filepath.Join(clonePath, pool.ClonePoolMarker)); err != nil {
+		t.Fatalf("%s stat error after Allocate() = %v", pool.ClonePoolMarker, err)
+	}
+	if got, want := gitCurrentBranch(t, clone.Path), "LAB-1808"; got != want {
+		t.Fatalf("current branch = %q, want %q", got, want)
+	}
+	record := lookupClone(t, store, project, clonePath)
+	if got, want := record.Status, state.CloneStatusOccupied; got != want {
+		t.Fatalf("record.Status = %q, want %q", got, want)
 	}
 }
 

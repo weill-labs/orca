@@ -1599,6 +1599,10 @@ func TestAppRunOutputModes(t *testing.T) {
 	if err := os.MkdirAll(cwdPath, 0o755); err != nil {
 		t.Fatalf("MkdirAll(%q): %v", cwdPath, err)
 	}
+	missingMarkerClone := filepath.Join(repoRoot, ".orca", "pool", "clone-1808")
+	if err := os.MkdirAll(missingMarkerClone, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", missingMarkerClone, err)
+	}
 
 	tests := []struct {
 		name    string
@@ -1686,6 +1690,28 @@ func TestAppRunOutputModes(t *testing.T) {
 				}
 				if !strings.Contains(stdout, "\"path\":\"/clones/orca01\"") {
 					t.Fatalf("stdout = %q, want clone json", stdout)
+				}
+			},
+		},
+		{
+			name:   "pool json marks missing marker clone",
+			args:   []string{"pool", "--json"},
+			daemon: &fakeDaemon{},
+			state: &fakeState{
+				clones: []state.Clone{
+					{Path: missingMarkerClone, Status: "free", UpdatedAt: now},
+				},
+			},
+			assert: func(t *testing.T, stdout string, _ *fakeDaemon, s *fakeState) {
+				t.Helper()
+				if got, want := s.clonesProject, repoRoot; got != want {
+					t.Fatalf("clones project = %q, want %q", got, want)
+				}
+				if !strings.Contains(stdout, `"status":"missing_marker"`) {
+					t.Fatalf("stdout = %q, want missing marker status", stdout)
+				}
+				if _, err := os.Stat(filepath.Join(missingMarkerClone, ".orca-pool")); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf(".orca-pool stat error = %v, want not exist", err)
 				}
 			},
 		},
