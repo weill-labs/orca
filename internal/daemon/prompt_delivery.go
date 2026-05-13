@@ -173,11 +173,11 @@ func codexPromptTargetError(phase string, snapshot PaneCapture) error {
 	}
 
 	profile := AgentProfile{Name: "codex"}
-	if promptDeliveryReturnedToShell(profile, snapshot) {
-		return promptDeliveryFailure(profile, fmt.Sprintf("%s and codex returned to shell", phase), snapshot)
-	}
 	if snapshot.Exited {
 		return promptDeliveryFailure(profile, fmt.Sprintf("%s and pane exited", phase), snapshot)
+	}
+	if promptDeliveryReturnedToShell(profile, snapshot) {
+		return promptDeliveryFailure(profile, fmt.Sprintf("%s and codex returned to shell", phase), snapshot)
 	}
 	return promptDeliveryFailure(profile, fmt.Sprintf("%s and codex is not running", phase), snapshot)
 }
@@ -198,9 +198,6 @@ func codexCommandRunsCodex(command string) (bool, bool) {
 		return false, false
 	}
 	fields := strings.Fields(command)
-	if len(fields) == 0 {
-		return false, true
-	}
 	return strings.EqualFold(filepath.Base(fields[0]), "codex"), true
 }
 
