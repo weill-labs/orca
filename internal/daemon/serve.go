@@ -23,6 +23,11 @@ import (
 
 // OrcaPoolSubdir is the project-relative directory that stores pool clones.
 const OrcaPoolSubdir = ".orca/pool"
+
+// orcaPoolSubdir is an unexported alias used by package-internal callers that
+// predate the exported constant. New code should reference OrcaPoolSubdir.
+const orcaPoolSubdir = OrcaPoolSubdir
+
 const daemonListenerFDEnvVar = "ORCA_DAEMON_LISTENER_FD"
 
 var (
