@@ -21,7 +21,8 @@ import (
 	"github.com/weill-labs/orca/internal/project"
 )
 
-const orcaPoolSubdir = ".orca/pool"
+// OrcaPoolSubdir is the project-relative directory that stores pool clones.
+const OrcaPoolSubdir = ".orca/pool"
 const daemonListenerFDEnvVar = "ORCA_DAEMON_LISTENER_FD"
 
 var (

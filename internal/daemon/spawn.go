@@ -94,7 +94,7 @@ type allocatedCloneReleaser interface {
 }
 
 func validateAllocatedSpawnCWD(ctx context.Context, projectPath string, releaser allocatedCloneReleaser, clone pool.Clone) (string, error) {
-	spawnCWD, err := pool.ValidateClonePath(filepath.Join(projectPath, orcaPoolSubdir), clone.Path)
+	spawnCWD, err := pool.ValidateClonePath(filepath.Join(projectPath, OrcaPoolSubdir), clone.Path)
 	if err != nil {
 		releaseErr := releaser.Release(ctx, clone.Path, clone.CurrentBranch)
 		if releaseErr != nil {
@@ -138,7 +138,7 @@ func (c *LocalController) spawnRuntime(projectPath, session string) (*pool.Manag
 		return nil, nil, fmt.Errorf("detect origin: %w", err)
 	}
 
-	poolDir := filepath.Join(projectPath, orcaPoolSubdir)
+	poolDir := filepath.Join(projectPath, OrcaPoolSubdir)
 	if err := os.MkdirAll(poolDir, 0o755); err != nil {
 		return nil, nil, fmt.Errorf("create pool directory: %w", err)
 	}
@@ -308,7 +308,7 @@ func workerPaneSpawnName(task Task, stableRef string) string {
 
 func (d *Daemon) spawnWorkerPane(ctx context.Context, task Task, stableRef, clonePath string, profile AgentProfile) (Pane, error) {
 	projectPath := d.projectPathForTask(task)
-	spawnCWD, err := pool.ValidateClonePath(filepath.Join(projectPath, orcaPoolSubdir), clonePath)
+	spawnCWD, err := pool.ValidateClonePath(filepath.Join(projectPath, OrcaPoolSubdir), clonePath)
 	if err != nil {
 		return Pane{}, fmt.Errorf("validate worker spawn cwd: %w", err)
 	}

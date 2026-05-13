@@ -25,7 +25,6 @@ const defaultAgent = "codex"
 const amuxSessionEnvVar = "AMUX_SESSION"
 const amuxPaneEnvVar = "AMUX_PANE"
 const cancelClientTimeout = 10 * time.Second
-const poolSubdir = ".orca/pool"
 const poolStatusMissingMarker = "missing_marker"
 const poolStatusInvalidMarker = "invalid_marker"
 const poolStatusInvalidPath = "invalid_path"
@@ -940,7 +939,7 @@ func annotatePoolCloneEligibility(projectPath string, clones []state.Clone) []st
 		return clones
 	}
 
-	poolDir := filepath.Join(projectPath, poolSubdir)
+	poolDir := filepath.Join(projectPath, daemon.OrcaPoolSubdir)
 	annotated := append([]state.Clone(nil), clones...)
 	for i := range annotated {
 		if annotated[i].Status != string(pool.StatusFree) {

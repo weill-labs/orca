@@ -64,7 +64,7 @@ func TestManagerDiscover(t *testing.T) {
 			wantPaths: nil,
 		},
 		{
-			name: "skips unmarked clone directories",
+			name: "skips unmarked non-git clone directories",
 			setup: func(t *testing.T, poolDir string, store *state.SQLiteStore, project string) {
 				t.Helper()
 

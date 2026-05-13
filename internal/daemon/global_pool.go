@@ -84,7 +84,7 @@ func (p *multiProjectPool) manager(projectPath string) (*pool.Manager, error) {
 		return nil, fmt.Errorf("detect origin: %w", err)
 	}
 
-	poolDir := filepath.Join(projectPath, orcaPoolSubdir)
+	poolDir := filepath.Join(projectPath, OrcaPoolSubdir)
 	if err := os.MkdirAll(poolDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create pool directory: %w", err)
 	}
