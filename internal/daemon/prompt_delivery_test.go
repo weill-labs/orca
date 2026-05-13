@@ -64,6 +64,26 @@ func TestPaneRunsCodex(t *testing.T) {
 			want: true,
 		},
 		{
+			name: "codex running as node falls through to scrollback check",
+			set: func(deps *testDeps) {
+				deps.amux.capturePaneSequence("pane-1", []PaneCapture{{
+					Content:        []string{"OpenAI Codex", "›"},
+					CurrentCommand: "node",
+				}})
+			},
+			want: true,
+		},
+		{
+			name: "non codex node process without codex scrollback returns false",
+			set: func(deps *testDeps) {
+				deps.amux.capturePaneSequence("pane-1", []PaneCapture{{
+					Content:        []string{"some node script output"},
+					CurrentCommand: "node",
+				}})
+			},
+			want: false,
+		},
+		{
 			name: "non codex pane returns false",
 			set: func(deps *testDeps) {
 				deps.amux.capturePaneSequence("pane-1", []PaneCapture{{

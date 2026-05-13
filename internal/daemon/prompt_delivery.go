@@ -189,7 +189,16 @@ func codexPromptTargetSafe(snapshot PaneCapture) bool {
 	if runsCodex, known := codexCommandRunsCodex(snapshot.CurrentCommand); known {
 		return runsCodex
 	}
-	return !promptDeliveryReturnedToShell(AgentProfile{Name: "codex"}, snapshot)
+	if promptDeliveryReturnedToShell(AgentProfile{Name: "codex"}, snapshot) {
+		return false
+	}
+	// Empty current_command can happen during spawn before codex reports;
+	// only reject when a non-codex command is positively running without
+	// matching codex scrollback evidence.
+	if strings.TrimSpace(snapshot.CurrentCommand) == "" {
+		return true
+	}
+	return containsFold(snapshot.Output(), "OpenAI Codex")
 }
 
 func codexCommandRunsCodex(command string) (bool, bool) {
@@ -198,7 +207,10 @@ func codexCommandRunsCodex(command string) (bool, bool) {
 		return false, false
 	}
 	fields := strings.Fields(command)
-	return strings.EqualFold(filepath.Base(fields[0]), "codex"), true
+	if strings.EqualFold(filepath.Base(fields[0]), "codex") {
+		return true, true
+	}
+	return false, false
 }
 
 func (d *Daemon) waitForPromptDeliveryConfirmation(ctx context.Context, paneID string, profile AgentProfile, phase string, baseline promptDeliveryBaseline) (promptDeliveryWaitState, error) {
