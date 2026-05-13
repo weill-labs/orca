@@ -80,6 +80,38 @@ func TestManagerDiscover(t *testing.T) {
 			},
 		},
 		{
+			name: "skips unmarked directories outside clone namespace",
+			setup: func(t *testing.T, poolDir string, store *state.SQLiteStore, project string) {
+				t.Helper()
+
+				mustMkdir(t, filepath.Join(poolDir, "scratch"))
+				mustMkdir(t, filepath.Join(poolDir, "clone-02"))
+				markClone(t, filepath.Join(poolDir, "clone-02"))
+			},
+			wantPaths: []string{
+				"clone-02",
+			},
+			wantStatuses: map[string]pool.Status{
+				"clone-02": pool.StatusFree,
+			},
+		},
+		{
+			name: "backfills unmarked clone directories with git file metadata",
+			setup: func(t *testing.T, poolDir string, store *state.SQLiteStore, project string) {
+				t.Helper()
+
+				clonePath := filepath.Join(poolDir, "clone-01")
+				mustMkdir(t, clonePath)
+				mustWriteFile(t, filepath.Join(clonePath, ".git"), "gitdir: ../worktrees/clone-01\n")
+			},
+			wantPaths: []string{
+				"clone-01",
+			},
+			wantStatuses: map[string]pool.Status{
+				"clone-01": pool.StatusFree,
+			},
+		},
+		{
 			name: "preserves occupied status from state",
 			setup: func(t *testing.T, poolDir string, store *state.SQLiteStore, project string) {
 				t.Helper()
@@ -141,6 +173,65 @@ func TestManagerDiscover(t *testing.T) {
 						t.Fatalf("clone[%d].Status = %q, want %q", i, clone.Status, tc.wantStatuses[gotBase])
 					}
 				}
+			}
+		})
+	}
+}
+
+func TestHasCloneMarker(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name        string
+		setup       func(t *testing.T, clonePath string)
+		wantHas     bool
+		wantErrText string
+	}{
+		{
+			name: "regular marker exists",
+			setup: func(t *testing.T, clonePath string) {
+				t.Helper()
+				markClone(t, clonePath)
+			},
+			wantHas: true,
+		},
+		{
+			name:    "marker is missing",
+			setup:   func(t *testing.T, clonePath string) { t.Helper() },
+			wantHas: false,
+		},
+		{
+			name: "marker is not regular file",
+			setup: func(t *testing.T, clonePath string) {
+				t.Helper()
+				mustMkdir(t, filepath.Join(clonePath, pool.ClonePoolMarker))
+			},
+			wantHas:     false,
+			wantErrText: "must be a regular file",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			clonePath := filepath.Join(t.TempDir(), "clone-01")
+			mustMkdir(t, clonePath)
+			tc.setup(t, clonePath)
+
+			gotHas, err := pool.HasCloneMarker(clonePath)
+			if tc.wantErrText != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErrText) {
+					t.Fatalf("HasCloneMarker() error = %v, want containing %q", err, tc.wantErrText)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("HasCloneMarker() error = %v", err)
+			}
+			if gotHas != tc.wantHas {
+				t.Fatalf("HasCloneMarker() = %v, want %v", gotHas, tc.wantHas)
 			}
 		})
 	}
