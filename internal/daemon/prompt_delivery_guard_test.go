@@ -39,6 +39,50 @@ func TestCodexPromptTargetGuardHelpers(t *testing.T) {
 		t.Fatal("codexPromptTargetRunning(shell output) = true, want false")
 	}
 
+	bashLeaks := []PaneCapture{
+		{
+			Content:        []string{"OpenAI Codex", "bash: Verify: command not found"},
+			CurrentCommand: "bash",
+		},
+		{
+			Content:        []string{"OpenAI Codex", "bash: syntax error near unexpected token `('"},
+			CurrentCommand: "bash",
+		},
+	}
+	for _, snapshot := range bashLeaks {
+		if codexPromptTargetSafe(snapshot) {
+			t.Fatalf("codexPromptTargetSafe(%q) = true, want false", snapshot.Output())
+		}
+		err := codexPromptTargetError("before prompt delivery", snapshot)
+		if !errors.Is(err, ErrPromptDeliveryNotConfirmed) {
+			t.Fatalf("codexPromptTargetError(%q) error = %v, want ErrPromptDeliveryNotConfirmed", snapshot.Output(), err)
+		}
+	}
+
+	spawnHandshake := PaneCapture{}
+	if !codexPromptTargetSafe(spawnHandshake) {
+		t.Fatal("codexPromptTargetSafe(empty current command) = false, want true")
+	}
+
+	commands := []struct {
+		command   string
+		wantRuns  bool
+		wantKnown bool
+	}{
+		{command: "/usr/local/bin/codex --yolo", wantRuns: true, wantKnown: true},
+		{command: "node", wantRuns: false, wantKnown: false},
+		{command: "/usr/bin/nodejs", wantRuns: false, wantKnown: false},
+		{command: "npx @openai/codex", wantRuns: false, wantKnown: false},
+		{command: "sh /usr/local/bin/codex-wrapper", wantRuns: false, wantKnown: false},
+		{command: "", wantRuns: false, wantKnown: false},
+	}
+	for _, tt := range commands {
+		runs, known := codexCommandRunsCodex(tt.command)
+		if runs != tt.wantRuns || known != tt.wantKnown {
+			t.Fatalf("codexCommandRunsCodex(%q) = (%t, %t), want (%t, %t)", tt.command, runs, known, tt.wantRuns, tt.wantKnown)
+		}
+	}
+
 	otherCommand := PaneCapture{
 		Content:        []string{"python prompt"},
 		CurrentCommand: "python",

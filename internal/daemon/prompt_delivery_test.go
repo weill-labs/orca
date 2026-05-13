@@ -74,6 +74,46 @@ func TestPaneRunsCodex(t *testing.T) {
 			want: true,
 		},
 		{
+			name: "codex running as nodejs falls through to scrollback check",
+			set: func(deps *testDeps) {
+				deps.amux.capturePaneSequence("pane-1", []PaneCapture{{
+					Content:        []string{"OpenAI Codex", "›"},
+					CurrentCommand: "/usr/bin/nodejs",
+				}})
+			},
+			want: true,
+		},
+		{
+			name: "codex launched by npx falls through to scrollback check",
+			set: func(deps *testDeps) {
+				deps.amux.capturePaneSequence("pane-1", []PaneCapture{{
+					Content:        []string{"OpenAI Codex", "›"},
+					CurrentCommand: "npx @openai/codex",
+				}})
+			},
+			want: true,
+		},
+		{
+			name: "codex launched through shell wrapper falls through to scrollback check",
+			set: func(deps *testDeps) {
+				deps.amux.capturePaneSequence("pane-1", []PaneCapture{{
+					Content:        []string{"OpenAI Codex", "›"},
+					CurrentCommand: "sh /usr/local/bin/codex-wrapper",
+				}})
+			},
+			want: true,
+		},
+		{
+			name: "shell wrapper still requires codex scrollback",
+			set: func(deps *testDeps) {
+				deps.amux.capturePaneSequence("pane-1", []PaneCapture{{
+					Content:        []string{"wrapper failed before rendering"},
+					CurrentCommand: "sh /usr/local/bin/codex-wrapper",
+				}})
+			},
+			want: false,
+		},
+		{
 			name: "non codex node process without codex scrollback returns false",
 			set: func(deps *testDeps) {
 				deps.amux.capturePaneSequence("pane-1", []PaneCapture{{
