@@ -59,7 +59,7 @@ func (d *Daemon) markClonePathMissing(update *TaskStateUpdate, profile AgentProf
 	firstDetected := update.Active.Task.State != TaskStateCloneMissing
 	message := cloneMissingRecoveryMessage(update.Active.Task.Issue, clonePath)
 
-	if update.Active.Worker.Health != WorkerHealthEscalated {
+	if activeAssignmentHasWorkerIdentity(update.Active) && update.Active.Worker.Health != WorkerHealthEscalated {
 		update.Active.Worker.Health = WorkerHealthEscalated
 		update.Active.Worker.LastSeenAt = now
 		update.WorkerChanged = true
@@ -74,6 +74,12 @@ func (d *Daemon) markClonePathMissing(update *TaskStateUpdate, profile AgentProf
 	if firstDetected {
 		update.Events = append(update.Events, d.assignmentEvent(update.Active, profile, EventPRPollCloneMissing, message))
 	}
+}
+
+func activeAssignmentHasWorkerIdentity(active ActiveAssignment) bool {
+	return strings.TrimSpace(active.Worker.WorkerID) != "" ||
+		strings.TrimSpace(active.Worker.PaneID) != "" ||
+		strings.TrimSpace(active.Worker.PaneName) != ""
 }
 
 func (d *Daemon) markClonePathMissingNow(ctx context.Context, active ActiveAssignment, messageClonePath string) {
