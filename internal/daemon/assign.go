@@ -193,7 +193,7 @@ func (d *Daemon) assign(ctx context.Context, projectPath, issue, prompt, agentPr
 	}
 
 	failUnspawnedAssignment := func(err error) {
-		_ = d.cleanupCloneAndReleaseForProject(ctx, projectPath, clone, issue)
+		_ = d.cleanupCloneAndReleaseForProject(context.WithoutCancel(ctx), projectPath, clone, issue)
 		restoreWorkerClaim()
 		restoreReservation()
 		d.emitAssignFailure(ctx, projectPath, issue, claimedWorker.WorkerID, profile.Name, clone, Pane{}, prNumber, err)
@@ -366,7 +366,7 @@ func promptMentionsDifferentIssue(prompt, issue string) bool {
 
 func (d *Daemon) failPendingAssignment(ctx context.Context, projectPath, issue string, clone Clone, pane Pane, worker Worker, profile AgentProfile, prNumber int, err error, releaseReservation func()) {
 	d.emitAssignFailure(ctx, projectPath, issue, worker.WorkerID, profile.Name, clone, pane, prNumber, err)
-	_ = d.rollbackAssignmentForProject(ctx, projectPath, clone, pane, issue)
+	_ = d.rollbackAssignmentForProject(context.WithoutCancel(ctx), projectPath, clone, pane, issue)
 	if assignmentStartupFailureCountsTowardQuarantine(err) {
 		d.recordCloneAssignmentFailure(context.WithoutCancel(ctx), projectPath, clone)
 	}

@@ -544,11 +544,10 @@ func TestAssignRetriesCodexPromptDeliveryAfterPaneReturnsToShell(t *testing.T) {
 	deps.amux.waitContentResults = []error{
 		amuxapi.ErrWaitContentTimeout,
 		amuxapi.ErrWaitContentTimeout,
-		amuxapi.ErrWaitContentTimeout,
 	}
 	deps.amux.captureSequence("pane-1", []string{"OpenAI Codex\n›"})
 	deps.amux.captureSequence("pane-2", []string{"OpenAI Codex\n›"})
-	deps.amux.capturePaneSequence("pane-1", []PaneCapture{{
+	deps.amux.captureHistorySequence("pane-1", []PaneCapture{{
 		Content:        []string{"bash-5.2$", "codex exited after startup"},
 		CurrentCommand: "bash",
 	}})
@@ -586,7 +585,7 @@ func TestAssignRetriesCodexPromptDeliveryAfterPaneReturnsToShell(t *testing.T) {
 		t.Fatalf("worker.PaneID = %q, want %q", got, want)
 	}
 
-	deps.amux.requireSentKeys(t, "pane-1", []string{wrappedCodexPrompt("LAB-1330", "Retry prompt delivery on a fresh pane") + "\n"})
+	deps.amux.requireSentKeys(t, "pane-1", nil)
 	deps.amux.requireSentKeys(t, "pane-2", []string{wrappedCodexPrompt("LAB-1330", "Retry prompt delivery on a fresh pane") + "\n"})
 	if got, want := deps.amux.killCalls, []string{"pane-1"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("kill calls = %#v, want %#v", got, want)
@@ -649,7 +648,7 @@ func TestAssignSurfacesCodexUpdateRemediationFromPromptDeliveryFailure(t *testin
 		amuxapi.ErrWaitContentTimeout,
 	}
 	deps.amux.captureSequence("pane-1", []string{"OpenAI Codex\n›"})
-	deps.amux.capturePaneSequence("pane-1", []PaneCapture{{
+	deps.amux.captureHistorySequence("pane-1", []PaneCapture{{
 		Content: []string{
 			"Checking for Codex updates",
 			"npm ERR! code EACCES",
@@ -724,15 +723,15 @@ func TestAssignRollsBackWhenCodexPromptNeverShowsWorking(t *testing.T) {
 	deps.amux.captureSequence("pane-1", []string{"OpenAI Codex\n›"})
 	deps.amux.captureSequence("pane-2", []string{"OpenAI Codex\n›"})
 	deps.amux.captureSequence("pane-3", []string{"OpenAI Codex\n›"})
-	deps.amux.capturePaneSequence("pane-1", []PaneCapture{{
+	deps.amux.captureHistorySequence("pane-1", []PaneCapture{{
 		Content:        []string{"bash-5.2$", "codex exited on first attempt"},
 		CurrentCommand: "bash",
 	}})
-	deps.amux.capturePaneSequence("pane-2", []PaneCapture{{
+	deps.amux.captureHistorySequence("pane-2", []PaneCapture{{
 		Content:        []string{"bash-5.2$", "codex exited on second attempt"},
 		CurrentCommand: "bash",
 	}})
-	deps.amux.capturePaneSequence("pane-3", []PaneCapture{{
+	deps.amux.captureHistorySequence("pane-3", []PaneCapture{{
 		Content:        []string{"bash-5.2$", "codex exited on third attempt"},
 		CurrentCommand: "bash",
 	}})
@@ -775,11 +774,8 @@ func TestAssignRollsBackWhenCodexPromptNeverShowsWorking(t *testing.T) {
 	}
 	if got, want := deps.amux.waitContentCalls, []waitContentCall{
 		{PaneID: "pane-1", Substring: "do you trust", Timeout: defaultTrustPromptTimeout},
-		{PaneID: "pane-1", Substring: "Working", Timeout: codexPromptRetryIdleProbeTime},
 		{PaneID: "pane-2", Substring: "do you trust", Timeout: defaultTrustPromptTimeout},
-		{PaneID: "pane-2", Substring: "Working", Timeout: codexPromptRetryIdleProbeTime},
 		{PaneID: "pane-3", Substring: "do you trust", Timeout: defaultTrustPromptTimeout},
-		{PaneID: "pane-3", Substring: "Working", Timeout: codexPromptRetryIdleProbeTime},
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("waitContent calls = %#v, want %#v", got, want)
 	}
@@ -803,7 +799,7 @@ func TestAssignQuarantinesCloneAfterConsecutivePromptDeliveryFailures(t *testing
 			amuxapi.ErrWaitContentTimeout,
 		)
 		deps.amux.captureSequence(paneID, []string{"OpenAI Codex\n›"})
-		deps.amux.capturePaneSequence(paneID, []PaneCapture{{
+		deps.amux.captureHistorySequence(paneID, []PaneCapture{{
 			Content:        []string{"bash-5.2$", "bash: Command Verify: command not found"},
 			CurrentCommand: "bash",
 		}})
@@ -1151,6 +1147,9 @@ func TestAssignLogsFailureWhenSpawnFails(t *testing.T) {
 	}
 	if message := deps.events.lastMessage(EventTaskAssignFailed); !strings.Contains(message, "spawn pane: spawn failed") {
 		t.Fatalf("assign failure message = %q, want spawn context", message)
+	}
+	if _, ok := deps.state.task("LAB-689"); ok {
+		t.Fatal("task stored despite spawn rollback")
 	}
 }
 

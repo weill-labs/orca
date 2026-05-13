@@ -254,6 +254,12 @@ func TestAssignAdditionalErrorPaths(t *testing.T) {
 				amux.spawnErr = errors.New("spawn failed")
 			},
 			wantErr: "spawn pane",
+			assert: func(t *testing.T, deps *testDeps) {
+				t.Helper()
+				if _, ok := deps.state.task("LAB-892"); ok {
+					t.Fatal("task stored despite spawn rollback")
+				}
+			},
 		},
 		{
 			name: "assignment metadata error",

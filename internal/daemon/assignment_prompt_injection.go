@@ -44,6 +44,9 @@ func (d *Daemon) sendIdempotentAssignmentPromptCommand(ctx context.Context, pane
 	}
 
 	if !promptAlreadySent {
+		if err := d.ensureCodexPromptTarget(ctx, paneID, "before assignment prompt delivery"); err != nil {
+			return err
+		}
 		if err := d.sendKeysToLivePane(ctx, paneID, trimmed); err != nil {
 			return err
 		}
@@ -53,6 +56,9 @@ func (d *Daemon) sendIdempotentAssignmentPromptCommand(ctx context.Context, pane
 		}
 	}
 
+	if err := d.ensureCodexPromptTarget(ctx, paneID, "before assignment prompt enter"); err != nil {
+		return err
+	}
 	if err := d.sendKeysToLivePane(ctx, paneID, command); err != nil {
 		return err
 	}

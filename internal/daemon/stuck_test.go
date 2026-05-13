@@ -296,6 +296,7 @@ func TestStuckDetectionEscalationCapturesDiagnosticsWithoutCleanupOrKill(t *test
 		t.Fatalf("Assign() error = %v", err)
 	}
 
+	historyCapturesBeforeEscalation := deps.amux.captureHistoryCount("pane-1")
 	deps.commands.reset()
 	deps.amux.killCalls = nil
 
@@ -319,8 +320,8 @@ func TestStuckDetectionEscalationCapturesDiagnosticsWithoutCleanupOrKill(t *test
 	if got, want := active.Worker.Health, WorkerHealthEscalated; got != want {
 		t.Fatalf("worker.Health = %q, want %q", got, want)
 	}
-	if got := deps.amux.captureHistoryCount("pane-1"); got != 0 {
-		t.Fatalf("capture history count = %d, want 0", got)
+	if got := deps.amux.captureHistoryCount("pane-1"); got != historyCapturesBeforeEscalation {
+		t.Fatalf("capture history count = %d, want %d", got, historyCapturesBeforeEscalation)
 	}
 	if got, want := deps.amux.killCalls, []string(nil); !reflect.DeepEqual(got, want) {
 		t.Fatalf("kill calls = %#v, want none", got)
