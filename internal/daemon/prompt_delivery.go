@@ -366,10 +366,18 @@ func promptDeliveryReturnedToShell(profile AgentProfile, snapshot PaneCapture) b
 	base := filepath.Base(strings.Fields(command)[0])
 	switch strings.ToLower(base) {
 	case "bash", "zsh", "sh", "fish":
-		return true
+		return !shellCommandReferencesCodex(command)
 	default:
 		return false
 	}
+}
+
+func shellCommandReferencesCodex(command string) bool {
+	fields := strings.Fields(command)
+	if len(fields) < 2 {
+		return false
+	}
+	return containsFold(strings.Join(fields[1:], " "), "codex")
 }
 
 func commandNotFoundInOutput(output string) bool {
