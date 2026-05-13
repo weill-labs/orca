@@ -26,6 +26,7 @@ type promptDeliveryWaitState int
 type promptDeliveryBaseline struct {
 	output     string
 	hasWorking bool
+	snapshot   PaneCapture
 }
 
 const (
@@ -64,9 +65,19 @@ func (d *Daemon) submitToCodex(ctx context.Context, paneID, prompt string) error
 		if err != nil {
 			return err
 		}
+		if err := codexPromptTargetError("before prompt delivery", baseline.snapshot); err != nil {
+			return err
+		}
 		if baseline.hasWorking {
 			if err := d.amux.WaitIdle(ctx, paneID, defaultAgentHandshakeTimeout); err != nil {
 				return fmt.Errorf("wait for idle before prompt delivery: %w", err)
+			}
+			baseline, err = d.capturePromptDeliveryBaseline(ctx, paneID)
+			if err != nil {
+				return err
+			}
+			if err := codexPromptTargetError("before prompt delivery after idle", baseline.snapshot); err != nil {
+				return err
 			}
 		}
 	}
@@ -100,6 +111,9 @@ func (d *Daemon) submitToCodex(ctx context.Context, paneID, prompt string) error
 		if attempt == codexWorkingConfirmationAttempts {
 			return lastErr
 		}
+		if err := d.ensureCodexPromptTarget(ctx, paneID, "before retry enter"); err != nil {
+			return err
+		}
 		if err := d.amux.SendKeys(ctx, paneID, "Enter"); err != nil {
 			return fmt.Errorf("retry prompt delivery: %w", err)
 		}
@@ -112,19 +126,82 @@ func (d *Daemon) paneRunsCodex(ctx context.Context, paneID string) bool {
 	if err != nil {
 		return false
 	}
-	if containsFold(snapshot.Output(), "OpenAI Codex") {
-		return true
+	return codexPromptTargetRunning(snapshot)
+}
+
+func (d *Daemon) ensureCodexPromptTarget(ctx context.Context, paneID, phase string) error {
+	snapshot, ok, err := d.capturePromptDeliveryGuardSnapshot(ctx, paneID)
+	if err != nil {
+		if isPaneGoneError(err) {
+			return fmt.Errorf("%w: pane disappeared %s", ErrPromptDeliveryNotConfirmed, phase)
+		}
+		return fmt.Errorf("capture prompt delivery state %s: %w", phase, err)
+	}
+	if !ok {
+		return nil
+	}
+	return codexPromptTargetError(phase, snapshot)
+}
+
+func (d *Daemon) capturePromptDeliveryGuardSnapshot(ctx context.Context, paneID string) (PaneCapture, bool, error) {
+	history, err := d.amux.CaptureHistory(ctx, paneID)
+	if err != nil {
+		return PaneCapture{}, false, fmt.Errorf("capture history: %w", err)
+	}
+	if len(history.Content) == 0 && strings.TrimSpace(history.CurrentCommand) == "" && !history.Exited {
+		return PaneCapture{}, false, nil
+	}
+	return history, true, nil
+}
+
+func codexPromptTargetRunning(snapshot PaneCapture) bool {
+	if snapshot.Exited {
+		return false
+	}
+	if runsCodex, known := codexCommandRunsCodex(snapshot.CurrentCommand); known {
+		return runsCodex
+	}
+	if promptDeliveryReturnedToShell(AgentProfile{Name: "codex"}, snapshot) {
+		return false
+	}
+	return containsFold(snapshot.Output(), "OpenAI Codex")
+}
+
+func codexPromptTargetError(phase string, snapshot PaneCapture) error {
+	if codexPromptTargetSafe(snapshot) {
+		return nil
 	}
 
-	command := strings.TrimSpace(snapshot.CurrentCommand)
-	if command == "" {
+	profile := AgentProfile{Name: "codex"}
+	if promptDeliveryReturnedToShell(profile, snapshot) {
+		return promptDeliveryFailure(profile, fmt.Sprintf("%s and codex returned to shell", phase), snapshot)
+	}
+	if snapshot.Exited {
+		return promptDeliveryFailure(profile, fmt.Sprintf("%s and pane exited", phase), snapshot)
+	}
+	return promptDeliveryFailure(profile, fmt.Sprintf("%s and codex is not running", phase), snapshot)
+}
+
+func codexPromptTargetSafe(snapshot PaneCapture) bool {
+	if snapshot.Exited {
 		return false
+	}
+	if runsCodex, known := codexCommandRunsCodex(snapshot.CurrentCommand); known {
+		return runsCodex
+	}
+	return !promptDeliveryReturnedToShell(AgentProfile{Name: "codex"}, snapshot)
+}
+
+func codexCommandRunsCodex(command string) (bool, bool) {
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return false, false
 	}
 	fields := strings.Fields(command)
 	if len(fields) == 0 {
-		return false
+		return false, true
 	}
-	return strings.EqualFold(filepath.Base(fields[0]), "codex")
+	return strings.EqualFold(filepath.Base(fields[0]), "codex"), true
 }
 
 func (d *Daemon) waitForPromptDeliveryConfirmation(ctx context.Context, paneID string, profile AgentProfile, phase string, baseline promptDeliveryBaseline) (promptDeliveryWaitState, error) {
@@ -225,6 +302,7 @@ func (d *Daemon) capturePromptDeliveryBaseline(ctx context.Context, paneID strin
 	return promptDeliveryBaseline{
 		output:     output,
 		hasWorking: strings.Contains(output, strings.ToLower(codexWorkingText)),
+		snapshot:   snapshot,
 	}, nil
 }
 
@@ -288,6 +366,7 @@ func promptDeliveryReturnedToShell(profile AgentProfile, snapshot PaneCapture) b
 func commandNotFoundInOutput(output string) bool {
 	lower := strings.ToLower(output)
 	return strings.Contains(lower, "command not found") ||
+		strings.Contains(lower, "syntax error near unexpected token") ||
 		strings.Contains(lower, ": not found")
 }
 
