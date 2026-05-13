@@ -8,6 +8,7 @@ import (
 
 	"github.com/weill-labs/orca/internal/pool"
 	"github.com/weill-labs/orca/internal/project"
+	legacy "github.com/weill-labs/orca/internal/state"
 )
 
 type multiProjectPool struct {
@@ -55,6 +56,38 @@ func (p *multiProjectPool) Release(ctx context.Context, projectPath string, clon
 		branch = clone.AssignedTask
 	}
 	return manager.Release(ctx, clone.Path, branch)
+}
+
+func (p *multiProjectPool) Adopt(ctx context.Context, projectPath string, clone Clone) error {
+	projectPath, err := project.CanonicalPath(projectPath)
+	if err != nil {
+		return err
+	}
+	clonePath, err := pool.ValidateClonePath(filepath.Join(projectPath, OrcaPoolSubdir), clone.Path)
+	if err != nil {
+		return err
+	}
+
+	branch := clone.CurrentBranch
+	if branch == "" {
+		branch = clone.AssignedTask
+	}
+	record, err := p.store.EnsureClone(ctx, projectPath, clonePath)
+	if err != nil {
+		return fmt.Errorf("ensure adopted clone %q: %w", clonePath, err)
+	}
+	if record.Status == legacy.CloneStatusOccupied && record.AssignedTask == clone.AssignedTask {
+		return nil
+	}
+
+	ok, err := p.store.TryOccupyClone(ctx, projectPath, clonePath, branch, clone.AssignedTask)
+	if err != nil {
+		return fmt.Errorf("occupy adopted clone %q: %w", clonePath, err)
+	}
+	if !ok {
+		return fmt.Errorf("adopted clone %q is not free", clonePath)
+	}
+	return nil
 }
 
 func (p *multiProjectPool) RecordCloneFailure(ctx context.Context, projectPath string, clone Clone) error {

@@ -549,8 +549,9 @@ func (c *LocalController) Reconcile(ctx context.Context, req ReconcileRequest) (
 	}
 
 	return instance.Reconcile(ctx, ReconcileRequest{
-		Project: projectPath,
-		Fix:     req.Fix,
+		Project:      projectPath,
+		Fix:          req.Fix,
+		AdoptOrphans: req.AdoptOrphans,
 	})
 }
 

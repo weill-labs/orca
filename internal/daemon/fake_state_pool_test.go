@@ -21,6 +21,9 @@ type fakeState struct {
 	cloneOccupancies      []CloneOccupancy
 	mergeQueue            []MergeQueueEntry
 	knownProjectsErr      error
+	taskByIssueErr        error
+	putTaskErrs           []error
+	putWorkerErrs         []error
 	nonTerminalErr        error
 	restoreTaskErr        error
 	updateMergeErr        error
@@ -38,6 +41,9 @@ func newFakeState() *fakeState {
 func (s *fakeState) TaskByIssue(ctx context.Context, project, issue string) (Task, error) {
 	if s.rejectCanceledContext && ctx.Err() != nil {
 		return Task{}, ctx.Err()
+	}
+	if s.taskByIssueErr != nil {
+		return Task{}, s.taskByIssueErr
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -92,6 +98,13 @@ func (s *fakeState) PutTask(ctx context.Context, task Task) error {
 	if s.rejectCanceledContext && ctx.Err() != nil {
 		return ctx.Err()
 	}
+	if len(s.putTaskErrs) > 0 {
+		err := s.putTaskErrs[0]
+		s.putTaskErrs = s.putTaskErrs[1:]
+		if err != nil {
+			return err
+		}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	task.WorkerID = taskWorkerID(task)
@@ -115,6 +128,13 @@ func (s *fakeState) DeleteTask(ctx context.Context, project, issue string) error
 func (s *fakeState) PutWorker(ctx context.Context, worker Worker) error {
 	if s.rejectCanceledContext && ctx.Err() != nil {
 		return ctx.Err()
+	}
+	if len(s.putWorkerErrs) > 0 {
+		err := s.putWorkerErrs[0]
+		s.putWorkerErrs = s.putWorkerErrs[1:]
+		if err != nil {
+			return err
+		}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -722,6 +742,27 @@ func (p *fakePool) Release(ctx context.Context, project string, clone Clone) err
 	return nil
 }
 
+func (p *fakePool) Adopt(ctx context.Context, project string, clone Clone) error {
+	if p.rejectCanceledContext && ctx.Err() != nil {
+		return ctx.Err()
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	clone = fakePoolCloneForProject(project, clone)
+	if clone.AssignedTask == "" {
+		clone.AssignedTask = clone.CurrentBranch
+	}
+	if clone.CurrentBranch == "" {
+		clone.CurrentBranch = clone.AssignedTask
+	}
+	if p.acquired == nil {
+		p.acquired = make(map[string]bool)
+	}
+	p.acquired[clone.Path] = true
+	p.rememberClonePath(clone)
+	return nil
+}
+
 func (p *fakePool) RecordCloneFailure(ctx context.Context, project string, clone Clone) error {
 	if p.rejectCanceledContext && ctx.Err() != nil {
 		return ctx.Err()
@@ -815,6 +856,12 @@ func (p *fakePool) cloneFailureCount(path string) int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.failureCounts[path]
+}
+
+func (p *fakePool) cloneAcquired(path string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.acquired[path]
 }
 
 func (p *fakePool) cloneQuarantined(path string) bool {
