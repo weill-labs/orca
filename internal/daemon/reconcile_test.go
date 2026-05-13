@@ -354,6 +354,53 @@ func TestReconcileSkipsNonActiveTaskWithoutPane(t *testing.T) {
 	}
 }
 
+func TestReconcileReportsMissingClonePath(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	const issue = "LAB-1809"
+	seedReconcileAssignment(t, deps, issue, "pane-1809", "worker-1809", 0)
+	missingClonePath := filepath.Join("/tmp/project", orcaPoolSubdir, "deleted-clone")
+	task, ok := deps.state.task(issue)
+	if !ok {
+		t.Fatal("task missing after seed")
+	}
+	task.ClonePath = missingClonePath
+	deps.state.putTaskForTest(task)
+	worker, ok := deps.state.worker("worker-1809")
+	if !ok {
+		t.Fatal("worker missing after seed")
+	}
+	worker.ClonePath = missingClonePath
+	if err := deps.state.PutWorker(context.Background(), worker); err != nil {
+		t.Fatalf("PutWorker() error = %v", err)
+	}
+	deps.amux.paneExists = map[string]bool{"pane-1809": true}
+
+	result, err := deps.newDaemon(t).Reconcile(context.Background(), ReconcileRequest{Project: "/tmp/project"})
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	if len(result.Findings) != 1 {
+		t.Fatalf("findings = %#v, want one missing clone finding", result.Findings)
+	}
+	finding := result.Findings[0]
+	if got, want := finding.Kind, "clone_missing"; got != want {
+		t.Fatalf("finding.Kind = %q, want %q", got, want)
+	}
+	if got, want := finding.Issue, issue; got != want {
+		t.Fatalf("finding.Issue = %q, want %q", got, want)
+	}
+	for _, want := range []string{missingClonePath, "restoring the directory alone does not resume polling", "orca cancel LAB-1809"} {
+		if !strings.Contains(finding.Message, want) {
+			t.Fatalf("finding.Message = %q, want to contain %q", finding.Message, want)
+		}
+	}
+	if got := len(deps.commands.callsByName("gh")); got != 0 {
+		t.Fatalf("gh call count = %d, want 0", got)
+	}
+}
+
 func TestReconcileUsesDefaultProjectAndSortsFindings(t *testing.T) {
 	t.Parallel()
 

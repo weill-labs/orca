@@ -12,6 +12,7 @@ const (
 	TaskStateCIPending     = "ci_pending"
 	TaskStateReviewPending = "review_pending"
 	TaskStateMerged        = "merged"
+	TaskStateCloneMissing  = "clone_missing"
 	TaskStateDone          = "done"
 	TaskStateEscalated     = "escalated"
 )
@@ -36,6 +37,9 @@ func normalizeTaskState(task Task) string {
 }
 
 func taskStateForAssignment(active ActiveAssignment) string {
+	if active.Task.State == TaskStateCloneMissing {
+		return TaskStateCloneMissing
+	}
 	if active.Worker.Health == WorkerHealthEscalated {
 		return TaskStateEscalated
 	}

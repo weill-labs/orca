@@ -179,6 +179,29 @@ func TestTaskStateForAssignmentPreservesMergedState(t *testing.T) {
 	}
 }
 
+func TestTaskStateForAssignmentPreservesCloneMissingState(t *testing.T) {
+	t.Parallel()
+
+	active := ActiveAssignment{
+		Task: Task{
+			Issue:    "LAB-1809",
+			State:    TaskStateCloneMissing,
+			Status:   TaskStatusActive,
+			PRNumber: 42,
+		},
+		Worker: Worker{
+			WorkerID:     "worker-01",
+			Health:       WorkerHealthEscalated,
+			LastCIState:  ciStatePass,
+			LastPRNumber: 42,
+		},
+	}
+
+	if got, want := taskStateForAssignment(active), TaskStateCloneMissing; got != want {
+		t.Fatalf("taskStateForAssignment(...) = %q, want %q", got, want)
+	}
+}
+
 func TestCheckTaskPRPollTransitionsReviewPendingToMerged(t *testing.T) {
 	t.Parallel()
 
