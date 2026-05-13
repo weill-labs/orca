@@ -31,6 +31,9 @@ func (d *Daemon) resume(ctx context.Context, projectPath, issue, prompt string) 
 	if err != nil {
 		return err
 	}
+	if task.Status == TaskStatusStarting {
+		return fmt.Errorf("task %s is still starting and cannot be resumed safely; if no worker pane exists, run `orca cancel %s` or `orca reconcile --fix` to clear it before assigning again", issue, issue)
+	}
 	if !taskCanResume(task.Status) {
 		return fmt.Errorf("task %s with status %s cannot be resumed", issue, task.Status)
 	}

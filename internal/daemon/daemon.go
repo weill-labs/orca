@@ -410,6 +410,18 @@ func (d *Daemon) cancel(ctx context.Context, projectPath, issue string) error {
 	}
 
 	active, err := d.state.ActiveAssignmentByIssue(ctx, projectPath, issue)
+	if errors.Is(err, ErrTaskNotFound) {
+		task, lookupErr := d.state.TaskByIssue(ctx, projectPath, issue)
+		if lookupErr != nil {
+			if !errors.Is(lookupErr, ErrTaskNotFound) {
+				return lookupErr
+			}
+			return err
+		}
+		if task.Status == TaskStatusStarting {
+			return d.cancelStartingAssignment(ctx, projectPath, task)
+		}
+	}
 	if err != nil {
 		return err
 	}
