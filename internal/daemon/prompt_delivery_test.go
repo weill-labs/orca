@@ -35,14 +35,23 @@ func TestPaneRunsCodex(t *testing.T) {
 		want bool
 	}{
 		{
-			name: "history output identifies codex",
+			name: "history output identifies codex when command is unavailable",
 			set: func(deps *testDeps) {
 				deps.amux.captureHistorySequence("pane-1", []PaneCapture{{
-					Content:        []string{"OpenAI Codex", "›"},
-					CurrentCommand: "bash",
+					Content: []string{"OpenAI Codex", "›"},
 				}})
 			},
 			want: true,
+		},
+		{
+			name: "stale history with shell command does not identify codex",
+			set: func(deps *testDeps) {
+				deps.amux.captureHistorySequence("pane-1", []PaneCapture{{
+					Content:        []string{"OpenAI Codex", "›", "bash-5.2$"},
+					CurrentCommand: "bash",
+				}})
+			},
+			want: false,
 		},
 		{
 			name: "command basename identifies codex",
@@ -106,6 +115,11 @@ func TestCommandNotFoundInOutput(t *testing.T) {
 		{
 			name:   "shell not found shorthand",
 			output: "zsh: verify: not found",
+			want:   true,
+		},
+		{
+			name:   "shell syntax error",
+			output: "bash: syntax error near unexpected token `('",
 			want:   true,
 		},
 		{
@@ -402,6 +416,33 @@ func TestAssignmentPromptInjectionIsIdempotentForTaskToken(t *testing.T) {
 	deps.amux.requireSentKeys(t, "pane-1", []string{"Fix prompt delivery\n"})
 }
 
+func TestAssignmentPromptInjectionSmokeRefusesShellMetacharactersWhenCodexExited(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.amux.captureHistorySequence("pane-1", []PaneCapture{{
+		Content:        []string{"OpenAI Codex", "›", "bash-5.2$"},
+		CurrentCommand: "bash",
+	}})
+	d := deps.newDaemon(t)
+	task := Task{
+		Project:   "/tmp/project",
+		Issue:     "LAB-1748",
+		WorkerID:  "worker-01",
+		CreatedAt: deps.clock.Now(),
+	}
+	prompt := "Fix LAB-1748 (do not execute): echo 'leaked' && touch /tmp/orca-leak\nrm -rf /tmp/orca-nope"
+
+	err := d.sendAssignmentPromptAndEnter(context.Background(), "pane-1", task, prompt)
+	if !errors.Is(err, ErrPromptDeliveryNotConfirmed) {
+		t.Fatalf("sendAssignmentPromptAndEnter() error = %v, want ErrPromptDeliveryNotConfirmed", err)
+	}
+	if !strings.Contains(err.Error(), `current command "bash"`) {
+		t.Fatalf("sendAssignmentPromptAndEnter() error = %v, want shell command context", err)
+	}
+	deps.amux.requireSentKeys(t, "pane-1", nil)
+}
+
 func TestAssignmentPromptInjectionRetrySendsOnlyMissingEnter(t *testing.T) {
 	t.Parallel()
 
@@ -589,6 +630,23 @@ func TestSendAndConfirmWorkingTreatsStaleWorkingAsUnconfirmed(t *testing.T) {
 	if len(sleeps) == 0 {
 		t.Fatal("sleep calls = 0, want freshness polling between stale captures")
 	}
+}
+
+func TestSendAndConfirmWorkingRefusesShellBeforePrompt(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.amux.captureHistorySequence("pane-1", []PaneCapture{{
+		Content:        []string{"OpenAI Codex", "›", "bash-5.2$"},
+		CurrentCommand: "bash",
+	}})
+	d := deps.newDaemon(t)
+
+	err := d.sendAndConfirmWorking(context.Background(), "pane-1", "echo 'leaked' && touch /tmp/orca-leak")
+	if !errors.Is(err, ErrPromptDeliveryNotConfirmed) {
+		t.Fatalf("sendAndConfirmWorking() error = %v, want ErrPromptDeliveryNotConfirmed", err)
+	}
+	deps.amux.requireSentKeys(t, "pane-1", nil)
 }
 
 func TestSendAndConfirmWorkingRetriesWhenFreshWorkingAppearsAfterStaleScrollback(t *testing.T) {
