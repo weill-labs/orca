@@ -87,6 +87,10 @@ func (d *Daemon) releaseStalePoolClones(ctx context.Context) {
 }
 
 func (d *Daemon) reconcileTaskOnStartup(ctx context.Context, task Task) {
+	if d.reconcileMissingClonePathOnStartup(ctx, task) {
+		return
+	}
+
 	paneID := strings.TrimSpace(task.PaneID)
 	if paneID == "" {
 		_ = d.failTaskWithoutWorker(ctx, task, "worker pane missing on daemon startup")

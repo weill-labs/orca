@@ -73,7 +73,7 @@ func TestDaemonStartEscalatesMissingClonePathAssignment(t *testing.T) {
 	deps := newTestDeps(t)
 	const issue = "LAB-1809"
 	seedActiveAssignment(t, deps, issue, "pane-1")
-	missingClonePath := filepath.Join(t.TempDir(), "deleted-clone")
+	missingClonePath := filepath.Join("/tmp/project", orcaPoolSubdir, "deleted-clone")
 	task, ok := deps.state.task(issue)
 	if !ok {
 		t.Fatal("task missing after seed")

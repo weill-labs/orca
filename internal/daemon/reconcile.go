@@ -140,6 +140,9 @@ func (d *Daemon) Reconcile(ctx context.Context, req ReconcileRequest) (Reconcile
 }
 
 func (d *Daemon) reconcileTaskDrift(ctx context.Context, task Task) (ReconcileFinding, bool, error) {
+	if finding, ok, err := d.reconcileMissingClonePathDrift(task); ok || err != nil {
+		return finding, ok, err
+	}
 	if task.Status == TaskStatusStarting {
 		return d.reconcileStartingTaskDrift(ctx, task)
 	}

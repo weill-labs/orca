@@ -1032,19 +1032,19 @@ func TestPRPollHandlesMissingClonePathOnceWithoutGitHubLookup(t *testing.T) {
 	deps := newTestDeps(t)
 	const issue = "LAB-1809"
 	seedTaskMonitorAssignment(t, deps, issue, "pane-1", 0)
-	missingClonePath := filepath.Join(t.TempDir(), "deleted-clone")
+	missingClonePath := filepath.Join("/tmp/project", orcaPoolSubdir, "deleted-clone")
 	task, ok := deps.state.task(issue)
 	if !ok {
 		t.Fatal("task missing after seed")
 	}
-	task.ClonePath = missingClonePath
+	task.ClonePath = deps.pool.clone.Path
 	task.PRRepo = missingClonePath
 	deps.state.putTaskForTest(task)
 	worker, ok := deps.state.worker("pane-1")
 	if !ok {
 		t.Fatal("worker missing after seed")
 	}
-	worker.ClonePath = missingClonePath
+	worker.ClonePath = deps.pool.clone.Path
 	if err := deps.state.PutWorker(context.Background(), worker); err != nil {
 		t.Fatalf("PutWorker() error = %v", err)
 	}

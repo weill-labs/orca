@@ -360,7 +360,7 @@ func TestReconcileReportsMissingClonePath(t *testing.T) {
 	deps := newTestDeps(t)
 	const issue = "LAB-1809"
 	seedReconcileAssignment(t, deps, issue, "pane-1809", "worker-1809", 0)
-	missingClonePath := filepath.Join(t.TempDir(), "deleted-clone")
+	missingClonePath := filepath.Join("/tmp/project", orcaPoolSubdir, "deleted-clone")
 	task, ok := deps.state.task(issue)
 	if !ok {
 		t.Fatal("task missing after seed")

@@ -77,6 +77,22 @@ func (d *Daemon) checkTaskPRPoll(ctx context.Context, active ActiveAssignment) (
 	}
 	profile = loadedProfile
 
+	if update.Active.Task.State == TaskStateCloneMissing {
+		traceAction = "clone_missing"
+		return update
+	}
+	clonePath, unavailable, err := taskManagedClonePathUnavailable(update.Active.Task)
+	if err != nil {
+		traceAction = "clone_path_stat_error"
+		traceErr = err
+		return update
+	}
+	if unavailable {
+		d.markClonePathMissing(&update, profile, clonePath, now)
+		traceAction = "poll_clone_missing"
+		return update
+	}
+
 	switch update.Active.Task.State {
 	case TaskStateDone:
 		traceAction = "task_done"

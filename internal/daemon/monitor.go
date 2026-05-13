@@ -305,6 +305,9 @@ func dueAssignmentsForPRPoll(now time.Time, assignments []ActiveAssignment, defa
 }
 
 func shouldPollAssignmentForPR(now time.Time, active ActiveAssignment, defaultInterval time.Duration) bool {
+	if active.Task.State == TaskStateCloneMissing {
+		return false
+	}
 	if active.Task.PRNumber != active.Worker.LastPRNumber {
 		return true
 	}
