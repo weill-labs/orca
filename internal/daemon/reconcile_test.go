@@ -391,8 +391,10 @@ func TestReconcileReportsMissingClonePath(t *testing.T) {
 	if got, want := finding.Issue, issue; got != want {
 		t.Fatalf("finding.Issue = %q, want %q", got, want)
 	}
-	if !strings.Contains(finding.Message, missingClonePath) || !strings.Contains(finding.Message, "orca cancel LAB-1809") {
-		t.Fatalf("finding.Message = %q, want clone path and recovery action", finding.Message)
+	for _, want := range []string{missingClonePath, "restoring the directory alone does not resume polling", "orca cancel LAB-1809"} {
+		if !strings.Contains(finding.Message, want) {
+			t.Fatalf("finding.Message = %q, want to contain %q", finding.Message, want)
+		}
 	}
 	if got := len(deps.commands.callsByName("gh")); got != 0 {
 		t.Fatalf("gh call count = %d, want 0", got)

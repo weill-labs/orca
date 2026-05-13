@@ -74,12 +74,12 @@ func TestTaskManagedClonePathUnavailableTreatsFilesAsUnavailable(t *testing.T) {
 	}
 }
 
-func TestReconcileMissingClonePathDriftReturnsStatError(t *testing.T) {
+func TestReconcileMissingClonePathDriftReportsStatError(t *testing.T) {
 	t.Parallel()
 
 	deps := newTestDeps(t)
 	clonePath := selfReferencingPoolSymlink(t)
-	_, ok, err := deps.newDaemon(t).reconcileMissingClonePathDrift(Task{
+	finding, ok, err := deps.newDaemon(t).reconcileMissingClonePathDrift(Task{
 		Project:   "/tmp/project",
 		Issue:     "LAB-1809",
 		Status:    TaskStatusActive,
@@ -87,11 +87,59 @@ func TestReconcileMissingClonePathDriftReturnsStatError(t *testing.T) {
 		ClonePath: clonePath,
 		Branch:    "LAB-1809",
 	})
-	if err == nil {
-		t.Fatal("reconcileMissingClonePathDrift() error = nil, want stat error")
+	if err != nil {
+		t.Fatalf("reconcileMissingClonePathDrift() error = %v", err)
 	}
-	if ok {
-		t.Fatal("reconcileMissingClonePathDrift() ok = true, want false")
+	if !ok {
+		t.Fatal("reconcileMissingClonePathDrift() ok = false, want true")
+	}
+	if got, want := finding.Kind, ReconcileClonePathError; got != want {
+		t.Fatalf("finding.Kind = %q, want %q", got, want)
+	}
+	for _, want := range []string{clonePath, "could not be inspected", "orca cancel LAB-1809"} {
+		if !strings.Contains(finding.Message, want) {
+			t.Fatalf("finding.Message = %q, want to contain %q", finding.Message, want)
+		}
+	}
+}
+
+func TestReconcileReportsClonePathStatErrorAndContinues(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	statErrClonePath := selfReferencingPoolSymlink(t)
+	missingClonePath := filepath.Join(t.TempDir(), orcaPoolSubdir, "deleted-clone")
+	seedReconcileAssignment(t, deps, "LAB-1808", "pane-1808", "worker-1808", 0)
+	seedReconcileAssignment(t, deps, "LAB-1809", "pane-1809", "worker-1809", 0)
+	setReconcileAssignmentClonePath(t, deps, "LAB-1808", "worker-1808", statErrClonePath)
+	setReconcileAssignmentClonePath(t, deps, "LAB-1809", "worker-1809", missingClonePath)
+
+	result, err := deps.newDaemon(t).Reconcile(context.Background(), ReconcileRequest{Project: "/tmp/project"})
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+
+	got := findingKindsByIssue(result.Findings)
+	if len(got) != 2 || got["LAB-1808"] != ReconcileClonePathError || got["LAB-1809"] != ReconcileCloneMissing {
+		t.Fatalf("finding kinds = %#v, want LAB-1808 clone path error and LAB-1809 clone missing", got)
+	}
+	var statErrFinding ReconcileFinding
+	for _, finding := range result.Findings {
+		if finding.Issue == "LAB-1808" {
+			statErrFinding = finding
+			break
+		}
+	}
+	for _, want := range []string{statErrClonePath, "could not be inspected", "orca cancel LAB-1808"} {
+		if !strings.Contains(statErrFinding.Message, want) {
+			t.Fatalf("stat error finding message = %q, want to contain %q", statErrFinding.Message, want)
+		}
+	}
+	if got := len(deps.commands.callsByName("gh")); got != 0 {
+		t.Fatalf("gh call count = %d, want 0", got)
+	}
+	if got, want := deps.events.countType(EventReconcileFinding), 2; got != want {
+		t.Fatalf("reconcile finding event count = %d, want %d", got, want)
 	}
 }
 
@@ -133,4 +181,24 @@ func selfReferencingPoolSymlink(t *testing.T) string {
 		t.Fatalf("Symlink(%q) error = %v", clonePath, err)
 	}
 	return clonePath
+}
+
+func setReconcileAssignmentClonePath(t *testing.T, deps *testDeps, issue, workerID, clonePath string) {
+	t.Helper()
+
+	task, ok := deps.state.task(issue)
+	if !ok {
+		t.Fatalf("%s task missing after seed", issue)
+	}
+	task.ClonePath = clonePath
+	deps.state.putTaskForTest(task)
+
+	worker, ok := deps.state.worker(workerID)
+	if !ok {
+		t.Fatalf("%s worker missing after seed", workerID)
+	}
+	worker.ClonePath = clonePath
+	if err := deps.state.PutWorker(context.Background(), worker); err != nil {
+		t.Fatalf("PutWorker() error = %v", err)
+	}
 }
