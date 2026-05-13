@@ -8,12 +8,14 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 )
 
 const (
 	ReconcileRecoverableGhost = "recoverable_ghost"
 	ReconcileAbandoned        = "abandoned"
 	ReconcileStuckCleanup     = "stuck_cleanup"
+	ReconcileStartingZombie   = "starting_zombie"
 	ReconcileOrphanPane       = "orphan_pane"
 
 	reconcileActionReported  = "reported"
@@ -24,6 +26,8 @@ const (
 	reconcilePRStateOpen   = "open"
 	reconcilePRStateMerged = "merged"
 	reconcilePRStateClosed = "closed"
+
+	startingTaskDriftThreshold = 5 * time.Minute
 )
 
 var reconcileWorkerPaneNamePattern = regexp.MustCompile(`^w-([A-Z][A-Z0-9]*-\d+)$`)
@@ -89,7 +93,7 @@ func (d *Daemon) Reconcile(ctx context.Context, req ReconcileRequest) (Reconcile
 		}
 
 		if req.Fix && reconcileFindingSafelyFixable(finding) {
-			if err := d.fixMergedReconcileFinding(ctx, task, finding); err != nil {
+			if err := d.fixReconcileFinding(ctx, task, finding); err != nil {
 				finding.Action = reconcileActionFixFailed
 				finding.Message = finding.Message + ": " + err.Error()
 				d.emitReconcileFinding(ctx, projectPath, finding)
@@ -136,6 +140,9 @@ func (d *Daemon) Reconcile(ctx context.Context, req ReconcileRequest) (Reconcile
 }
 
 func (d *Daemon) reconcileTaskDrift(ctx context.Context, task Task) (ReconcileFinding, bool, error) {
+	if task.Status == TaskStatusStarting {
+		return d.reconcileStartingTaskDrift(ctx, task)
+	}
 	if task.Status != TaskStatusActive {
 		return ReconcileFinding{}, false, nil
 	}
@@ -172,6 +179,42 @@ func (d *Daemon) reconcileTaskDrift(ctx context.Context, task Task) (ReconcileFi
 	default:
 		return ReconcileFinding{}, false, nil
 	}
+}
+
+func (d *Daemon) reconcileStartingTaskDrift(ctx context.Context, task Task) (ReconcileFinding, bool, error) {
+	if !startingTaskPastDriftThreshold(task, d.now()) {
+		return ReconcileFinding{}, false, nil
+	}
+
+	paneID := strings.TrimSpace(task.PaneID)
+	if paneID != "" {
+		exists, _, err := d.paneExists(ctx, paneID)
+		if err != nil {
+			return ReconcileFinding{}, false, fmt.Errorf("check pane for %s: %w", task.Issue, err)
+		}
+		if exists {
+			return ReconcileFinding{}, false, nil
+		}
+	}
+
+	finding := taskReconcileFinding(task, reconcilePRInfo{
+		state:  reconcilePRStateNone,
+		branch: strings.TrimSpace(task.Branch),
+	})
+	finding.Kind = ReconcileStartingZombie
+	finding.Message = fmt.Sprintf("task has been starting for at least %s without a live worker pane; run `orca cancel %s` or `orca reconcile --fix` to cancel and clear it", startingTaskDriftThreshold, task.Issue)
+	return finding, true, nil
+}
+
+func startingTaskPastDriftThreshold(task Task, now time.Time) bool {
+	startedAt := task.UpdatedAt
+	if startedAt.IsZero() {
+		startedAt = task.CreatedAt
+	}
+	if startedAt.IsZero() {
+		return true
+	}
+	return !now.Before(startedAt.Add(startingTaskDriftThreshold))
 }
 
 func (d *Daemon) reconcilePaneDrift(ctx context.Context, projectPath string) ([]ReconcileFinding, error) {
@@ -311,8 +354,18 @@ func taskReconcileFinding(task Task, prInfo reconcilePRInfo) ReconcileFinding {
 }
 
 func reconcileFindingSafelyFixable(finding ReconcileFinding) bool {
+	if finding.Kind == ReconcileStartingZombie && finding.Status == TaskStatusStarting {
+		return true
+	}
 	return finding.PRState == reconcilePRStateMerged &&
 		(finding.Kind == ReconcileRecoverableGhost || finding.Kind == ReconcileStuckCleanup)
+}
+
+func (d *Daemon) fixReconcileFinding(ctx context.Context, task Task, finding ReconcileFinding) error {
+	if finding.Kind == ReconcileStartingZombie {
+		return d.clearStartingAssignment(ctx, d.reconcileActiveAssignment(ctx, task), "starting task cancelled and cleared by reconcile")
+	}
+	return d.fixMergedReconcileFinding(ctx, task, finding)
 }
 
 func (d *Daemon) fixMergedReconcileFinding(ctx context.Context, task Task, finding ReconcileFinding) error {

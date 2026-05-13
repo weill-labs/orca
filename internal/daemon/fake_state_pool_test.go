@@ -22,6 +22,7 @@ type fakeState struct {
 	mergeQueue            []MergeQueueEntry
 	knownProjectsErr      error
 	nonTerminalErr        error
+	restoreTaskErr        error
 	updateMergeErr        error
 	deleteMergeErr        error
 	events                []Event
@@ -72,6 +73,9 @@ func (s *fakeState) ClaimTask(ctx context.Context, task Task) (*Task, error) {
 func (s *fakeState) RestoreTask(ctx context.Context, project, issue string, previous *Task) error {
 	if s.rejectCanceledContext && ctx.Err() != nil {
 		return ctx.Err()
+	}
+	if s.restoreTaskErr != nil {
+		return s.restoreTaskErr
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
