@@ -511,7 +511,17 @@ func (m *Manager) eligibleClonePaths() ([]string, error) {
 			return nil, err
 		}
 		if !hasMarker {
-			continue
+			backfillable, err := isLegacyClonePath(absPath)
+			if err != nil {
+				return nil, err
+			}
+			if !backfillable {
+				continue
+			}
+			if err := ensureCloneMarker(absPath); err != nil {
+				return nil, err
+			}
+			m.logf("pool: backfilled %s marker for legacy clone %q", ClonePoolMarker, absPath)
 		}
 		paths = append(paths, absPath)
 	}
@@ -625,6 +635,11 @@ func cloneHasMarker(clonePath string) (bool, error) {
 	return true, nil
 }
 
+// HasCloneMarker reports whether clonePath has a valid Orca pool marker.
+func HasCloneMarker(clonePath string) (bool, error) {
+	return cloneHasMarker(clonePath)
+}
+
 func requireCloneMarker(clonePath string) error {
 	hasMarker, err := cloneHasMarker(clonePath)
 	if err != nil {
@@ -634,6 +649,21 @@ func requireCloneMarker(clonePath string) error {
 		return fmt.Errorf("pool: clone path %q is missing %s marker", clonePath, ClonePoolMarker)
 	}
 	return nil
+}
+
+func isLegacyClonePath(clonePath string) (bool, error) {
+	if !strings.HasPrefix(filepath.Base(clonePath), "clone-") {
+		return false, nil
+	}
+
+	info, err := os.Lstat(filepath.Join(clonePath, ".git"))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, fmt.Errorf("pool: inspect legacy clone git metadata %q: %w", clonePath, err)
+	}
+	return info.IsDir() || info.Mode().IsRegular(), nil
 }
 
 func ensureCloneMarker(clonePath string) error {

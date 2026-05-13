@@ -17,6 +17,7 @@ import (
 
 	"github.com/weill-labs/orca/internal/daemon"
 	state "github.com/weill-labs/orca/internal/daemonstate"
+	"github.com/weill-labs/orca/internal/pool"
 	"github.com/weill-labs/orca/internal/project"
 )
 
@@ -24,6 +25,10 @@ const defaultAgent = "codex"
 const amuxSessionEnvVar = "AMUX_SESSION"
 const amuxPaneEnvVar = "AMUX_PANE"
 const cancelClientTimeout = 10 * time.Second
+const poolSubdir = ".orca/pool"
+const poolStatusMissingMarker = "missing_marker"
+const poolStatusInvalidMarker = "invalid_marker"
+const poolStatusInvalidPath = "invalid_path"
 
 const usageText = `orca: agent orchestration daemon
 usage: orca <command>
@@ -867,6 +872,7 @@ func (a *App) runPool(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	clones = annotatePoolCloneEligibility(projectPath, clones)
 	if jsonOutput {
 		return writeJSON(a.stdout, clones)
 	}
@@ -927,6 +933,35 @@ func resolvePoolClone(clones []state.Clone, ref string) (state.Clone, error) {
 		}
 	}
 	return state.Clone{}, fmt.Errorf("clone %q not found in pool", ref)
+}
+
+func annotatePoolCloneEligibility(projectPath string, clones []state.Clone) []state.Clone {
+	if len(clones) == 0 {
+		return clones
+	}
+
+	poolDir := filepath.Join(projectPath, poolSubdir)
+	annotated := append([]state.Clone(nil), clones...)
+	for i := range annotated {
+		if annotated[i].Status != string(pool.StatusFree) {
+			continue
+		}
+
+		clonePath, err := pool.ValidateClonePath(poolDir, annotated[i].Path)
+		if err != nil {
+			annotated[i].Status = poolStatusInvalidPath
+			continue
+		}
+		hasMarker, err := pool.HasCloneMarker(clonePath)
+		if err != nil {
+			annotated[i].Status = poolStatusInvalidMarker
+			continue
+		}
+		if !hasMarker {
+			annotated[i].Status = poolStatusMissingMarker
+		}
+	}
+	return annotated
 }
 
 func (a *App) runEvents(ctx context.Context, args []string) error {
