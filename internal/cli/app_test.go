@@ -13,6 +13,7 @@ import (
 
 	"github.com/weill-labs/orca/internal/daemon"
 	state "github.com/weill-labs/orca/internal/daemonstate"
+	"github.com/weill-labs/orca/internal/pool"
 )
 
 func TestAppRunDispatchesCommands(t *testing.T) {
@@ -1599,6 +1600,23 @@ func TestAppRunOutputModes(t *testing.T) {
 	if err := os.MkdirAll(cwdPath, 0o755); err != nil {
 		t.Fatalf("MkdirAll(%q): %v", cwdPath, err)
 	}
+	poolDir := filepath.Join(repoRoot, daemon.OrcaPoolSubdir)
+	markedClone := filepath.Join(poolDir, "clone-marked")
+	if err := os.MkdirAll(markedClone, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", markedClone, err)
+	}
+	if err := os.WriteFile(filepath.Join(markedClone, pool.ClonePoolMarker), []byte("orca clone pool\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(%s): %v", pool.ClonePoolMarker, err)
+	}
+	missingMarkerClone := filepath.Join(poolDir, "clone-1808")
+	if err := os.MkdirAll(missingMarkerClone, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", missingMarkerClone, err)
+	}
+	invalidMarkerClone := filepath.Join(poolDir, "clone-invalid-marker")
+	if err := os.MkdirAll(filepath.Join(invalidMarkerClone, pool.ClonePoolMarker), 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q %s): %v", invalidMarkerClone, pool.ClonePoolMarker, err)
+	}
+	outsidePoolClone := filepath.Join(repoRoot, "outside", "clone-1808")
 
 	tests := []struct {
 		name    string
@@ -1686,6 +1704,85 @@ func TestAppRunOutputModes(t *testing.T) {
 				}
 				if !strings.Contains(stdout, "\"path\":\"/clones/orca01\"") {
 					t.Fatalf("stdout = %q, want clone json", stdout)
+				}
+			},
+		},
+		{
+			name:   "pool json keeps marked clone free",
+			args:   []string{"pool", "--json"},
+			daemon: &fakeDaemon{},
+			state: &fakeState{
+				clones: []state.Clone{
+					{Path: markedClone, Status: "free", UpdatedAt: now},
+				},
+			},
+			assert: func(t *testing.T, stdout string, _ *fakeDaemon, s *fakeState) {
+				t.Helper()
+				if got, want := s.clonesProject, repoRoot; got != want {
+					t.Fatalf("clones project = %q, want %q", got, want)
+				}
+				if !strings.Contains(stdout, `"status":"free"`) {
+					t.Fatalf("stdout = %q, want free status", stdout)
+				}
+			},
+		},
+		{
+			name:   "pool json marks missing marker clone",
+			args:   []string{"pool", "--json"},
+			daemon: &fakeDaemon{},
+			state: &fakeState{
+				clones: []state.Clone{
+					{Path: missingMarkerClone, Status: "free", UpdatedAt: now},
+				},
+			},
+			assert: func(t *testing.T, stdout string, _ *fakeDaemon, s *fakeState) {
+				t.Helper()
+				if got, want := s.clonesProject, repoRoot; got != want {
+					t.Fatalf("clones project = %q, want %q", got, want)
+				}
+				if !strings.Contains(stdout, `"status":"missing_marker"`) {
+					t.Fatalf("stdout = %q, want missing marker status", stdout)
+				}
+				if _, err := os.Stat(filepath.Join(missingMarkerClone, pool.ClonePoolMarker)); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("%s stat error = %v, want not exist", pool.ClonePoolMarker, err)
+				}
+			},
+		},
+		{
+			name:   "pool json marks invalid marker clone",
+			args:   []string{"pool", "--json"},
+			daemon: &fakeDaemon{},
+			state: &fakeState{
+				clones: []state.Clone{
+					{Path: invalidMarkerClone, Status: "free", UpdatedAt: now},
+				},
+			},
+			assert: func(t *testing.T, stdout string, _ *fakeDaemon, s *fakeState) {
+				t.Helper()
+				if got, want := s.clonesProject, repoRoot; got != want {
+					t.Fatalf("clones project = %q, want %q", got, want)
+				}
+				if !strings.Contains(stdout, `"status":"invalid_marker"`) {
+					t.Fatalf("stdout = %q, want invalid marker status", stdout)
+				}
+			},
+		},
+		{
+			name:   "pool json marks invalid path clone",
+			args:   []string{"pool", "--json"},
+			daemon: &fakeDaemon{},
+			state: &fakeState{
+				clones: []state.Clone{
+					{Path: outsidePoolClone, Status: "free", UpdatedAt: now},
+				},
+			},
+			assert: func(t *testing.T, stdout string, _ *fakeDaemon, s *fakeState) {
+				t.Helper()
+				if got, want := s.clonesProject, repoRoot; got != want {
+					t.Fatalf("clones project = %q, want %q", got, want)
+				}
+				if !strings.Contains(stdout, `"status":"invalid_path"`) {
+					t.Fatalf("stdout = %q, want invalid path status", stdout)
 				}
 			},
 		},

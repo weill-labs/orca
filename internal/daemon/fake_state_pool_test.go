@@ -765,7 +765,7 @@ func fakePoolCloneForProject(project string, clone Clone) Clone {
 		return clone
 	}
 
-	poolDir := filepath.Join(project, orcaPoolSubdir)
+	poolDir := filepath.Join(project, OrcaPoolSubdir)
 	if cleaned, err := pool.ValidateClonePath(poolDir, clone.Path); err == nil {
 		clone.Path = cleaned
 		if strings.TrimSpace(clone.Name) == "" {

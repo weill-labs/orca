@@ -3,6 +3,7 @@ package pool_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -63,7 +64,7 @@ func TestManagerDiscover(t *testing.T) {
 			wantPaths: nil,
 		},
 		{
-			name: "skips unmarked clone directories",
+			name: "skips unmarked non-git clone directories",
 			setup: func(t *testing.T, poolDir string, store *state.SQLiteStore, project string) {
 				t.Helper()
 
@@ -76,6 +77,38 @@ func TestManagerDiscover(t *testing.T) {
 			},
 			wantStatuses: map[string]pool.Status{
 				"clone-02": pool.StatusFree,
+			},
+		},
+		{
+			name: "skips unmarked directories outside clone namespace",
+			setup: func(t *testing.T, poolDir string, store *state.SQLiteStore, project string) {
+				t.Helper()
+
+				mustMkdir(t, filepath.Join(poolDir, "scratch"))
+				mustMkdir(t, filepath.Join(poolDir, "clone-02"))
+				markClone(t, filepath.Join(poolDir, "clone-02"))
+			},
+			wantPaths: []string{
+				"clone-02",
+			},
+			wantStatuses: map[string]pool.Status{
+				"clone-02": pool.StatusFree,
+			},
+		},
+		{
+			name: "backfills unmarked clone directories with git file metadata",
+			setup: func(t *testing.T, poolDir string, store *state.SQLiteStore, project string) {
+				t.Helper()
+
+				clonePath := filepath.Join(poolDir, "clone-01")
+				mustMkdir(t, clonePath)
+				mustWriteFile(t, filepath.Join(clonePath, ".git"), "gitdir: ../worktrees/clone-01\n")
+			},
+			wantPaths: []string{
+				"clone-01",
+			},
+			wantStatuses: map[string]pool.Status{
+				"clone-01": pool.StatusFree,
 			},
 		},
 		{
@@ -142,6 +175,105 @@ func TestManagerDiscover(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestHasCloneMarker(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name        string
+		setup       func(t *testing.T, clonePath string)
+		wantHas     bool
+		wantErrText string
+	}{
+		{
+			name: "regular marker exists",
+			setup: func(t *testing.T, clonePath string) {
+				t.Helper()
+				markClone(t, clonePath)
+			},
+			wantHas: true,
+		},
+		{
+			name:    "marker is missing",
+			setup:   func(t *testing.T, clonePath string) { t.Helper() },
+			wantHas: false,
+		},
+		{
+			name: "marker is not regular file",
+			setup: func(t *testing.T, clonePath string) {
+				t.Helper()
+				mustMkdir(t, filepath.Join(clonePath, pool.ClonePoolMarker))
+			},
+			wantHas:     false,
+			wantErrText: "must be a regular file",
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			clonePath := filepath.Join(t.TempDir(), "clone-01")
+			mustMkdir(t, clonePath)
+			tc.setup(t, clonePath)
+
+			gotHas, err := pool.HasCloneMarker(clonePath)
+			if tc.wantErrText != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErrText) {
+					t.Fatalf("HasCloneMarker() error = %v, want containing %q", err, tc.wantErrText)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("HasCloneMarker() error = %v", err)
+			}
+			if gotHas != tc.wantHas {
+				t.Fatalf("HasCloneMarker() = %v, want %v", gotHas, tc.wantHas)
+			}
+		})
+	}
+}
+
+func TestManagerDiscoverBackfillsLegacyCloneMarker(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	poolDir := filepath.Join(root, "pool")
+	origin := newOrigin(t, "main")
+	clonePath := newClone(t, origin, filepath.Join(poolDir, "clone-01"))
+	if err := os.Remove(filepath.Join(clonePath, pool.ClonePoolMarker)); err != nil {
+		t.Fatalf("Remove(%s) error = %v", pool.ClonePoolMarker, err)
+	}
+	store := newStore(t)
+	logs := []string(nil)
+	manager := newManager(t, project, staticConfig{poolDir: poolDir}, store, pool.WithLogf(func(format string, args ...any) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	}))
+
+	clones, err := manager.Discover(context.Background())
+	if err != nil {
+		t.Fatalf("Discover() error = %v", err)
+	}
+
+	if len(clones) != 1 {
+		t.Fatalf("len(clones) = %d, want 1", len(clones))
+	}
+	if got, want := clones[0].Path, clonePath; got != want {
+		t.Fatalf("clone.Path = %q, want %q", got, want)
+	}
+	if _, err := os.Stat(filepath.Join(clonePath, pool.ClonePoolMarker)); err != nil {
+		t.Fatalf("%s stat error after Discover() = %v", pool.ClonePoolMarker, err)
+	}
+	record := lookupClone(t, store, project, clonePath)
+	if got, want := record.Status, state.CloneStatusFree; got != want {
+		t.Fatalf("record.Status = %q, want %q", got, want)
+	}
+	if got := strings.Join(logs, "\n"); !strings.Contains(got, "backfilled .orca-pool marker") || !strings.Contains(got, clonePath) {
+		t.Fatalf("logs = %q, want backfill entry for clone", got)
 	}
 }
 
@@ -307,6 +439,43 @@ func TestManagerReleaseRejectsInvalidClonePathsBeforeCleanup(t *testing.T) {
 				t.Fatalf("record.Status = %q, want %q", got, want)
 			}
 		})
+	}
+}
+
+func TestManagerAllocateBackfillsLegacyCloneMarkerBeforeUse(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	poolDir := filepath.Join(root, "pool")
+	origin := newOrigin(t, "main")
+	clonePath := newClone(t, origin, filepath.Join(poolDir, "clone-01"))
+	if err := os.Remove(filepath.Join(clonePath, pool.ClonePoolMarker)); err != nil {
+		t.Fatalf("Remove(%s) error = %v", pool.ClonePoolMarker, err)
+	}
+	store := newStore(t)
+	manager := newManager(t, project, staticConfig{poolDir: poolDir}, store)
+
+	clone, err := manager.Allocate(context.Background(), "LAB-1808", "LAB-1808")
+	if err != nil {
+		t.Fatalf("Allocate() error = %v", err)
+	}
+
+	if got, want := clone.Path, clonePath; got != want {
+		t.Fatalf("clone.Path = %q, want %q", got, want)
+	}
+	if got, want := clone.Status, pool.StatusOccupied; got != want {
+		t.Fatalf("clone.Status = %q, want %q", got, want)
+	}
+	if _, err := os.Stat(filepath.Join(clonePath, pool.ClonePoolMarker)); err != nil {
+		t.Fatalf("%s stat error after Allocate() = %v", pool.ClonePoolMarker, err)
+	}
+	if got, want := gitCurrentBranch(t, clone.Path), "LAB-1808"; got != want {
+		t.Fatalf("current branch = %q, want %q", got, want)
+	}
+	record := lookupClone(t, store, project, clonePath)
+	if got, want := record.Status, state.CloneStatusOccupied; got != want {
+		t.Fatalf("record.Status = %q, want %q", got, want)
 	}
 }
 
