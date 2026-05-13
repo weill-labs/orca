@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -1080,6 +1081,57 @@ func TestPRPollHandlesMissingClonePathOnceWithoutGitHubLookup(t *testing.T) {
 	}
 	if got, want := deps.events.countType(EventPRPollTrace), 1; got != want {
 		t.Fatalf("PR poll trace count = %d, want %d", got, want)
+	}
+}
+
+func TestPRPollHandlesClonePathStatErrorWithoutGitHubLookup(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	const issue = "LAB-1809"
+	seedTaskMonitorAssignment(t, deps, issue, "pane-1", 0)
+	clonePath := filepath.Join(t.TempDir(), orcaPoolSubdir, "clone-loop")
+	if err := os.MkdirAll(filepath.Dir(clonePath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", filepath.Dir(clonePath), err)
+	}
+	if err := os.Symlink(filepath.Base(clonePath), clonePath); err != nil {
+		t.Fatalf("Symlink(%q) error = %v", clonePath, err)
+	}
+
+	task, ok := deps.state.task(issue)
+	if !ok {
+		t.Fatal("task missing after seed")
+	}
+	task.ClonePath = clonePath
+	task.PRRepo = clonePath
+	deps.state.putTaskForTest(task)
+
+	d := deps.newDaemon(t)
+	t.Cleanup(func() {
+		d.stopAllTaskMonitors(true)
+	})
+
+	d.runPollTick(context.Background())
+
+	task, ok = deps.state.task(issue)
+	if !ok {
+		t.Fatal("task missing after poll")
+	}
+	if got, want := task.State, TaskStateAssigned; got != want {
+		t.Fatalf("task.State = %q, want %q", got, want)
+	}
+	if got := deps.events.countType(EventPRPollCloneMissing); got != 0 {
+		t.Fatalf("clone missing event count = %d, want 0", got)
+	}
+	if got := len(deps.commands.callsByName("gh")); got != 0 {
+		t.Fatalf("gh call count = %d, want 0", got)
+	}
+	event, ok := deps.events.lastEventOfType(EventPRPollTrace)
+	if !ok {
+		t.Fatal("PR poll trace missing")
+	}
+	if !strings.Contains(event.Message, "action=clone_path_stat_error") {
+		t.Fatalf("last PR poll trace = %q, want clone_path_stat_error", event.Message)
 	}
 }
 
