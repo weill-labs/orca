@@ -116,6 +116,53 @@ func TestDaemonStartEscalatesMissingClonePathAssignment(t *testing.T) {
 	}
 }
 
+func TestDaemonStartMissingClonePathWithoutWorkerDoesNotCreateStubWorker(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	const issue = "LAB-1809"
+	missingClonePath := filepath.Join("/tmp/project", orcaPoolSubdir, "deleted-clone")
+	deps.state.putTaskForTest(Task{
+		Project:      "/tmp/project",
+		Issue:        issue,
+		Status:       TaskStatusActive,
+		State:        TaskStateAssigned,
+		ClonePath:    missingClonePath,
+		Branch:       issue,
+		AgentProfile: "codex",
+		CreatedAt:    deps.clock.Now(),
+		UpdatedAt:    deps.clock.Now(),
+	})
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	waitFor(t, "startup missing clone reconciliation", func() bool {
+		task, ok := deps.state.task(issue)
+		return ok && task.State == TaskStateCloneMissing
+	})
+
+	workers, err := deps.state.ListWorkers(context.Background(), "/tmp/project")
+	if err != nil {
+		t.Fatalf("ListWorkers() error = %v", err)
+	}
+	if len(workers) != 0 {
+		t.Fatalf("workers = %#v, want none", workers)
+	}
+	if got, want := deps.events.countType(EventPRPollCloneMissing), 1; got != want {
+		t.Fatalf("clone missing event count = %d, want %d", got, want)
+	}
+	if got := deps.events.countType(EventWorkerEscalated); got != 0 {
+		t.Fatalf("worker escalation event count = %d, want 0", got)
+	}
+}
+
 func TestDaemonStartResumesMonitoringLiveAssignments(t *testing.T) {
 	t.Parallel()
 
