@@ -44,20 +44,29 @@ func (d *Daemon) confirmPromptDelivery(ctx context.Context, paneID string, profi
 	if !strings.EqualFold(profile.Name, "codex") {
 		return nil
 	}
-	return d.submitToCodex(ctx, paneID, "")
+	// Initial handshake: codex has not yet been verified, so demand positive
+	// evidence (banner in scrollback or codex command) before delivering.
+	return d.submitToCodex(ctx, paneID, "", false)
 }
 
 // Post-start lifecycle prompts can race with Codex input buffering. Send the
 // prompt once, then retry only Enter until Codex transitions to Working or the
 // bounded retry budget is exhausted.
+//
+// Lifecycle prompts run after the initial handshake has already confirmed
+// codex is alive, so the guard trusts that proof and only rejects on positive
+// shell evidence — the startup banner has typically scrolled out of the
+// captured snapshot by this point in a long-lived codex session.
 func (d *Daemon) sendAndConfirmWorking(ctx context.Context, paneID, prompt string) error {
-	return d.submitToCodex(ctx, paneID, prompt)
+	return d.submitToCodex(ctx, paneID, prompt, true)
 }
 
 // submitToCodex submits prompt+Enter to a codex pane and retries Enter while
 // the pane keeps returning to idle. An empty prompt means the caller already
-// sent the initial Enter and only needs confirmation/retries.
-func (d *Daemon) submitToCodex(ctx context.Context, paneID, prompt string) error {
+// sent the initial Enter and only needs confirmation/retries. trusted=true
+// relaxes the require-positive-codex-evidence rule for callers that have
+// already verified codex via a prior successful handshake.
+func (d *Daemon) submitToCodex(ctx context.Context, paneID, prompt string, trusted bool) error {
 	baseline := promptDeliveryBaseline{}
 	if strings.TrimSpace(prompt) != "" {
 		var err error
@@ -65,7 +74,7 @@ func (d *Daemon) submitToCodex(ctx context.Context, paneID, prompt string) error
 		if err != nil {
 			return err
 		}
-		if err := codexPromptTargetError("before prompt delivery", baseline.snapshot); err != nil {
+		if err := codexPromptTargetError("before prompt delivery", baseline.snapshot, trusted); err != nil {
 			return err
 		}
 		if baseline.hasWorking {
@@ -76,7 +85,7 @@ func (d *Daemon) submitToCodex(ctx context.Context, paneID, prompt string) error
 			if err != nil {
 				return err
 			}
-			if err := codexPromptTargetError("before prompt delivery after idle", baseline.snapshot); err != nil {
+			if err := codexPromptTargetError("before prompt delivery after idle", baseline.snapshot, trusted); err != nil {
 				return err
 			}
 		}
@@ -111,7 +120,7 @@ func (d *Daemon) submitToCodex(ctx context.Context, paneID, prompt string) error
 		if attempt == codexWorkingConfirmationAttempts {
 			return lastErr
 		}
-		if err := d.ensureCodexPromptTarget(ctx, paneID, "before retry enter"); err != nil {
+		if err := d.ensureCodexPromptTarget(ctx, paneID, "before retry enter", trusted); err != nil {
 			return err
 		}
 		if err := d.amux.SendKeys(ctx, paneID, "Enter"); err != nil {
@@ -129,7 +138,7 @@ func (d *Daemon) paneRunsCodex(ctx context.Context, paneID string) bool {
 	return codexPromptTargetRunning(snapshot)
 }
 
-func (d *Daemon) ensureCodexPromptTarget(ctx context.Context, paneID, phase string) error {
+func (d *Daemon) ensureCodexPromptTarget(ctx context.Context, paneID, phase string, trusted bool) error {
 	snapshot, ok, err := d.capturePromptDeliveryGuardSnapshot(ctx, paneID)
 	if err != nil {
 		if isPaneGoneError(err) {
@@ -140,7 +149,7 @@ func (d *Daemon) ensureCodexPromptTarget(ctx context.Context, paneID, phase stri
 	if !ok {
 		return nil
 	}
-	return codexPromptTargetError(phase, snapshot)
+	return codexPromptTargetError(phase, snapshot, trusted)
 }
 
 func (d *Daemon) capturePromptDeliveryGuardSnapshot(ctx context.Context, paneID string) (PaneCapture, bool, error) {
@@ -167,8 +176,8 @@ func codexPromptTargetRunning(snapshot PaneCapture) bool {
 	return containsFold(snapshot.Output(), "OpenAI Codex")
 }
 
-func codexPromptTargetError(phase string, snapshot PaneCapture) error {
-	if codexPromptTargetSafe(snapshot) {
+func codexPromptTargetError(phase string, snapshot PaneCapture, trusted bool) error {
+	if codexPromptTargetSafe(snapshot, trusted) {
 		return nil
 	}
 
@@ -182,7 +191,14 @@ func codexPromptTargetError(phase string, snapshot PaneCapture) error {
 	return promptDeliveryFailure(profile, fmt.Sprintf("%s and codex is not running", phase), snapshot)
 }
 
-func codexPromptTargetSafe(snapshot PaneCapture) bool {
+// codexPromptTargetSafe decides whether the captured pane state is acceptable
+// for prompt delivery. trusted=true is for callers that have already verified
+// codex via a prior successful handshake (lifecycle prompts, merge-notify);
+// the require-banner-in-scrollback rule is relaxed in that case because the
+// startup banner scrolls out of long-lived codex sessions. The bash-leak
+// protections (Exited / returned-to-shell / command-not-found scrollback)
+// always fire regardless of trust.
+func codexPromptTargetSafe(snapshot PaneCapture, trusted bool) bool {
 	if snapshot.Exited {
 		return false
 	}
@@ -196,6 +212,9 @@ func codexPromptTargetSafe(snapshot PaneCapture) bool {
 	// only reject when a non-codex command is positively running without
 	// matching codex scrollback evidence.
 	if strings.TrimSpace(snapshot.CurrentCommand) == "" {
+		return true
+	}
+	if trusted {
 		return true
 	}
 	return containsFold(snapshot.Output(), "OpenAI Codex")

@@ -498,7 +498,9 @@ func (d *Daemon) notifyCallerPaneReviewEscalation(ctx context.Context, active Ac
 
 	prompt := formatLeadReviewEscalation(active, feedback)
 	if d.paneRunsCodex(ctx, targetPane) {
-		_ = d.submitToCodex(ctx, targetPane, prompt)
+		// paneRunsCodex just confirmed via positive evidence; trust the
+		// handshake for the immediate follow-up delivery.
+		_ = d.submitToCodex(ctx, targetPane, prompt, true)
 		return
 	}
 	_ = d.amuxClient(ctx).SendKeys(ctx, targetPane, prompt, "Enter")
