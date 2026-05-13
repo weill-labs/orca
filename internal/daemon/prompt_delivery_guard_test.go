@@ -42,27 +42,61 @@ func TestCodexPromptTargetGuardHelpers(t *testing.T) {
 		t.Fatal("codexPromptTargetRunning(shell output) = true, want false")
 	}
 
-	bashLeaks := []PaneCapture{
+	bashLeaks := []struct {
+		name     string
+		snapshot PaneCapture
+	}{
 		{
-			Content:        []string{"OpenAI Codex", "bash: Verify: command not found"},
-			CurrentCommand: "bash",
+			name: "bash command not found",
+			snapshot: PaneCapture{
+				Content:        []string{"OpenAI Codex", "bash: Verify: command not found"},
+				CurrentCommand: "bash",
+			},
 		},
 		{
-			Content:        []string{"OpenAI Codex", "bash: syntax error near unexpected token `('"},
-			CurrentCommand: "bash",
+			name: "bash syntax error",
+			snapshot: PaneCapture{
+				Content:        []string{"OpenAI Codex", "bash: syntax error near unexpected token `('"},
+				CurrentCommand: "bash",
+			},
+		},
+		{
+			name: "earlier shell output mixed with later codex output",
+			snapshot: PaneCapture{
+				Content: []string{
+					"bash: Verify: command not found",
+					"gpt-5.5 xhigh - ~/clone-01 - LAB-1819 - Context 37% used",
+					">",
+				},
+				CurrentCommand: "node",
+			},
+		},
+		{
+			name: "node command with banner and command-not-found output",
+			snapshot: PaneCapture{
+				Content:        []string{"OpenAI Codex", "bash: Verify: command not found", ">"},
+				CurrentCommand: "node",
+			},
 		},
 	}
-	for _, snapshot := range bashLeaks {
-		if codexPromptTargetSafe(snapshot, false) {
-			t.Fatalf("codexPromptTargetSafe(%q) = true, want false", snapshot.Output())
-		}
-		if codexPromptTargetSafe(snapshot, true) {
-			t.Fatalf("codexPromptTargetSafe(%q, trusted) = true, want false (bash-leak protection must remain)", snapshot.Output())
-		}
-		err := codexPromptTargetError("before prompt delivery", snapshot, false)
-		if !errors.Is(err, ErrPromptDeliveryNotConfirmed) {
-			t.Fatalf("codexPromptTargetError(%q) error = %v, want ErrPromptDeliveryNotConfirmed", snapshot.Output(), err)
-		}
+	for _, tt := range bashLeaks {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if codexPromptTargetSafe(tt.snapshot, false) {
+				t.Fatalf("codexPromptTargetSafe(%q) = true, want false", tt.snapshot.Output())
+			}
+			if codexPromptTargetSafe(tt.snapshot, true) {
+				t.Fatalf("codexPromptTargetSafe(%q, trusted) = true, want false (bash-leak protection must remain)", tt.snapshot.Output())
+			}
+			err := codexPromptTargetError("before prompt delivery", tt.snapshot, true)
+			if !errors.Is(err, ErrPromptDeliveryNotConfirmed) {
+				t.Fatalf("codexPromptTargetError(%q, trusted) error = %v, want ErrPromptDeliveryNotConfirmed", tt.snapshot.Output(), err)
+			}
+			if !strings.Contains(err.Error(), "before prompt delivery and codex returned to shell") {
+				t.Fatalf("codexPromptTargetError(%q, trusted) error = %v, want returned-to-shell context", tt.snapshot.Output(), err)
+			}
+		})
 	}
 
 	spawnHandshake := PaneCapture{}
@@ -145,7 +179,6 @@ func TestEnsureCodexPromptTargetReturnsGuardCaptureErrors(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
