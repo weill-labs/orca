@@ -19,9 +19,11 @@ func (a *App) runReconcile(ctx context.Context, args []string) error {
 	fs := newFlagSet("reconcile")
 	var projectPath string
 	var fix bool
+	var adoptOrphans bool
 	var jsonOutput bool
 	fs.StringVar(&projectPath, "project", "", "project path")
 	fs.BoolVar(&fix, "fix", false, "complete safe automated recovery for merged PR cleanup only")
+	fs.BoolVar(&adoptOrphans, "adopt-orphans", false, "adopt orphan worker panes into active tasks")
 	fs.BoolVar(&jsonOutput, "json", false, "emit JSON output")
 
 	if err := parseFlags(fs, args); err != nil {
@@ -37,8 +39,9 @@ func (a *App) runReconcile(ctx context.Context, args []string) error {
 	}
 
 	result, err := a.daemon.Reconcile(ctx, daemon.ReconcileRequest{
-		Project: projectPath,
-		Fix:     fix,
+		Project:      projectPath,
+		Fix:          fix,
+		AdoptOrphans: adoptOrphans,
 	})
 	if err != nil {
 		if len(result.Findings) > 0 {
@@ -71,7 +74,7 @@ func writeReconcileResult(w io.Writer, result daemon.ReconcileResult) error {
 	if _, err := fmt.Fprintf(w, "drift: %d finding(s)\n", len(result.Findings)); err != nil {
 		return err
 	}
-	if result.Fix {
+	if result.Fix || result.AdoptOrphans {
 		if _, err := fmt.Fprintf(w, "fixed: %d\n", result.Fixed); err != nil {
 			return err
 		}

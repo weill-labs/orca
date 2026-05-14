@@ -86,14 +86,15 @@ Flags:
 	"refresh-codex": `usage: orca refresh-codex
 
 Print the Codex refresh command.`,
-	"reconcile": `usage: orca reconcile [--project PATH] [--fix] [--json]
+	"reconcile": `usage: orca reconcile [--project PATH] [--fix] [--adopt-orphans] [--json]
 
 Detect drift between orca tasks and amux panes.
 
 Flags:
-  --project Project path
-  --fix     Complete safe automated recovery for merged PR cleanup only
-  --json    Emit JSON output`,
+  --project       Project path
+  --fix           Complete safe automated recovery for merged PR cleanup only
+  --adopt-orphans Adopt orphan worker panes into active tasks
+  --json          Emit JSON output`,
 	"assign": `usage: orca assign ISSUE --prompt TEXT [--agent NAME] [--project PATH] [--json]
 
 Assign an issue to a worker.

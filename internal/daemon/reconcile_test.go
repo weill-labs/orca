@@ -49,6 +49,678 @@ func TestReconcileClassifiesTaskAndPaneDrift(t *testing.T) {
 	if got := deps.events.countType(EventReconcileFinding); got != len(want) {
 		t.Fatalf("reconcile finding event count = %d, want %d", got, len(want))
 	}
+	for _, finding := range result.Findings {
+		if finding.Kind == ReconcileOrphanPane && !strings.Contains(finding.Message, "--adopt-orphans") {
+			t.Fatalf("orphan message = %q, want adoption action", finding.Message)
+		}
+	}
+}
+
+func TestReconcileAdoptOrphansRecoversTask(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	clonePath := filepath.Join("/tmp/project", OrcaPoolSubdir, "clone-02")
+	deps.amux.listPanes = []Pane{{ID: "906", Name: "w-LAB-1816", CWD: clonePath}}
+	deps.amux.metadata = map[string]map[string]string{
+		"906": {
+			"agent_profile": "codex",
+			"branch":        "LAB-1816",
+			"task":          "Implement LAB-1816",
+		},
+	}
+	deps.amux.captureHistorySequence("906", []PaneCapture{{
+		Content:        []string{"OpenAI Codex", "Working (12s - esc to interrupt)"},
+		CWD:            clonePath,
+		CurrentCommand: "codex",
+	}})
+
+	result, err := deps.newDaemon(t).Reconcile(context.Background(), ReconcileRequest{
+		Project:      "/tmp/project",
+		AdoptOrphans: true,
+	})
+	if err != nil {
+		t.Fatalf("Reconcile(--adopt-orphans) error = %v", err)
+	}
+	if got, want := result.Fixed, 1; got != want {
+		t.Fatalf("result.Fixed = %d, want %d", got, want)
+	}
+	if got, want := len(result.Findings), 1; got != want {
+		t.Fatalf("len(findings) = %d, want %d: %#v", got, want, result.Findings)
+	}
+	finding := result.Findings[0]
+	if finding.Kind != ReconcileOrphanPane || finding.Action != reconcileActionFixed {
+		t.Fatalf("finding = %#v, want fixed orphan pane", finding)
+	}
+
+	active, err := deps.state.ActiveAssignmentByIssue(context.Background(), "/tmp/project", "LAB-1816")
+	if err != nil {
+		t.Fatalf("ActiveAssignmentByIssue() error = %v", err)
+	}
+	if active.Task.Status != TaskStatusActive || active.Task.State != TaskStateAssigned {
+		t.Fatalf("adopted task state = %s/%s, want active/assigned", active.Task.Status, active.Task.State)
+	}
+	if active.Task.PaneID != "906" || active.Task.PaneName != "w-LAB-1816" {
+		t.Fatalf("adopted task pane = %q/%q, want 906/w-LAB-1816", active.Task.PaneID, active.Task.PaneName)
+	}
+	if active.Task.ClonePath != clonePath || active.Worker.ClonePath != clonePath {
+		t.Fatalf("adopted clone paths = %q/%q, want %q", active.Task.ClonePath, active.Worker.ClonePath, clonePath)
+	}
+	if active.Task.AgentProfile != "codex" || active.Worker.AgentProfile != "codex" {
+		t.Fatalf("adopted profiles = %q/%q, want codex", active.Task.AgentProfile, active.Worker.AgentProfile)
+	}
+	if !deps.pool.cloneAcquired(clonePath) {
+		t.Fatalf("clone %q was not marked acquired", clonePath)
+	}
+	if len(deps.amux.killCalls) != 0 {
+		t.Fatalf("kill calls = %#v, want none", deps.amux.killCalls)
+	}
+	deps.amux.requireSentKeys(t, "906", nil)
+	deps.events.requireTypes(t, EventWorkerRecovered, EventReconcileFinding)
+
+	_, err = deps.newDaemon(t).adoptOrphanPane(context.Background(), "/tmp/project", ReconcileFinding{
+		Kind:      ReconcileOrphanPane,
+		Issue:     "LAB-1816",
+		PaneID:    "906",
+		PaneName:  "w-LAB-1816",
+		ClonePath: clonePath,
+	})
+	if err == nil || !strings.Contains(err.Error(), "task LAB-1816 is already active") {
+		t.Fatalf("second adoptOrphanPane() error = %v, want already active", err)
+	}
+}
+
+func TestAdoptOrphanPaneUsesCaptureFallbacks(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	clonePath := filepath.Join("/tmp/project", OrcaPoolSubdir, "clone-03")
+	deps.amux.listPanes = []Pane{{ID: "907", Name: "w-LAB-1817"}}
+	deps.amux.captureHistorySequence("907", []PaneCapture{{}})
+	deps.amux.capturePaneSequence("907", []PaneCapture{{
+		Content:        []string{"Claude Code", "working"},
+		CWD:            clonePath,
+		CurrentCommand: "claude",
+	}})
+	if err := deps.state.PutWorker(context.Background(), Worker{
+		Project:      "/tmp/project",
+		WorkerID:     "worker-adopted",
+		PaneID:       "907",
+		PaneName:     "w-LAB-1817",
+		AgentProfile: "claude",
+		Health:       WorkerHealthHealthy,
+		CreatedAt:    deps.clock.Now(),
+		LastSeenAt:   deps.clock.Now(),
+		UpdatedAt:    deps.clock.Now(),
+	}); err != nil {
+		t.Fatalf("PutWorker() error = %v", err)
+	}
+
+	message, err := deps.newDaemon(t).adoptOrphanPane(context.Background(), "/tmp/project", ReconcileFinding{
+		Kind:     ReconcileOrphanPane,
+		Issue:    "LAB-1817",
+		PaneID:   "907",
+		PaneName: "w-LAB-1817",
+	})
+	if err != nil {
+		t.Fatalf("adoptOrphanPane() error = %v", err)
+	}
+	if !strings.Contains(message, "adopted") {
+		t.Fatalf("message = %q, want adoption message", message)
+	}
+
+	active, err := deps.state.ActiveAssignmentByIssue(context.Background(), "/tmp/project", "LAB-1817")
+	if err != nil {
+		t.Fatalf("ActiveAssignmentByIssue() error = %v", err)
+	}
+	if got, want := active.Task.WorkerID, "worker-adopted"; got != want {
+		t.Fatalf("worker id = %q, want %q", got, want)
+	}
+	if got, want := active.Task.AgentProfile, "claude"; got != want {
+		t.Fatalf("agent profile = %q, want %q", got, want)
+	}
+	if got, want := active.Task.ClonePath, clonePath; got != want {
+		t.Fatalf("clone path = %q, want %q", got, want)
+	}
+	if got, want := deps.amux.captureHistoryCount("907"), 1; got != want {
+		t.Fatalf("history capture count = %d, want %d", got, want)
+	}
+	if got, want := deps.amux.captureCount("907"), 1; got != want {
+		t.Fatalf("pane capture count = %d, want %d", got, want)
+	}
+}
+
+func TestAdoptOrphanPaneClampsSubdirectoryCWDToCloneRoot(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	clonePath := filepath.Join("/tmp/project", OrcaPoolSubdir, "clone-14")
+	paneCWD := filepath.Join(clonePath, "src", "internal")
+	deps.amux.listPanes = []Pane{{ID: "922", Name: "w-LAB-1836", CWD: paneCWD}}
+	deps.amux.metadata = map[string]map[string]string{
+		"922": {"agent_profile": "codex"},
+	}
+	deps.amux.captureHistorySequence("922", []PaneCapture{{
+		Content:        []string{"OpenAI Codex"},
+		CWD:            paneCWD,
+		CurrentCommand: "codex",
+	}})
+
+	message, err := deps.newDaemon(t).adoptOrphanPane(context.Background(), "/tmp/project", ReconcileFinding{
+		Kind:     ReconcileOrphanPane,
+		Issue:    "LAB-1836",
+		PaneID:   "922",
+		PaneName: "w-LAB-1836",
+	})
+	if err != nil {
+		t.Fatalf("adoptOrphanPane() error = %v", err)
+	}
+	if !strings.Contains(message, "adopted") {
+		t.Fatalf("message = %q, want adoption message", message)
+	}
+
+	active, err := deps.state.ActiveAssignmentByIssue(context.Background(), "/tmp/project", "LAB-1836")
+	if err != nil {
+		t.Fatalf("ActiveAssignmentByIssue() error = %v", err)
+	}
+	if active.Task.ClonePath != clonePath || active.Worker.ClonePath != clonePath {
+		t.Fatalf("adopted clone paths = %q/%q, want %q", active.Task.ClonePath, active.Worker.ClonePath, clonePath)
+	}
+	if !deps.pool.cloneAcquired(clonePath) {
+		t.Fatalf("clone %q was not marked acquired", clonePath)
+	}
+	if deps.pool.cloneAcquired(paneCWD) {
+		t.Fatalf("subdirectory %q was marked acquired", paneCWD)
+	}
+}
+
+func TestAdoptOrphanPaneUsesPaneNameWhenPaneIDMissing(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	clonePath := filepath.Join("/tmp/project", OrcaPoolSubdir, "clone-09")
+	deps.amux.listPanes = []Pane{{Name: "w-LAB-1830", CWD: clonePath}}
+	deps.amux.metadata = map[string]map[string]string{
+		"w-LAB-1830": {"agent_profile": "codex"},
+	}
+	deps.amux.captureHistorySequence("w-LAB-1830", []PaneCapture{{CWD: clonePath, CurrentCommand: "codex"}})
+
+	message, err := deps.newDaemon(t).adoptOrphanPane(context.Background(), "/tmp/project", ReconcileFinding{
+		Kind:     ReconcileOrphanPane,
+		Issue:    "LAB-1830",
+		PaneName: "w-LAB-1830",
+	})
+	if err != nil {
+		t.Fatalf("adoptOrphanPane() error = %v", err)
+	}
+	if !strings.Contains(message, "adopted") {
+		t.Fatalf("message = %q, want adoption message", message)
+	}
+	active, err := deps.state.ActiveAssignmentByIssue(context.Background(), "/tmp/project", "LAB-1830")
+	if err != nil {
+		t.Fatalf("ActiveAssignmentByIssue() error = %v", err)
+	}
+	if got, want := active.Task.PaneName, "w-LAB-1830"; got != want {
+		t.Fatalf("pane name = %q, want %q", got, want)
+	}
+	if got := active.Task.PaneID; got != "" {
+		t.Fatalf("pane id = %q, want empty", got)
+	}
+}
+
+func TestLiveOrphanPaneLooksUpCWDFromPaneList(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	clonePath := filepath.Join("/tmp/project", OrcaPoolSubdir, "clone-04")
+	deps.amux.listPanes = []Pane{{ID: "912", Name: "w-LAB-1822", CWD: clonePath}}
+
+	pane, err := deps.newDaemon(t).liveOrphanPane(context.Background(), ReconcileFinding{
+		Issue:    "LAB-1822",
+		PaneID:   "912",
+		PaneName: "w-LAB-1822",
+	})
+	if err != nil {
+		t.Fatalf("liveOrphanPane() error = %v", err)
+	}
+	if got, want := pane.CWD, clonePath; got != want {
+		t.Fatalf("pane.CWD = %q, want %q", got, want)
+	}
+	if got, want := deps.amux.paneExistsCalls, []string{"912"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("pane exists calls = %#v, want %#v", got, want)
+	}
+}
+
+func TestLiveOrphanPaneReportsListErrors(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.amux.listPanesErr = errors.New("list failed")
+
+	_, err := deps.newDaemon(t).liveOrphanPane(context.Background(), ReconcileFinding{
+		Issue:    "LAB-1828",
+		PaneName: "w-LAB-1828",
+	})
+	if err == nil || !strings.Contains(err.Error(), "list panes for orphan adoption") {
+		t.Fatalf("liveOrphanPane() error = %v, want list failure", err)
+	}
+}
+
+func TestLiveOrphanPaneReportsMissingListedPane(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.amux.listPanes = []Pane{{ID: "other", Name: "w-LAB-0000"}}
+
+	_, err := deps.newDaemon(t).liveOrphanPane(context.Background(), ReconcileFinding{
+		Issue:    "LAB-1829",
+		PaneName: "w-LAB-1829",
+	})
+	if err == nil || !strings.Contains(err.Error(), "is no longer listed") {
+		t.Fatalf("liveOrphanPane() error = %v, want missing pane", err)
+	}
+}
+
+func TestAdoptOrphanPaneReportsPaneLivenessFailure(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.amux.paneExistsErr = errors.New("amux unavailable")
+
+	_, err := deps.newDaemon(t).adoptOrphanPane(context.Background(), "/tmp/project", ReconcileFinding{
+		Kind:     ReconcileOrphanPane,
+		Issue:    "LAB-1831",
+		PaneID:   "918",
+		PaneName: "w-LAB-1831",
+	})
+	if err == nil || !strings.Contains(err.Error(), "orphan pane 918 is no longer live") || !strings.Contains(err.Error(), "amux unavailable") {
+		t.Fatalf("adoptOrphanPane() error = %v, want pane liveness failure", err)
+	}
+}
+
+func TestAdoptOrphanPaneReportsTaskLookupFailure(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.state.taskByIssueErr = errors.New("state unavailable")
+
+	_, err := deps.newDaemon(t).adoptOrphanPane(context.Background(), "/tmp/project", ReconcileFinding{
+		Kind:     ReconcileOrphanPane,
+		Issue:    "LAB-1832",
+		PaneName: "w-LAB-1832",
+	})
+	if err == nil || !strings.Contains(err.Error(), "lookup task LAB-1832 before adoption") || !strings.Contains(err.Error(), "state unavailable") {
+		t.Fatalf("adoptOrphanPane() error = %v, want task lookup failure", err)
+	}
+}
+
+func TestReconcileAdoptOrphansReportsAdoptionFailure(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	clonePath := filepath.Join("/tmp/project", OrcaPoolSubdir, "clone-05")
+	deps.amux.listPanes = []Pane{{ID: "913", Name: "w-LAB-1823", CWD: clonePath}}
+	deps.amux.metadataErr = errors.New("metadata unavailable")
+
+	result, err := deps.newDaemon(t).Reconcile(context.Background(), ReconcileRequest{
+		Project:      "/tmp/project",
+		AdoptOrphans: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "metadata unavailable") {
+		t.Fatalf("Reconcile(--adopt-orphans) error = %v, want metadata failure", err)
+	}
+	if got, want := result.Fixed, 0; got != want {
+		t.Fatalf("result.Fixed = %d, want %d", got, want)
+	}
+	if got, want := len(result.Findings), 1; got != want {
+		t.Fatalf("len(findings) = %d, want %d: %#v", got, want, result.Findings)
+	}
+	finding := result.Findings[0]
+	if finding.Action != reconcileActionFixFailed {
+		t.Fatalf("finding.Action = %q, want %q", finding.Action, reconcileActionFixFailed)
+	}
+	if !strings.Contains(finding.Message, "load orphan pane metadata") {
+		t.Fatalf("finding.Message = %q, want metadata failure context", finding.Message)
+	}
+	deps.events.requireTypes(t, EventReconcileFinding)
+}
+
+func TestAdoptOrphanPaneWorkerWriteFailureLeavesRetryableOrphan(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	clonePath := filepath.Join("/tmp/project", OrcaPoolSubdir, "clone-12")
+	deps.amux.listPanes = []Pane{{ID: "920", Name: "w-LAB-1834", CWD: clonePath}}
+	deps.amux.metadata = map[string]map[string]string{
+		"920": {"agent_profile": "codex"},
+	}
+	deps.amux.captureHistorySequence("920", []PaneCapture{
+		{Content: []string{"OpenAI Codex"}, CWD: clonePath, CurrentCommand: "codex"},
+		{Content: []string{"OpenAI Codex"}, CWD: clonePath, CurrentCommand: "codex"},
+	})
+	deps.state.putWorkerErrs = []error{errors.New("worker store unavailable")}
+
+	_, err := deps.newDaemon(t).adoptOrphanPane(context.Background(), "/tmp/project", ReconcileFinding{
+		Kind:      ReconcileOrphanPane,
+		Issue:     "LAB-1834",
+		PaneID:    "920",
+		PaneName:  "w-LAB-1834",
+		ClonePath: clonePath,
+	})
+	if err == nil || !strings.Contains(err.Error(), "store adopted worker") || !strings.Contains(err.Error(), "worker store unavailable") {
+		t.Fatalf("adoptOrphanPane() error = %v, want worker storage failure", err)
+	}
+	if _, err := deps.state.TaskByIssue(context.Background(), "/tmp/project", "LAB-1834"); !errors.Is(err, ErrTaskNotFound) {
+		t.Fatalf("TaskByIssue() error = %v, want no task after worker write failure", err)
+	}
+
+	result, err := deps.newDaemon(t).Reconcile(context.Background(), ReconcileRequest{
+		Project:      "/tmp/project",
+		AdoptOrphans: true,
+	})
+	if err != nil {
+		t.Fatalf("retry Reconcile(--adopt-orphans) error = %v", err)
+	}
+	if got, want := result.Fixed, 1; got != want {
+		t.Fatalf("retry result.Fixed = %d, want %d", got, want)
+	}
+	if got, want := len(result.Findings), 1; got != want {
+		t.Fatalf("len(retry findings) = %d, want %d: %#v", got, want, result.Findings)
+	}
+	if finding := result.Findings[0]; finding.Action != reconcileActionFixed || !strings.Contains(finding.Message, "adopted") {
+		t.Fatalf("retry finding = %#v, want fixed adoption", finding)
+	}
+	if _, err := deps.state.ActiveAssignmentByIssue(context.Background(), "/tmp/project", "LAB-1834"); err != nil {
+		t.Fatalf("ActiveAssignmentByIssue() error = %v", err)
+	}
+}
+
+func TestAdoptOrphanPaneTaskWriteFailureLeavesRetryableOrphan(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	clonePath := filepath.Join("/tmp/project", OrcaPoolSubdir, "clone-13")
+	deps.amux.listPanes = []Pane{{ID: "921", Name: "w-LAB-1835", CWD: clonePath}}
+	deps.amux.metadata = map[string]map[string]string{
+		"921": {"agent_profile": "codex"},
+	}
+	deps.amux.captureHistorySequence("921", []PaneCapture{
+		{Content: []string{"OpenAI Codex"}, CWD: clonePath, CurrentCommand: "codex"},
+		{Content: []string{"OpenAI Codex"}, CWD: clonePath, CurrentCommand: "codex"},
+	})
+	deps.state.putTaskErrs = []error{errors.New("task store unavailable")}
+
+	_, err := deps.newDaemon(t).adoptOrphanPane(context.Background(), "/tmp/project", ReconcileFinding{
+		Kind:      ReconcileOrphanPane,
+		Issue:     "LAB-1835",
+		PaneID:    "921",
+		PaneName:  "w-LAB-1835",
+		ClonePath: clonePath,
+	})
+	if err == nil || !strings.Contains(err.Error(), "store adopted task") || !strings.Contains(err.Error(), "task store unavailable") {
+		t.Fatalf("adoptOrphanPane() error = %v, want task storage failure", err)
+	}
+	if _, err := deps.state.TaskByIssue(context.Background(), "/tmp/project", "LAB-1835"); !errors.Is(err, ErrTaskNotFound) {
+		t.Fatalf("TaskByIssue() error = %v, want no task after task write failure", err)
+	}
+	if _, err := deps.state.WorkerByPane(context.Background(), "/tmp/project", "921"); err != nil {
+		t.Fatalf("WorkerByPane() error = %v, want worker persisted for retry", err)
+	}
+
+	result, err := deps.newDaemon(t).Reconcile(context.Background(), ReconcileRequest{
+		Project:      "/tmp/project",
+		AdoptOrphans: true,
+	})
+	if err != nil {
+		t.Fatalf("retry Reconcile(--adopt-orphans) error = %v", err)
+	}
+	if got, want := result.Fixed, 1; got != want {
+		t.Fatalf("retry result.Fixed = %d, want %d", got, want)
+	}
+	if got, want := len(result.Findings), 1; got != want {
+		t.Fatalf("len(retry findings) = %d, want %d: %#v", got, want, result.Findings)
+	}
+	if finding := result.Findings[0]; finding.Action != reconcileActionFixed || !strings.Contains(finding.Message, "adopted") {
+		t.Fatalf("retry finding = %#v, want fixed adoption", finding)
+	}
+	if _, err := deps.state.ActiveAssignmentByIssue(context.Background(), "/tmp/project", "LAB-1835"); err != nil {
+		t.Fatalf("ActiveAssignmentByIssue() error = %v", err)
+	}
+}
+
+func TestAdoptOrphanPaneReportsCaptureFailureWhenCWDUnknown(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.amux.listPanes = []Pane{{ID: "919", Name: "w-LAB-1833"}}
+	deps.amux.metadata = map[string]map[string]string{
+		"919": {"agent_profile": "codex"},
+	}
+	deps.amux.captureHistoryErrors("919", []error{errors.New("history unavailable")})
+	deps.amux.capturePaneErr = errors.New("capture unavailable")
+
+	_, err := deps.newDaemon(t).adoptOrphanPane(context.Background(), "/tmp/project", ReconcileFinding{
+		Kind:     ReconcileOrphanPane,
+		Issue:    "LAB-1833",
+		PaneID:   "919",
+		PaneName: "w-LAB-1833",
+	})
+	if err == nil || !strings.Contains(err.Error(), "capture orphan pane cwd") || !strings.Contains(err.Error(), "history unavailable") || !strings.Contains(err.Error(), "capture unavailable") {
+		t.Fatalf("adoptOrphanPane() error = %v, want capture cwd failure", err)
+	}
+}
+
+func TestAdoptOrphanPaneReportsCaptureWarningWhenCWDKnown(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	clonePath := filepath.Join("/tmp/project", OrcaPoolSubdir, "clone-06")
+	deps.amux.metadata = map[string]map[string]string{
+		"914": {"agent_profile": "claude"},
+	}
+	deps.amux.captureHistoryErrors("914", []error{errors.New("history unavailable")})
+	deps.amux.capturePaneErr = errors.New("capture unavailable")
+
+	message, err := deps.newDaemon(t).adoptOrphanPane(context.Background(), "/tmp/project", ReconcileFinding{
+		Kind:      ReconcileOrphanPane,
+		Issue:     "LAB-1824",
+		PaneID:    "914",
+		PaneName:  "w-LAB-1824",
+		ClonePath: clonePath,
+	})
+	if err != nil {
+		t.Fatalf("adoptOrphanPane() error = %v", err)
+	}
+	for _, want := range []string{"pane capture failed", "history unavailable", "capture unavailable"} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("message = %q, want %q", message, want)
+		}
+	}
+
+	active, err := deps.state.ActiveAssignmentByIssue(context.Background(), "/tmp/project", "LAB-1824")
+	if err != nil {
+		t.Fatalf("ActiveAssignmentByIssue() error = %v", err)
+	}
+	if got, want := active.Task.AgentProfile, "claude"; got != want {
+		t.Fatalf("agent profile = %q, want %q", got, want)
+	}
+}
+
+func TestAdoptOrphanPaneReportsMetadataRefreshWarning(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	clonePath := filepath.Join("/tmp/project", OrcaPoolSubdir, "clone-07")
+	deps.amux.listPanes = []Pane{{ID: "915", Name: "w-LAB-1825", CWD: clonePath}}
+	deps.amux.metadata = map[string]map[string]string{
+		"915": {"agent_profile": "codex"},
+	}
+	deps.amux.captureHistorySequence("915", []PaneCapture{{CWD: clonePath, CurrentCommand: "codex"}})
+	deps.amux.setMetadataErr = errors.New("metadata write failed")
+
+	message, err := deps.newDaemon(t).adoptOrphanPane(context.Background(), "/tmp/project", ReconcileFinding{
+		Kind:     ReconcileOrphanPane,
+		Issue:    "LAB-1825",
+		PaneID:   "915",
+		PaneName: "w-LAB-1825",
+	})
+	if err != nil {
+		t.Fatalf("adoptOrphanPane() error = %v", err)
+	}
+	if !strings.Contains(message, "metadata refresh failed") || !strings.Contains(message, "metadata write failed") {
+		t.Fatalf("message = %q, want metadata refresh warning", message)
+	}
+	if _, err := deps.state.ActiveAssignmentByIssue(context.Background(), "/tmp/project", "LAB-1825"); err != nil {
+		t.Fatalf("ActiveAssignmentByIssue() error = %v", err)
+	}
+}
+
+func TestAdoptOrphanPaneRejectsPoolWithoutAdopter(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	d := deps.newDaemon(t)
+	d.pool = nonAdoptingPool{}
+
+	err := d.adoptOrphanClone(context.Background(), "/tmp/project", Clone{
+		Path:         filepath.Join("/tmp/project", OrcaPoolSubdir, "clone-08"),
+		AssignedTask: "LAB-1826",
+	})
+	if err == nil || !strings.Contains(err.Error(), "requires pool implementation with Adopt") {
+		t.Fatalf("adoptOrphanClone() error = %v, want missing adopter error", err)
+	}
+}
+
+func TestAdoptOrphanPaneRejectsMissingClonePath(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.amux.listPanes = []Pane{{ID: "908", Name: "w-LAB-1818"}}
+	deps.amux.disableAutomaticReadyCapture = true
+
+	_, err := deps.newDaemon(t).adoptOrphanPane(context.Background(), "/tmp/project", ReconcileFinding{
+		Kind:     ReconcileOrphanPane,
+		Issue:    "LAB-1818",
+		PaneID:   "908",
+		PaneName: "w-LAB-1818",
+	})
+	if err == nil || !strings.Contains(err.Error(), "validate orphan pane clone path") {
+		t.Fatalf("adoptOrphanPane() error = %v, want clone path validation failure", err)
+	}
+}
+
+func TestAdoptOrphanPaneRejectsClonePathOutsidePool(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.amux.listPanes = []Pane{{ID: "916", Name: "w-LAB-1827", CWD: "/tmp/not-orca/clone"}}
+
+	_, err := deps.newDaemon(t).adoptOrphanPane(context.Background(), "/tmp/project", ReconcileFinding{
+		Kind:     ReconcileOrphanPane,
+		Issue:    "LAB-1827",
+		PaneID:   "916",
+		PaneName: "w-LAB-1827",
+	})
+	if err == nil || !strings.Contains(err.Error(), "must stay inside pool root") {
+		t.Fatalf("adoptOrphanPane() error = %v, want outside pool failure", err)
+	}
+}
+
+func TestOrphanPaneAgentProfileFallbacks(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		metadata map[string]string
+		snapshot PaneCapture
+		want     string
+	}{
+		{
+			name:     "metadata",
+			metadata: map[string]string{"agent_profile": "codex"},
+			want:     "codex",
+		},
+		{
+			name:     "codex scrollback",
+			snapshot: PaneCapture{Content: []string{"OpenAI Codex", "Working"}, CurrentCommand: "node"},
+			want:     "codex",
+		},
+		{
+			name:     "claude command",
+			snapshot: PaneCapture{CurrentCommand: "/usr/local/bin/claude"},
+			want:     "claude",
+		},
+		{
+			name:     "claude output",
+			snapshot: PaneCapture{Content: []string{"Claude Code"}},
+			want:     "claude",
+		},
+		{
+			name: "default",
+			want: "codex",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := orphanPaneAgentProfile(tt.metadata, tt.snapshot); got != tt.want {
+				t.Fatalf("orphanPaneAgentProfile() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestOrphanPaneWorkerIDFallbacks(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	d := deps.newDaemon(t)
+	if got, want := d.orphanPaneWorkerID(context.Background(), "/tmp/project", Pane{ID: "909", Name: "w-LAB-1819"}, map[string]string{"worker_id": "worker-meta"}), "worker-meta"; got != want {
+		t.Fatalf("metadata worker id = %q, want %q", got, want)
+	}
+	if got, want := d.orphanPaneWorkerID(context.Background(), "/tmp/project", Pane{Name: "w-LAB-1820"}, nil), "w-LAB-1820"; got != want {
+		t.Fatalf("pane name worker id = %q, want %q", got, want)
+	}
+	if got, want := d.orphanPaneWorkerID(context.Background(), "/tmp/project", Pane{ID: "910"}, nil), "pane-910"; got != want {
+		t.Fatalf("pane id worker id = %q, want %q", got, want)
+	}
+	if got, want := d.orphanPaneWorkerID(context.Background(), "/tmp/project", Pane{}, nil), "adopted-worker"; got != want {
+		t.Fatalf("empty worker id = %q, want %q", got, want)
+	}
+}
+
+func TestCaptureOrphanPaneReturnsCaptureErrors(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.amux.captureHistoryErrors("911", []error{errors.New("history failed")})
+	deps.amux.capturePaneErr = errors.New("pane failed")
+
+	_, err := deps.newDaemon(t).captureOrphanPane(context.Background(), "911")
+	if err == nil || !strings.Contains(err.Error(), "history failed") || !strings.Contains(err.Error(), "pane failed") {
+		t.Fatalf("captureOrphanPane() error = %v, want both capture errors", err)
+	}
+}
+
+func TestAppendAdoptionWarningIgnoresNilError(t *testing.T) {
+	t.Parallel()
+
+	if got, want := appendAdoptionWarning("adopted", "warning", nil), "adopted"; got != want {
+		t.Fatalf("appendAdoptionWarning() = %q, want %q", got, want)
+	}
+}
+
+type nonAdoptingPool struct{}
+
+func (nonAdoptingPool) Acquire(context.Context, string, string) (Clone, error) {
+	return Clone{}, errors.New("unused")
+}
+
+func (nonAdoptingPool) Release(context.Context, string, Clone) error {
+	return errors.New("unused")
 }
 
 func TestReconcileFixCompletesMergedGhostWithoutTouchingPanes(t *testing.T) {
@@ -591,6 +1263,75 @@ func TestLocalControllerReconcileUsesRuntimeAdapters(t *testing.T) {
 	}
 	if got := findingKindsByIssue(result.Findings); !reflect.DeepEqual(got, map[string]string{"LAB-1491": ReconcileOrphanPane}) {
 		t.Fatalf("finding kinds = %#v, want orphan pane", got)
+	}
+}
+
+func TestLocalControllerReconcileAdoptsOrphanPaneForStatus(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("LINEAR_API_KEY", "")
+
+	projectPath := testProjectPath(t)
+	clonePath := filepath.Join(projectPath, OrcaPoolSubdir, "clone-02")
+	stateDB := filepath.Join(t.TempDir(), "state.db")
+	store, err := state.OpenSQLite(stateDB)
+	if err != nil {
+		t.Fatalf("OpenSQLite() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	})
+
+	amuxClient := &fakeAmux{
+		listPanes: []Pane{{ID: "906", Name: "w-LAB-1816", CWD: clonePath}},
+		metadata: map[string]map[string]string{
+			"906": {
+				"agent_profile": "codex",
+				"branch":        "LAB-1816",
+				"task":          "Implement LAB-1816",
+			},
+		},
+	}
+	amuxClient.captureHistorySequence("906", []PaneCapture{{
+		Content:        []string{"OpenAI Codex", "Working (12s - esc to interrupt)"},
+		CWD:            clonePath,
+		CurrentCommand: "codex",
+	}})
+
+	controller, err := NewLocalController(ControllerOptions{
+		Store: store,
+		Paths: Paths{
+			StateDB: stateDB,
+			PIDDir:  t.TempDir(),
+		},
+		DetectOrigin: func(string) (string, error) { return "", nil },
+		Amux:         amuxClient,
+	})
+	if err != nil {
+		t.Fatalf("NewLocalController() error = %v", err)
+	}
+
+	result, err := controller.Reconcile(context.Background(), ReconcileRequest{
+		Project:      projectPath,
+		AdoptOrphans: true,
+	})
+	if err != nil {
+		t.Fatalf("controller.Reconcile(--adopt-orphans) error = %v", err)
+	}
+	if got, want := result.Fixed, 1; got != want {
+		t.Fatalf("result.Fixed = %d, want %d", got, want)
+	}
+
+	status, err := store.TaskStatus(context.Background(), projectPath, "LAB-1816")
+	if err != nil {
+		t.Fatalf("TaskStatus() error = %v", err)
+	}
+	if status.Task.Status != TaskStatusActive || status.Task.CurrentPaneID != "906" {
+		t.Fatalf("status task = %#v, want active pane 906", status.Task)
+	}
+	if status.Task.ClonePath != clonePath || status.Task.Agent != "codex" {
+		t.Fatalf("status task clone/agent = %q/%q, want %q/codex", status.Task.ClonePath, status.Task.Agent, clonePath)
 	}
 }
 

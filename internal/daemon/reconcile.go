@@ -30,29 +30,32 @@ const (
 var reconcileWorkerPaneNamePattern = regexp.MustCompile(`^w-([A-Z][A-Z0-9]*-\d+)$`)
 
 type ReconcileRequest struct {
-	Project string `json:"project,omitempty"`
-	Fix     bool   `json:"fix,omitempty"`
+	Project      string `json:"project,omitempty"`
+	Fix          bool   `json:"fix,omitempty"`
+	AdoptOrphans bool   `json:"adopt_orphans,omitempty"`
 }
 
 type ReconcileResult struct {
-	Project  string             `json:"project"`
-	Fix      bool               `json:"fix"`
-	Fixed    int                `json:"fixed"`
-	Findings []ReconcileFinding `json:"findings"`
+	Project      string             `json:"project"`
+	Fix          bool               `json:"fix"`
+	AdoptOrphans bool               `json:"adopt_orphans,omitempty"`
+	Fixed        int                `json:"fixed"`
+	Findings     []ReconcileFinding `json:"findings"`
 }
 
 type ReconcileFinding struct {
-	Kind     string `json:"kind"`
-	Issue    string `json:"issue,omitempty"`
-	Status   string `json:"status,omitempty"`
-	State    string `json:"state,omitempty"`
-	PaneID   string `json:"pane_id,omitempty"`
-	PaneName string `json:"pane_name,omitempty"`
-	Branch   string `json:"branch,omitempty"`
-	PRNumber int    `json:"pr_number,omitempty"`
-	PRState  string `json:"pr_state,omitempty"`
-	Action   string `json:"action"`
-	Message  string `json:"message"`
+	Kind      string `json:"kind"`
+	Issue     string `json:"issue,omitempty"`
+	Status    string `json:"status,omitempty"`
+	State     string `json:"state,omitempty"`
+	PaneID    string `json:"pane_id,omitempty"`
+	PaneName  string `json:"pane_name,omitempty"`
+	ClonePath string `json:"clone_path,omitempty"`
+	Branch    string `json:"branch,omitempty"`
+	PRNumber  int    `json:"pr_number,omitempty"`
+	PRState   string `json:"pr_state,omitempty"`
+	Action    string `json:"action"`
+	Message   string `json:"message"`
 }
 
 type reconcilePRInfo struct {
@@ -68,8 +71,9 @@ func (d *Daemon) Reconcile(ctx context.Context, req ReconcileRequest) (Reconcile
 	}
 
 	result := ReconcileResult{
-		Project: projectPath,
-		Fix:     req.Fix,
+		Project:      projectPath,
+		Fix:          req.Fix,
+		AdoptOrphans: req.AdoptOrphans,
 	}
 
 	tasks, err := d.state.NonTerminalTasks(ctx, projectPath)
@@ -116,6 +120,21 @@ func (d *Daemon) Reconcile(ctx context.Context, req ReconcileRequest) (Reconcile
 	for _, finding := range orphanFindings {
 		if fixedLivePaneIssues[strings.ToUpper(strings.TrimSpace(finding.Issue))] {
 			continue
+		}
+		if req.AdoptOrphans {
+			message, err := d.adoptOrphanPane(ctx, projectPath, finding)
+			if err != nil {
+				finding.Action = reconcileActionFixFailed
+				finding.Message = finding.Message + ": " + err.Error()
+				d.emitReconcileFinding(ctx, projectPath, finding)
+				result.Findings = append(result.Findings, finding)
+				fixErr = errors.Join(fixErr, err)
+				continue
+			}
+			finding.Action = reconcileActionFixed
+			finding.Message = message
+			// Adoption warnings are embedded in the message; the task is still recovered.
+			result.Fixed++
 		}
 		d.emitReconcileFinding(ctx, projectPath, finding)
 		result.Findings = append(result.Findings, finding)
@@ -211,12 +230,13 @@ func (d *Daemon) reconcilePaneDrift(ctx context.Context, projectPath string) ([]
 		}
 
 		findings = append(findings, ReconcileFinding{
-			Kind:     ReconcileOrphanPane,
-			Issue:    issue,
-			PaneID:   strings.TrimSpace(pane.ID),
-			PaneName: strings.TrimSpace(pane.Name),
-			Action:   reconcileActionReported,
-			Message:  "worker pane exists but orca has no active task for it",
+			Kind:      ReconcileOrphanPane,
+			Issue:     issue,
+			PaneID:    strings.TrimSpace(pane.ID),
+			PaneName:  strings.TrimSpace(pane.Name),
+			ClonePath: strings.TrimSpace(pane.CWD),
+			Action:    reconcileActionReported,
+			Message:   "worker pane exists but orca has no active task for it; run orca reconcile --adopt-orphans to recover it",
 		})
 	}
 

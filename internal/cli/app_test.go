@@ -2772,6 +2772,49 @@ func TestAppRunReconcile(t *testing.T) {
 	}
 }
 
+func TestAppRunReconcileAdoptOrphans(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := newRepoRoot(t)
+	var stdout bytes.Buffer
+	fake := &fakeDaemon{
+		reconcileResult: daemon.ReconcileResult{
+			Project:      repoRoot,
+			AdoptOrphans: true,
+			Fixed:        1,
+			Findings: []daemon.ReconcileFinding{{
+				Kind:    daemon.ReconcileOrphanPane,
+				Issue:   "LAB-1816",
+				Action:  "fixed",
+				Message: "orphan pane adopted into active task",
+			}},
+		},
+	}
+	app := New(Options{
+		Daemon:  fake,
+		State:   &fakeState{},
+		Stdout:  &stdout,
+		Stderr:  &bytes.Buffer{},
+		Version: "build-123",
+		Cwd: func() (string, error) {
+			return repoRoot, nil
+		},
+	})
+
+	if err := app.Run(context.Background(), []string{"reconcile", "--adopt-orphans"}); err != nil {
+		t.Fatalf("Run(reconcile --adopt-orphans) error = %v", err)
+	}
+	if fake.reconcileRequest == nil {
+		t.Fatal("expected reconcile to be called")
+	}
+	if !fake.reconcileRequest.AdoptOrphans {
+		t.Fatal("reconcile --adopt-orphans did not set AdoptOrphans")
+	}
+	if got := stdout.String(); !strings.Contains(got, "orphan_pane") || !strings.Contains(got, "fixed: 1") {
+		t.Fatalf("reconcile output = %q, want orphan finding and fixed count", got)
+	}
+}
+
 type errWriter struct{}
 
 func (errWriter) Write([]byte) (int, error) {
