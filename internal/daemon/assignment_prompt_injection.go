@@ -44,7 +44,11 @@ func (d *Daemon) sendIdempotentAssignmentPromptCommand(ctx context.Context, pane
 	}
 
 	if !promptAlreadySent {
-		if err := d.ensureCodexPromptTarget(ctx, paneID, "before assignment prompt delivery"); err != nil {
+		// Assignment prompt injection runs immediately after agentHandshake
+		// verified codex via the startup readiness check; trust that proof
+		// rather than re-demanding the banner be in the current scrollback
+		// window.
+		if err := d.ensureCodexPromptTarget(ctx, paneID, "before assignment prompt delivery", true); err != nil {
 			return err
 		}
 		if err := d.sendKeysToLivePane(ctx, paneID, trimmed); err != nil {
@@ -56,7 +60,7 @@ func (d *Daemon) sendIdempotentAssignmentPromptCommand(ctx context.Context, pane
 		}
 	}
 
-	if err := d.ensureCodexPromptTarget(ctx, paneID, "before assignment prompt enter"); err != nil {
+	if err := d.ensureCodexPromptTarget(ctx, paneID, "before assignment prompt enter", true); err != nil {
 		return err
 	}
 	if err := d.sendKeysToLivePane(ctx, paneID, command); err != nil {

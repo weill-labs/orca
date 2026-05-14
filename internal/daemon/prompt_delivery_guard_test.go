@@ -20,10 +20,13 @@ func TestCodexPromptTargetGuardHelpers(t *testing.T) {
 	if codexPromptTargetRunning(exitedShell) {
 		t.Fatal("codexPromptTargetRunning(exited shell) = true, want false")
 	}
-	if codexPromptTargetSafe(exitedShell) {
+	if codexPromptTargetSafe(exitedShell, false) {
 		t.Fatal("codexPromptTargetSafe(exited shell) = true, want false")
 	}
-	err := codexPromptTargetError("before prompt delivery", exitedShell)
+	if codexPromptTargetSafe(exitedShell, true) {
+		t.Fatal("codexPromptTargetSafe(exited shell, trusted) = true, want false")
+	}
+	err := codexPromptTargetError("before prompt delivery", exitedShell, false)
 	if !errors.Is(err, ErrPromptDeliveryNotConfirmed) {
 		t.Fatalf("codexPromptTargetError(exited shell) error = %v, want ErrPromptDeliveryNotConfirmed", err)
 	}
@@ -39,28 +42,65 @@ func TestCodexPromptTargetGuardHelpers(t *testing.T) {
 		t.Fatal("codexPromptTargetRunning(shell output) = true, want false")
 	}
 
-	bashLeaks := []PaneCapture{
+	bashLeaks := []struct {
+		name     string
+		snapshot PaneCapture
+	}{
 		{
-			Content:        []string{"OpenAI Codex", "bash: Verify: command not found"},
-			CurrentCommand: "bash",
+			name: "bash command not found",
+			snapshot: PaneCapture{
+				Content:        []string{"OpenAI Codex", "bash: Verify: command not found"},
+				CurrentCommand: "bash",
+			},
 		},
 		{
-			Content:        []string{"OpenAI Codex", "bash: syntax error near unexpected token `('"},
-			CurrentCommand: "bash",
+			name: "bash syntax error",
+			snapshot: PaneCapture{
+				Content:        []string{"OpenAI Codex", "bash: syntax error near unexpected token `('"},
+				CurrentCommand: "bash",
+			},
+		},
+		{
+			name: "earlier shell output mixed with later codex output",
+			snapshot: PaneCapture{
+				Content: []string{
+					"bash: Verify: command not found",
+					"gpt-5.5 xhigh - ~/clone-01 - LAB-1819 - Context 37% used",
+					">",
+				},
+				CurrentCommand: "node",
+			},
+		},
+		{
+			name: "node command with banner and command-not-found output",
+			snapshot: PaneCapture{
+				Content:        []string{"OpenAI Codex", "bash: Verify: command not found", ">"},
+				CurrentCommand: "node",
+			},
 		},
 	}
-	for _, snapshot := range bashLeaks {
-		if codexPromptTargetSafe(snapshot) {
-			t.Fatalf("codexPromptTargetSafe(%q) = true, want false", snapshot.Output())
-		}
-		err := codexPromptTargetError("before prompt delivery", snapshot)
-		if !errors.Is(err, ErrPromptDeliveryNotConfirmed) {
-			t.Fatalf("codexPromptTargetError(%q) error = %v, want ErrPromptDeliveryNotConfirmed", snapshot.Output(), err)
-		}
+	for _, tt := range bashLeaks {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if codexPromptTargetSafe(tt.snapshot, false) {
+				t.Fatalf("codexPromptTargetSafe(%q) = true, want false", tt.snapshot.Output())
+			}
+			if codexPromptTargetSafe(tt.snapshot, true) {
+				t.Fatalf("codexPromptTargetSafe(%q, trusted) = true, want false (bash-leak protection must remain)", tt.snapshot.Output())
+			}
+			err := codexPromptTargetError("before prompt delivery", tt.snapshot, true)
+			if !errors.Is(err, ErrPromptDeliveryNotConfirmed) {
+				t.Fatalf("codexPromptTargetError(%q, trusted) error = %v, want ErrPromptDeliveryNotConfirmed", tt.snapshot.Output(), err)
+			}
+			if !strings.Contains(err.Error(), "before prompt delivery and codex returned to shell") {
+				t.Fatalf("codexPromptTargetError(%q, trusted) error = %v, want returned-to-shell context", tt.snapshot.Output(), err)
+			}
+		})
 	}
 
 	spawnHandshake := PaneCapture{}
-	if !codexPromptTargetSafe(spawnHandshake) {
+	if !codexPromptTargetSafe(spawnHandshake, false) {
 		t.Fatal("codexPromptTargetSafe(empty current command) = false, want true")
 	}
 
@@ -87,12 +127,32 @@ func TestCodexPromptTargetGuardHelpers(t *testing.T) {
 		Content:        []string{"python prompt"},
 		CurrentCommand: "python",
 	}
-	err = codexPromptTargetError("before prompt delivery", otherCommand)
+	err = codexPromptTargetError("before prompt delivery", otherCommand, false)
 	if !errors.Is(err, ErrPromptDeliveryNotConfirmed) {
-		t.Fatalf("codexPromptTargetError(other command) error = %v, want ErrPromptDeliveryNotConfirmed", err)
+		t.Fatalf("codexPromptTargetError(other command, untrusted) error = %v, want ErrPromptDeliveryNotConfirmed", err)
 	}
 	if !strings.Contains(err.Error(), "before prompt delivery and codex is not running") {
 		t.Fatalf("codexPromptTargetError(other command) error = %v, want not-running context", err)
+	}
+
+	// Long-lived codex pane: current command appears as "node" because codex is
+	// a Node.js app, and the startup "OpenAI Codex" banner has scrolled out of
+	// the visible snapshot. Untrusted callers must reject (initial handshake
+	// has no prior proof). Trusted callers must accept (orca verified codex at
+	// handshake time; demanding the banner again would fail every merge-notify
+	// after a worker has been running for ~10 minutes).
+	longLivedNode := PaneCapture{
+		Content:        []string{"gpt-5.5 xhigh · ~/clone-01 · LAB-1815 · Context 37% used"},
+		CurrentCommand: "node",
+	}
+	if codexPromptTargetSafe(longLivedNode, false) {
+		t.Fatal("codexPromptTargetSafe(long-lived node, untrusted) = true, want false")
+	}
+	if !codexPromptTargetSafe(longLivedNode, true) {
+		t.Fatal("codexPromptTargetSafe(long-lived node, trusted) = false, want true")
+	}
+	if err := codexPromptTargetError("before prompt delivery", longLivedNode, true); err != nil {
+		t.Fatalf("codexPromptTargetError(long-lived node, trusted) error = %v, want nil", err)
 	}
 }
 
@@ -119,7 +179,6 @@ func TestEnsureCodexPromptTargetReturnsGuardCaptureErrors(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -127,7 +186,7 @@ func TestEnsureCodexPromptTargetReturnsGuardCaptureErrors(t *testing.T) {
 			deps.amux.captureHistoryErrors("pane-1", []error{tt.err})
 			d := deps.newDaemon(t)
 
-			err := d.ensureCodexPromptTarget(context.Background(), "pane-1", "before prompt delivery")
+			err := d.ensureCodexPromptTarget(context.Background(), "pane-1", "before prompt delivery", false)
 			if tt.wantPrompt && !errors.Is(err, ErrPromptDeliveryNotConfirmed) {
 				t.Fatalf("ensureCodexPromptTarget() error = %v, want ErrPromptDeliveryNotConfirmed", err)
 			}
