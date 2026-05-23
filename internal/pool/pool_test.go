@@ -816,6 +816,29 @@ func TestManagerCreateClone(t *testing.T) {
 		}
 	})
 
+	t.Run("returns reset error for newly cloned worktree", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		project := filepath.Join(root, "project")
+		poolDir := filepath.Join(root, "pool")
+		store := newStore(t)
+		manager := newManager(t, project, staticConfig{
+			poolDir:     poolDir,
+			cloneOrigin: "unused-origin",
+		}, store, pool.WithRunner(failResetRunner{}))
+
+		_, err := manager.CreateClone(context.Background())
+		if err == nil {
+			t.Fatal("CreateClone() error = nil, want reset error")
+		}
+		for _, want := range []string{"reset new clone", "origin/main", "reset failed"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("CreateClone() error = %v, want substring %q", err, want)
+			}
+		}
+	})
+
 	t.Run("increments clone number", func(t *testing.T) {
 		t.Parallel()
 
@@ -860,6 +883,36 @@ func TestManagerCreateClone(t *testing.T) {
 			t.Fatalf("CreateClone() error = %v, want ErrNoFreeClones", err)
 		}
 	})
+}
+
+func TestManagerAllocateFreesCloneWhenPrepareResetFails(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	poolDir := filepath.Join(root, "pool")
+	mustMkdir(t, poolDir)
+	origin := newOrigin(t, "main")
+	clonePath := newClone(t, origin, filepath.Join(poolDir, "clone-01"))
+	store := newStore(t)
+	manager := newManager(t, project, staticConfig{
+		poolDir:     poolDir,
+		cloneOrigin: origin,
+	}, store, pool.WithRunner(failResetRunner{}))
+
+	_, err := manager.Allocate(context.Background(), "LAB-1875", "LAB-1875")
+	if err == nil {
+		t.Fatal("Allocate() error = nil, want reset error")
+	}
+	for _, want := range []string{"prepare clone", "reset failed"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("Allocate() error = %v, want substring %q", err, want)
+		}
+	}
+	record := lookupClone(t, store, project, clonePath)
+	if got, want := record.Status, state.CloneStatusFree; got != want {
+		t.Fatalf("record.Status = %q, want %q", got, want)
+	}
 }
 
 func TestManagerHealthCheck(t *testing.T) {
@@ -1451,6 +1504,18 @@ type recordingRunner struct {
 func (r *recordingRunner) Run(_ context.Context, _, _ string, _ ...string) error {
 	r.calls++
 	return r.err
+}
+
+type failResetRunner struct{}
+
+func (failResetRunner) Run(_ context.Context, _ string, name string, args ...string) error {
+	if name == "git" && len(args) > 0 && args[0] == "clone" {
+		return os.MkdirAll(args[len(args)-1], 0o755)
+	}
+	if name == "git" && len(args) > 0 && args[0] == "fetch" {
+		return errors.New("reset failed")
+	}
+	return nil
 }
 
 type fakeCWDUsageChecker struct {
