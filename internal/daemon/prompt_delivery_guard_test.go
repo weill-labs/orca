@@ -42,6 +42,21 @@ func TestCodexPromptTargetGuardHelpers(t *testing.T) {
 		t.Fatal("codexPromptTargetRunning(shell output) = true, want false")
 	}
 
+	bareShellWithoutCommand := PaneCapture{Content: []string{"OpenAI Codex", "bash-5.2$"}}
+	if codexPromptTargetSafe(bareShellWithoutCommand, false) {
+		t.Fatal("codexPromptTargetSafe(bare shell without command) = true, want false")
+	}
+	if codexPromptTargetSafe(bareShellWithoutCommand, true) {
+		t.Fatal("codexPromptTargetSafe(bare shell without command, trusted) = true, want false")
+	}
+	err = codexPromptTargetError("before prompt delivery", bareShellWithoutCommand, true)
+	if !errors.Is(err, ErrPromptDeliveryNotConfirmed) {
+		t.Fatalf("codexPromptTargetError(bare shell without command) error = %v, want ErrPromptDeliveryNotConfirmed", err)
+	}
+	if !strings.Contains(err.Error(), "before prompt delivery and codex returned to shell") {
+		t.Fatalf("codexPromptTargetError(bare shell without command) error = %v, want returned-to-shell context", err)
+	}
+
 	bashLeaks := []struct {
 		name     string
 		snapshot PaneCapture
