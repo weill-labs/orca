@@ -990,18 +990,20 @@ func (s *PostgresStore) queryEvents(ctx context.Context, project, issue string, 
 
 func (s *PostgresStore) lookupCloneRecord(ctx context.Context, project, path string) (legacy.CloneRecord, error) {
 	row := s.pool.QueryRow(ctx, `
-		SELECT project, path, status, branch, issue, failure_count
+		SELECT project, path, status, branch, issue, failure_count, updated_at
 		FROM clones
 		WHERE project = $1 AND path = $2 AND `+postgresHostMatch("host", 3)+`
 	`, project, path, s.host)
 
 	var record legacy.CloneRecord
-	if err := row.Scan(&record.Project, &record.Path, &record.Status, &record.CurrentBranch, &record.AssignedTask, &record.FailureCount); err != nil {
+	var updatedAt time.Time
+	if err := row.Scan(&record.Project, &record.Path, &record.Status, &record.CurrentBranch, &record.AssignedTask, &record.FailureCount, &updatedAt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return legacy.CloneRecord{}, legacy.ErrCloneNotFound
 		}
 		return legacy.CloneRecord{}, err
 	}
+	record.UpdatedAt = normalizeTime(updatedAt)
 	return record, nil
 }
 

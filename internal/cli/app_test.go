@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -1617,6 +1618,11 @@ func TestAppRunOutputModes(t *testing.T) {
 		t.Fatalf("MkdirAll(%q %s): %v", invalidMarkerClone, pool.ClonePoolMarker, err)
 	}
 	outsidePoolClone := filepath.Join(repoRoot, "outside", "clone-1808")
+	missingStateClone := filepath.Join(poolDir, "clone-missing-state")
+	statErrorClone := filepath.Join(repoRoot, "stat-loop")
+	if err := os.Symlink("stat-loop", statErrorClone); err != nil {
+		t.Fatalf("Symlink(%q): %v", statErrorClone, err)
+	}
 
 	tests := []struct {
 		name    string
@@ -1787,6 +1793,168 @@ func TestAppRunOutputModes(t *testing.T) {
 			},
 		},
 		{
+			name:   "pool prune no-op",
+			args:   []string{"pool", "prune"},
+			daemon: &fakeDaemon{},
+			state: &fakeState{
+				clones: []state.Clone{
+					{Path: markedClone, Status: "free", UpdatedAt: now},
+				},
+			},
+			assert: func(t *testing.T, stdout string, _ *fakeDaemon, s *fakeState) {
+				t.Helper()
+				if got, want := s.clonesProject, repoRoot; got != want {
+					t.Fatalf("clones project = %q, want %q", got, want)
+				}
+				if len(s.deleteClonePaths) != 0 {
+					t.Fatalf("deleted clones = %#v, want none", s.deleteClonePaths)
+				}
+				if len(s.appendedEvents) != 0 {
+					t.Fatalf("appended events = %#v, want none", s.appendedEvents)
+				}
+				if !strings.Contains(stdout, "pruned 0 pool entries") {
+					t.Fatalf("stdout = %q, want no-op prune confirmation", stdout)
+				}
+			},
+		},
+		{
+			name:    "pool unknown subcommand",
+			args:    []string{"pool", "repair"},
+			daemon:  &fakeDaemon{},
+			state:   &fakeState{},
+			wantErr: `unknown pool subcommand "repair"`,
+			assert: func(t *testing.T, stdout string, _ *fakeDaemon, _ *fakeState) {
+				t.Helper()
+				_ = stdout
+			},
+		},
+		{
+			name:    "pool prune extra arg",
+			args:    []string{"pool", "prune", "clone-01"},
+			daemon:  &fakeDaemon{},
+			state:   &fakeState{},
+			wantErr: "usage: orca pool [--project PATH] prune",
+			assert: func(t *testing.T, stdout string, _ *fakeDaemon, _ *fakeState) {
+				t.Helper()
+				_ = stdout
+			},
+		},
+		{
+			name:   "pool prune removes missing clone state",
+			args:   []string{"pool", "prune"},
+			daemon: &fakeDaemon{},
+			state: &fakeState{
+				clones: []state.Clone{
+					{Path: markedClone, Status: "free", UpdatedAt: now},
+					{Path: missingStateClone, Status: "quarantined", FailureCount: 3, UpdatedAt: now},
+				},
+			},
+			assert: func(t *testing.T, stdout string, _ *fakeDaemon, s *fakeState) {
+				t.Helper()
+				if got, want := s.deleteCloneProject, repoRoot; got != want {
+					t.Fatalf("delete clone project = %q, want %q", got, want)
+				}
+				if len(s.deleteClonePaths) != 1 || s.deleteClonePaths[0] != missingStateClone {
+					t.Fatalf("deleted clones = %#v, want [%q]", s.deleteClonePaths, missingStateClone)
+				}
+				if got := len(s.appendedEvents); got != 1 {
+					t.Fatalf("appended events = %d, want 1", got)
+				}
+				if got, want := s.appendedEvents[0].Kind, daemon.EventPoolEntryPruned; got != want {
+					t.Fatalf("event kind = %q, want %q", got, want)
+				}
+				if !strings.Contains(stdout, "pruned clone-missing-state") {
+					t.Fatalf("stdout = %q, want prune confirmation", stdout)
+				}
+			},
+		},
+		{
+			name:   "pool prune json",
+			args:   []string{"pool", "--json", "prune"},
+			daemon: &fakeDaemon{},
+			state: &fakeState{
+				clones: []state.Clone{
+					{Path: missingStateClone, Status: "free", UpdatedAt: now},
+				},
+			},
+			assert: func(t *testing.T, stdout string, _ *fakeDaemon, s *fakeState) {
+				t.Helper()
+				if len(s.deleteClonePaths) != 1 || s.deleteClonePaths[0] != missingStateClone {
+					t.Fatalf("deleted clones = %#v, want [%q]", s.deleteClonePaths, missingStateClone)
+				}
+				if !strings.Contains(stdout, `"pruned"`) || !strings.Contains(stdout, "clone-missing-state") {
+					t.Fatalf("stdout = %q, want prune json", stdout)
+				}
+			},
+		},
+		{
+			name:   "pool prune inspect error",
+			args:   []string{"pool", "prune"},
+			daemon: &fakeDaemon{},
+			state: &fakeState{
+				clones: []state.Clone{
+					{Path: statErrorClone, Status: "free", UpdatedAt: now},
+				},
+			},
+			wantErr: "inspect clone",
+			assert: func(t *testing.T, stdout string, _ *fakeDaemon, _ *fakeState) {
+				t.Helper()
+				_ = stdout
+			},
+		},
+		{
+			name:   "pool reset rejects occupied clone",
+			args:   []string{"pool", "reset", "clone-occupied"},
+			daemon: &fakeDaemon{},
+			state: &fakeState{
+				clones: []state.Clone{
+					{Path: filepath.Join(poolDir, "clone-occupied"), Status: "occupied", Issue: "LAB-1876", UpdatedAt: now},
+				},
+			},
+			wantErr: `clone "clone-occupied" is occupied by task LAB-1876; cancel the task first`,
+			assert: func(t *testing.T, stdout string, _ *fakeDaemon, _ *fakeState) {
+				t.Helper()
+				_ = stdout
+			},
+		},
+		{
+			name:    "pool reset missing arg",
+			args:    []string{"pool", "reset"},
+			daemon:  &fakeDaemon{},
+			state:   &fakeState{},
+			wantErr: "usage: orca pool [--project PATH] reset CLONE",
+			assert: func(t *testing.T, stdout string, _ *fakeDaemon, _ *fakeState) {
+				t.Helper()
+				_ = stdout
+			},
+		},
+		{
+			name:    "pool reset unknown clone",
+			args:    []string{"pool", "reset", "clone-missing"},
+			daemon:  &fakeDaemon{},
+			state:   &fakeState{},
+			wantErr: `clone "clone-missing" not found in pool`,
+			assert: func(t *testing.T, stdout string, _ *fakeDaemon, _ *fakeState) {
+				t.Helper()
+				_ = stdout
+			},
+		},
+		{
+			name:   "pool reset unsupported store",
+			args:   []string{"pool", "reset", "clone-free"},
+			daemon: &fakeDaemon{},
+			state: &fakeState{
+				clones: []state.Clone{
+					{Path: filepath.Join(poolDir, "clone-free"), Status: "free", UpdatedAt: now},
+				},
+			},
+			wantErr: "state store does not support clone reset",
+			assert: func(t *testing.T, stdout string, _ *fakeDaemon, _ *fakeState) {
+				t.Helper()
+				_ = stdout
+			},
+		},
+		{
 			name:   "pool unquarantine",
 			args:   []string{"pool", "unquarantine", "clone-08"},
 			daemon: &fakeDaemon{},
@@ -1806,6 +1974,36 @@ func TestAppRunOutputModes(t *testing.T) {
 				if !strings.Contains(stdout, "unquarantined clone-08") {
 					t.Fatalf("stdout = %q, want unquarantine confirmation", stdout)
 				}
+			},
+		},
+		{
+			name:   "pool unquarantine json",
+			args:   []string{"pool", "--json", "unquarantine", "clone-08"},
+			daemon: &fakeDaemon{},
+			state: &fakeState{
+				clones: []state.Clone{
+					{Path: filepath.Join(repoRoot, ".orca/pool/clone-08"), Status: "quarantined", Issue: "LAB-8", Branch: "lab-8", FailureCount: 3, UpdatedAt: now},
+				},
+			},
+			assert: func(t *testing.T, stdout string, _ *fakeDaemon, s *fakeState) {
+				t.Helper()
+				if got, want := s.unquarantinePath, filepath.Join(repoRoot, ".orca/pool/clone-08"); got != want {
+					t.Fatalf("unquarantine path = %q, want %q", got, want)
+				}
+				if !strings.Contains(stdout, `"status":"free"`) || !strings.Contains(stdout, `"path":`) {
+					t.Fatalf("stdout = %q, want unquarantine json", stdout)
+				}
+			},
+		},
+		{
+			name:    "pool unquarantine missing arg",
+			args:    []string{"pool", "unquarantine"},
+			daemon:  &fakeDaemon{},
+			state:   &fakeState{},
+			wantErr: "usage: orca pool [--project PATH] unquarantine CLONE",
+			assert: func(t *testing.T, stdout string, _ *fakeDaemon, _ *fakeState) {
+				t.Helper()
+				_ = stdout
 			},
 		},
 		{
@@ -1877,6 +2075,87 @@ func TestAppRunOutputModes(t *testing.T) {
 				t.Fatalf("stderr = %q, want empty", stderr.String())
 			}
 		})
+	}
+}
+
+func TestAppRunPoolResetRebuildsMissingCloneDirectory(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := newGitRepoWithOrigin(t)
+	clonePath := filepath.Join(repoRoot, daemon.OrcaPoolSubdir, "clone-01")
+	store, err := state.OpenSQLite(filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatalf("OpenSQLite() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	})
+	if _, err := store.EnsureClone(context.Background(), repoRoot, clonePath); err != nil {
+		t.Fatalf("EnsureClone() setup error = %v", err)
+	}
+	if _, err := store.RecordCloneFailure(context.Background(), repoRoot, clonePath, pool.CloneQuarantineFailureThreshold); err != nil {
+		t.Fatalf("RecordCloneFailure() setup error = %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	app := New(Options{
+		Daemon:  &fakeDaemon{},
+		State:   store,
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		Version: "build-123",
+		Cwd: func() (string, error) {
+			return repoRoot, nil
+		},
+	})
+
+	if err := app.Run(context.Background(), []string{"pool", "reset", "clone-01"}); err != nil {
+		t.Fatalf("Run(pool reset) error = %v", err)
+	}
+	if got := stdout.String(); !strings.Contains(got, "reset clone-01") {
+		t.Fatalf("stdout = %q, want reset confirmation", got)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(clonePath, pool.ClonePoolMarker)); err != nil {
+		t.Fatalf("%s stat error after reset = %v", pool.ClonePoolMarker, err)
+	}
+	clones, err := store.ListClones(context.Background(), repoRoot)
+	if err != nil {
+		t.Fatalf("ListClones() error = %v", err)
+	}
+	if len(clones) != 1 {
+		t.Fatalf("len(clones) = %d, want 1", len(clones))
+	}
+	if got, want := clones[0].Status, string(pool.StatusFree); got != want {
+		t.Fatalf("clone status = %q, want %q", got, want)
+	}
+	if got, want := clones[0].FailureCount, 0; got != want {
+		t.Fatalf("clone failure count = %d, want %d", got, want)
+	}
+
+	if _, err := store.RecordCloneFailure(context.Background(), repoRoot, clonePath, pool.CloneQuarantineFailureThreshold); err != nil {
+		t.Fatalf("RecordCloneFailure() second setup error = %v", err)
+	}
+	stdout.Reset()
+	if err := app.Run(context.Background(), []string{"pool", "--json", "reset", "clone-01"}); err != nil {
+		t.Fatalf("Run(pool reset --json existing) error = %v", err)
+	}
+	if got := stdout.String(); !strings.Contains(got, `"status":"free"`) || !strings.Contains(got, `"path":`) {
+		t.Fatalf("stdout = %q, want reset clone json", got)
+	}
+}
+
+func TestResolvePoolCloneRejectsBlankRef(t *testing.T) {
+	t.Parallel()
+
+	_, err := resolvePoolClone([]state.Clone{{Path: "/tmp/clone-01"}}, " ")
+	if err == nil || !strings.Contains(err.Error(), "clone is required") {
+		t.Fatalf("resolvePoolClone() error = %v, want clone is required", err)
 	}
 }
 
@@ -2478,6 +2757,42 @@ func newRepoRoot(t *testing.T) string {
 	return resolvedRoot
 }
 
+func newGitRepoWithOrigin(t *testing.T) string {
+	t.Helper()
+
+	root := t.TempDir()
+	repoRoot := filepath.Join(root, "repo")
+	runTestCommand(t, "", "git", "init", "-b", "main", repoRoot)
+	runTestCommand(t, repoRoot, "git", "config", "user.name", "Orca Test")
+	runTestCommand(t, repoRoot, "git", "config", "user.email", "orca@example.test")
+	if err := os.WriteFile(filepath.Join(repoRoot, "README.md"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(README.md): %v", err)
+	}
+	runTestCommand(t, repoRoot, "git", "add", "README.md")
+	runTestCommand(t, repoRoot, "git", "commit", "-m", "initial commit")
+
+	origin := filepath.Join(root, "origin.git")
+	runTestCommand(t, "", "git", "clone", "--bare", repoRoot, origin)
+	runTestCommand(t, repoRoot, "git", "remote", "add", "origin", origin)
+
+	resolvedRoot, err := filepath.EvalSymlinks(repoRoot)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(%q): %v", repoRoot, err)
+	}
+	return resolvedRoot
+}
+
+func runTestCommand(t *testing.T, dir, name string, args ...string) {
+	t.Helper()
+
+	cmd := exec.Command(name, args...)
+	cmd.Dir = dir
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%s %s: %v\n%s", name, strings.Join(args, " "), err, strings.TrimSpace(string(output)))
+	}
+}
+
 type fakeDaemon struct {
 	startRequest     *daemon.StartRequest
 	stopRequest      *daemon.StopRequest
@@ -2588,6 +2903,8 @@ type fakeState struct {
 	clonesProject                string
 	unquarantineProject          string
 	unquarantinePath             string
+	deleteCloneProject           string
+	deleteClonePaths             []string
 	eventsProject                string
 	allHostsProjectStatusProject string
 	allHostsTaskStatusProject    string
@@ -2598,6 +2915,7 @@ type fakeState struct {
 	workers               []state.Worker
 	clones                []state.Clone
 	events                []state.Event
+	appendedEvents        []state.Event
 	allHostsProjectStatus state.ProjectStatus
 	allHostsTaskStatus    state.TaskStatus
 
@@ -2672,6 +2990,30 @@ func (f *fakeState) UnquarantineClone(_ context.Context, project, path string) e
 	f.unquarantineProject = project
 	f.unquarantinePath = path
 	return nil
+}
+
+func (f *fakeState) DeleteClone(_ context.Context, project, path string) error {
+	if f.err != nil {
+		return f.err
+	}
+	f.deleteCloneProject = project
+	f.deleteClonePaths = append(f.deleteClonePaths, path)
+	for i, clone := range f.clones {
+		if clone.Path == path {
+			f.clones = append(f.clones[:i], f.clones[i+1:]...)
+			return nil
+		}
+	}
+	return nil
+}
+
+func (f *fakeState) AppendEvent(_ context.Context, event state.Event) (state.Event, error) {
+	if f.err != nil {
+		return state.Event{}, f.err
+	}
+	event.ID = int64(len(f.appendedEvents) + 1)
+	f.appendedEvents = append(f.appendedEvents, event)
+	return event, nil
 }
 
 func (f *fakeState) Events(_ context.Context, project string, _ int64) (<-chan state.Event, <-chan error) {

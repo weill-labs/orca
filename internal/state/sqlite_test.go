@@ -130,6 +130,41 @@ func TestSQLiteCloneStore(t *testing.T) {
 			},
 		},
 		{
+			name: "reset and delete clone",
+			run: func(t *testing.T, store *state.SQLiteStore, project string) {
+				t.Helper()
+
+				path := filepath.Join(t.TempDir(), "orca01")
+				if _, err := store.EnsureClone(context.Background(), project, path); err != nil {
+					t.Fatalf("EnsureClone() setup error = %v", err)
+				}
+				if _, err := store.RecordCloneFailure(context.Background(), project, path, 3); err != nil {
+					t.Fatalf("RecordCloneFailure() setup error = %v", err)
+				}
+
+				record, err := store.ResetClone(context.Background(), project, path)
+				if err != nil {
+					t.Fatalf("ResetClone() error = %v", err)
+				}
+				if got, want := record.Status, state.CloneStatusFree; got != want {
+					t.Fatalf("record.Status after reset = %q, want %q", got, want)
+				}
+				if got, want := record.FailureCount, 0; got != want {
+					t.Fatalf("record.FailureCount after reset = %d, want %d", got, want)
+				}
+
+				if err := store.DeleteClone(context.Background(), project, path); err != nil {
+					t.Fatalf("DeleteClone() error = %v", err)
+				}
+				if _, err := store.ResetClone(context.Background(), project, path); err != state.ErrCloneNotFound {
+					t.Fatalf("ResetClone() missing error = %v, want ErrCloneNotFound", err)
+				}
+				if err := store.DeleteClone(context.Background(), project, path); err != state.ErrCloneNotFound {
+					t.Fatalf("DeleteClone() missing error = %v, want ErrCloneNotFound", err)
+				}
+			},
+		},
+		{
 			name: "record clone failure quarantines at threshold",
 			run: func(t *testing.T, store *state.SQLiteStore, project string) {
 				t.Helper()
@@ -242,6 +277,13 @@ func TestSQLiteCloneStore(t *testing.T) {
 				}
 				if got, want := record.Status, state.CloneStatusOccupied; got != want {
 					t.Fatalf("record.Status after occupied unquarantine = %q, want %q", got, want)
+				}
+				record, err = store.ResetClone(context.Background(), project, path)
+				if err != state.ErrCloneOccupied {
+					t.Fatalf("ResetClone() occupied error = %v, want ErrCloneOccupied", err)
+				}
+				if got, want := record.Status, state.CloneStatusOccupied; got != want {
+					t.Fatalf("record.Status after occupied reset = %q, want %q", got, want)
 				}
 
 				missingPath := filepath.Join(t.TempDir(), "missing")

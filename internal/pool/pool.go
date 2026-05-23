@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/weill-labs/orca/internal/state"
 )
@@ -28,6 +29,8 @@ const (
 	ClonePoolMarker = ".orca-pool"
 )
 
+const CloneFailureCooldown = 5 * time.Minute
+
 type Clone struct {
 	Name          string
 	Path          string
@@ -35,6 +38,7 @@ type Clone struct {
 	CurrentBranch string
 	AssignedTask  string
 	FailureCount  int
+	UpdatedAt     time.Time
 }
 
 type Config interface {
@@ -53,6 +57,10 @@ type CloneFailureStore interface {
 	RecordCloneFailure(ctx context.Context, project, path string, threshold int) (state.CloneRecord, error)
 	ResetCloneFailures(ctx context.Context, project, path string) error
 	UnquarantineClone(ctx context.Context, project, path string) error
+}
+
+type CloneResetStore interface {
+	ResetClone(ctx context.Context, project, path string) (state.CloneRecord, error)
 }
 
 type NoAvailableClonesError struct {
@@ -82,6 +90,7 @@ type Manager struct {
 	store           Store
 	runner          Runner
 	cwdUsageChecker CWDUsageChecker
+	now             func() time.Time
 }
 
 func New(project string, cfg Config, store Store, opts ...Option) (*Manager, error) {
@@ -108,6 +117,7 @@ func New(project string, cfg Config, store Store, opts ...Option) (*Manager, err
 		logf:        log.Printf,
 		store:       store,
 		runner:      execRunner{},
+		now:         func() time.Time { return time.Now().UTC() },
 	}
 
 	for _, opt := range opts {
@@ -119,6 +129,9 @@ func New(project string, cfg Config, store Store, opts ...Option) (*Manager, err
 	}
 	if manager.logf == nil {
 		manager.logf = log.Printf
+	}
+	if manager.now == nil {
+		manager.now = func() time.Time { return time.Now().UTC() }
 	}
 
 	return manager, nil
@@ -145,6 +158,12 @@ func WithCWDUsageChecker(checker CWDUsageChecker) Option {
 func WithLogf(logf func(string, ...any)) Option {
 	return func(manager *Manager) {
 		manager.logf = logf
+	}
+}
+
+func WithNow(now func() time.Time) Option {
+	return func(manager *Manager) {
+		manager.now = now
 	}
 }
 
@@ -293,6 +312,31 @@ func (m *Manager) Unquarantine(ctx context.Context, path string) error {
 	return store.UnquarantineClone(ctx, m.project, clonePath)
 }
 
+func (m *Manager) Reset(ctx context.Context, path string) (Clone, error) {
+	store, ok := m.store.(CloneResetStore)
+	if !ok {
+		return Clone{}, errors.New("pool store does not support clone reset")
+	}
+	clonePath, err := m.clonePath(path)
+	if err != nil {
+		return Clone{}, err
+	}
+	if err := m.ensureResetCloneDirectory(ctx, clonePath); err != nil {
+		return Clone{}, err
+	}
+
+	record, err := store.ResetClone(ctx, m.project, clonePath)
+	if err != nil {
+		return Clone{}, err
+	}
+	recordPath, err := m.markedClonePath(record.Path)
+	if err != nil {
+		return Clone{}, fmt.Errorf("reset clone %q returned invalid path %q: %w", clonePath, record.Path, err)
+	}
+	record.Path = recordPath
+	return fromState(record), nil
+}
+
 func (m *Manager) activeCWDSet(ctx context.Context) (map[string]struct{}, error) {
 	if m.cwdUsageChecker == nil {
 		return nil, nil
@@ -339,46 +383,76 @@ func (m *Manager) Release(ctx context.Context, path, taskBranch string) error {
 }
 
 func (m *Manager) tryAllocateExisting(ctx context.Context, clones []Clone, activeCWDs map[string]struct{}, taskID, issueBranch string) (*Clone, error) {
-	for _, clone := range clones {
-		if clone.Status != StatusFree {
-			continue
-		}
-		if _, ok := activeCWDs[clone.Path]; ok {
-			continue
-		}
-
-		ok, err := m.store.TryOccupyClone(ctx, m.project, clone.Path, issueBranch, taskID)
-		if err != nil {
-			return nil, fmt.Errorf("occupy clone %q: %w", clone.Path, err)
-		}
-		if !ok {
-			continue
-		}
-
-		if err := m.HealthCheck(ctx, clone.Path); err != nil {
-			freeErr := m.store.MarkCloneFree(ctx, m.project, clone.Path)
-			if freeErr != nil {
-				err = errors.Join(err, freeErr)
-				return nil, fmt.Errorf("health check clone %q: %w", clone.Path, err)
+	for _, allowCooldown := range []bool{false, true} {
+		for _, clone := range clones {
+			if !selectableClone(clone, activeCWDs) {
+				continue
 			}
-			continue
-		}
-
-		if err := m.prepareClone(ctx, clone.Path, issueBranch); err != nil {
-			freeErr := m.store.MarkCloneFree(ctx, m.project, clone.Path)
-			if freeErr != nil {
-				err = errors.Join(err, freeErr)
+			inCooldown := m.cloneInFailureCooldown(clone)
+			if inCooldown != allowCooldown {
+				continue
 			}
-			return nil, fmt.Errorf("prepare clone %q: %w", clone.Path, err)
-		}
 
-		clone.Status = StatusOccupied
-		clone.CurrentBranch = issueBranch
-		clone.AssignedTask = taskID
-		return &clone, nil
+			allocated, err := m.tryAllocateClone(ctx, clone, taskID, issueBranch)
+			if err != nil {
+				return nil, err
+			}
+			if allocated != nil {
+				return allocated, nil
+			}
+		}
 	}
 
 	return nil, nil
+}
+
+func (m *Manager) tryAllocateClone(ctx context.Context, clone Clone, taskID, issueBranch string) (*Clone, error) {
+	ok, err := m.store.TryOccupyClone(ctx, m.project, clone.Path, issueBranch, taskID)
+	if err != nil {
+		return nil, fmt.Errorf("occupy clone %q: %w", clone.Path, err)
+	}
+	if !ok {
+		return nil, nil
+	}
+
+	if err := m.HealthCheck(ctx, clone.Path); err != nil {
+		freeErr := m.store.MarkCloneFree(ctx, m.project, clone.Path)
+		if freeErr != nil {
+			err = errors.Join(err, freeErr)
+			return nil, fmt.Errorf("health check clone %q: %w", clone.Path, err)
+		}
+		return nil, nil
+	}
+
+	if err := m.prepareClone(ctx, clone.Path, issueBranch); err != nil {
+		freeErr := m.store.MarkCloneFree(ctx, m.project, clone.Path)
+		if freeErr != nil {
+			err = errors.Join(err, freeErr)
+		}
+		return nil, fmt.Errorf("prepare clone %q: %w", clone.Path, err)
+	}
+
+	clone.Status = StatusOccupied
+	clone.CurrentBranch = issueBranch
+	clone.AssignedTask = taskID
+	return &clone, nil
+}
+
+func selectableClone(clone Clone, activeCWDs map[string]struct{}) bool {
+	if clone.Status != StatusFree {
+		return false
+	}
+	if _, ok := activeCWDs[clone.Path]; ok {
+		return false
+	}
+	return true
+}
+
+func (m *Manager) cloneInFailureCooldown(clone Clone) bool {
+	if clone.FailureCount <= 0 || clone.UpdatedAt.IsZero() {
+		return false
+	}
+	return !clone.UpdatedAt.Before(m.now().Add(-CloneFailureCooldown))
 }
 
 func noAvailableQuarantinedClonesError(clones []Clone, activeCWDs map[string]struct{}) error {
@@ -399,13 +473,9 @@ func noAvailableQuarantinedClonesError(clones []Clone, activeCWDs map[string]str
 
 func selectableFreeCloneExists(clones []Clone, activeCWDs map[string]struct{}) bool {
 	for _, clone := range clones {
-		if clone.Status != StatusFree {
-			continue
+		if selectableClone(clone, activeCWDs) {
+			return true
 		}
-		if _, ok := activeCWDs[clone.Path]; ok {
-			continue
-		}
-		return true
 	}
 	return false
 }
@@ -485,6 +555,45 @@ func (m *Manager) nextCloneName() (string, error) {
 	}
 
 	return fmt.Sprintf("clone-%02d", maxNum+1), nil
+}
+
+func (m *Manager) ensureResetCloneDirectory(ctx context.Context, clonePath string) error {
+	info, err := os.Lstat(clonePath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return m.rebuildCloneAt(ctx, clonePath)
+		}
+		return fmt.Errorf("inspect clone %q: %w", clonePath, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("pool: clone path %q must be a directory", clonePath)
+	}
+	if err := requireCloneMarker(clonePath); err != nil {
+		return err
+	}
+	if err := m.HealthCheck(ctx, clonePath); err != nil {
+		return fmt.Errorf("health check clone %q: %w", clonePath, err)
+	}
+	return nil
+}
+
+func (m *Manager) rebuildCloneAt(ctx context.Context, clonePath string) error {
+	if strings.TrimSpace(m.cloneOrigin) == "" {
+		return fmt.Errorf("%w: set a git origin remote or ORCA_CLONE_ORIGIN", ErrNoFreeClones)
+	}
+	if err := os.MkdirAll(filepath.Dir(clonePath), 0o755); err != nil {
+		return fmt.Errorf("create clone directory parent: %w", err)
+	}
+	if err := m.runner.Run(ctx, filepath.Dir(clonePath), "git", "clone", m.cloneOrigin, clonePath); err != nil {
+		return fmt.Errorf("git clone into %q: %w", clonePath, err)
+	}
+	if err := ensureCloneMarker(clonePath); err != nil {
+		return err
+	}
+	if err := m.runCloneSetupHook(ctx, clonePath); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (m *Manager) eligibleClonePaths() ([]string, error) {
@@ -861,6 +970,7 @@ func fromState(record state.CloneRecord) Clone {
 		CurrentBranch: record.CurrentBranch,
 		AssignedTask:  record.AssignedTask,
 		FailureCount:  record.FailureCount,
+		UpdatedAt:     record.UpdatedAt,
 	}
 }
 

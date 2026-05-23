@@ -1449,6 +1449,50 @@ func (s *SQLiteStore) ResetCloneFailures(ctx context.Context, project, path stri
 	return nil
 }
 
+func (s *SQLiteStore) ResetClone(ctx context.Context, project, path string) (legacy.CloneRecord, error) {
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE clones
+		SET host = ?, status = 'free', issue = '', branch = '', failure_count = 0, updated_at = ?
+		WHERE project = ? AND path = ? AND status != 'occupied' AND `+sqliteHostMatch("host")+`
+	`, s.host, formatTime(s.now()), project, path, s.host)
+	if err != nil {
+		return legacy.CloneRecord{}, fmt.Errorf("reset clone: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return legacy.CloneRecord{}, fmt.Errorf("reset clone rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		record, loadErr := s.lookupCloneRecord(ctx, project, path)
+		if loadErr != nil {
+			return legacy.CloneRecord{}, loadErr
+		}
+		if record.Status == legacy.CloneStatusOccupied {
+			return record, legacy.ErrCloneOccupied
+		}
+		return legacy.CloneRecord{}, legacy.ErrCloneNotFound
+	}
+	return s.lookupCloneRecord(ctx, project, path)
+}
+
+func (s *SQLiteStore) DeleteClone(ctx context.Context, project, path string) error {
+	result, err := s.db.ExecContext(ctx, `
+		DELETE FROM clones
+		WHERE project = ? AND path = ? AND `+sqliteHostMatch("host")+`
+	`, project, path, s.host)
+	if err != nil {
+		return fmt.Errorf("delete clone: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("delete clone rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		return legacy.ErrCloneNotFound
+	}
+	return nil
+}
+
 func (s *SQLiteStore) UnquarantineClone(ctx context.Context, project, path string) error {
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE clones
@@ -2214,18 +2258,20 @@ func (s *SQLiteStore) queryEvents(ctx context.Context, project, issue string, af
 
 func (s *SQLiteStore) lookupCloneRecord(ctx context.Context, project, path string) (legacy.CloneRecord, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT project, path, status, branch, issue, failure_count
+		SELECT project, path, status, branch, issue, failure_count, updated_at
 		FROM clones
 		WHERE project = ? AND path = ? AND `+sqliteHostMatch("host")+`
 	`, project, path, s.host)
 
 	var record legacy.CloneRecord
-	if err := row.Scan(&record.Project, &record.Path, &record.Status, &record.CurrentBranch, &record.AssignedTask, &record.FailureCount); err != nil {
+	var updatedAt string
+	if err := row.Scan(&record.Project, &record.Path, &record.Status, &record.CurrentBranch, &record.AssignedTask, &record.FailureCount, &updatedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return legacy.CloneRecord{}, legacy.ErrCloneNotFound
 		}
 		return legacy.CloneRecord{}, err
 	}
+	record.UpdatedAt = parseTime(updatedAt)
 
 	return record, nil
 }

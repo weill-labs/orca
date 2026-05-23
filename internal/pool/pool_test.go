@@ -479,6 +479,262 @@ func TestManagerAllocateBackfillsLegacyCloneMarkerBeforeUse(t *testing.T) {
 	}
 }
 
+func TestManagerResetRestoresQuarantinedClone(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	poolDir := filepath.Join(root, "pool")
+	origin := newOrigin(t, "main")
+	clonePath := newClone(t, origin, filepath.Join(poolDir, "clone-01"))
+	store := newStore(t)
+	manager := newManager(t, project, staticConfig{
+		poolDir:     poolDir,
+		cloneOrigin: origin,
+	}, store)
+
+	if _, err := store.EnsureClone(context.Background(), project, clonePath); err != nil {
+		t.Fatalf("EnsureClone() setup error = %v", err)
+	}
+	for i := 0; i < pool.CloneQuarantineFailureThreshold; i++ {
+		if err := manager.RecordCloneFailure(context.Background(), clonePath); err != nil {
+			t.Fatalf("RecordCloneFailure() setup error = %v", err)
+		}
+	}
+
+	clone, err := manager.Reset(context.Background(), clonePath)
+	if err != nil {
+		t.Fatalf("Reset() error = %v", err)
+	}
+	if got, want := clone.Status, pool.StatusFree; got != want {
+		t.Fatalf("clone.Status = %q, want %q", got, want)
+	}
+	if got, want := clone.FailureCount, 0; got != want {
+		t.Fatalf("clone.FailureCount = %d, want %d", got, want)
+	}
+
+	allocated, err := manager.Allocate(context.Background(), "LAB-1876", "LAB-1876")
+	if err != nil {
+		t.Fatalf("Allocate() after reset error = %v", err)
+	}
+	if got, want := allocated.Path, clonePath; got != want {
+		t.Fatalf("allocated clone = %q, want %q", got, want)
+	}
+}
+
+func TestManagerNewDefaultsNilNowOption(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	if _, err := pool.New(filepath.Join(root, "project"), staticConfig{
+		poolDir: filepath.Join(root, "pool"),
+	}, newStore(t), pool.WithNow(nil)); err != nil {
+		t.Fatalf("pool.New() error = %v", err)
+	}
+}
+
+func TestManagerResetRebuildsMissingCloneDirectory(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	poolDir := filepath.Join(root, "pool")
+	origin := newOrigin(t, "main")
+	clonePath := filepath.Join(poolDir, "clone-01")
+	store := newStore(t)
+	manager := newManager(t, project, staticConfig{
+		poolDir:     poolDir,
+		cloneOrigin: origin,
+	}, store)
+
+	if _, err := store.EnsureClone(context.Background(), project, clonePath); err != nil {
+		t.Fatalf("EnsureClone() setup error = %v", err)
+	}
+	if _, err := store.RecordCloneFailure(context.Background(), project, clonePath, pool.CloneQuarantineFailureThreshold); err != nil {
+		t.Fatalf("RecordCloneFailure() setup error = %v", err)
+	}
+
+	clone, err := manager.Reset(context.Background(), clonePath)
+	if err != nil {
+		t.Fatalf("Reset() error = %v", err)
+	}
+	if got, want := clone.Path, clonePath; got != want {
+		t.Fatalf("clone.Path = %q, want %q", got, want)
+	}
+	if got, want := clone.Status, pool.StatusFree; got != want {
+		t.Fatalf("clone.Status = %q, want %q", got, want)
+	}
+	if _, err := os.Stat(filepath.Join(clonePath, ".git")); err != nil {
+		t.Fatalf(".git stat error after reset = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(clonePath, pool.ClonePoolMarker)); err != nil {
+		t.Fatalf("%s stat error after reset = %v", pool.ClonePoolMarker, err)
+	}
+	record := lookupClone(t, store, project, clonePath)
+	if got, want := record.FailureCount, 0; got != want {
+		t.Fatalf("record.FailureCount = %d, want %d", got, want)
+	}
+}
+
+func TestManagerResetRejectsUnmarkedExistingDirectory(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	poolDir := filepath.Join(root, "pool")
+	clonePath := filepath.Join(poolDir, "clone-01")
+	mustMkdir(t, clonePath)
+	store := newStore(t)
+	manager := newManager(t, project, staticConfig{
+		poolDir:     poolDir,
+		cloneOrigin: newOrigin(t, "main"),
+	}, store)
+	if _, err := store.EnsureClone(context.Background(), project, clonePath); err != nil {
+		t.Fatalf("EnsureClone() setup error = %v", err)
+	}
+
+	_, err := manager.Reset(context.Background(), clonePath)
+	if err == nil {
+		t.Fatal("Reset() succeeded, want marker error")
+	}
+	if got, want := err.Error(), ".orca-pool"; !strings.Contains(got, want) {
+		t.Fatalf("Reset() error = %v, want %q", err, want)
+	}
+}
+
+func TestManagerResetMissingCloneRequiresOrigin(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	poolDir := filepath.Join(root, "pool")
+	clonePath := filepath.Join(poolDir, "clone-01")
+	store := newStore(t)
+	manager := newManager(t, project, staticConfig{poolDir: poolDir}, store)
+	if _, err := store.EnsureClone(context.Background(), project, clonePath); err != nil {
+		t.Fatalf("EnsureClone() setup error = %v", err)
+	}
+
+	_, err := manager.Reset(context.Background(), clonePath)
+	if !errors.Is(err, pool.ErrNoFreeClones) {
+		t.Fatalf("Reset() error = %v, want ErrNoFreeClones", err)
+	}
+}
+
+func TestManagerResetRejectsRelativeClonePath(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	manager := newManager(t, filepath.Join(root, "project"), staticConfig{
+		poolDir: filepath.Join(root, "pool"),
+	}, newStore(t))
+
+	_, err := manager.Reset(context.Background(), "clone-01")
+	if err == nil {
+		t.Fatal("Reset() succeeded, want path validation error")
+	}
+	if got, want := err.Error(), "path must be absolute"; !strings.Contains(got, want) {
+		t.Fatalf("Reset() error = %v, want %q", err, want)
+	}
+}
+
+func TestManagerResetRequiresResetStore(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	manager, err := pool.New(filepath.Join(root, "project"), staticConfig{
+		poolDir: filepath.Join(root, "pool"),
+	}, storeWithoutReset{})
+	if err != nil {
+		t.Fatalf("pool.New() error = %v", err)
+	}
+
+	_, err = manager.Reset(context.Background(), filepath.Join(root, "pool", "clone-01"))
+	if err == nil {
+		t.Fatal("Reset() succeeded, want unsupported store error")
+	}
+	if got, want := err.Error(), "does not support clone reset"; !strings.Contains(got, want) {
+		t.Fatalf("Reset() error = %v, want %q", err, want)
+	}
+}
+
+func TestManagerResetRejectsFilePath(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	poolDir := filepath.Join(root, "pool")
+	clonePath := filepath.Join(poolDir, "clone-01")
+	mustMkdir(t, poolDir)
+	mustWriteFile(t, clonePath, "not a directory")
+	store := newStore(t)
+	manager := newManager(t, project, staticConfig{poolDir: poolDir}, store)
+	if _, err := store.EnsureClone(context.Background(), project, clonePath); err != nil {
+		t.Fatalf("EnsureClone() setup error = %v", err)
+	}
+
+	_, err := manager.Reset(context.Background(), clonePath)
+	if err == nil {
+		t.Fatal("Reset() succeeded, want directory error")
+	}
+	if got, want := err.Error(), "must be a directory"; !strings.Contains(got, want) {
+		t.Fatalf("Reset() error = %v, want %q", err, want)
+	}
+}
+
+func TestManagerResetRejectsUnhealthyExistingClone(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	poolDir := filepath.Join(root, "pool")
+	clonePath := filepath.Join(poolDir, "clone-01")
+	mustMkdir(t, clonePath)
+	markClone(t, clonePath)
+	store := newStore(t)
+	manager := newManager(t, project, staticConfig{poolDir: poolDir}, store)
+	if _, err := store.EnsureClone(context.Background(), project, clonePath); err != nil {
+		t.Fatalf("EnsureClone() setup error = %v", err)
+	}
+
+	_, err := manager.Reset(context.Background(), clonePath)
+	if err == nil {
+		t.Fatal("Reset() succeeded, want health check error")
+	}
+	if got, want := err.Error(), "health check clone"; !strings.Contains(got, want) {
+		t.Fatalf("Reset() error = %v, want %q", err, want)
+	}
+}
+
+func TestManagerResetRejectsInvalidStorePath(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	poolDir := filepath.Join(root, "pool")
+	origin := newOrigin(t, "main")
+	clonePath := newClone(t, origin, filepath.Join(poolDir, "clone-01"))
+	store := &resetBadPathStore{
+		SQLiteStore: newStore(t),
+		path:        filepath.Join(root, "outside"),
+	}
+	manager := newManager(t, project, staticConfig{
+		poolDir:     poolDir,
+		cloneOrigin: origin,
+	}, store)
+	if _, err := store.EnsureClone(context.Background(), project, clonePath); err != nil {
+		t.Fatalf("EnsureClone() setup error = %v", err)
+	}
+
+	_, err := manager.Reset(context.Background(), clonePath)
+	if err == nil {
+		t.Fatal("Reset() succeeded, want invalid returned path error")
+	}
+	if got, want := err.Error(), "returned invalid path"; !strings.Contains(got, want) {
+		t.Fatalf("Reset() error = %v, want %q", err, want)
+	}
+}
+
 func TestManagerAllocate(t *testing.T) {
 	t.Parallel()
 
@@ -1394,6 +1650,20 @@ func (c fakeCWDUsageChecker) ActiveCWDs(context.Context) ([]string, error) {
 	return append([]string(nil), c.paths...), nil
 }
 
+type storeWithoutReset struct{}
+
+func (storeWithoutReset) EnsureClone(context.Context, string, string) (state.CloneRecord, error) {
+	return state.CloneRecord{}, nil
+}
+
+func (storeWithoutReset) TryOccupyClone(context.Context, string, string, string, string) (bool, error) {
+	return false, nil
+}
+
+func (storeWithoutReset) MarkCloneFree(context.Context, string, string) error {
+	return nil
+}
+
 type overrideEnsurePathStore struct {
 	*state.SQLiteStore
 	path string
@@ -1401,6 +1671,20 @@ type overrideEnsurePathStore struct {
 
 func (s *overrideEnsurePathStore) EnsureClone(ctx context.Context, project, path string) (state.CloneRecord, error) {
 	record, err := s.SQLiteStore.EnsureClone(ctx, project, path)
+	if err != nil {
+		return state.CloneRecord{}, err
+	}
+	record.Path = s.path
+	return record, nil
+}
+
+type resetBadPathStore struct {
+	*state.SQLiteStore
+	path string
+}
+
+func (s *resetBadPathStore) ResetClone(ctx context.Context, project, path string) (state.CloneRecord, error) {
+	record, err := s.SQLiteStore.ResetClone(ctx, project, path)
 	if err != nil {
 		return state.CloneRecord{}, err
 	}
