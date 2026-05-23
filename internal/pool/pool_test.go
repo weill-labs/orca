@@ -605,6 +605,42 @@ func TestManagerAllocate(t *testing.T) {
 			},
 		},
 		{
+			name: "resets feature branch checkout to origin main before creating issue branch",
+			run: func(t *testing.T, manager *pool.Manager, store *state.SQLiteStore, project string, clones []string) {
+				t.Helper()
+
+				configureTestGitIdentity(t, clones[0])
+				mustRun(t, clones[0], "git", "checkout", "-b", "LAB-1856")
+				mustWriteFile(t, filepath.Join(clones[0], "hotfix-only.txt"), "hotfix")
+				mustRun(t, clones[0], "git", "add", "hotfix-only.txt")
+				mustRun(t, clones[0], "git", "commit", "-m", "hotfix branch")
+				featureHead := gitHeadCommit(t, clones[0])
+
+				clone, err := manager.Allocate(context.Background(), "LAB-1852", "LAB-1852")
+				if err != nil {
+					t.Fatalf("Allocate() error = %v", err)
+				}
+
+				if got, want := gitCurrentBranch(t, clone.Path), "LAB-1852"; got != want {
+					t.Fatalf("current branch = %q, want %q", got, want)
+				}
+				if got, want := gitHeadCommit(t, clone.Path), gitRevision(t, clone.Path, "origin/main"); got != want {
+					t.Fatalf("HEAD = %q, want origin/main %q", got, want)
+				}
+				if got := gitHeadCommit(t, clone.Path); got == featureHead {
+					t.Fatalf("HEAD = %q, still on feature branch commit", got)
+				}
+				if _, err := os.Stat(filepath.Join(clone.Path, "hotfix-only.txt")); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("hotfix-only.txt stat error = %v, want not exist", err)
+				}
+
+				record := lookupClone(t, store, project, clone.Path)
+				if got, want := record.CurrentBranch, "LAB-1852"; got != want {
+					t.Fatalf("record.CurrentBranch = %q, want %q", got, want)
+				}
+			},
+		},
+		{
 			name: "skips unhealthy clone and allocates next healthy clone",
 			run: func(t *testing.T, manager *pool.Manager, store *state.SQLiteStore, project string, clones []string) {
 				t.Helper()
