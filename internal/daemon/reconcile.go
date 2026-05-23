@@ -16,6 +16,7 @@ const (
 	ReconcileStuckCleanup     = "stuck_cleanup"
 	ReconcileStartingZombie   = "starting_zombie"
 	ReconcileOrphanPane       = "orphan_pane"
+	ReconcileOrphanWorker     = "orphan_worker"
 
 	reconcileActionReported  = "reported"
 	reconcileActionFixed     = "fixed"
