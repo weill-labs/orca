@@ -614,7 +614,6 @@ func TestManagerAllocate(t *testing.T) {
 				mustWriteFile(t, filepath.Join(clones[0], "hotfix-only.txt"), "hotfix")
 				mustRun(t, clones[0], "git", "add", "hotfix-only.txt")
 				mustRun(t, clones[0], "git", "commit", "-m", "hotfix branch")
-				featureHead := gitHeadCommit(t, clones[0])
 
 				clone, err := manager.Allocate(context.Background(), "LAB-1852", "LAB-1852")
 				if err != nil {
@@ -626,9 +625,6 @@ func TestManagerAllocate(t *testing.T) {
 				}
 				if got, want := gitHeadCommit(t, clone.Path), gitRevision(t, clone.Path, "origin/main"); got != want {
 					t.Fatalf("HEAD = %q, want origin/main %q", got, want)
-				}
-				if got := gitHeadCommit(t, clone.Path); got == featureHead {
-					t.Fatalf("HEAD = %q, still on feature branch commit", got)
 				}
 				if _, err := os.Stat(filepath.Join(clone.Path, "hotfix-only.txt")); !errors.Is(err, os.ErrNotExist) {
 					t.Fatalf("hotfix-only.txt stat error = %v, want not exist", err)
@@ -778,6 +774,45 @@ func TestManagerCreateClone(t *testing.T) {
 		}
 		if _, err := os.Stat(filepath.Join(path, pool.ClonePoolMarker)); err != nil {
 			t.Fatalf("%s stat error = %v", pool.ClonePoolMarker, err)
+		}
+	})
+
+	t.Run("resets non-bare origin checked out on feature branch", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		project := filepath.Join(root, "project")
+		poolDir := filepath.Join(root, "pool")
+		source := filepath.Join(root, "source")
+		mustRun(t, "", "git", "init", "-b", "main", source)
+		configureTestGitIdentity(t, source)
+		mustWriteFile(t, filepath.Join(source, "README.md"), "hello")
+		mustRun(t, source, "git", "add", "README.md")
+		mustRun(t, source, "git", "commit", "-m", "initial commit")
+		mustRun(t, source, "git", "checkout", "-b", "LAB-1856")
+		mustWriteFile(t, filepath.Join(source, "hotfix-only.txt"), "hotfix")
+		mustRun(t, source, "git", "add", "hotfix-only.txt")
+		mustRun(t, source, "git", "commit", "-m", "hotfix branch")
+
+		store := newStore(t)
+		manager := newManager(t, project, staticConfig{
+			poolDir:     poolDir,
+			cloneOrigin: source,
+		}, store)
+
+		path, err := manager.CreateClone(context.Background())
+		if err != nil {
+			t.Fatalf("CreateClone() error = %v", err)
+		}
+
+		if got, want := gitCurrentBranch(t, path), "HEAD"; got != want {
+			t.Fatalf("current branch = %q, want detached %q", got, want)
+		}
+		if got, want := gitHeadCommit(t, path), gitRevision(t, path, "origin/main"); got != want {
+			t.Fatalf("HEAD = %q, want origin/main %q", got, want)
+		}
+		if _, err := os.Stat(filepath.Join(path, "hotfix-only.txt")); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("hotfix-only.txt stat error = %v, want not exist", err)
 		}
 	})
 
