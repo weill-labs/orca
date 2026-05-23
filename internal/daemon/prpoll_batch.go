@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"context"
-	"fmt"
 	"net/url"
 	"sort"
 	"strings"
@@ -51,6 +50,7 @@ func (d *Daemon) prTerminalStateRefs(assignments []ActiveAssignment) ([]githubPR
 		name  string
 	}
 	repos := make(map[string]githubRepo)
+	skippedProjects := make(map[string]struct{})
 	seen := make(map[prTerminalStateKey]struct{}, len(assignments))
 	refs := make([]githubPRTerminalStateRef, 0, len(assignments))
 
@@ -68,16 +68,23 @@ func (d *Daemon) prTerminalStateRefs(assignments []ActiveAssignment) ([]githubPR
 		if _, ok := seen[key]; ok {
 			continue
 		}
+		if _, ok := skippedProjects[projectPath]; ok {
+			continue
+		}
 
 		repo, ok := repos[projectPath]
 		if !ok {
 			origin, err := d.detectOrigin(projectPath)
 			if err != nil {
-				return nil, fmt.Errorf("detect origin for %s: %w", projectPath, err)
+				d.logPRTerminalStateBatchSkip("detect origin for %s: %v", projectPath, err)
+				skippedProjects[projectPath] = struct{}{}
+				continue
 			}
 			owner, name, ok := githubOwnerRepoFromOrigin(origin)
 			if !ok {
-				return nil, fmt.Errorf("origin for %s is not a GitHub repository: %s", projectPath, origin)
+				d.logPRTerminalStateBatchSkip("origin for %s is not a GitHub repository: %s", projectPath, origin)
+				skippedProjects[projectPath] = struct{}{}
+				continue
 			}
 			repo = githubRepo{owner: owner, name: name}
 			repos[projectPath] = repo
@@ -105,6 +112,13 @@ func (d *Daemon) prTerminalStateRefs(assignments []ActiveAssignment) ([]githubPR
 		return refs[i].Key.Project < refs[j].Key.Project
 	})
 	return refs, nil
+}
+
+func (d *Daemon) logPRTerminalStateBatchSkip(format string, args ...any) {
+	if d.logf == nil {
+		return
+	}
+	d.logf("github graphql PR terminal state batch skipping project: "+format, args...)
 }
 
 func taskStateRunsTerminalPoll(state string) bool {

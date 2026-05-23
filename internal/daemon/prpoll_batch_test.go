@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
+	"sync"
 	"testing"
 )
 
@@ -130,4 +132,92 @@ func TestPRPollFallsBackToPerPRTerminalStateWhenGraphQLFails(t *testing.T) {
 	if want := []int{1, 1}; !reflect.DeepEqual(gotPerPR, want) {
 		t.Fatalf("per-PR terminal state calls = %#v, want %#v", gotPerPR, want)
 	}
+}
+
+func TestPRPollSkipsUnbatchableOriginsWithoutAbortingBatch(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	seedTaskMonitorAssignment(t, deps, "LAB-904-A", "pane-1", 41)
+	seedTaskMonitorAssignment(t, deps, "LAB-904-B", "pane-2", 42)
+	seedTaskMonitorAssignment(t, deps, "LAB-904-C", "pane-3", 43)
+	setTaskPRRepoForTest(t, deps, "LAB-904-B", "/tmp/gitlab")
+	setTaskPRRepoForTest(t, deps, "LAB-904-C", "/tmp/broken-origin")
+
+	refs := []githubPRTerminalStateRef{
+		{Key: prTerminalStateKey{Project: "/tmp/project", PRNumber: 41}, Owner: "weill-labs", Repo: "orca", PRNumber: 41},
+	}
+	deps.commands.queue("gh", prTerminalStateGraphQLArgs(refs), `{
+		"data": {
+			"pr0": {"pullRequest": {"number": 41, "merged": true, "mergedAt": "2026-04-02T12:00:00Z", "state": "MERGED"}}
+		}
+	}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, `{"mergedAt":"2026-04-02T12:01:00Z","state":"MERGED"}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "43", "--json", prSnapshotJSONFields}, `{"mergedAt":"2026-04-02T12:02:00Z","state":"MERGED"}`, nil)
+
+	var logMu sync.Mutex
+	var logs []string
+	d := deps.newDaemonWithOptions(t, func(opts *Options) {
+		opts.DetectOrigin = func(projectDir string) (string, error) {
+			switch projectDir {
+			case "/tmp/project":
+				return "https://github.com/weill-labs/orca.git", nil
+			case "/tmp/gitlab":
+				return "https://gitlab.com/weill-labs/orca.git", nil
+			case "/tmp/broken-origin":
+				return "", errors.New("origin not found")
+			default:
+				t.Fatalf("DetectOrigin(%q) called for unexpected project", projectDir)
+				return "", nil
+			}
+		}
+		opts.Logf = func(format string, args ...any) {
+			logMu.Lock()
+			defer logMu.Unlock()
+			logs = append(logs, fmt.Sprintf(format, args...))
+		}
+	})
+	t.Cleanup(func() {
+		d.stopAllTaskMonitors(true)
+	})
+
+	d.runPollTick(context.Background())
+
+	if got, want := deps.events.countType(EventPRMerged), 3; got != want {
+		t.Fatalf("merged event count = %d, want %d", got, want)
+	}
+	if got, want := deps.commands.countCalls("gh", prTerminalStateGraphQLArgs(refs)), 1; got != want {
+		t.Fatalf("GraphQL terminal state call count = %d, want %d", got, want)
+	}
+	gotPerPR := []int{
+		deps.commands.countCalls("gh", []string{"pr", "view", "41", "--json", prSnapshotJSONFields}),
+		deps.commands.countCalls("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}),
+		deps.commands.countCalls("gh", []string{"pr", "view", "43", "--json", prSnapshotJSONFields}),
+	}
+	if want := []int{0, 1, 1}; !reflect.DeepEqual(gotPerPR, want) {
+		t.Fatalf("per-PR terminal state calls = %#v, want %#v", gotPerPR, want)
+	}
+
+	logMu.Lock()
+	gotLogs := strings.Join(logs, "\n")
+	logMu.Unlock()
+	for _, want := range []string{
+		"origin for /tmp/gitlab is not a GitHub repository",
+		"detect origin for /tmp/broken-origin: origin not found",
+	} {
+		if !strings.Contains(gotLogs, want) {
+			t.Fatalf("batch skip logs = %q, want substring %q", gotLogs, want)
+		}
+	}
+}
+
+func setTaskPRRepoForTest(t *testing.T, deps *testDeps, issue, prRepo string) {
+	t.Helper()
+
+	task, ok := deps.state.task(issue)
+	if !ok {
+		t.Fatalf("task %q not found", issue)
+	}
+	task.PRRepo = prRepo
+	deps.state.putTaskForTest(task)
 }

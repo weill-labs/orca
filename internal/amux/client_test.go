@@ -653,7 +653,7 @@ func TestParsePaneList(t *testing.T) {
 		{
 			name:    "rejects malformed header",
 			output:  "PANE ONLY\n",
-			wantErr: "got 1 columns",
+			wantErr: "unrecognized pane list header",
 		},
 		{
 			name: "parses rows and strips active marker",
