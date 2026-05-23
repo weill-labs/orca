@@ -34,7 +34,7 @@ func (d *Daemon) lookupBatchedPRTerminalStates(ctx context.Context, assignments 
 		return nil, err
 	}
 
-	client, ok := d.githubForProject(d.project).(prTerminalStateBatchLookup)
+	client, ok := d.gitHubClientForContext(ctx, d.project).(prTerminalStateBatchLookup)
 	if !ok {
 		return nil, nil
 	}

@@ -563,6 +563,25 @@ func TestCircuitGitHubClientWrapsLookupMethods(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "lookup pr terminal states",
+			call: func(t *testing.T, client gitHubClient) {
+				t.Helper()
+
+				batch, ok := client.(prTerminalStateBatchLookup)
+				if !ok {
+					t.Fatal("client does not support batch terminal state lookup")
+				}
+				key := prTerminalStateKey{Project: "/tmp/repo", PRNumber: 42}
+				got, err := batch.lookupPRTerminalStates(context.Background(), []githubPRTerminalStateRef{{Key: key, Owner: "weill-labs", Repo: "orca", PRNumber: 42}})
+				if err != nil {
+					t.Fatalf("lookupPRTerminalStates() error = %v", err)
+				}
+				if got[key] != (prTerminalState{merged: true}) {
+					t.Fatalf("lookupPRTerminalStates() = %#v, want merged state for %#v", got, key)
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -576,6 +595,9 @@ func TestCircuitGitHubClientWrapsLookupMethods(t *testing.T) {
 				allPRNumber:  44,
 				mergedPR:     true,
 				merged:       true,
+				terminalStates: map[prTerminalStateKey]prTerminalState{
+					{Project: "/tmp/repo", PRNumber: 42}: {merged: true},
+				},
 			}, NewCircuitBreaker(time.Now, 3, time.Minute))
 			tt.call(t, client)
 		})
@@ -608,13 +630,14 @@ func TestMonitorCircuitDependencyAccessorsFallbackToBaseDependencies(t *testing.
 }
 
 type circuitGitHubClientStub struct {
-	err          error
-	prNumber     int
-	openPRNumber int
-	allPRNumber  int
-	mergedPR     bool
-	merged       bool
-	terminal     prTerminalState
+	err            error
+	prNumber       int
+	openPRNumber   int
+	allPRNumber    int
+	mergedPR       bool
+	merged         bool
+	terminal       prTerminalState
+	terminalStates map[prTerminalStateKey]prTerminalState
 }
 
 func (c circuitGitHubClientStub) lookupPRNumber(context.Context, string) (int, error) {
@@ -639,6 +662,10 @@ func (c circuitGitHubClientStub) lookupOpenOrMergedPRNumber(context.Context, str
 
 func (c circuitGitHubClientStub) lookupPRTerminalState(context.Context, int) (prTerminalState, error) {
 	return c.terminal, c.err
+}
+
+func (c circuitGitHubClientStub) lookupPRTerminalStates(context.Context, []githubPRTerminalStateRef) (map[prTerminalStateKey]prTerminalState, error) {
+	return c.terminalStates, c.err
 }
 
 func (c circuitGitHubClientStub) lookupPRMergeability(context.Context, int) (prMergeabilityPayload, bool, error) {
