@@ -32,8 +32,8 @@ func TestGitHubCLIClientLookupPRTerminalStatesPaginatesRefs(t *testing.T) {
 
 	firstPage := refs[:prTerminalStateGraphQLPageSize]
 	secondPage := refs[prTerminalStateGraphQLPageSize:]
-	commands.queue("gh", prTerminalStateGraphQLArgs(firstPage), prTerminalStateGraphQLPayload(firstPage), nil)
-	commands.queue("gh", prTerminalStateGraphQLArgs(secondPage), prTerminalStateGraphQLPayload(secondPage), nil)
+	commands.queue("gh", prTerminalStateGraphQLArgs(firstPage), prTerminalStateGraphQLResponse(firstPage), nil)
+	commands.queue("gh", prTerminalStateGraphQLArgs(secondPage), prTerminalStateGraphQLResponse(secondPage), nil)
 
 	got, err := client.lookupPRTerminalStates(context.Background(), refs)
 	if err != nil {
@@ -59,7 +59,7 @@ func TestGitHubCLIClientLookupPRTerminalStatesPaginatesRefs(t *testing.T) {
 	}
 }
 
-func prTerminalStateGraphQLPayload(refs []githubPRTerminalStateRef) string {
+func prTerminalStateGraphQLResponse(refs []githubPRTerminalStateRef) string {
 	out := `{"data":{`
 	for i, ref := range refs {
 		if i > 0 {
@@ -70,4 +70,3 @@ func prTerminalStateGraphQLPayload(refs []githubPRTerminalStateRef) string {
 	out += `}}`
 	return out
 }
-

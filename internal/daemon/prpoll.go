@@ -308,6 +308,9 @@ func (d *Daemon) lookupOpenOrMergedPRNumber(ctx context.Context, projectPath, br
 }
 
 func (d *Daemon) lookupPRTerminalState(ctx context.Context, projectPath string, prNumber int) (prTerminalState, error) {
+	if state, ok := batchedPRTerminalState(ctx, projectPath, prNumber); ok {
+		return state, nil
+	}
 	return d.gitHubClientForContext(ctx, projectPath).lookupPRTerminalState(ctx, prNumber)
 }
 

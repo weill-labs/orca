@@ -131,4 +131,3 @@ func TestPRPollFallsBackToPerPRTerminalStateWhenGraphQLFails(t *testing.T) {
 		t.Fatalf("per-PR terminal state calls = %#v, want %#v", gotPerPR, want)
 	}
 }
-
