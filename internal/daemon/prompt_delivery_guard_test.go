@@ -57,6 +57,14 @@ func TestCodexPromptTargetGuardHelpers(t *testing.T) {
 		t.Fatalf("codexPromptTargetError(bare shell without command) error = %v, want returned-to-shell context", err)
 	}
 
+	shortShellLikeLines := []string{"sh$", "sh#", "fish%", "fish>"}
+	for _, line := range shortShellLikeLines {
+		snapshot := PaneCapture{Content: []string{"OpenAI Codex", line}}
+		if !codexPromptTargetSafe(snapshot, false) {
+			t.Fatalf("codexPromptTargetSafe(short shell-like line %q) = false, want true", line)
+		}
+	}
+
 	bashLeaks := []struct {
 		name     string
 		snapshot PaneCapture

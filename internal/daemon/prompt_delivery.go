@@ -22,7 +22,9 @@ const (
 
 var ErrPromptDeliveryNotConfirmed = errors.New("prompt delivery not confirmed")
 
-var shellPromptLinePattern = regexp.MustCompile(`^(?:(?:bash(?:-[0-9]+(?:\.[0-9]+)*)?|zsh|sh|fish)|[A-Za-z0-9._-]+@[A-Za-z0-9._-]+(?::[^$#%>\n]*)?)\s*[$#%>]\s*$`)
+// Match concrete shell prompts without treating short content lines like "sh$"
+// or "fish%" as proof that Codex returned to a shell.
+var shellPromptLinePattern = regexp.MustCompile(`^(?:(?:bash|zsh)(?:-[0-9]+(?:\.[0-9]+)*)?|[A-Za-z0-9._-]+@[A-Za-z0-9._-]+(?::[^$#%>\n]*)?)\s*[$#%>]\s*$`)
 
 type promptDeliveryWaitState int
 

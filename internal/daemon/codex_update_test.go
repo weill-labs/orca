@@ -1,6 +1,9 @@
 package daemon
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestCodexOutputMatchesUpdatePermissionError(t *testing.T) {
 	t.Parallel()
@@ -71,5 +74,17 @@ func TestCodexOutputMatchesUpdatePermissionError(t *testing.T) {
 				t.Fatalf("codexOutputMatchesUpdatePermissionError() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestCodexUpdateEvidenceStripsShellPromptLines(t *testing.T) {
+	t.Parallel()
+
+	evidence := codexUpdateEvidence("npm ERR! code EACCES\nnpm ERR! path /usr/lib/node_modules/@openai\nbash-5.2$")
+	if strings.Contains(evidence, "bash-5.2$") {
+		t.Fatalf("codexUpdateEvidence() = %q, want shell prompt stripped", evidence)
+	}
+	if !strings.Contains(evidence, "/usr/lib/node_modules/@openai") {
+		t.Fatalf("codexUpdateEvidence() = %q, want npm failure evidence retained", evidence)
 	}
 }

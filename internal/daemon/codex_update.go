@@ -86,14 +86,26 @@ func codexOutputMatchesUpdatePermissionError(output string) bool {
 }
 
 func codexUpdateEvidence(output string) string {
-	output = strings.TrimSpace(output)
-	if output == "" {
+	fields := codexUpdateEvidenceFields(output)
+	if len(fields) == 0 {
 		return ""
 	}
 	const maxEvidenceLen = 600
-	evidence := strings.Join(strings.Fields(output), " ")
+	evidence := strings.Join(fields, " ")
 	if len(evidence) <= maxEvidenceLen {
 		return evidence
 	}
 	return evidence[:maxEvidenceLen] + "..."
+}
+
+func codexUpdateEvidenceFields(output string) []string {
+	var fields []string
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || shellPromptLinePattern.MatchString(line) {
+			continue
+		}
+		fields = append(fields, strings.Fields(line)...)
+	}
+	return fields
 }
