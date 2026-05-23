@@ -85,15 +85,114 @@ func TestAssignParallelCodexStartupStressN3(t *testing.T) {
 	}
 }
 
+func TestAssignParallelLargeCodexPromptFanoutN10(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	project := t.TempDir()
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	deps.pool.clones = testParallelAssignProjectClones(t, project, 10)
+	deps.pool.clone = deps.pool.clones[0]
+	deps.amux.spawnPanes = testParallelAssignPanes(10)
+
+	d := deps.newDaemonWithOptions(t, func(opts *Options) {
+		opts.Project = project
+	})
+	ctx := context.Background()
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	assignments := make([]struct {
+		issue  string
+		prompt string
+	}, 10)
+	for i := range assignments {
+		assignments[i] = struct {
+			issue  string
+			prompt string
+		}{
+			issue:  fmt.Sprintf("LAB-%d", 18710+i),
+			prompt: strings.Repeat(fmt.Sprintf("Detailed assignment %d. ", i+1), 120),
+		}
+	}
+
+	var wg sync.WaitGroup
+	errs := make(chan error, len(assignments))
+	for _, assignment := range assignments {
+		assignment := assignment
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs <- d.Assign(ctx, assignment.issue, assignment.prompt, "codex")
+		}()
+	}
+	wg.Wait()
+	close(errs)
+
+	var gotErrs []error
+	for err := range errs {
+		if err != nil {
+			gotErrs = append(gotErrs, err)
+		}
+	}
+	if len(gotErrs) > 0 {
+		t.Fatalf("parallel Assign() errors = %v", gotErrs)
+	}
+
+	for _, assignment := range assignments {
+		task, ok := deps.state.task(assignment.issue)
+		if !ok {
+			t.Fatalf("task %s missing after large-prompt fanout", assignment.issue)
+		}
+		if got, want := task.Status, TaskStatusActive; got != want {
+			t.Fatalf("task %s status = %q, want %q", assignment.issue, got, want)
+		}
+		promptFile, err := assignmentPromptFilePath(task)
+		if err != nil {
+			t.Fatalf("assignmentPromptFilePath(%s) error = %v", assignment.issue, err)
+		}
+		content, err := os.ReadFile(promptFile)
+		if err != nil {
+			t.Fatalf("ReadFile(%q) error = %v", promptFile, err)
+		}
+		if got, want := string(content), wrapAssignmentPrompt(AgentProfile{Name: "codex"}, assignment.issue, assignment.prompt)+"\n"; got != want {
+			t.Fatalf("prompt file for %s = %q, want wrapped prompt", assignment.issue, got)
+		}
+	}
+
+	if got, want := deps.events.countType(EventTaskAssigned), 10; got != want {
+		t.Fatalf("task.assigned events = %d, want %d", got, want)
+	}
+	if got, want := countStartupPromptConfirmed(deps.events.eventsByType(EventWorkerStartupTransition)), 10; got != want {
+		t.Fatalf("prompt delivery confirmations = %d, want %d", got, want)
+	}
+	for paneID, sentKeys := range snapshotSentKeys(deps.amux) {
+		if len(sentKeys) != 1 {
+			t.Fatalf("sent keys for %s = %#v, want one file-reference prompt", paneID, sentKeys)
+		}
+		if !strings.Contains(sentKeys[0], "Read the assignment brief at ") {
+			t.Fatalf("sent keys for %s = %q, want file-reference prompt", paneID, sentKeys[0])
+		}
+		if strings.Contains(sentKeys[0], "Detailed assignment") {
+			t.Fatalf("sent keys for %s include large prompt text: %q", paneID, sentKeys[0])
+		}
+	}
+}
+
 type parallelCodexStartupRace struct {
 	amux       *fakeAmux
 	promptHold time.Duration
 
-	mu                   sync.Mutex
-	activePromptTexts    int
-	maxPromptTexts       int
-	paneIssues           map[string]string
-	doomedIssues         map[string]bool
+	mu                sync.Mutex
+	activePromptTexts int
+	maxPromptTexts    int
+	paneIssues        map[string]string
+	doomedIssues      map[string]bool
 }
 
 func newParallelCodexStartupRace(amux *fakeAmux, promptHold time.Duration) *parallelCodexStartupRace {
@@ -199,6 +298,21 @@ func testParallelAssignClones(t *testing.T, first Clone, total int) []Clone {
 	return clones
 }
 
+func testParallelAssignProjectClones(t *testing.T, project string, total int) []Clone {
+	t.Helper()
+
+	clones := make([]Clone, 0, total)
+	for i := 1; i <= total; i++ {
+		name := fmt.Sprintf("clone-%02d", i)
+		path := filepath.Join(project, OrcaPoolSubdir, name)
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q) error = %v", path, err)
+		}
+		clones = append(clones, Clone{Name: name, Path: path})
+	}
+	return clones
+}
+
 func testParallelAssignPanes(total int) []Pane {
 	panes := make([]Pane, 0, total)
 	for i := 1; i <= total; i++ {
@@ -208,4 +322,25 @@ func testParallelAssignPanes(total int) []Pane {
 		})
 	}
 	return panes
+}
+
+func countStartupPromptConfirmed(events []Event) int {
+	count := 0
+	for _, event := range events {
+		if strings.Contains(event.Message, assignStartupStepPromptConfirmed) {
+			count++
+		}
+	}
+	return count
+}
+
+func snapshotSentKeys(amux *fakeAmux) map[string][]string {
+	amux.mu.Lock()
+	defer amux.mu.Unlock()
+
+	copied := make(map[string][]string, len(amux.sentKeys))
+	for paneID, sentKeys := range amux.sentKeys {
+		copied[paneID] = append([]string(nil), sentKeys...)
+	}
+	return copied
 }

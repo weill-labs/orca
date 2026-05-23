@@ -149,7 +149,11 @@ func (d *Daemon) resumeExistingPaneForProject(ctx context.Context, projectPath s
 		promptToSend = strings.TrimSpace(task.Prompt)
 	}
 	if promptToSend != "" {
-		if err := d.sendPromptAndEnter(ctx, paneID, promptToSend); err != nil {
+		deliveryPrompt, err := d.prepareAssignmentPromptForDelivery(task, profile, promptToSend)
+		if err != nil {
+			return fmt.Errorf("prepare prompt delivery: %w", err)
+		}
+		if err := d.sendPromptAndEnter(ctx, paneID, deliveryPrompt); err != nil {
 			return fmt.Errorf("send prompt: %w", err)
 		}
 		if prompt != "" {
@@ -212,7 +216,11 @@ func (d *Daemon) resumeWithFreshPaneForProject(ctx context.Context, projectPath 
 		promptToSend = strings.TrimSpace(task.Prompt)
 	}
 	if promptToSend != "" {
-		if err := d.sendPromptAndEnter(ctx, pane.ID, promptToSend); err != nil {
+		deliveryPrompt, err := d.prepareAssignmentPromptForDelivery(task, profile, promptToSend)
+		if err != nil {
+			return fmt.Errorf("prepare prompt delivery: %w", err)
+		}
+		if err := d.sendPromptAndEnter(ctx, pane.ID, deliveryPrompt); err != nil {
 			return fmt.Errorf("send prompt: %w", err)
 		}
 		if prompt != "" {
