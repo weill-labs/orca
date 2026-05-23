@@ -11,14 +11,22 @@ const CodexRefreshCommand = "sudo npm install -g @openai/codex"
 var ErrCodexUpdateRequired = errors.New("codex update required")
 
 type CodexUpdateRequiredError struct {
-	Cause error
+	Cause    error
+	Evidence string
 }
 
 func (e *CodexUpdateRequiredError) Error() string {
-	if e == nil || e.Cause == nil {
-		return fmt.Sprintf("%s: codex self-update failed because global npm install needs elevated permissions; run: %s", ErrCodexUpdateRequired, CodexRefreshCommand)
+	message := fmt.Sprintf("%s: codex self-update failed because global npm install needs elevated permissions; run: %s", ErrCodexUpdateRequired, CodexRefreshCommand)
+	if e == nil {
+		return message
 	}
-	return fmt.Sprintf("%s: codex self-update failed because global npm install needs elevated permissions; run: %s; underlying error: %v", ErrCodexUpdateRequired, CodexRefreshCommand, e.Cause)
+	if evidence := codexUpdateEvidence(e.Evidence); evidence != "" {
+		message += "; evidence: " + evidence
+	}
+	if e.Cause != nil {
+		message += fmt.Sprintf("; underlying error: %v", e.Cause)
+	}
+	return message
 }
 
 func (e *CodexUpdateRequiredError) Unwrap() error {
@@ -33,10 +41,14 @@ func (e *CodexUpdateRequiredError) Is(target error) bool {
 }
 
 func codexUpdateRequiredError(cause error) error {
+	return codexUpdateRequiredErrorWithEvidence(cause, "")
+}
+
+func codexUpdateRequiredErrorWithEvidence(cause error, evidence string) error {
 	if errors.Is(cause, ErrCodexUpdateRequired) {
 		return cause
 	}
-	return &CodexUpdateRequiredError{Cause: cause}
+	return &CodexUpdateRequiredError{Cause: cause, Evidence: evidence}
 }
 
 func wrapCodexUpdateRequiredFromOutput(profile AgentProfile, cause error, output string) error {
@@ -46,7 +58,7 @@ func wrapCodexUpdateRequiredFromOutput(profile AgentProfile, cause error, output
 	if !codexOutputMatchesUpdatePermissionError(output) {
 		return cause
 	}
-	return codexUpdateRequiredError(cause)
+	return codexUpdateRequiredErrorWithEvidence(cause, output)
 }
 
 func wrapCodexUpdateRequiredFromScrollback(profile AgentProfile, cause error, scrollback []string) error {
@@ -71,4 +83,17 @@ func codexOutputMatchesUpdatePermissionError(output string) bool {
 		(strings.Contains(output, "eacces") || strings.Contains(output, "permission denied") || strings.Contains(output, "operation was rejected"))
 
 	return globalInstallFailed || nodeModulesPermissionDenied
+}
+
+func codexUpdateEvidence(output string) string {
+	output = strings.TrimSpace(output)
+	if output == "" {
+		return ""
+	}
+	const maxEvidenceLen = 600
+	evidence := strings.Join(strings.Fields(output), " ")
+	if len(evidence) <= maxEvidenceLen {
+		return evidence
+	}
+	return evidence[:maxEvidenceLen] + "..."
 }
