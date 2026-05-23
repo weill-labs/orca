@@ -445,6 +445,16 @@ func (c *circuitGitHubClient) lookupPRTerminalState(ctx context.Context, prNumbe
 	})
 }
 
+func (c *circuitGitHubClient) lookupPRTerminalStates(ctx context.Context, refs []githubPRTerminalStateRef) (map[prTerminalStateKey]prTerminalState, error) {
+	batch, ok := c.base.(prTerminalStateBatchLookup)
+	if !ok {
+		return nil, nil
+	}
+	return withCircuit(c.breaker, func() (map[prTerminalStateKey]prTerminalState, error) {
+		return batch.lookupPRTerminalStates(ctx, refs)
+	})
+}
+
 func (c *circuitGitHubClient) lookupPRMergeability(ctx context.Context, prNumber int) (prMergeabilityPayload, bool, error) {
 	return withCircuit3(c.breaker, func() (prMergeabilityPayload, bool, error) {
 		return c.base.lookupPRMergeability(ctx, prNumber)

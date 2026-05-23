@@ -597,16 +597,29 @@ func parsePaneList(output string) ([]Pane, error) {
 
 func parsePaneListHeader(header string) error {
 	fields := splitPaneListFields(header)
-	want := []string{"PANE", "NAME", "HOST", "BRANCH", "IDLE", "WINDOW", "TASK", "META"}
+	for _, want := range [][]string{
+		{"PANE", "NAME", "HOST", "BRANCH", "IDLE", "WINDOW", "TASK", "META"},
+		{"PANE", "NAME", "HOST", "BRANCH", "IDLE", "WINDOW", "ZOOM TASK", "META"},
+		{"PANE", "NAME", "HOST", "BRANCH", "IDLE", "WINDOW", "ZOOM", "TASK", "META"},
+	} {
+		if paneListHeaderMatches(fields, want) {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("unrecognized pane list header with %d columns: %v", len(fields), fields)
+}
+
+func paneListHeaderMatches(fields, want []string) bool {
 	if len(fields) != len(want) {
-		return fmt.Errorf("got %d columns, want %d", len(fields), len(want))
+		return false
 	}
 	for i := range want {
 		if fields[i] != want[i] {
-			return fmt.Errorf("column %d = %q, want %q", i, fields[i], want[i])
+			return false
 		}
 	}
-	return nil
+	return true
 }
 
 func parsePaneListRow(line string) (Pane, error) {
