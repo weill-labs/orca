@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -11,13 +12,7 @@ func TestGitHubCLIClientLookupPRTerminalStatesPaginatesRefs(t *testing.T) {
 	t.Parallel()
 
 	commands := newFakeCommands()
-	client := newGitHubCLIClient(gitHubCLIClientConfig{
-		project:     "/repo",
-		commands:    commands,
-		now:         func() time.Time { return time.Date(2026, 4, 2, 9, 0, 0, 0, time.UTC) },
-		sleep:       noSleep,
-		maxAttempts: 1,
-	})
+	client := newBatchGitHubTestClient(commands)
 
 	refs := make([]githubPRTerminalStateRef, 0, prTerminalStateGraphQLPageSize+5)
 	for i := 0; i < prTerminalStateGraphQLPageSize+5; i++ {
@@ -57,6 +52,71 @@ func TestGitHubCLIClientLookupPRTerminalStatesPaginatesRefs(t *testing.T) {
 	if gotCount, want := commands.countCalls("gh", prTerminalStateGraphQLArgs(secondPage)), 1; gotCount != want {
 		t.Fatalf("second GraphQL page call count = %d, want %d", gotCount, want)
 	}
+}
+
+func TestGitHubCLIClientLookupPRTerminalStatePageHandlesEmptyInputs(t *testing.T) {
+	t.Parallel()
+
+	commands := newFakeCommands()
+	client := newBatchGitHubTestClient(commands)
+
+	got, err := client.lookupPRTerminalStatePage(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("lookupPRTerminalStatePage(nil) error = %v", err)
+	}
+	if got != nil {
+		t.Fatalf("lookupPRTerminalStatePage(nil) = %#v, want nil", got)
+	}
+
+	refs := []githubPRTerminalStateRef{
+		{Key: prTerminalStateKey{Project: "/repo", PRNumber: 42}, Owner: "weill-labs", Repo: "orca", PRNumber: 42},
+	}
+	commands.queue("gh", prTerminalStateGraphQLArgs(refs), "", nil)
+	_, err = client.lookupPRTerminalStatePage(context.Background(), refs)
+	if err == nil || !strings.Contains(err.Error(), "empty response") {
+		t.Fatalf("lookupPRTerminalStatePage(empty response) error = %v, want empty response error", err)
+	}
+}
+
+func TestGitHubCLIClientLookupPRTerminalStatePageSkipsMissingPullRequests(t *testing.T) {
+	t.Parallel()
+
+	commands := newFakeCommands()
+	client := newBatchGitHubTestClient(commands)
+
+	refs := []githubPRTerminalStateRef{
+		{Key: prTerminalStateKey{Project: "/repo", PRNumber: 41}, Owner: "weill-labs", Repo: "orca", PRNumber: 41},
+		{Key: prTerminalStateKey{Project: "/repo", PRNumber: 42}, Owner: "weill-labs", Repo: "orca", PRNumber: 42},
+		{Key: prTerminalStateKey{Project: "/repo", PRNumber: 43}, Owner: "weill-labs", Repo: "orca", PRNumber: 43},
+	}
+	commands.queue("gh", prTerminalStateGraphQLArgs(refs), `{
+		"data": {
+			"pr0": null,
+			"pr1": {"pullRequest": null},
+			"pr2": {"pullRequest": {"number": 43, "merged": true, "mergedAt": "2026-04-02T12:00:00Z", "state": "MERGED"}}
+		}
+	}`, nil)
+
+	got, err := client.lookupPRTerminalStatePage(context.Background(), refs)
+	if err != nil {
+		t.Fatalf("lookupPRTerminalStatePage() error = %v", err)
+	}
+	if gotLen, want := len(got), 1; gotLen != want {
+		t.Fatalf("len(terminal states) = %d, want %d: %#v", gotLen, want, got)
+	}
+	if !got[refs[2].Key].merged {
+		t.Fatalf("terminal state for PR #%d merged = false, want true", refs[2].PRNumber)
+	}
+}
+
+func newBatchGitHubTestClient(commands *fakeCommands) *gitHubCLIClient {
+	return newGitHubCLIClient(gitHubCLIClientConfig{
+		project:     "/repo",
+		commands:    commands,
+		now:         func() time.Time { return time.Date(2026, 4, 2, 9, 0, 0, 0, time.UTC) },
+		sleep:       noSleep,
+		maxAttempts: 1,
+	})
 }
 
 func prTerminalStateGraphQLResponse(refs []githubPRTerminalStateRef) string {

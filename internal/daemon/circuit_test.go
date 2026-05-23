@@ -604,6 +604,26 @@ func TestCircuitGitHubClientWrapsLookupMethods(t *testing.T) {
 	}
 }
 
+func TestCircuitGitHubClientLookupPRTerminalStatesNoBatchSupport(t *testing.T) {
+	t.Parallel()
+
+	client := newCircuitGitHubClient(staticGitHubClient{}, NewCircuitBreaker(time.Now, 3, time.Minute))
+	batch, ok := client.(prTerminalStateBatchLookup)
+	if !ok {
+		t.Fatal("circuit client does not support batch terminal state lookup")
+	}
+
+	got, err := batch.lookupPRTerminalStates(context.Background(), []githubPRTerminalStateRef{
+		{Key: prTerminalStateKey{Project: "/tmp/project", PRNumber: 42}, Owner: "weill-labs", Repo: "orca", PRNumber: 42},
+	})
+	if err != nil {
+		t.Fatalf("lookupPRTerminalStates() error = %v", err)
+	}
+	if got != nil {
+		t.Fatalf("lookupPRTerminalStates() = %#v, want nil", got)
+	}
+}
+
 func TestMonitorCircuitDependencyAccessorsFallbackToBaseDependencies(t *testing.T) {
 	t.Parallel()
 

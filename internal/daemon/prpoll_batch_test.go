@@ -211,6 +211,123 @@ func TestPRPollSkipsUnbatchableOriginsWithoutAbortingBatch(t *testing.T) {
 	}
 }
 
+func TestLookupBatchedPRTerminalStatesReturnsNilForNoRefs(t *testing.T) {
+	t.Parallel()
+
+	d := &Daemon{}
+	got, err := d.lookupBatchedPRTerminalStates(context.Background(), []ActiveAssignment{
+		{Task: Task{Project: "/tmp/project", State: TaskStatePRDetected, PRNumber: 41}},
+	})
+	if err != nil {
+		t.Fatalf("lookupBatchedPRTerminalStates() error = %v", err)
+	}
+	if got != nil {
+		t.Fatalf("lookupBatchedPRTerminalStates() = %#v, want nil", got)
+	}
+}
+
+func TestLookupBatchedPRTerminalStatesNoBatchClient(t *testing.T) {
+	t.Parallel()
+
+	d := &Daemon{
+		project: "/tmp/project",
+		github:  staticGitHubClient{},
+		detectOrigin: func(projectDir string) (string, error) {
+			if projectDir != "/tmp/project" {
+				t.Fatalf("DetectOrigin(%q), want /tmp/project", projectDir)
+			}
+			return "https://github.com/weill-labs/orca.git", nil
+		},
+	}
+	got, err := d.lookupBatchedPRTerminalStates(context.Background(), []ActiveAssignment{
+		{Task: Task{Project: "/tmp/project", State: TaskStatePRDetected, PRNumber: 41}},
+	})
+	if err != nil {
+		t.Fatalf("lookupBatchedPRTerminalStates() error = %v", err)
+	}
+	if got != nil {
+		t.Fatalf("lookupBatchedPRTerminalStates() = %#v, want nil", got)
+	}
+}
+
+func TestPRTerminalStateRefsReturnsNilWhenNoTasksHavePRs(t *testing.T) {
+	t.Parallel()
+
+	d := &Daemon{
+		detectOrigin: func(projectDir string) (string, error) {
+			t.Fatalf("DetectOrigin(%q) should not be called", projectDir)
+			return "", nil
+		},
+	}
+	got, err := d.prTerminalStateRefs([]ActiveAssignment{
+		{Task: Task{Project: "/tmp/project", State: TaskStatePRDetected}},
+	})
+	if err != nil {
+		t.Fatalf("prTerminalStateRefs() error = %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("prTerminalStateRefs() = %#v, want empty", got)
+	}
+}
+
+func TestGitHubOwnerRepoFromOrigin(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		origin    string
+		wantOwner string
+		wantRepo  string
+		wantOK    bool
+	}{
+		{
+			name:      "https github",
+			origin:    "https://github.com/weill-labs/orca.git",
+			wantOwner: "weill-labs",
+			wantRepo:  "orca",
+			wantOK:    true,
+		},
+		{
+			name:      "ssh scp syntax",
+			origin:    "git@github.com:weill-labs/orca.git",
+			wantOwner: "weill-labs",
+			wantRepo:  "orca",
+			wantOK:    true,
+		},
+		{
+			name:      "plain github path",
+			origin:    "github.com/weill-labs/orca",
+			wantOwner: "weill-labs",
+			wantRepo:  "orca",
+			wantOK:    true,
+		},
+		{
+			name:   "non github host",
+			origin: "https://gitlab.com/weill-labs/orca.git",
+		},
+		{
+			name:   "malformed github path",
+			origin: "https://github.com/weill-labs",
+		},
+		{
+			name:   "nested repo path",
+			origin: "https://github.com/weill-labs/orca/extra.git",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			gotOwner, gotRepo, gotOK := githubOwnerRepoFromOrigin(tt.origin)
+			if gotOwner != tt.wantOwner || gotRepo != tt.wantRepo || gotOK != tt.wantOK {
+				t.Fatalf("githubOwnerRepoFromOrigin(%q) = %q, %q, %t; want %q, %q, %t", tt.origin, gotOwner, gotRepo, gotOK, tt.wantOwner, tt.wantRepo, tt.wantOK)
+			}
+		})
+	}
+}
+
 func setTaskPRRepoForTest(t *testing.T, deps *testDeps, issue, prRepo string) {
 	t.Helper()
 
