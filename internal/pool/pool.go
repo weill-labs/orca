@@ -452,6 +452,8 @@ func (m *Manager) CreateClone(ctx context.Context) (string, error) {
 	if err := ensureCloneMarker(clonePath); err != nil {
 		return "", err
 	}
+	// Local clone origins may have a feature branch checked out; setup hooks
+	// and worker handoff must start from the configured base branch instead.
 	if err := m.resetCloneToOriginBase(ctx, clonePath); err != nil {
 		return "", fmt.Errorf("reset new clone %q to %s: %w", clonePath, m.originBaseBranchRef(), err)
 	}
