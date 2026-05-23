@@ -635,6 +635,7 @@ func TestParsePaneList(t *testing.T) {
 
 	header := fmt.Sprintf("%-6s %-20s %-15s %-30s %-9s %-10s %-12s %s", "PANE", "NAME", "HOST", "BRANCH", "IDLE", "WINDOW", "TASK", "META")
 	headerWithZoom := fmt.Sprintf("%-6s %-20s %-15s %-30s %-9s %-10s %-4s %-12s %s", "PANE", "NAME", "HOST", "BRANCH", "IDLE", "WINDOW", "ZOOM", "TASK", "META")
+	compactZoomHeader := "PANE   NAME                 HOST            BRANCH                         IDLE      WINDOW     ZOOM TASK         META"
 
 	tests := []struct {
 		name    string
@@ -688,6 +689,17 @@ func TestParsePaneList(t *testing.T) {
 			}, "\n"),
 			want: []Pane{
 				{ID: "481", Name: "pane-481", Window: "alphacritic", Lead: true},
+			},
+		},
+		{
+			name: "parses compact zoom task header",
+			output: strings.Join([]string{
+				compactZoomHeader,
+				fmt.Sprintf("%-6s %-20s %-15s %-30s %-9s %-10s %-6s %-12s %s", "10", "w-LAB-1058", "local", "LAB-1058", "--", "main", "-", "LAB-1058", "agent=codex"),
+				"",
+			}, "\n"),
+			want: []Pane{
+				{ID: "10", Name: "w-LAB-1058", Window: "main"},
 			},
 		},
 		{
