@@ -597,14 +597,21 @@ func parsePaneList(output string) ([]Pane, error) {
 
 func parsePaneListHeader(header string) error {
 	fields := splitPaneListFields(header)
-	want := []string{"PANE", "NAME", "HOST", "BRANCH", "IDLE", "WINDOW", "TASK", "META"}
-	if len(fields) != len(want) {
-		return fmt.Errorf("got %d columns, want %d", len(fields), len(want))
+	// amux added a ZOOM column between WINDOW and TASK in LAB-1847. The row
+	// parser captures window via idle-marker-relative regex and reads the
+	// trailing meta string as a whole, so extra columns between WINDOW and
+	// META don't break it — only the header check needs to tolerate them.
+	required := []string{"PANE", "NAME", "HOST", "BRANCH", "IDLE", "WINDOW"}
+	if len(fields) < len(required)+1 {
+		return fmt.Errorf("got %d columns, want at least %d", len(fields), len(required)+1)
 	}
-	for i := range want {
-		if fields[i] != want[i] {
-			return fmt.Errorf("column %d = %q, want %q", i, fields[i], want[i])
+	for i, want := range required {
+		if fields[i] != want {
+			return fmt.Errorf("column %d = %q, want %q", i, fields[i], want)
 		}
+	}
+	if fields[len(fields)-1] != "META" {
+		return fmt.Errorf("last column = %q, want %q", fields[len(fields)-1], "META")
 	}
 	return nil
 }

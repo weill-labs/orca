@@ -732,6 +732,27 @@ func TestParsePaneList(t *testing.T) {
 			wantErr: "parse pane id from list row",
 		},
 		{
+			name: "accepts new ZOOM column layout from amux LAB-1847",
+			output: strings.Join([]string{
+				fmt.Sprintf("%-6s %-20s %-15s %-30s %-9s %-10s %-4s %-12s %s", "PANE", "NAME", "HOST", "BRANCH", "IDLE", "WINDOW", "ZOOM", "TASK", "META"),
+				fmt.Sprintf("%-6s %-20s %-15s %-30s %-9s %-10s %-4s %-12s %s", "7", "pane-7", "local", "main", "--", "orca", "", "", "lead"),
+				fmt.Sprintf("%-6s %-20s %-15s %-30s %-9s %-10s %-4s %-12s %s", "8", "w-LAB-712", "local", "LAB-712", "--", "main", "Z", "LAB-712", "agent=codex"),
+				"",
+			}, "\n"),
+			want: []Pane{
+				{ID: "7", Name: "pane-7", Window: "orca", Lead: true},
+				{ID: "8", Name: "w-LAB-712", Window: "main"},
+			},
+		},
+		{
+			name: "rejects header missing META as last column",
+			output: strings.Join([]string{
+				"PANE   NAME   HOST   BRANCH   IDLE   WINDOW   TASK   TRAILING",
+				"",
+			}, "\n"),
+			wantErr: `last column = "TRAILING", want "META"`,
+		},
+		{
 			name: "rejects row without idle and window columns",
 			output: strings.Join([]string{
 				header,
