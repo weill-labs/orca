@@ -247,6 +247,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 	d.cleanupDrainCtx, d.cleanupDrainCancel = context.WithCancel(context.Background())
 	d.lastHeartbeat.Store(d.now().UnixMilli())
 	d.releaseStalePoolClones(ctx)
+	d.reconcileOrphanWorkers(ctx)
 	d.reconcileStrandedMergedTasks(ctx)
 	d.reconcileNonTerminalAssignments(ctx)
 	d.refreshTaskMonitors(ctx)
@@ -416,10 +417,27 @@ func (d *Daemon) cancel(ctx context.Context, projectPath, issue string) error {
 			if !errors.Is(lookupErr, ErrTaskNotFound) {
 				return lookupErr
 			}
+			if cleaned, cleanupErr := d.cleanupOrphanWorkersForIssue(ctx, projectPath, issue, orphanWorkerCleanupMode{
+				killPane:  true,
+				taskEvent: true,
+				message:   "orphan worker cancelled and cleared",
+			}); cleanupErr != nil || cleaned > 0 {
+				return cleanupErr
+			}
 			return err
 		}
 		if task.Status == TaskStatusStarting {
 			return d.cancelStartingAssignment(ctx, projectPath, task)
+		}
+		if !taskBlocksAssignment(task.Status) {
+			if cleaned, cleanupErr := d.cleanupOrphanWorkersForIssue(ctx, projectPath, issue, orphanWorkerCleanupMode{
+				killPane:  true,
+				taskEvent: true,
+				branch:    task.Branch,
+				message:   "orphan worker cancelled and cleared",
+			}); cleanupErr != nil || cleaned > 0 {
+				return cleanupErr
+			}
 		}
 	}
 	if err != nil {
