@@ -8,6 +8,24 @@ import (
 	"testing"
 )
 
+func TestWorkersForIssueWithEmptyIssueReturnsNil(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	// Seed a worker so we'd detect any accidental list traversal.
+	seedOrphanWorker(t, deps, "LAB-1863", "worker-stub", "pane-stub", "")
+
+	d := deps.newDaemon(t)
+
+	got, err := d.workersForIssue(context.Background(), "/tmp/project", "")
+	if err != nil {
+		t.Fatalf("workersForIssue(empty) error = %v, want nil", err)
+	}
+	if got != nil {
+		t.Fatalf("workersForIssue(empty) = %#v, want nil", got)
+	}
+}
+
 func TestDaemonStartSweepsOrphanWorkersAndKeepsHealthyWorkers(t *testing.T) {
 	t.Parallel()
 

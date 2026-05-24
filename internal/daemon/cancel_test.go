@@ -247,6 +247,85 @@ func TestCancelCleansOrphanWorkerWhenTaskIsTerminal(t *testing.T) {
 	deps.events.requireTypes(t, EventTaskCancelled)
 }
 
+func TestCancelDoesNotKillPaneWhenAnotherTaskBlocks(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	now := deps.clock.Now()
+
+	// Two workers share the same pane. Worker A has an active task
+	// (LAB-1860). Worker B is an orphan (LAB-1861 has no task row).
+	// Canceling B must not kill the pane because A is still using it.
+	const sharedPane = "pane-shared"
+
+	deps.state.putTaskForTest(Task{
+		Project:   "/tmp/project",
+		Issue:     "LAB-1860",
+		PaneID:    sharedPane,
+		Status:    TaskStatusActive,
+		State:     TaskStateAssigned,
+		Branch:    "LAB-1860",
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+	if err := deps.state.PutWorker(context.Background(), Worker{
+		Project:        "/tmp/project",
+		WorkerID:       "worker-active",
+		PaneID:         sharedPane,
+		PaneName:       workerPaneName("LAB-1860", "worker-active"),
+		Issue:          "LAB-1860",
+		ClonePath:      deps.pool.clone.Path,
+		AgentProfile:   "codex",
+		Health:         WorkerHealthHealthy,
+		LastActivityAt: now,
+		CreatedAt:      now,
+		LastSeenAt:     now,
+		UpdatedAt:      now,
+	}); err != nil {
+		t.Fatalf("PutWorker() active = %v", err)
+	}
+
+	orphan := seedOrphanWorker(t, deps, "LAB-1861", "worker-orphan", sharedPane, deps.pool.clone.Path)
+
+	d := deps.newDaemon(t)
+	d.started.Store(true)
+
+	if err := d.Cancel(context.Background(), "LAB-1861"); err != nil {
+		t.Fatalf("Cancel() error = %v", err)
+	}
+
+	if got := deps.amux.killCalls; len(got) != 0 {
+		t.Fatalf("kill calls = %#v, want none — pane shared with active task", got)
+	}
+	if _, ok := deps.state.worker(orphan.WorkerID); ok {
+		t.Fatal("orphan worker row still present after cancel")
+	}
+	if got := deps.pool.releasedClones(); len(got) != 1 || got[0].Path != deps.pool.clone.Path {
+		t.Fatalf("released clones = %#v, want orphan's clone released", got)
+	}
+}
+
+func TestCancelCleansOrphanWorkerWithNoClonePath(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	worker := seedOrphanWorker(t, deps, "LAB-1862", "worker-noclone", "pane-noclone", "")
+	d := deps.newDaemon(t)
+	d.started.Store(true)
+
+	if err := d.Cancel(context.Background(), "LAB-1862"); err != nil {
+		t.Fatalf("Cancel() error = %v", err)
+	}
+
+	if _, ok := deps.state.worker(worker.WorkerID); ok {
+		t.Fatal("orphan worker row still present after cancel")
+	}
+	if got := deps.pool.releasedClones(); len(got) != 0 {
+		t.Fatalf("released clones = %#v, want none — worker had no clone path", got)
+	}
+	deps.events.requireTypes(t, EventTaskCancelled)
+}
+
 func TestCancelKeepsOrphanWorkerWhenCleanupFails(t *testing.T) {
 	t.Parallel()
 
