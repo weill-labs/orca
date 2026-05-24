@@ -379,6 +379,27 @@ func (d *Daemon) findPRRepoDrift(ctx context.Context, task Task, alreadyCheckedP
 }
 
 func (d *Daemon) knownPRLookupProjects(ctx context.Context, preferredProject string) ([]string, error) {
+	projects, err := d.rawKnownPRLookupProjects(ctx, preferredProject)
+	if err != nil {
+		return nil, err
+	}
+
+	available := projects[:0]
+	for _, project := range projects {
+		missing, err := prLookupProjectCloneMissing(project)
+		if err != nil {
+			return nil, err
+		}
+		if missing {
+			d.emitPRLookupCloneMissingOnce(ctx, project)
+			continue
+		}
+		available = append(available, project)
+	}
+	return available, nil
+}
+
+func (d *Daemon) rawKnownPRLookupProjects(ctx context.Context, preferredProject string) ([]string, error) {
 	seen := make(map[string]bool)
 	projects := make([]string, 0)
 	add := func(project string) {
@@ -401,6 +422,14 @@ func (d *Daemon) knownPRLookupProjects(ctx context.Context, preferredProject str
 		add(project)
 	}
 	return projects, nil
+}
+
+func prLookupProjectCloneMissing(project string) (bool, error) {
+	project = strings.TrimSpace(project)
+	if project == "" || !isOrcaPoolClonePath(project) {
+		return false, nil
+	}
+	return managedClonePathUnavailable(project)
 }
 
 func nonTrivialPRLookupBranch(branch string) bool {

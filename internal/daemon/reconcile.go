@@ -141,6 +141,15 @@ func (d *Daemon) Reconcile(ctx context.Context, req ReconcileRequest) (Reconcile
 		result.Findings = append(result.Findings, finding)
 	}
 
+	prLookupFindings, err := d.reconcilePRLookupProjectDrift(ctx, projectPath)
+	if err != nil {
+		return result, errors.Join(fixErr, err)
+	}
+	for _, finding := range prLookupFindings {
+		d.emitReconcileFinding(ctx, projectPath, finding)
+		result.Findings = append(result.Findings, finding)
+	}
+
 	sort.Slice(result.Findings, func(i, j int) bool {
 		left := result.Findings[i]
 		right := result.Findings[j]
@@ -241,6 +250,41 @@ func (d *Daemon) reconcilePaneDrift(ctx context.Context, projectPath string) ([]
 		})
 	}
 
+	return findings, nil
+}
+
+func (d *Daemon) reconcilePRLookupProjectDrift(ctx context.Context, projectPath string) ([]ReconcileFinding, error) {
+	projects, err := d.rawKnownPRLookupProjects(ctx, projectPath)
+	if err != nil {
+		return nil, fmt.Errorf("list known PR lookup projects: %w", err)
+	}
+
+	findings := make([]ReconcileFinding, 0)
+	for _, project := range projects {
+		project = strings.TrimSpace(project)
+		if project == "" || !isOrcaPoolClonePath(project) {
+			continue
+		}
+		missing, err := managedClonePathUnavailable(project)
+		switch {
+		case err != nil:
+			findings = append(findings, ReconcileFinding{
+				Kind:      ReconcileClonePathError,
+				ClonePath: project,
+				PRState:   reconcilePRStateNone,
+				Action:    reconcileActionReported,
+				Message:   prLookupClonePathInspectionErrorMessage(project, err),
+			})
+		case missing:
+			findings = append(findings, ReconcileFinding{
+				Kind:      ReconcileCloneMissing,
+				ClonePath: project,
+				PRState:   reconcilePRStateNone,
+				Action:    reconcileActionReported,
+				Message:   prLookupCloneMissingMessage(project),
+			})
+		}
+	}
 	return findings, nil
 }
 
