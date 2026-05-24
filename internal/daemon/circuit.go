@@ -134,6 +134,16 @@ func (c *CircuitBreaker) RecordFailure(err error) {
 	}
 }
 
+func (c *CircuitBreaker) IsOpen() bool {
+	if c == nil {
+		return false
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.isOpenLocked()
+}
+
 func (c *CircuitBreaker) shouldCloseLocked() bool {
 	return c.isOpenLocked() && !c.now().Before(c.openedAt.Add(c.activeCooldown))
 }

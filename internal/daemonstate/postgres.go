@@ -2,6 +2,7 @@ package state
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -297,6 +298,30 @@ func OpenPostgres(dsn string) (*PostgresStore, error) {
 func (s *PostgresStore) Close() error {
 	s.pool.Close()
 	return nil
+}
+
+func (s *PostgresStore) PostgresConnectionStats() (int, int, int) {
+	if s == nil || s.pool == nil {
+		return 0, 0, 0
+	}
+	stats := s.pool.Stat()
+	return int(stats.TotalConns()), int(stats.AcquiredConns()), int(stats.IdleConns())
+}
+
+func (s *PostgresStore) ReconcileFindingCount(ctx context.Context, project string) (int, error) {
+	if s == nil || s.pool == nil {
+		return 0, errors.New("postgres store is not open")
+	}
+	var count int64
+	err := s.pool.QueryRow(ctx, `
+SELECT COUNT(*)
+FROM events
+WHERE project = $1 AND kind = 'reconcile.finding'
+`, project).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count reconcile findings: %w", err)
+	}
+	return int(count), nil
 }
 
 func (s *PostgresStore) EnsureSchema(ctx context.Context) error {

@@ -18,6 +18,7 @@ const (
 	defaultPromptSettleDuration     = 2 * time.Second
 	defaultTrustPromptTimeout       = 2 * time.Second
 	defaultPollInterval             = 30 * time.Second
+	defaultStatsInterval            = 5 * time.Minute
 	defaultMergeGracePeriod         = 10 * time.Minute
 	defaultShutdownCleanupDeadline  = 30 * time.Second
 	defaultDaemonStopTimeout        = defaultShutdownCleanupDeadline + 5*time.Second
@@ -46,6 +47,7 @@ type Daemon struct {
 	sleep                   func(context.Context, time.Duration) error
 	captureInterval         time.Duration
 	pollInterval            time.Duration
+	statsInterval           time.Duration
 	mergeGracePeriod        time.Duration
 	shutdownCleanupDeadline time.Duration
 	statusWriter            daemonStatusWriter
@@ -130,6 +132,9 @@ func New(opts Options) (*Daemon, error) {
 	if opts.PollInterval <= 0 {
 		opts.PollInterval = defaultPollInterval
 	}
+	if opts.StatsInterval == 0 {
+		opts.StatsInterval = defaultStatsInterval
+	}
 	if opts.MergeGracePeriod <= 0 {
 		opts.MergeGracePeriod = defaultMergeGracePeriod
 	}
@@ -183,6 +188,7 @@ func New(opts Options) (*Daemon, error) {
 		sleep:                   opts.Sleep,
 		captureInterval:         opts.CaptureInterval,
 		pollInterval:            opts.PollInterval,
+		statsInterval:           opts.StatsInterval,
 		mergeGracePeriod:        opts.MergeGracePeriod,
 		shutdownCleanupDeadline: opts.ShutdownCleanupDeadline,
 		statusWriter:            opts.DaemonStatusWriter,
