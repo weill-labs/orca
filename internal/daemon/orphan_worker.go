@@ -188,16 +188,12 @@ func projectPathFromPoolClone(clonePath string) string {
 		return ""
 	}
 	cleaned := filepath.Clean(clonePath)
-	poolDir := filepath.Dir(cleaned)
-	if filepath.Base(poolDir) != "pool" {
-		return ""
-	}
-	orcaDir := filepath.Dir(poolDir)
-	if filepath.Base(orcaDir) != ".orca" {
-		return ""
-	}
-	projectPath := filepath.Dir(orcaDir)
+	poolRoot := filepath.Dir(cleaned)
+	projectPath := filepath.Dir(filepath.Dir(poolRoot))
 	if projectPath == "." {
+		return ""
+	}
+	if filepath.Clean(filepath.Join(projectPath, OrcaPoolSubdir)) != poolRoot {
 		return ""
 	}
 	return projectPath
