@@ -13,6 +13,7 @@ import (
 
 	"github.com/weill-labs/orca/internal/amux"
 	"github.com/weill-labs/orca/internal/linear"
+	"github.com/weill-labs/orca/internal/pool"
 )
 
 var linearIssueIdentifierPattern = regexp.MustCompile(`^[A-Z][A-Z0-9]*-\d+$`)
@@ -85,6 +86,7 @@ func (d *Daemon) prepareClone(ctx context.Context, clonePath, branch, workerID s
 		{"fetch", "origin", "main"},
 		{"checkout", "--detach", "origin/main"},
 		{"reset", "--hard", "origin/main"},
+		pool.CleanCloneArgs(),
 	}
 	if name, email := workerGitIdentity(workerID); name != "" && email != "" {
 		commands = append(commands,

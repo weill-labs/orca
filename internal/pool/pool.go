@@ -31,6 +31,13 @@ const (
 
 const CloneFailureCooldown = 5 * time.Minute
 
+// CleanCloneArgs returns the git-clean arguments used for task handoff cleanup.
+// The pool marker and setup-hook sentinels are Orca-owned clone metadata, not
+// assignment workspace files.
+func CleanCloneArgs() []string {
+	return []string{"clean", "-fdx", "-e", ClonePoolMarker, "-e", ".setup-*"}
+}
+
 type Clone struct {
 	Name          string
 	Path          string
@@ -796,6 +803,9 @@ func (m *Manager) prepareClone(ctx context.Context, path, issueBranch string) er
 	if err := m.resetCloneToOriginBase(ctx, clonePath); err != nil {
 		return err
 	}
+	if err := m.runner.Run(ctx, clonePath, "git", CleanCloneArgs()...); err != nil {
+		return err
+	}
 	if err := m.runner.Run(ctx, clonePath, "git", "checkout", "-B", issueBranch); err != nil {
 		return err
 	}
@@ -809,7 +819,7 @@ func (m *Manager) cleanupClone(ctx context.Context, path, taskBranch string) err
 		return err
 	}
 	commands := append([][]string{{"reset", "--hard"}}, m.resetToOriginBaseCommands()...)
-	commands = append(commands, []string{"clean", "-fdx", "-e", ClonePoolMarker})
+	commands = append(commands, CleanCloneArgs())
 
 	for _, args := range commands {
 		if err := m.runner.Run(ctx, clonePath, "git", args...); err != nil {
