@@ -168,6 +168,7 @@ func (d *Daemon) runCaptureTick(ctx context.Context) *pollTickTiming {
 func (d *Daemon) runPollTick(ctx context.Context) *pollTickTiming {
 	timing := newPollTickTiming("poll", d.now)
 	ctx = withPollTickTiming(ctx, timing)
+	ctx = withPRLookupCloneEventTracker(ctx)
 	ctx = d.withMonitorCircuits(ctx)
 	done := timing.stage("merge_updates_initial")
 	if d.mergeQueueUpdateDone == nil {

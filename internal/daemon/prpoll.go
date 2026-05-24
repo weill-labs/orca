@@ -379,6 +379,27 @@ func (d *Daemon) findPRRepoDrift(ctx context.Context, task Task, alreadyCheckedP
 }
 
 func (d *Daemon) knownPRLookupProjects(ctx context.Context, preferredProject string) ([]string, error) {
+	projects, err := d.rawKnownPRLookupProjects(ctx, preferredProject)
+	if err != nil {
+		return nil, err
+	}
+
+	available := projects[:0]
+	for _, project := range projects {
+		cloneStatus := inspectPRLookupProjectClone(project)
+		if cloneStatus.inspectErr != nil {
+			return nil, cloneStatus.inspectErr
+		}
+		if cloneStatus.missing {
+			d.emitPRLookupCloneMissingOnce(ctx, cloneStatus.path)
+			continue
+		}
+		available = append(available, project)
+	}
+	return available, nil
+}
+
+func (d *Daemon) rawKnownPRLookupProjects(ctx context.Context, preferredProject string) ([]string, error) {
 	seen := make(map[string]bool)
 	projects := make([]string, 0)
 	add := func(project string) {
@@ -401,6 +422,27 @@ func (d *Daemon) knownPRLookupProjects(ctx context.Context, preferredProject str
 		add(project)
 	}
 	return projects, nil
+}
+
+type prLookupProjectCloneStatus struct {
+	path       string
+	poolClone  bool
+	missing    bool
+	inspectErr error
+}
+
+func inspectPRLookupProjectClone(project string) prLookupProjectCloneStatus {
+	project = strings.TrimSpace(project)
+	if project == "" || !isOrcaPoolClonePath(project) {
+		return prLookupProjectCloneStatus{path: project}
+	}
+	missing, err := managedClonePathUnavailable(project)
+	return prLookupProjectCloneStatus{
+		path:       project,
+		poolClone:  true,
+		missing:    missing,
+		inspectErr: err,
+	}
 }
 
 func nonTrivialPRLookupBranch(branch string) bool {

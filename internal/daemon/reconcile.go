@@ -141,6 +141,15 @@ func (d *Daemon) Reconcile(ctx context.Context, req ReconcileRequest) (Reconcile
 		result.Findings = append(result.Findings, finding)
 	}
 
+	prLookupFindings, err := d.reconcilePRLookupProjectDrift(ctx, projectPath)
+	if err != nil {
+		return result, errors.Join(fixErr, err)
+	}
+	for _, finding := range prLookupFindings {
+		d.emitReconcileFinding(ctx, projectPath, finding)
+		result.Findings = append(result.Findings, finding)
+	}
+
 	sort.Slice(result.Findings, func(i, j int) bool {
 		left := result.Findings[i]
 		right := result.Findings[j]
@@ -150,7 +159,10 @@ func (d *Daemon) Reconcile(ctx context.Context, req ReconcileRequest) (Reconcile
 		if left.Issue != right.Issue {
 			return left.Issue < right.Issue
 		}
-		return left.PaneID < right.PaneID
+		if left.PaneID != right.PaneID {
+			return left.PaneID < right.PaneID
+		}
+		return left.ClonePath < right.ClonePath
 	})
 
 	return result, fixErr
@@ -241,6 +253,40 @@ func (d *Daemon) reconcilePaneDrift(ctx context.Context, projectPath string) ([]
 		})
 	}
 
+	return findings, nil
+}
+
+func (d *Daemon) reconcilePRLookupProjectDrift(ctx context.Context, projectPath string) ([]ReconcileFinding, error) {
+	projects, err := d.rawKnownPRLookupProjects(ctx, projectPath)
+	if err != nil {
+		return nil, fmt.Errorf("list known PR lookup projects: %w", err)
+	}
+
+	findings := make([]ReconcileFinding, 0)
+	for _, project := range projects {
+		cloneStatus := inspectPRLookupProjectClone(project)
+		if !cloneStatus.poolClone {
+			continue
+		}
+		switch {
+		case cloneStatus.inspectErr != nil:
+			findings = append(findings, ReconcileFinding{
+				Kind:      ReconcileClonePathError,
+				ClonePath: cloneStatus.path,
+				PRState:   reconcilePRStateNone,
+				Action:    reconcileActionReported,
+				Message:   prLookupClonePathInspectionErrorMessage(cloneStatus.path, cloneStatus.inspectErr),
+			})
+		case cloneStatus.missing:
+			findings = append(findings, ReconcileFinding{
+				Kind:      ReconcileCloneMissing,
+				ClonePath: cloneStatus.path,
+				PRState:   reconcilePRStateNone,
+				Action:    reconcileActionReported,
+				Message:   prLookupCloneMissingMessage(cloneStatus.path),
+			})
+		}
+	}
 	return findings, nil
 }
 
@@ -461,15 +507,16 @@ func (d *Daemon) emitReconcileFinding(ctx context.Context, projectPath string, f
 	}
 	message = fmt.Sprintf("reconcile %s: %s", finding.Kind, message)
 	d.emit(ctx, Event{
-		Time:     d.now(),
-		Type:     EventReconcileFinding,
-		Project:  projectPath,
-		Issue:    finding.Issue,
-		PaneID:   finding.PaneID,
-		PaneName: finding.PaneName,
-		Branch:   finding.Branch,
-		PRNumber: finding.PRNumber,
-		Message:  message,
+		Time:      d.now(),
+		Type:      EventReconcileFinding,
+		Project:   projectPath,
+		Issue:     finding.Issue,
+		PaneID:    finding.PaneID,
+		PaneName:  finding.PaneName,
+		ClonePath: finding.ClonePath,
+		Branch:    finding.Branch,
+		PRNumber:  finding.PRNumber,
+		Message:   message,
 	})
 }
 
