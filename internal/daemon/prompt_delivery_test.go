@@ -293,6 +293,25 @@ func TestConfirmPromptDeliveryFailsFastWhenCodexReturnsToShell(t *testing.T) {
 	deps.amux.requireSentKeys(t, "pane-1", nil)
 }
 
+func TestSendAndConfirmWorkingRejectsBareShellWithoutCurrentCommand(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.amux.captureHistorySequence("pane-1", []PaneCapture{{
+		Content: []string{"bash-5.2$"},
+	}})
+	d := deps.newDaemon(t)
+
+	err := d.sendAndConfirmWorking(context.Background(), "pane-1", "Implement LAB-1057")
+	if !errors.Is(err, ErrPromptDeliveryNotConfirmed) {
+		t.Fatalf("sendAndConfirmWorking() error = %v, want ErrPromptDeliveryNotConfirmed", err)
+	}
+	if !strings.Contains(err.Error(), "before prompt delivery and codex returned to shell") {
+		t.Fatalf("sendAndConfirmWorking() error = %v, want returned-to-shell context", err)
+	}
+	deps.amux.requireSentKeys(t, "pane-1", nil)
+}
+
 func TestConfirmPromptDeliveryWrapsCodexUpdateRequiredOnNpmPermissionError(t *testing.T) {
 	t.Parallel()
 

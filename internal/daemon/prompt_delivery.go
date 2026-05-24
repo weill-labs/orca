@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -20,6 +21,10 @@ const (
 )
 
 var ErrPromptDeliveryNotConfirmed = errors.New("prompt delivery not confirmed")
+
+// Match concrete shell prompts without treating short content lines like "sh$"
+// or "fish%" as proof that Codex returned to a shell.
+var shellPromptLinePattern = regexp.MustCompile(`^(?:(?:bash|zsh)(?:-[0-9]+(?:\.[0-9]+)*)?|[A-Za-z0-9._-]+@[A-Za-z0-9._-]+(?::[^$#%>\n]*)?)\s*[$#%>]\s*$`)
 
 type promptDeliveryWaitState int
 
@@ -380,7 +385,7 @@ func promptDeliveryReturnedToShell(profile AgentProfile, snapshot PaneCapture) b
 	}
 	command := strings.TrimSpace(snapshot.CurrentCommand)
 	if command == "" {
-		return false
+		return outputEndsAtShellPrompt(snapshot.Output())
 	}
 	base := filepath.Base(strings.Fields(command)[0])
 	switch strings.ToLower(base) {
@@ -389,6 +394,18 @@ func promptDeliveryReturnedToShell(profile AgentProfile, snapshot PaneCapture) b
 	default:
 		return false
 	}
+}
+
+func outputEndsAtShellPrompt(output string) bool {
+	lines := strings.Split(output, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line == "" {
+			continue
+		}
+		return shellPromptLinePattern.MatchString(line)
+	}
+	return false
 }
 
 func shellCommandReferencesCodex(command string) bool {

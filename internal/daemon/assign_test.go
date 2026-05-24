@@ -702,6 +702,76 @@ func TestAssignSurfacesCodexUpdateRemediationFromPromptDeliveryFailure(t *testin
 	}
 }
 
+func TestAssignSurfacesCodexInstallFailureDuringStartup(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	deps.amux.spawnPanes = []Pane{{ID: "pane-1", Name: "worker-1"}}
+	deps.amux.disableAutomaticReadyCapture = true
+	deps.amux.waitContentResults = []error{
+		amuxapi.ErrWaitContentTimeout,
+		amuxapi.ErrWaitContentTimeout,
+	}
+	installFailure := []string{
+		"npm ERR! code EACCES",
+		"npm ERR! Error: EACCES: permission denied, mkdir '/usr/lib/node_modules/@openai'",
+		"bash-5.2$",
+	}
+	deps.amux.captureSequence("pane-1", []string{strings.Join(installFailure, "\n")})
+	deps.amux.captureHistorySequence("pane-1", []PaneCapture{{
+		Content: installFailure,
+	}})
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	err := d.Assign(ctx, "LAB-1057", "Handle Codex install failure", "codex")
+	if err == nil {
+		t.Fatal("Assign() error = nil, want Codex install failure")
+	}
+	if !errors.Is(err, ErrCodexUpdateRequired) {
+		t.Fatalf("Assign() error = %v, want ErrCodexUpdateRequired", err)
+	}
+	for _, want := range []string{CodexRefreshCommand, "/usr/lib/node_modules", "codex self-update failed"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("Assign() error = %v, want substring %q", err, want)
+		}
+	}
+	if _, ok := deps.state.task("LAB-1057"); ok {
+		t.Fatal("task stored despite Codex install startup failure")
+	}
+	worker, ok := deps.state.worker("worker-01")
+	if !ok {
+		t.Fatal("worker missing after Codex install startup rollback")
+	}
+	if worker.PaneID != "" || worker.Issue != "" || worker.ClonePath != "" {
+		t.Fatalf("worker after startup rollback = %#v, want released worker claim", worker)
+	}
+	if got, want := deps.pool.releasedClones(), []Clone{{
+		Name:          deps.pool.clone.Name,
+		Path:          deps.pool.clone.Path,
+		CurrentBranch: "LAB-1057",
+		AssignedTask:  "LAB-1057",
+	}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("released clones = %#v, want %#v", got, want)
+	}
+	if got, want := deps.amux.killCalls, []string{"pane-1"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("kill calls = %#v, want %#v", got, want)
+	}
+
+	event := requireAssignFailureEvent(t, deps, CodexRefreshCommand)
+	if got, want := event.PaneID, "pane-1"; got != want {
+		t.Fatalf("assign failure pane id = %q, want %q", got, want)
+	}
+}
+
 func TestAssignRollsBackWhenCodexPromptNeverShowsWorking(t *testing.T) {
 	t.Parallel()
 
