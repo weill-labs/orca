@@ -261,27 +261,26 @@ func (d *Daemon) reconcilePRLookupProjectDrift(ctx context.Context, projectPath 
 
 	findings := make([]ReconcileFinding, 0)
 	for _, project := range projects {
-		project = strings.TrimSpace(project)
-		if project == "" || !isOrcaPoolClonePath(project) {
+		cloneStatus := inspectPRLookupProjectClone(project)
+		if !cloneStatus.poolClone {
 			continue
 		}
-		missing, err := managedClonePathUnavailable(project)
 		switch {
-		case err != nil:
+		case cloneStatus.inspectErr != nil:
 			findings = append(findings, ReconcileFinding{
 				Kind:      ReconcileClonePathError,
-				ClonePath: project,
+				ClonePath: cloneStatus.path,
 				PRState:   reconcilePRStateNone,
 				Action:    reconcileActionReported,
-				Message:   prLookupClonePathInspectionErrorMessage(project, err),
+				Message:   prLookupClonePathInspectionErrorMessage(cloneStatus.path, cloneStatus.inspectErr),
 			})
-		case missing:
+		case cloneStatus.missing:
 			findings = append(findings, ReconcileFinding{
 				Kind:      ReconcileCloneMissing,
-				ClonePath: project,
+				ClonePath: cloneStatus.path,
 				PRState:   reconcilePRStateNone,
 				Action:    reconcileActionReported,
-				Message:   prLookupCloneMissingMessage(project),
+				Message:   prLookupCloneMissingMessage(cloneStatus.path),
 			})
 		}
 	}
