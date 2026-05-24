@@ -131,6 +131,40 @@ func TestReconcileReportsDeletedPRLookupClone(t *testing.T) {
 	if !strings.Contains(finding.Message, "PR lookup") || !strings.Contains(finding.Message, missingClonePath) {
 		t.Fatalf("finding.Message = %q, want PR lookup missing clone message", finding.Message)
 	}
+
+	event, ok := deps.events.lastEventOfType(EventReconcileFinding)
+	if !ok {
+		t.Fatal("reconcile finding event missing")
+	}
+	if got, want := event.ClonePath, missingClonePath; got != want {
+		t.Fatalf("event.ClonePath = %q, want %q", got, want)
+	}
+	if event.Issue != "" {
+		t.Fatalf("event.Issue = %q, want empty project-level event", event.Issue)
+	}
+}
+
+func TestReconcileSortsPRLookupCloneFindingsByClonePath(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	highClonePath := filepath.Join("/tmp/project", orcaPoolSubdir, "clone-z")
+	lowClonePath := filepath.Join("/tmp/project", orcaPoolSubdir, "clone-a")
+	seedKnownProjectForPRLookup(t, deps, lowClonePath)
+
+	result, err := deps.newDaemon(t).Reconcile(context.Background(), ReconcileRequest{Project: highClonePath})
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	if len(result.Findings) != 2 {
+		t.Fatalf("findings = %#v, want two deleted PR lookup clone findings", result.Findings)
+	}
+	if got, want := result.Findings[0].ClonePath, lowClonePath; got != want {
+		t.Fatalf("first finding ClonePath = %q, want %q; findings = %#v", got, want, result.Findings)
+	}
+	if got, want := result.Findings[1].ClonePath, highClonePath; got != want {
+		t.Fatalf("second finding ClonePath = %q, want %q; findings = %#v", got, want, result.Findings)
+	}
 }
 
 func TestPRPollRepoDriftReportsLookupCloneStatErrorWithoutGitHubLookup(t *testing.T) {
