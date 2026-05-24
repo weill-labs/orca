@@ -37,6 +37,7 @@ const (
 	EventDaemonStopped              = "daemon.stopped"
 	EventDaemonCircuitOpened        = "daemon.circuit_opened"
 	EventDaemonCircuitClosed        = "daemon.circuit_closed"
+	EventDaemonStats                = "daemon.stats"
 	EventIssueStatusSkipped         = "issue.status_skipped"
 	EventTaskAssigned               = "task.assigned"
 	EventTaskAssignPreflightSkipped = "task.assign_preflight_skipped"
@@ -86,22 +87,24 @@ var (
 )
 
 type Options struct {
-	Project                  string
-	Session                  string
-	PIDPath                  string
-	AllowCurrentPIDReuse     bool
-	Config                   ConfigProvider
-	State                    StateStore
-	Pool                     Pool
-	Amux                     AmuxClient
-	IssueTracker             IssueTracker
-	Commands                 CommandRunner
-	Events                   EventSink
-	Now                      func() time.Time
-	NewTicker                func(time.Duration) Ticker
-	Sleep                    func(context.Context, time.Duration) error
-	CaptureInterval          time.Duration
-	PollInterval             time.Duration
+	Project              string
+	Session              string
+	PIDPath              string
+	AllowCurrentPIDReuse bool
+	Config               ConfigProvider
+	State                StateStore
+	Pool                 Pool
+	Amux                 AmuxClient
+	IssueTracker         IssueTracker
+	Commands             CommandRunner
+	Events               EventSink
+	Now                  func() time.Time
+	NewTicker            func(time.Duration) Ticker
+	Sleep                func(context.Context, time.Duration) error
+	CaptureInterval      time.Duration
+	PollInterval         time.Duration
+	// StatsInterval controls daemon.stats emission; zero uses the default and negative disables it.
+	StatsInterval            time.Duration
 	MergeGracePeriod         time.Duration
 	ShutdownCleanupDeadline  time.Duration
 	NewWatchdogTicker        func(time.Duration) Ticker

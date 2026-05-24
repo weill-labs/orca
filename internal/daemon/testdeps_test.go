@@ -75,21 +75,23 @@ func (d *testDeps) newDaemonWithOptions(t *testing.T, mutate func(*Options)) *Da
 	t.Helper()
 
 	opts := Options{
-		Project:          "/tmp/project",
-		Session:          "test-session",
-		PIDPath:          d.pidPath,
-		Config:           d.config,
-		State:            d.state,
-		Pool:             d.pool,
-		Amux:             d.amux,
-		IssueTracker:     d.issueTracker,
-		Commands:         d.commands,
-		Events:           d.events,
-		Now:              d.clock.Now,
-		NewTicker:        d.tickers.NewTicker,
-		Sleep:            d.sleep,
-		CaptureInterval:  5 * time.Second,
-		PollInterval:     30 * time.Second,
+		Project:         "/tmp/project",
+		Session:         "test-session",
+		PIDPath:         d.pidPath,
+		Config:          d.config,
+		State:           d.state,
+		Pool:            d.pool,
+		Amux:            d.amux,
+		IssueTracker:    d.issueTracker,
+		Commands:        d.commands,
+		Events:          d.events,
+		Now:             d.clock.Now,
+		NewTicker:       d.tickers.NewTicker,
+		Sleep:           d.sleep,
+		CaptureInterval: 5 * time.Second,
+		PollInterval:    30 * time.Second,
+		// Most daemon tests pre-enqueue capture/poll fake tickers; stats tests opt in explicitly.
+		StatsInterval:    -1,
 		MergeGracePeriod: 2 * time.Minute,
 	}
 	if mutate != nil {

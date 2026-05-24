@@ -57,7 +57,9 @@ func TestDaemonStatsEmitsOnStatsTicker(t *testing.T) {
 	statsTicker := newFakeTicker()
 	deps.tickers.enqueue(captureTicker, pollTicker, statsTicker)
 
-	d := deps.newDaemon(t)
+	d := deps.newDaemonWithOptions(t, func(opts *Options) {
+		opts.StatsInterval = 5 * time.Minute
+	})
 	ctx := context.Background()
 	if err := d.Start(ctx); err != nil {
 		t.Fatalf("Start() error = %v", err)
@@ -150,6 +152,7 @@ func TestDaemonStatsMessageIncludesPopulatedFields(t *testing.T) {
 	deps.tickers.enqueue(captureTicker, pollTicker, statsTicker)
 
 	d := deps.newDaemonWithOptions(t, func(opts *Options) {
+		opts.StatsInterval = 5 * time.Minute
 		opts.State = daemonStatsTestState{
 			StateStore:      deps.state,
 			openConnections: 7,
@@ -225,7 +228,9 @@ func TestDaemonStatsHandlesMissingOptionalSources(t *testing.T) {
 	statsTicker := newFakeTicker()
 	deps.tickers.enqueue(captureTicker, pollTicker, statsTicker)
 
-	d := deps.newDaemon(t)
+	d := deps.newDaemonWithOptions(t, func(opts *Options) {
+		opts.StatsInterval = 5 * time.Minute
+	})
 	ctx := context.Background()
 	if err := d.Start(ctx); err != nil {
 		t.Fatalf("Start() error = %v", err)

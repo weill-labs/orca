@@ -98,6 +98,22 @@ func (a *sqliteStateAdapter) SetHost(host string) {
 	}
 }
 
+func (a *sqliteStateAdapter) PostgresConnectionStats() (int, int, int) {
+	source, ok := a.store.(postgresConnectionStatsSource)
+	if !ok {
+		return 0, 0, 0
+	}
+	return source.PostgresConnectionStats()
+}
+
+func (a *sqliteStateAdapter) ReconcileFindingCount(ctx context.Context, project string) (int, error) {
+	source, ok := a.store.(reconcileFindingCountSource)
+	if !ok {
+		return 0, nil
+	}
+	return source.ReconcileFindingCount(ctx, project)
+}
+
 func newSQLiteDaemonStatusWriter(store daemonStateStore, project, session string, pid int, startedAt time.Time) *sqliteDaemonStatusWriter {
 	return &sqliteDaemonStatusWriter{
 		store:     store,
