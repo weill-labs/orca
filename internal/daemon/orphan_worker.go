@@ -108,33 +108,37 @@ func (d *Daemon) cleanupOrphanWorker(ctx context.Context, projectPath string, wo
 	issue := normalizeIssueIdentifier(worker.Issue)
 	branch := firstNonEmpty(mode.branch, issue)
 	paneID := strings.TrimSpace(worker.PaneID)
-	if mode.killPane && paneID != "" && !d.paneHasOtherBlockingTask(cleanupCtx, projectPath, paneID, issue) {
+	clonePath := strings.TrimSpace(worker.ClonePath)
+	cleanupProjectPath := orphanWorkerCleanupProjectPath(projectPath, worker)
+	deleteProjectPath := orphanWorkerDeleteProjectPath(projectPath, worker)
+	if mode.killPane && paneID != "" && !d.paneHasOtherBlockingTask(cleanupCtx, cleanupProjectPath, paneID, issue) {
 		if err := ignorePaneAlreadyGoneError(d.amux.KillPane(cleanupCtx, paneID)); err != nil {
 			result = errors.Join(result, fmt.Errorf("kill orphan worker pane %s: %w", paneID, err))
 		}
 	}
 
-	clonePath := strings.TrimSpace(worker.ClonePath)
 	if clonePath != "" {
 		clone := Clone{
 			Name: filepath.Base(clonePath),
 			Path: clonePath,
 		}
-		result = errors.Join(result, d.cleanupCloneAndReleaseForProject(cleanupCtx, projectPath, clone, branch))
+		result = errors.Join(result, d.cleanupCloneAndReleaseForProject(cleanupCtx, cleanupProjectPath, clone, branch))
 	}
 
 	if result != nil {
+		d.emitOrphanWorkerCleanupFailure(cleanupCtx, cleanupProjectPath, worker, issue, paneID, clonePath, branch, result, mode)
 		return result
 	}
 
 	ref := workerRef(worker)
 	if ref == "" {
 		result = errors.Join(result, errors.New("orphan worker has no worker or pane reference"))
-	} else if err := d.state.DeleteWorker(cleanupCtx, projectPath, ref); err != nil && !errors.Is(err, ErrWorkerNotFound) {
+	} else if err := d.state.DeleteWorker(cleanupCtx, deleteProjectPath, ref); err != nil && !errors.Is(err, ErrWorkerNotFound) {
 		result = errors.Join(result, err)
 	}
 
 	if result != nil {
+		d.emitOrphanWorkerCleanupFailure(cleanupCtx, cleanupProjectPath, worker, issue, paneID, clonePath, branch, result, mode)
 		return result
 	}
 
@@ -156,22 +160,71 @@ func (d *Daemon) cleanupOrphanWorker(ctx context.Context, projectPath string, wo
 		})
 	}
 	if mode.reconcileEvent {
-		d.emit(cleanupCtx, Event{
-			Time:         d.now(),
-			Type:         EventReconcileFinding,
-			Project:      projectPath,
-			Issue:        issue,
-			WorkerID:     strings.TrimSpace(worker.WorkerID),
-			PaneID:       paneID,
-			PaneName:     strings.TrimSpace(worker.PaneName),
-			CloneName:    cloneNameForPath(worker.ClonePath),
-			ClonePath:    clonePath,
-			Branch:       branch,
-			AgentProfile: strings.TrimSpace(worker.AgentProfile),
-			Message:      fmt.Sprintf("reconcile %s: %s", ReconcileOrphanWorker, firstNonEmpty(mode.message, "orphan worker row removed")),
-		})
+		d.emitOrphanWorkerReconcileFinding(cleanupCtx, cleanupProjectPath, worker, issue, paneID, clonePath, branch, firstNonEmpty(mode.message, "orphan worker row removed"))
 	}
 	return nil
+}
+
+func orphanWorkerCleanupProjectPath(projectPath string, worker Worker) string {
+	if project := strings.TrimSpace(worker.Project); project != "" {
+		return project
+	}
+	if project := projectPathFromPoolClone(worker.ClonePath); project != "" {
+		return project
+	}
+	return strings.TrimSpace(projectPath)
+}
+
+func orphanWorkerDeleteProjectPath(projectPath string, worker Worker) string {
+	if project := strings.TrimSpace(worker.Project); project != "" {
+		return project
+	}
+	return strings.TrimSpace(projectPath)
+}
+
+func projectPathFromPoolClone(clonePath string) string {
+	clonePath = strings.TrimSpace(clonePath)
+	if clonePath == "" {
+		return ""
+	}
+	cleaned := filepath.Clean(clonePath)
+	poolDir := filepath.Dir(cleaned)
+	if filepath.Base(poolDir) != "pool" {
+		return ""
+	}
+	orcaDir := filepath.Dir(poolDir)
+	if filepath.Base(orcaDir) != ".orca" {
+		return ""
+	}
+	projectPath := filepath.Dir(orcaDir)
+	if projectPath == "." {
+		return ""
+	}
+	return projectPath
+}
+
+func (d *Daemon) emitOrphanWorkerCleanupFailure(ctx context.Context, projectPath string, worker Worker, issue, paneID, clonePath, branch string, err error, mode orphanWorkerCleanupMode) {
+	if !mode.reconcileEvent || err == nil {
+		return
+	}
+	d.emitOrphanWorkerReconcileFinding(ctx, projectPath, worker, issue, paneID, clonePath, branch, fmt.Sprintf("orphan worker cleanup failed: %v", err))
+}
+
+func (d *Daemon) emitOrphanWorkerReconcileFinding(ctx context.Context, projectPath string, worker Worker, issue, paneID, clonePath, branch, message string) {
+	d.emit(ctx, Event{
+		Time:         d.now(),
+		Type:         EventReconcileFinding,
+		Project:      projectPath,
+		Issue:        issue,
+		WorkerID:     strings.TrimSpace(worker.WorkerID),
+		PaneID:       paneID,
+		PaneName:     strings.TrimSpace(worker.PaneName),
+		CloneName:    cloneNameForPath(clonePath),
+		ClonePath:    clonePath,
+		Branch:       branch,
+		AgentProfile: strings.TrimSpace(worker.AgentProfile),
+		Message:      fmt.Sprintf("reconcile %s: %s", ReconcileOrphanWorker, message),
+	})
 }
 
 func (d *Daemon) paneHasOtherBlockingTask(ctx context.Context, projectPath, paneID, issue string) bool {
