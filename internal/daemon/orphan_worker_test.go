@@ -1,0 +1,92 @@
+package daemon
+
+import (
+	"context"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+)
+
+func TestWorkersForIssueWithEmptyIssueReturnsNil(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	// Seed a worker so we'd detect any accidental list traversal.
+	seedOrphanWorker(t, deps, "LAB-1863", "worker-stub", "pane-stub", "")
+
+	d := deps.newDaemon(t)
+
+	got, err := d.workersForIssue(context.Background(), "/tmp/project", "")
+	if err != nil {
+		t.Fatalf("workersForIssue(empty) error = %v, want nil", err)
+	}
+	if got != nil {
+		t.Fatalf("workersForIssue(empty) = %#v, want nil", got)
+	}
+}
+
+func TestDaemonStartSweepsOrphanWorkersAndKeepsHealthyWorkers(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	orphanClonePath := filepath.Join("/tmp/project", OrcaPoolSubdir, "clone-orphan")
+	seedOrphanWorker(t, deps, "LAB-1852", "worker-orphan", "pane-orphan", orphanClonePath)
+	seedActiveAssignment(t, deps, "LAB-1853", "pane-healthy")
+	deps.amux.paneExists = map[string]bool{"pane-healthy": true}
+
+	healthyTask, ok := deps.state.task("LAB-1853")
+	if !ok {
+		t.Fatal("healthy task missing after seed")
+	}
+	healthyWorkerBefore, ok := deps.state.worker(healthyTask.WorkerID)
+	if !ok {
+		t.Fatal("healthy worker missing after seed")
+	}
+
+	d := deps.newDaemon(t)
+	if err := d.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	waitFor(t, "orphan worker startup cleanup", func() bool {
+		_, orphanExists := deps.state.worker("worker-orphan")
+		healthyWorker, healthyExists := deps.state.worker(healthyTask.WorkerID)
+		return !orphanExists &&
+			healthyExists &&
+			healthyWorker.Issue == healthyWorkerBefore.Issue &&
+			healthyWorker.PaneID == healthyWorkerBefore.PaneID
+	})
+
+	if _, ok := deps.state.worker("worker-orphan"); ok {
+		t.Fatal("orphan worker still present after startup")
+	}
+	healthyWorker, ok := deps.state.worker(healthyTask.WorkerID)
+	if !ok {
+		t.Fatal("healthy worker missing after startup")
+	}
+	if got, want := healthyWorker.Issue, "LAB-1853"; got != want {
+		t.Fatalf("healthy worker issue = %q, want %q", got, want)
+	}
+	if got, want := healthyWorker.PaneID, "pane-healthy"; got != want {
+		t.Fatalf("healthy worker pane = %q, want %q", got, want)
+	}
+	if got, want := deps.pool.releasedClones(), []Clone{{
+		Name:          "clone-orphan",
+		Path:          orphanClonePath,
+		CurrentBranch: "LAB-1852",
+		AssignedTask:  "LAB-1852",
+	}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("released clones = %#v, want %#v", got, want)
+	}
+	if got := deps.amux.killCalls; len(got) != 0 {
+		t.Fatalf("startup kill calls = %#v, want none", got)
+	}
+	deps.events.requireTypes(t, EventReconcileFinding, EventDaemonStarted)
+	if got := deps.events.lastMessage(EventReconcileFinding); !strings.Contains(got, ReconcileOrphanWorker) {
+		t.Fatalf("reconcile event message = %q, want orphan worker kind", got)
+	}
+}

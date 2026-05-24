@@ -440,7 +440,7 @@ func dispatchRPCRequest(ctx context.Context, request rpcRequest, instance *Daemo
 			return rpcFailure(request.ID, -32000, err)
 		}
 
-		result, err := taskActionResultForIssue(ctx, store, projectPath, issue)
+		result, err := taskActionResultForCancelledIssue(ctx, store, projectPath, issue, instance.now())
 		if err != nil {
 			return rpcFailure(request.ID, -32000, err)
 		}
