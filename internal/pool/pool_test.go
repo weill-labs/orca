@@ -835,6 +835,38 @@ func TestManagerAllocate(t *testing.T) {
 			},
 		},
 		{
+			name: "cleans ignored stale workspace files before creating issue branch",
+			run: func(t *testing.T, manager *pool.Manager, store *state.SQLiteStore, project string, clones []string) {
+				t.Helper()
+
+				staleFile := filepath.Join(clones[0], "stale", "LAB-1405.txt")
+				mustWriteFile(t, filepath.Join(clones[0], ".git", "info", "exclude"), "stale/\n")
+				mustMkdir(t, filepath.Dir(staleFile))
+				mustWriteFile(t, staleFile, "prior assignment")
+				if got := gitStatusPorcelain(t, clones[0]); !gitStatusClean(got) {
+					t.Fatalf("setup git status --porcelain = %q, want clean worktree", got)
+				}
+
+				clone, err := manager.Allocate(context.Background(), "LAB-1884", "LAB-1884")
+				if err != nil {
+					t.Fatalf("Allocate() error = %v", err)
+				}
+
+				if got, want := gitCurrentBranch(t, clone.Path), "LAB-1884"; got != want {
+					t.Fatalf("current branch = %q, want %q", got, want)
+				}
+				if _, err := os.Stat(staleFile); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("stale file stat error = %v, want not exist", err)
+				}
+				if _, err := os.Stat(filepath.Join(clone.Path, pool.ClonePoolMarker)); err != nil {
+					t.Fatalf("%s stat error = %v", pool.ClonePoolMarker, err)
+				}
+				if got := gitStatusPorcelain(t, clone.Path); !gitStatusClean(got) {
+					t.Fatalf("git status --porcelain = %q, want clean worktree", got)
+				}
+			},
+		},
+		{
 			name: "repairs diverged base branch before creating issue branch",
 			run: func(t *testing.T, manager *pool.Manager, store *state.SQLiteStore, project string, clones []string) {
 				t.Helper()
@@ -1161,6 +1193,36 @@ func TestManagerAllocateFreesCloneWhenPrepareResetFails(t *testing.T) {
 		t.Fatal("Allocate() error = nil, want reset error")
 	}
 	for _, want := range []string{"prepare clone", "reset failed"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("Allocate() error = %v, want substring %q", err, want)
+		}
+	}
+	record := lookupClone(t, store, project, clonePath)
+	if got, want := record.Status, state.CloneStatusFree; got != want {
+		t.Fatalf("record.Status = %q, want %q", got, want)
+	}
+}
+
+func TestManagerAllocateFreesCloneWhenPrepareCleanFails(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	poolDir := filepath.Join(root, "pool")
+	mustMkdir(t, poolDir)
+	origin := newOrigin(t, "main")
+	clonePath := newClone(t, origin, filepath.Join(poolDir, "clone-01"))
+	store := newStore(t)
+	manager := newManager(t, project, staticConfig{
+		poolDir:     poolDir,
+		cloneOrigin: origin,
+	}, store, pool.WithRunner(failCleanRunner{}))
+
+	_, err := manager.Allocate(context.Background(), "LAB-1884", "LAB-1884")
+	if err == nil {
+		t.Fatal("Allocate() error = nil, want clean error")
+	}
+	for _, want := range []string{"prepare clone", "clean failed"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("Allocate() error = %v, want substring %q", err, want)
 		}
@@ -1770,6 +1832,15 @@ func (failResetRunner) Run(_ context.Context, _ string, name string, args ...str
 	}
 	if name == "git" && len(args) > 0 && args[0] == "fetch" {
 		return errors.New("reset failed")
+	}
+	return nil
+}
+
+type failCleanRunner struct{}
+
+func (failCleanRunner) Run(_ context.Context, _ string, name string, args ...string) error {
+	if name == "git" && len(args) > 0 && args[0] == "clean" {
+		return errors.New("clean failed")
 	}
 	return nil
 }

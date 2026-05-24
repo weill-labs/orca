@@ -25,8 +25,8 @@ var ErrAgentStartupNotReady = errors.New("agent startup not ready")
 
 func (d *Daemon) agentHandshake(ctx context.Context, paneID string, profile AgentProfile) (PaneCapture, error) {
 	d.emitHandshakeEvent(ctx, paneID, profile, handshakeStepWait)
-	if err := d.amux.WaitIdle(ctx, paneID, defaultAgentHandshakeTimeout); err != nil {
-		return PaneCapture{}, fmt.Errorf("wait for startup idle: %w", err)
+	if err := d.waitHandshakeIdle(ctx, paneID, handshakeStepWait); err != nil {
+		return PaneCapture{}, err
 	}
 
 	resumed := false
@@ -61,8 +61,8 @@ func (d *Daemon) agentHandshake(ctx context.Context, paneID string, profile Agen
 		}
 
 		d.emitHandshakeEvent(ctx, paneID, profile, handshakeStepWait)
-		if err := d.amux.WaitIdle(ctx, paneID, defaultAgentHandshakeTimeout); err != nil {
-			return PaneCapture{}, fmt.Errorf("wait for post-startup action idle: %w", err)
+		if err := d.waitHandshakeIdle(ctx, paneID, "wait for post-startup action idle"); err != nil {
+			return PaneCapture{}, err
 		}
 	}
 }
@@ -117,10 +117,25 @@ func (d *Daemon) confirmTrustPromptIfPresent(ctx context.Context, paneID string,
 	}
 	d.emitHandshakeEvent(ctx, paneID, profile, handshakeStepTrustEnter)
 	d.emitHandshakeEvent(ctx, paneID, profile, handshakeStepWait)
-	if err := d.amux.WaitIdle(ctx, paneID, defaultAgentHandshakeTimeout); err != nil {
-		return false, fmt.Errorf("wait for post-startup action idle: %w", err)
+	if err := d.waitHandshakeIdle(ctx, paneID, "wait for post-startup action idle"); err != nil {
+		return false, err
 	}
 	return true, nil
+}
+
+func (d *Daemon) waitHandshakeIdle(ctx context.Context, paneID, stage string) error {
+	if err := d.amux.WaitIdle(ctx, paneID, defaultAgentHandshakeTimeout); err != nil {
+		return d.handshakeIdleError(ctx, paneID, stage, err)
+	}
+	return nil
+}
+
+func (d *Daemon) handshakeIdleError(ctx context.Context, paneID, stage string, cause error) error {
+	snapshot, err := d.amux.CapturePane(context.WithoutCancel(ctx), paneID)
+	if err != nil {
+		return fmt.Errorf("%s: %w (capture pane state failed: %v)", stage, cause, err)
+	}
+	return fmt.Errorf("%s: %w (%s)", stage, cause, describePaneSnapshot(snapshot))
 }
 
 func (d *Daemon) emitHandshakeEvent(ctx context.Context, paneID string, profile AgentProfile, message string) {

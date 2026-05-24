@@ -214,6 +214,7 @@ func TestAssignRollsBackOnAgentHandshakeFailure(t *testing.T) {
 		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"fetch", "origin", "main"}},
 		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"checkout", "--detach", "origin/main"}},
 		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"reset", "--hard", "origin/main"}},
+		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"clean", "-fdx", "-e", ".orca-pool", "-e", ".setup-*"}},
 		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"config", "user.name", "Orca worker-01"}},
 		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"config", "user.email", "worker-01@orca.local"}},
 		{Dir: deps.pool.clone.Path, Name: "git", Args: []string{"checkout", "-B", "LAB-720"}},
@@ -614,6 +615,55 @@ func TestConfirmTrustPromptIfPresentReturnsWaitIdleErrorAfterConfirmation(t *tes
 	}
 	if err == nil || !strings.Contains(err.Error(), "wait for post-startup action idle: idle failed") {
 		t.Fatalf("confirmTrustPromptIfPresent() error = %v, want wrapped idle failure", err)
+	}
+}
+
+func TestAgentHandshakeWaitIdleErrorIncludesPaneSnapshot(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.amux.waitIdleErr = errors.New("timeout waiting for w-LAB-1884 to become idle")
+	deps.amux.capturePaneSequence("pane-1", []PaneCapture{{
+		Content:        []string{"cd '/tmp/project/.orca/pool/clone-02'", "bash-5.2$"},
+		CurrentCommand: "bash",
+	}})
+	d := deps.newDaemon(t)
+
+	_, err := d.agentHandshake(context.Background(), "pane-1", deps.config.profiles["codex"])
+	if err == nil {
+		t.Fatal("agentHandshake() succeeded, want timeout error")
+	}
+	for _, want := range []string{
+		"wait for startup idle",
+		"timeout waiting for w-LAB-1884 to become idle",
+		`current command "bash"`,
+		`pane output "cd '/tmp/project/.orca/pool/clone-02'`,
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("agentHandshake() error = %v, want substring %q", err, want)
+		}
+	}
+}
+
+func TestAgentHandshakeWaitIdleErrorIncludesCaptureFailure(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.amux.waitIdleErr = errors.New("idle failed")
+	deps.amux.capturePaneErr = errors.New("capture failed")
+	d := deps.newDaemon(t)
+
+	_, err := d.agentHandshake(context.Background(), "pane-1", deps.config.profiles["codex"])
+	if err == nil {
+		t.Fatal("agentHandshake() succeeded, want timeout error")
+	}
+	for _, want := range []string{
+		"wait for startup idle: idle failed",
+		"capture pane state failed: capture failed",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("agentHandshake() error = %v, want substring %q", err, want)
+		}
 	}
 }
 
