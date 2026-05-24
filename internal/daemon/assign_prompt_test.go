@@ -26,7 +26,7 @@ func TestWrapAssignmentPrompt(t *testing.T) {
 			name:    "appends only missing title convention reminder",
 			profile: AgentProfile{Name: "codex"},
 			issue:   "LAB-893",
-			prompt:  "Implement daemon core\n\nWhen tests pass, commit, push, and open a PR with gh pr create.",
+			prompt:  "Implement daemon core\n\nWhen tests pass, commit, push, and open a PR with gh pr create --base main.",
 			want:    "Implement daemon core\n\n" + wantedCodexAssignmentReminder("LAB-893"),
 		},
 		{
@@ -120,7 +120,7 @@ func TestAssignAppendsOnlyMissingCodexPRTitleInstructions(t *testing.T) {
 		_ = d.Stop(context.Background())
 	})
 
-	prompt := "Implement daemon core\n\nWhen tests pass, commit, push, and open a PR with gh pr create."
+	prompt := "Implement daemon core\n\nWhen tests pass, commit, push, and open a PR with gh pr create --base main."
 	if err := d.Assign(ctx, "LAB-893", prompt, "codex"); err != nil {
 		t.Fatalf("Assign() error = %v", err)
 	}

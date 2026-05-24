@@ -9,7 +9,7 @@ import (
 
 const (
 	openPRNudgeIdleThreshold = 2 * time.Minute
-	openPRNudgePrompt        = "Tests appear to be passing and no PR is open yet. Commit, push, and open a PR with gh pr create."
+	openPRNudgePrompt        = "Tests appear to be passing and no PR is open yet. Commit, push, and open a PR with " + workerPRCreateCommand + "."
 )
 
 var (

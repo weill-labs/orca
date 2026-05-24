@@ -452,6 +452,11 @@ func (m *Manager) CreateClone(ctx context.Context) (string, error) {
 	if err := ensureCloneMarker(clonePath); err != nil {
 		return "", err
 	}
+	// Local clone origins may have a feature branch checked out; setup hooks
+	// and worker handoff must start from the configured base branch instead.
+	if err := m.resetCloneToOriginBase(ctx, clonePath); err != nil {
+		return "", fmt.Errorf("reset new clone %q to %s: %w", clonePath, m.originBaseBranchRef(), err)
+	}
 	if err := m.runCloneSetupHook(ctx, clonePath); err != nil {
 		return "", err
 	}
@@ -679,12 +684,11 @@ func (m *Manager) prepareClone(ctx context.Context, path, issueBranch string) er
 	if err != nil {
 		return err
 	}
-	commands := append(m.resetToOriginBaseCommands(), []string{"checkout", "-B", issueBranch})
-
-	for _, args := range commands {
-		if err := m.runner.Run(ctx, clonePath, "git", args...); err != nil {
-			return err
-		}
+	if err := m.resetCloneToOriginBase(ctx, clonePath); err != nil {
+		return err
+	}
+	if err := m.runner.Run(ctx, clonePath, "git", "checkout", "-B", issueBranch); err != nil {
+		return err
 	}
 
 	return nil
@@ -721,6 +725,15 @@ func (m *Manager) cleanupClone(ctx context.Context, path, taskBranch string) err
 		return err
 	}
 
+	return nil
+}
+
+func (m *Manager) resetCloneToOriginBase(ctx context.Context, clonePath string) error {
+	for _, args := range m.resetToOriginBaseCommands() {
+		if err := m.runner.Run(ctx, clonePath, "git", args...); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

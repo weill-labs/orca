@@ -5,7 +5,8 @@ import (
 	"strings"
 )
 
-const codexAssignmentPromptSuffix = "When tests pass, commit, push, and open a PR with gh pr create."
+const workerPRCreateCommand = "gh pr create --base main"
+const codexAssignmentPromptSuffix = "When tests pass, commit, push, and open a PR with " + workerPRCreateCommand + "."
 const assignPreflightSkippedPrompt = "Orca skipped its open PR preflight because GitHub is rate limited. Before editing, check whether an open PR already exists for %s. If one exists, fetch and resume that branch before making changes."
 
 func wrapAssignmentPrompt(profile AgentProfile, issue, prompt string) string {

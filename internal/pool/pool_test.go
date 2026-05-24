@@ -605,6 +605,38 @@ func TestManagerAllocate(t *testing.T) {
 			},
 		},
 		{
+			name: "resets feature branch checkout to origin main before creating issue branch",
+			run: func(t *testing.T, manager *pool.Manager, store *state.SQLiteStore, project string, clones []string) {
+				t.Helper()
+
+				configureTestGitIdentity(t, clones[0])
+				mustRun(t, clones[0], "git", "checkout", "-b", "LAB-1856")
+				mustWriteFile(t, filepath.Join(clones[0], "hotfix-only.txt"), "hotfix")
+				mustRun(t, clones[0], "git", "add", "hotfix-only.txt")
+				mustRun(t, clones[0], "git", "commit", "-m", "hotfix branch")
+
+				clone, err := manager.Allocate(context.Background(), "LAB-1852", "LAB-1852")
+				if err != nil {
+					t.Fatalf("Allocate() error = %v", err)
+				}
+
+				if got, want := gitCurrentBranch(t, clone.Path), "LAB-1852"; got != want {
+					t.Fatalf("current branch = %q, want %q", got, want)
+				}
+				if got, want := gitHeadCommit(t, clone.Path), gitRevision(t, clone.Path, "origin/main"); got != want {
+					t.Fatalf("HEAD = %q, want origin/main %q", got, want)
+				}
+				if _, err := os.Stat(filepath.Join(clone.Path, "hotfix-only.txt")); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("hotfix-only.txt stat error = %v, want not exist", err)
+				}
+
+				record := lookupClone(t, store, project, clone.Path)
+				if got, want := record.CurrentBranch, "LAB-1852"; got != want {
+					t.Fatalf("record.CurrentBranch = %q, want %q", got, want)
+				}
+			},
+		},
+		{
 			name: "skips unhealthy clone and allocates next healthy clone",
 			run: func(t *testing.T, manager *pool.Manager, store *state.SQLiteStore, project string, clones []string) {
 				t.Helper()
@@ -745,6 +777,68 @@ func TestManagerCreateClone(t *testing.T) {
 		}
 	})
 
+	t.Run("resets non-bare origin checked out on feature branch", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		project := filepath.Join(root, "project")
+		poolDir := filepath.Join(root, "pool")
+		source := filepath.Join(root, "source")
+		mustRun(t, "", "git", "init", "-b", "main", source)
+		configureTestGitIdentity(t, source)
+		mustWriteFile(t, filepath.Join(source, "README.md"), "hello")
+		mustRun(t, source, "git", "add", "README.md")
+		mustRun(t, source, "git", "commit", "-m", "initial commit")
+		mustRun(t, source, "git", "checkout", "-b", "LAB-1856")
+		mustWriteFile(t, filepath.Join(source, "hotfix-only.txt"), "hotfix")
+		mustRun(t, source, "git", "add", "hotfix-only.txt")
+		mustRun(t, source, "git", "commit", "-m", "hotfix branch")
+
+		store := newStore(t)
+		manager := newManager(t, project, staticConfig{
+			poolDir:     poolDir,
+			cloneOrigin: source,
+		}, store)
+
+		path, err := manager.CreateClone(context.Background())
+		if err != nil {
+			t.Fatalf("CreateClone() error = %v", err)
+		}
+
+		if got, want := gitCurrentBranch(t, path), "HEAD"; got != want {
+			t.Fatalf("current branch = %q, want detached %q", got, want)
+		}
+		if got, want := gitHeadCommit(t, path), gitRevision(t, path, "origin/main"); got != want {
+			t.Fatalf("HEAD = %q, want origin/main %q", got, want)
+		}
+		if _, err := os.Stat(filepath.Join(path, "hotfix-only.txt")); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("hotfix-only.txt stat error = %v, want not exist", err)
+		}
+	})
+
+	t.Run("returns reset error for newly cloned worktree", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		project := filepath.Join(root, "project")
+		poolDir := filepath.Join(root, "pool")
+		store := newStore(t)
+		manager := newManager(t, project, staticConfig{
+			poolDir:     poolDir,
+			cloneOrigin: "unused-origin",
+		}, store, pool.WithRunner(failResetRunner{}))
+
+		_, err := manager.CreateClone(context.Background())
+		if err == nil {
+			t.Fatal("CreateClone() error = nil, want reset error")
+		}
+		for _, want := range []string{"reset new clone", "origin/main", "reset failed"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("CreateClone() error = %v, want substring %q", err, want)
+			}
+		}
+	})
+
 	t.Run("increments clone number", func(t *testing.T) {
 		t.Parallel()
 
@@ -789,6 +883,36 @@ func TestManagerCreateClone(t *testing.T) {
 			t.Fatalf("CreateClone() error = %v, want ErrNoFreeClones", err)
 		}
 	})
+}
+
+func TestManagerAllocateFreesCloneWhenPrepareResetFails(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	poolDir := filepath.Join(root, "pool")
+	mustMkdir(t, poolDir)
+	origin := newOrigin(t, "main")
+	clonePath := newClone(t, origin, filepath.Join(poolDir, "clone-01"))
+	store := newStore(t)
+	manager := newManager(t, project, staticConfig{
+		poolDir:     poolDir,
+		cloneOrigin: origin,
+	}, store, pool.WithRunner(failResetRunner{}))
+
+	_, err := manager.Allocate(context.Background(), "LAB-1875", "LAB-1875")
+	if err == nil {
+		t.Fatal("Allocate() error = nil, want reset error")
+	}
+	for _, want := range []string{"prepare clone", "reset failed"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("Allocate() error = %v, want substring %q", err, want)
+		}
+	}
+	record := lookupClone(t, store, project, clonePath)
+	if got, want := record.Status, state.CloneStatusFree; got != want {
+		t.Fatalf("record.Status = %q, want %q", got, want)
+	}
 }
 
 func TestManagerHealthCheck(t *testing.T) {
@@ -1380,6 +1504,18 @@ type recordingRunner struct {
 func (r *recordingRunner) Run(_ context.Context, _, _ string, _ ...string) error {
 	r.calls++
 	return r.err
+}
+
+type failResetRunner struct{}
+
+func (failResetRunner) Run(_ context.Context, _ string, name string, args ...string) error {
+	if name == "git" && len(args) > 0 && args[0] == "clone" {
+		return os.MkdirAll(args[len(args)-1], 0o755)
+	}
+	if name == "git" && len(args) > 0 && args[0] == "fetch" {
+		return errors.New("reset failed")
+	}
+	return nil
 }
 
 type fakeCWDUsageChecker struct {
