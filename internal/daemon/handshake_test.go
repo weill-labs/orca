@@ -645,6 +645,28 @@ func TestAgentHandshakeWaitIdleErrorIncludesPaneSnapshot(t *testing.T) {
 	}
 }
 
+func TestAgentHandshakeWaitIdleErrorIncludesCaptureFailure(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.amux.waitIdleErr = errors.New("idle failed")
+	deps.amux.capturePaneErr = errors.New("capture failed")
+	d := deps.newDaemon(t)
+
+	_, err := d.agentHandshake(context.Background(), "pane-1", deps.config.profiles["codex"])
+	if err == nil {
+		t.Fatal("agentHandshake() succeeded, want timeout error")
+	}
+	for _, want := range []string{
+		"wait for startup idle: idle failed",
+		"capture pane state failed: capture failed",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("agentHandshake() error = %v, want substring %q", err, want)
+		}
+	}
+}
+
 func TestEmitHandshakeEventUsesWorkerMetadataBeforeTaskFallback(t *testing.T) {
 	t.Parallel()
 

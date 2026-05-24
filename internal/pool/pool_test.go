@@ -1203,6 +1203,36 @@ func TestManagerAllocateFreesCloneWhenPrepareResetFails(t *testing.T) {
 	}
 }
 
+func TestManagerAllocateFreesCloneWhenPrepareCleanFails(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	poolDir := filepath.Join(root, "pool")
+	mustMkdir(t, poolDir)
+	origin := newOrigin(t, "main")
+	clonePath := newClone(t, origin, filepath.Join(poolDir, "clone-01"))
+	store := newStore(t)
+	manager := newManager(t, project, staticConfig{
+		poolDir:     poolDir,
+		cloneOrigin: origin,
+	}, store, pool.WithRunner(failCleanRunner{}))
+
+	_, err := manager.Allocate(context.Background(), "LAB-1884", "LAB-1884")
+	if err == nil {
+		t.Fatal("Allocate() error = nil, want clean error")
+	}
+	for _, want := range []string{"prepare clone", "clean failed"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("Allocate() error = %v, want substring %q", err, want)
+		}
+	}
+	record := lookupClone(t, store, project, clonePath)
+	if got, want := record.Status, state.CloneStatusFree; got != want {
+		t.Fatalf("record.Status = %q, want %q", got, want)
+	}
+}
+
 func TestManagerHealthCheck(t *testing.T) {
 	t.Parallel()
 
@@ -1802,6 +1832,15 @@ func (failResetRunner) Run(_ context.Context, _ string, name string, args ...str
 	}
 	if name == "git" && len(args) > 0 && args[0] == "fetch" {
 		return errors.New("reset failed")
+	}
+	return nil
+}
+
+type failCleanRunner struct{}
+
+func (failCleanRunner) Run(_ context.Context, _ string, name string, args ...string) error {
+	if name == "git" && len(args) > 0 && args[0] == "clean" {
+		return errors.New("clean failed")
 	}
 	return nil
 }

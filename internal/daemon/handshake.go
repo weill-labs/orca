@@ -25,7 +25,7 @@ var ErrAgentStartupNotReady = errors.New("agent startup not ready")
 
 func (d *Daemon) agentHandshake(ctx context.Context, paneID string, profile AgentProfile) (PaneCapture, error) {
 	d.emitHandshakeEvent(ctx, paneID, profile, handshakeStepWait)
-	if err := d.waitHandshakeIdle(ctx, paneID, "wait for startup idle"); err != nil {
+	if err := d.waitHandshakeIdle(ctx, paneID, handshakeStepWait); err != nil {
 		return PaneCapture{}, err
 	}
 
