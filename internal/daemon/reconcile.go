@@ -159,7 +159,10 @@ func (d *Daemon) Reconcile(ctx context.Context, req ReconcileRequest) (Reconcile
 		if left.Issue != right.Issue {
 			return left.Issue < right.Issue
 		}
-		return left.PaneID < right.PaneID
+		if left.PaneID != right.PaneID {
+			return left.PaneID < right.PaneID
+		}
+		return left.ClonePath < right.ClonePath
 	})
 
 	return result, fixErr
@@ -504,15 +507,16 @@ func (d *Daemon) emitReconcileFinding(ctx context.Context, projectPath string, f
 	}
 	message = fmt.Sprintf("reconcile %s: %s", finding.Kind, message)
 	d.emit(ctx, Event{
-		Time:     d.now(),
-		Type:     EventReconcileFinding,
-		Project:  projectPath,
-		Issue:    finding.Issue,
-		PaneID:   finding.PaneID,
-		PaneName: finding.PaneName,
-		Branch:   finding.Branch,
-		PRNumber: finding.PRNumber,
-		Message:  message,
+		Time:      d.now(),
+		Type:      EventReconcileFinding,
+		Project:   projectPath,
+		Issue:     finding.Issue,
+		PaneID:    finding.PaneID,
+		PaneName:  finding.PaneName,
+		ClonePath: finding.ClonePath,
+		Branch:    finding.Branch,
+		PRNumber:  finding.PRNumber,
+		Message:   message,
 	})
 }
 
