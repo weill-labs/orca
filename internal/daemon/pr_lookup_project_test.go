@@ -42,6 +42,9 @@ func TestPRPollRepoDriftSkipsDeletedKnownPoolCloneForUnrelatedTask(t *testing.T)
 			t.Fatalf("unexpected GitHub lookup from deleted clone: %#v", call)
 		}
 	}
+	if got, want := deps.events.countType(EventPRPollCloneMissing), 1; got != want {
+		t.Fatalf("deleted lookup clone event count = %d, want %d", got, want)
+	}
 	if event, ok := deps.events.lastEventOfType(EventPRPollTrace); !ok {
 		t.Fatal("PR poll trace missing")
 	} else if strings.Contains(event.Message, "find_pr_repo_drift_error") {
@@ -127,5 +130,78 @@ func TestReconcileReportsDeletedPRLookupClone(t *testing.T) {
 	}
 	if !strings.Contains(finding.Message, "PR lookup") || !strings.Contains(finding.Message, missingClonePath) {
 		t.Fatalf("finding.Message = %q, want PR lookup missing clone message", finding.Message)
+	}
+}
+
+func TestPRPollRepoDriftReportsLookupCloneStatErrorWithoutGitHubLookup(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	const (
+		issue  = "LAB-1876"
+		branch = "lab-1876-stat-error"
+	)
+	seedTaskMonitorAssignment(t, deps, issue, "pane-1876", 0)
+	task, ok := deps.state.task(issue)
+	if !ok {
+		t.Fatal("task missing after seed")
+	}
+	task.Branch = branch
+	task.ClonePath = deps.pool.clone.Path
+	deps.state.putTaskForTest(task)
+
+	statErrClonePath := selfReferencingPoolSymlink(t)
+	seedKnownProjectForPRLookup(t, deps, statErrClonePath)
+
+	branchLookupArgs := []string{"pr", "list", "--head", branch, "--json", "number"}
+	deps.commands.queue("gh", branchLookupArgs, `[]`, nil)
+	deps.commands.queue("gh", issueIDPRSearchArgs(issue), `[]`, nil)
+
+	d := deps.newDaemon(t)
+	update := d.checkTaskPRPoll(context.Background(), activeTaskMonitorAssignment(t, deps, issue))
+	d.applyTaskStateUpdate(context.Background(), update)
+
+	for _, call := range deps.commands.callsByName("gh") {
+		if call.Dir == statErrClonePath {
+			t.Fatalf("unexpected GitHub lookup from stat-error clone: %#v", call)
+		}
+	}
+	event, ok := deps.events.lastEventOfType(EventPRPollTrace)
+	if !ok {
+		t.Fatal("PR poll trace missing")
+	}
+	if !strings.Contains(event.Message, "find_pr_repo_drift_error") || !strings.Contains(event.Message, statErrClonePath) {
+		t.Fatalf("last PR poll trace = %q, want lookup clone stat error", event.Message)
+	}
+}
+
+func TestReconcileReportsPRLookupCloneStatError(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	statErrClonePath := selfReferencingPoolSymlink(t)
+	seedKnownProjectForPRLookup(t, deps, statErrClonePath)
+
+	result, err := deps.newDaemon(t).Reconcile(context.Background(), ReconcileRequest{Project: "/tmp/project"})
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	if len(result.Findings) != 1 {
+		t.Fatalf("findings = %#v, want one PR lookup clone stat-error finding", result.Findings)
+	}
+	finding := result.Findings[0]
+	if got, want := finding.Kind, ReconcileClonePathError; got != want {
+		t.Fatalf("finding.Kind = %q, want %q", got, want)
+	}
+	if got, want := finding.ClonePath, statErrClonePath; got != want {
+		t.Fatalf("finding.ClonePath = %q, want %q", got, want)
+	}
+	if finding.Issue != "" {
+		t.Fatalf("finding.Issue = %q, want empty project-level finding", finding.Issue)
+	}
+	for _, want := range []string{"PR lookup", statErrClonePath, "could not be inspected"} {
+		if !strings.Contains(finding.Message, want) {
+			t.Fatalf("finding.Message = %q, want to contain %q", finding.Message, want)
+		}
 	}
 }
