@@ -680,6 +680,7 @@ type fakePool struct {
 	acquired              map[string]bool
 	released              []Clone
 	releaseErr            error
+	requireProjectRelease bool
 	failureCounts         map[string]int
 	quarantined           map[string]bool
 }
@@ -734,6 +735,9 @@ func (p *fakePool) Release(ctx context.Context, project string, clone Clone) err
 	defer p.mu.Unlock()
 	if p.releaseErr != nil {
 		return p.releaseErr
+	}
+	if p.requireProjectRelease && strings.TrimSpace(project) == "" {
+		return errors.New("project path is required")
 	}
 	if p.acquired != nil {
 		delete(p.acquired, clone.Path)
