@@ -107,6 +107,37 @@ func TestAdapterReleaseUsesCloneBranchInformation(t *testing.T) {
 	}
 }
 
+func TestAdapterPoolEntriesDiscoversClones(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	poolDir := filepath.Join(root, "pool")
+	mustMkdir(t, poolDir)
+	origin := newOrigin(t, "main")
+	clonePath := newClone(t, origin, filepath.Join(poolDir, "clone-01"))
+	store := newStore(t)
+	manager := newManager(t, project, staticConfig{
+		poolDir:     poolDir,
+		cloneOrigin: origin,
+	}, store)
+	adapter := pool.NewAdapter(manager)
+
+	entries, err := adapter.PoolEntries(context.Background(), project)
+	if err != nil {
+		t.Fatalf("PoolEntries() error = %v", err)
+	}
+	if got, want := len(entries), 1; got != want {
+		t.Fatalf("len(PoolEntries()) = %d, want %d", got, want)
+	}
+	if got, want := entries[0].Path, clonePath; got != want {
+		t.Fatalf("entry.Path = %q, want %q", got, want)
+	}
+	if got, want := entries[0].Status, pool.StatusFree; got != want {
+		t.Fatalf("entry.Status = %q, want %q", got, want)
+	}
+}
+
 func TestAdapterRecordsCloneFailureAndSuccess(t *testing.T) {
 	t.Parallel()
 

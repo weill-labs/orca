@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 )
@@ -19,9 +20,10 @@ type daemonStatsTestMessage struct {
 		Open   int `json:"open"`
 		Closed int `json:"closed"`
 	} `json:"breaker_states"`
-	ReconcileFindings   int            `json:"reconcile_findings"`
-	WorkerRows          int            `json:"worker_rows"`
-	PoolEntriesByStatus map[string]int `json:"pool_entries_by_status"`
+	ReconcileFindings   int               `json:"reconcile_findings"`
+	WorkerRows          int               `json:"worker_rows"`
+	PoolEntriesByStatus map[string]int    `json:"pool_entries_by_status"`
+	CollectionErrors    map[string]string `json:"collection_errors,omitempty"`
 }
 
 type daemonStatsTestState struct {
@@ -29,10 +31,19 @@ type daemonStatsTestState struct {
 	openConnections int
 	inUse           int
 	idle            int
+	reconcileCount  int
+	reconcileErr    error
 }
 
 func (s daemonStatsTestState) PostgresConnectionStats() (int, int, int) {
 	return s.openConnections, s.inUse, s.idle
+}
+
+func (s daemonStatsTestState) ReconcileFindingCount(ctx context.Context, project string) (int, error) {
+	if s.reconcileErr != nil {
+		return 0, s.reconcileErr
+	}
+	return s.reconcileCount, nil
 }
 
 type daemonStatsTestPool struct {
@@ -158,6 +169,7 @@ func TestDaemonStatsMessageIncludesPopulatedFields(t *testing.T) {
 			openConnections: 7,
 			inUse:           3,
 			idle:            4,
+			reconcileCount:  4,
 		}
 		opts.Pool = daemonStatsTestPool{
 			Pool: deps.pool,
@@ -204,7 +216,7 @@ func TestDaemonStatsMessageIncludesPopulatedFields(t *testing.T) {
 	if got, want := stats.BreakerStates.Closed, 1; got != want {
 		t.Fatalf("breaker_states.closed = %d, want %d", got, want)
 	}
-	if got, want := stats.ReconcileFindings, 0; got != want {
+	if got, want := stats.ReconcileFindings, 4; got != want {
 		t.Fatalf("reconcile_findings = %d, want %d", got, want)
 	}
 	if got, want := stats.WorkerRows, 3; got != want {
@@ -218,6 +230,46 @@ func TestDaemonStatsMessageIncludesPopulatedFields(t *testing.T) {
 	}
 	if got, want := stats.PoolEntriesByStatus["quarantined"], 1; got != want {
 		t.Fatalf("pool_entries_by_status.quarantined = %d, want %d", got, want)
+	}
+}
+
+func TestDaemonStatsMessageIncludesOptionalSourceErrors(t *testing.T) {
+	deps := newTestDeps(t)
+	captureTicker := newFakeTicker()
+	pollTicker := newFakeTicker()
+	statsTicker := newFakeTicker()
+	deps.tickers.enqueue(captureTicker, pollTicker, statsTicker)
+
+	d := deps.newDaemonWithOptions(t, func(opts *Options) {
+		opts.StatsInterval = 5 * time.Minute
+		opts.State = daemonStatsTestState{
+			StateStore:   deps.state,
+			reconcileErr: errors.New("reconcile unavailable"),
+		}
+		opts.Pool = daemonStatsTestPool{
+			Pool: deps.pool,
+			err:  errors.New("pool unavailable"),
+		}
+	})
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	defer func() {
+		if err := d.Stop(ctx); err != nil {
+			t.Fatalf("Stop() error = %v", err)
+		}
+	}()
+
+	deps.clock.Advance(5 * time.Minute)
+	statsTicker.tick(deps.clock.Now())
+	stats := lastDaemonStatsMessage(t, deps)
+
+	if got, want := stats.CollectionErrors["reconcile_findings"], "reconcile unavailable"; got != want {
+		t.Fatalf("collection_errors.reconcile_findings = %q, want %q", got, want)
+	}
+	if got, want := stats.CollectionErrors["pool_entries_by_status"], "pool unavailable"; got != want {
+		t.Fatalf("collection_errors.pool_entries_by_status = %q, want %q", got, want)
 	}
 }
 

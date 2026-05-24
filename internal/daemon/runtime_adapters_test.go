@@ -103,6 +103,61 @@ func TestNormalizeCodexStartCommand(t *testing.T) {
 	}
 }
 
+type statsDaemonStateStore struct {
+	fakeDaemonStateStore
+	openConnections int
+	inUse           int
+	idle            int
+	reconcileCount  int
+	reconcileErr    error
+}
+
+func (s statsDaemonStateStore) PostgresConnectionStats() (int, int, int) {
+	return s.openConnections, s.inUse, s.idle
+}
+
+func (s statsDaemonStateStore) ReconcileFindingCount(ctx context.Context, project string) (int, error) {
+	if s.reconcileErr != nil {
+		return 0, s.reconcileErr
+	}
+	return s.reconcileCount, nil
+}
+
+func TestSQLiteStateAdapterStatsSources(t *testing.T) {
+	t.Parallel()
+
+	adapter := newSQLiteStateAdapter(statsDaemonStateStore{
+		openConnections: 7,
+		inUse:           3,
+		idle:            4,
+		reconcileCount:  5,
+	})
+	openConnections, inUse, idle := adapter.PostgresConnectionStats()
+	if openConnections != 7 || inUse != 3 || idle != 4 {
+		t.Fatalf("PostgresConnectionStats() = (%d, %d, %d), want (7, 3, 4)", openConnections, inUse, idle)
+	}
+	count, err := adapter.ReconcileFindingCount(context.Background(), "/repo")
+	if err != nil {
+		t.Fatalf("ReconcileFindingCount() error = %v", err)
+	}
+	if got, want := count, 5; got != want {
+		t.Fatalf("ReconcileFindingCount() = %d, want %d", got, want)
+	}
+
+	fallback := newSQLiteStateAdapter(fakeDaemonStateStore{})
+	openConnections, inUse, idle = fallback.PostgresConnectionStats()
+	if openConnections != 0 || inUse != 0 || idle != 0 {
+		t.Fatalf("fallback PostgresConnectionStats() = (%d, %d, %d), want zeros", openConnections, inUse, idle)
+	}
+	count, err = fallback.ReconcileFindingCount(context.Background(), "/repo")
+	if err != nil {
+		t.Fatalf("fallback ReconcileFindingCount() error = %v", err)
+	}
+	if got, want := count, 0; got != want {
+		t.Fatalf("fallback ReconcileFindingCount() = %d, want %d", got, want)
+	}
+}
+
 func TestSQLiteStateAdapterRoundTrip(t *testing.T) {
 	t.Parallel()
 

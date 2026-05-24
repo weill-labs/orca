@@ -61,6 +61,61 @@ func TestPostgresStoreNotFoundAndHelpers(t *testing.T) {
 	}
 }
 
+func TestPostgresStoreStatsHelpers(t *testing.T) {
+	t.Parallel()
+
+	var nilStore *PostgresStore
+	openConnections, inUse, idle := nilStore.PostgresConnectionStats()
+	if openConnections != 0 || inUse != 0 || idle != 0 {
+		t.Fatalf("nil PostgresConnectionStats() = (%d, %d, %d), want zeros", openConnections, inUse, idle)
+	}
+	if _, err := nilStore.ReconcileFindingCount(context.Background(), "/repo"); err == nil {
+		t.Fatal("nil ReconcileFindingCount() error = nil, want non-nil")
+	}
+
+	store := mustPostgresStore(t)
+	if err := store.UpsertTask(context.Background(), "/repo", Task{
+		Issue:     "LAB-1872",
+		Status:    "active",
+		State:     "assigned",
+		Agent:     "codex",
+		CreatedAt: time.Date(2026, 5, 24, 5, 0, 0, 0, time.UTC),
+		UpdatedAt: time.Date(2026, 5, 24, 5, 0, 0, 0, time.UTC),
+	}); err != nil {
+		t.Fatalf("UpsertTask() error = %v", err)
+	}
+	if _, err := store.AppendEvent(context.Background(), Event{
+		Project:   "/repo",
+		Kind:      "reconcile.finding",
+		Issue:     "LAB-1872",
+		Message:   "finding",
+		CreatedAt: time.Date(2026, 5, 24, 5, 1, 0, 0, time.UTC),
+	}); err != nil {
+		t.Fatalf("AppendEvent(reconcile.finding) error = %v", err)
+	}
+	if _, err := store.AppendEvent(context.Background(), Event{
+		Project:   "/repo",
+		Kind:      "task.assigned",
+		Issue:     "LAB-1872",
+		Message:   "assigned",
+		CreatedAt: time.Date(2026, 5, 24, 5, 2, 0, 0, time.UTC),
+	}); err != nil {
+		t.Fatalf("AppendEvent(task.assigned) error = %v", err)
+	}
+
+	count, err := store.ReconcileFindingCount(context.Background(), "/repo")
+	if err != nil {
+		t.Fatalf("ReconcileFindingCount() error = %v", err)
+	}
+	if got, want := count, 1; got != want {
+		t.Fatalf("ReconcileFindingCount() = %d, want %d", got, want)
+	}
+	openConnections, inUse, idle = store.PostgresConnectionStats()
+	if openConnections < 0 || inUse < 0 || idle < 0 {
+		t.Fatalf("PostgresConnectionStats() = (%d, %d, %d), want non-negative values", openConnections, inUse, idle)
+	}
+}
+
 func TestPostgresStoreAllActiveQueriesAcrossProjects(t *testing.T) {
 	t.Parallel()
 	testStoreAllActiveQueriesAcrossProjects(t, newPostgresContractHarness(t))

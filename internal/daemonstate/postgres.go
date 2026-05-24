@@ -2,6 +2,7 @@ package state
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -308,6 +309,9 @@ func (s *PostgresStore) PostgresConnectionStats() (int, int, int) {
 }
 
 func (s *PostgresStore) ReconcileFindingCount(ctx context.Context, project string) (int, error) {
+	if s == nil || s.pool == nil {
+		return 0, errors.New("postgres store is not open")
+	}
 	var count int64
 	err := s.pool.QueryRow(ctx, `
 SELECT COUNT(*)
