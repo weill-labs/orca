@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -18,6 +19,7 @@ const (
 var (
 	ErrCloneNotFound       = errors.New("state: clone not found")
 	ErrCloneNotQuarantined = errors.New("state: clone not quarantined")
+	ErrCloneOccupied       = errors.New("state: clone occupied")
 )
 
 type CloneStatus string
@@ -35,6 +37,7 @@ type CloneRecord struct {
 	CurrentBranch string
 	AssignedTask  string
 	FailureCount  int
+	UpdatedAt     time.Time
 }
 
 type SQLiteStore struct {
@@ -200,6 +203,58 @@ func (s *SQLiteStore) ResetCloneFailures(ctx context.Context, project, path stri
 	)
 	if err != nil {
 		return fmt.Errorf("reset clone failures: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read affected rows: %w", err)
+	}
+	if rows == 0 {
+		return ErrCloneNotFound
+	}
+	return nil
+}
+
+func (s *SQLiteStore) ResetClone(ctx context.Context, project, path string) (CloneRecord, error) {
+	result, err := s.db.ExecContext(
+		ctx,
+		`UPDATE clones
+		 SET status = ?, current_branch = '', assigned_task = '', failure_count = 0
+		 WHERE project = ? AND path = ? AND status != ?`,
+		CloneStatusFree,
+		project,
+		path,
+		CloneStatusOccupied,
+	)
+	if err != nil {
+		return CloneRecord{}, fmt.Errorf("reset clone: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return CloneRecord{}, fmt.Errorf("read affected rows: %w", err)
+	}
+	if rows == 0 {
+		record, loadErr := s.clone(ctx, project, path)
+		if loadErr != nil {
+			return CloneRecord{}, loadErr
+		}
+		if record.Status == CloneStatusOccupied {
+			return record, ErrCloneOccupied
+		}
+		return CloneRecord{}, ErrCloneNotFound
+	}
+	return s.clone(ctx, project, path)
+}
+
+func (s *SQLiteStore) DeleteClone(ctx context.Context, project, path string) error {
+	result, err := s.db.ExecContext(
+		ctx,
+		`DELETE FROM clones
+		 WHERE project = ? AND path = ?`,
+		project,
+		path,
+	)
+	if err != nil {
+		return fmt.Errorf("delete clone: %w", err)
 	}
 	rows, err := result.RowsAffected()
 	if err != nil {

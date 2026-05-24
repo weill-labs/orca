@@ -30,6 +30,8 @@ type storeContract interface {
 	Events(context.Context, string, int64) (<-chan Event, <-chan error)
 	RecordCloneFailure(context.Context, string, string, int) (legacy.CloneRecord, error)
 	ResetCloneFailures(context.Context, string, string) error
+	ResetClone(context.Context, string, string) (legacy.CloneRecord, error)
+	DeleteClone(context.Context, string, string) error
 	UnquarantineClone(context.Context, string, string) error
 	UpdateTaskStatus(context.Context, string, string, string, time.Time) (Task, error)
 	DeleteWorker(context.Context, string, string) error
@@ -292,6 +294,12 @@ func testStoreNotFoundBehavior(t *testing.T, h storeContractHarness) {
 	if err := h.store.ResetCloneFailures(context.Background(), project, "missing"); !errors.Is(err, legacy.ErrCloneNotFound) {
 		t.Fatalf("ResetCloneFailures() missing error = %v, want ErrCloneNotFound", err)
 	}
+	if _, err := h.store.ResetClone(context.Background(), project, "missing"); !errors.Is(err, legacy.ErrCloneNotFound) {
+		t.Fatalf("ResetClone() missing error = %v, want ErrCloneNotFound", err)
+	}
+	if err := h.store.DeleteClone(context.Background(), project, "missing"); !errors.Is(err, legacy.ErrCloneNotFound) {
+		t.Fatalf("DeleteClone() missing error = %v, want ErrCloneNotFound", err)
+	}
 	if err := h.store.UnquarantineClone(context.Background(), project, "missing"); !errors.Is(err, legacy.ErrCloneNotFound) {
 		t.Fatalf("UnquarantineClone() missing error = %v, want ErrCloneNotFound", err)
 	}
@@ -382,6 +390,44 @@ func testStoreCloneFailureQuarantine(t *testing.T, h storeContractHarness) {
 	if got, want := record.FailureCount, 0; got != want {
 		t.Fatalf("record.FailureCount after unquarantine = %d, want %d", got, want)
 	}
+
+	for i := 0; i < 2; i++ {
+		record, err = h.store.RecordCloneFailure(ctx, project, clonePath, 3)
+		if err != nil {
+			t.Fatalf("RecordCloneFailure() reset setup call %d error = %v", i+1, err)
+		}
+	}
+	record, err = h.store.ResetClone(ctx, project, clonePath)
+	if err != nil {
+		t.Fatalf("ResetClone() error = %v", err)
+	}
+	if got, want := record.Status, legacy.CloneStatusFree; got != want {
+		t.Fatalf("record.Status after reset = %q, want %q", got, want)
+	}
+	if got, want := record.FailureCount, 0; got != want {
+		t.Fatalf("record.FailureCount after reset = %d, want %d", got, want)
+	}
+	if got, want := record.CurrentBranch, ""; got != want {
+		t.Fatalf("record.CurrentBranch after reset = %q, want empty", got)
+	}
+	if got, want := record.AssignedTask, ""; got != want {
+		t.Fatalf("record.AssignedTask after reset = %q, want empty", got)
+	}
+	if record.UpdatedAt.IsZero() {
+		t.Fatal("record.UpdatedAt after reset is zero, want timestamp")
+	}
+
+	deletePath := filepath.Join(t.TempDir(), "clone-delete")
+	if _, err := h.store.EnsureClone(ctx, project, deletePath); err != nil {
+		t.Fatalf("EnsureClone() delete setup error = %v", err)
+	}
+	if err := h.store.DeleteClone(ctx, project, deletePath); err != nil {
+		t.Fatalf("DeleteClone() error = %v", err)
+	}
+	if _, err := h.store.lookupCloneRecord(ctx, project, deletePath); !errors.Is(err, legacy.ErrCloneNotFound) {
+		t.Fatalf("lookupCloneRecord() after delete error = %v, want ErrCloneNotFound", err)
+	}
+
 	if err := h.store.UnquarantineClone(ctx, project, clonePath); !errors.Is(err, legacy.ErrCloneNotQuarantined) {
 		t.Fatalf("UnquarantineClone() free error = %v, want ErrCloneNotQuarantined", err)
 	}
@@ -415,6 +461,16 @@ func testStoreCloneFailureQuarantine(t *testing.T, h storeContractHarness) {
 	}
 	if got, want := record.Status, legacy.CloneStatusOccupied; got != want {
 		t.Fatalf("record.Status after occupied unquarantine = %q, want %q", got, want)
+	}
+	record, err = h.store.ResetClone(ctx, project, clonePath)
+	if !errors.Is(err, legacy.ErrCloneOccupied) {
+		t.Fatalf("ResetClone() occupied error = %v, want ErrCloneOccupied", err)
+	}
+	if got, want := record.Status, legacy.CloneStatusOccupied; got != want {
+		t.Fatalf("record.Status after occupied reset = %q, want %q", got, want)
+	}
+	if got, want := record.CurrentBranch, "LAB-1697"; got != want {
+		t.Fatalf("record.CurrentBranch after occupied reset = %q, want %q", got, want)
 	}
 }
 

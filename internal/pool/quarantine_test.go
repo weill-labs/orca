@@ -5,6 +5,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/weill-labs/orca/internal/pool"
 	"github.com/weill-labs/orca/internal/state"
@@ -20,7 +21,11 @@ func TestAllocateReportsQuarantinedClonesWhenNoFreeCloneExists(t *testing.T) {
 	origin := newOrigin(t, "main")
 	clonePath := newClone(t, origin, poolDir+"/clone-01")
 	store := newQuarantineStore(map[string]state.CloneRecord{
-		clonePath: {Path: clonePath, Status: state.CloneStatus("quarantined")},
+		clonePath: {
+			Path:         clonePath,
+			Status:       state.CloneStatus("quarantined"),
+			FailureCount: pool.CloneQuarantineFailureThreshold,
+		},
 	})
 	manager, err := pool.New(project, staticConfig{
 		poolDir:     poolDir,
@@ -36,6 +41,115 @@ func TestAllocateReportsQuarantinedClonesWhenNoFreeCloneExists(t *testing.T) {
 	}
 	if got, want := err.Error(), "no available clones; 1 are quarantined: clone-01"; !strings.Contains(got, want) {
 		t.Fatalf("Allocate() error = %v, want %q", err, want)
+	}
+}
+
+func TestAllocateSkipsRecentFailedCloneWhenCleanCloneExists(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 23, 10, 0, 0, 0, time.UTC)
+	root := t.TempDir()
+	project := root + "/project"
+	poolDir := root + "/pool"
+	mustMkdir(t, poolDir)
+	origin := newOrigin(t, "main")
+	recentFailedPath := newClone(t, origin, poolDir+"/clone-01")
+	healthyPath := newClone(t, origin, poolDir+"/clone-02")
+	store := newQuarantineStore(map[string]state.CloneRecord{
+		recentFailedPath: {
+			Path:         recentFailedPath,
+			Status:       state.CloneStatusFree,
+			FailureCount: 1,
+			UpdatedAt:    now.Add(-time.Minute),
+		},
+		healthyPath: {Path: healthyPath, Status: state.CloneStatusFree},
+	})
+	manager, err := pool.New(project, staticConfig{
+		poolDir:     poolDir,
+		cloneOrigin: origin,
+	}, store, pool.WithNow(func() time.Time { return now }))
+	if err != nil {
+		t.Fatalf("pool.New() error = %v", err)
+	}
+
+	clone, err := manager.Allocate(context.Background(), "LAB-1876", "LAB-1876")
+	if err != nil {
+		t.Fatalf("Allocate() error = %v", err)
+	}
+	if clone.Path != healthyPath {
+		t.Fatalf("allocated clone = %q, want clean clone %q", clone.Path, healthyPath)
+	}
+}
+
+func TestAllocateUsesRecentFailedCloneWhenOnlyFreeClone(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 23, 10, 0, 0, 0, time.UTC)
+	root := t.TempDir()
+	project := root + "/project"
+	poolDir := root + "/pool"
+	mustMkdir(t, poolDir)
+	origin := newOrigin(t, "main")
+	recentFailedPath := newClone(t, origin, poolDir+"/clone-01")
+	store := newQuarantineStore(map[string]state.CloneRecord{
+		recentFailedPath: {
+			Path:         recentFailedPath,
+			Status:       state.CloneStatusFree,
+			FailureCount: 1,
+			UpdatedAt:    now.Add(-time.Minute),
+		},
+	})
+	manager, err := pool.New(project, staticConfig{
+		poolDir:     poolDir,
+		cloneOrigin: origin,
+	}, store, pool.WithNow(func() time.Time { return now }))
+	if err != nil {
+		t.Fatalf("pool.New() error = %v", err)
+	}
+
+	clone, err := manager.Allocate(context.Background(), "LAB-1876", "LAB-1876")
+	if err != nil {
+		t.Fatalf("Allocate() error = %v", err)
+	}
+	if clone.Path != recentFailedPath {
+		t.Fatalf("allocated clone = %q, want only free clone %q", clone.Path, recentFailedPath)
+	}
+}
+
+func TestAllocateUsesExpiredFailedCloneBeforeCleanClone(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 23, 10, 0, 0, 0, time.UTC)
+	root := t.TempDir()
+	project := root + "/project"
+	poolDir := root + "/pool"
+	mustMkdir(t, poolDir)
+	origin := newOrigin(t, "main")
+	expiredFailedPath := newClone(t, origin, poolDir+"/clone-01")
+	healthyPath := newClone(t, origin, poolDir+"/clone-02")
+	store := newQuarantineStore(map[string]state.CloneRecord{
+		expiredFailedPath: {
+			Path:         expiredFailedPath,
+			Status:       state.CloneStatusFree,
+			FailureCount: 1,
+			UpdatedAt:    now.Add(-pool.CloneFailureCooldown - time.Second),
+		},
+		healthyPath: {Path: healthyPath, Status: state.CloneStatusFree},
+	})
+	manager, err := pool.New(project, staticConfig{
+		poolDir:     poolDir,
+		cloneOrigin: origin,
+	}, store, pool.WithNow(func() time.Time { return now }))
+	if err != nil {
+		t.Fatalf("pool.New() error = %v", err)
+	}
+
+	clone, err := manager.Allocate(context.Background(), "LAB-1876", "LAB-1876")
+	if err != nil {
+		t.Fatalf("Allocate() error = %v", err)
+	}
+	if clone.Path != expiredFailedPath {
+		t.Fatalf("allocated clone = %q, want expired failed clone %q", clone.Path, expiredFailedPath)
 	}
 }
 

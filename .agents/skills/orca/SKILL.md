@@ -178,7 +178,7 @@ This shows the task's event log with timestamps — handshake steps, stuck detec
 
 - `orca resume` tries to spawn a new pane rather than reconnecting to an existing one. If the worker is still running, use `orca cancel` then `orca assign` instead.
 - The default agent is `claude`. Always pass `--agent codex` explicitly when you want Codex.
-- Codex workers sometimes exit silently on startup (transient). Orca's prompt delivery verification retries up to 10 times, but if it still fails, cancel and reassign.
+- Codex workers sometimes exit silently on startup (transient). Orca retries startup prompt delivery across up to 3 fresh assignment attempts, but if it still fails, cancel and reassign.
 
 ## All Commands Reference
 

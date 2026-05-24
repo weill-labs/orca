@@ -75,6 +75,7 @@ const (
 	EventPRMerged                   = "pr.merged"
 	EventPRClosed                   = "pr.closed"
 	EventReconcileFinding           = "reconcile.finding"
+	EventPoolEntryPruned            = "pool.entry_pruned"
 )
 
 var (

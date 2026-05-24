@@ -445,6 +445,42 @@ func (s *PostgresStore) ResetCloneFailures(ctx context.Context, project, path st
 	return nil
 }
 
+func (s *PostgresStore) ResetClone(ctx context.Context, project, path string) (legacy.CloneRecord, error) {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE clones
+		SET host = $1, status = 'free', issue = '', branch = '', failure_count = 0, updated_at = $2
+		WHERE project = $3 AND path = $4 AND status != 'occupied' AND `+postgresHostMatch("host", 5)+`
+	`, s.host, normalizeTime(s.now()), project, path, s.host)
+	if err != nil {
+		return legacy.CloneRecord{}, fmt.Errorf("reset clone: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		record, loadErr := s.lookupCloneRecord(ctx, project, path)
+		if loadErr != nil {
+			return legacy.CloneRecord{}, loadErr
+		}
+		if record.Status == legacy.CloneStatusOccupied {
+			return record, legacy.ErrCloneOccupied
+		}
+		return legacy.CloneRecord{}, legacy.ErrCloneNotFound
+	}
+	return s.lookupCloneRecord(ctx, project, path)
+}
+
+func (s *PostgresStore) DeleteClone(ctx context.Context, project, path string) error {
+	tag, err := s.pool.Exec(ctx, `
+		DELETE FROM clones
+		WHERE project = $1 AND path = $2 AND `+postgresHostMatch("host", 3)+`
+	`, project, path, s.host)
+	if err != nil {
+		return fmt.Errorf("delete clone: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return legacy.ErrCloneNotFound
+	}
+	return nil
+}
+
 func (s *PostgresStore) UnquarantineClone(ctx context.Context, project, path string) error {
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE clones
