@@ -199,19 +199,25 @@ func (d *Daemon) assign(ctx context.Context, projectPath, issue, prompt, agentPr
 		d.emitAssignFailure(ctx, projectPath, issue, claimedWorker.WorkerID, profile.Name, clone, Pane{}, prNumber, err)
 	}
 	failSpawnedAssignment := func(pane Pane, worker Worker, err error) {
-		d.failPendingAssignment(ctx, projectPath, issue, clone, pane, worker, profile, prNumber, err, restoreReservation)
+		d.failPendingAssignment(ctx, projectPath, issue, task, clone, pane, worker, profile, prNumber, err, restoreReservation)
 	}
 
 	resolvedTitle := firstTitle(title)
 	if strings.TrimSpace(resolvedTitle) == "" && hasGitHubIssue {
 		resolvedTitle = gitHubIssue.Title
 	}
-	startup, err := d.startAssignmentWorker(ctx, projectPath, clone, task, worker, profile, prompt, d.resolveAssignmentTitle(ctx, issue, resolvedTitle), preflightSkipped)
+	deliveryPrompt, err := d.prepareAssignmentPromptForDelivery(task, profile, prompt)
+	if err != nil {
+		err = fmt.Errorf("prepare assignment prompt delivery: %w", err)
+		failUnspawnedAssignment(err)
+		return err
+	}
+	startup, err := d.startAssignmentWorker(ctx, projectPath, clone, task, worker, profile, deliveryPrompt, d.resolveAssignmentTitle(ctx, issue, resolvedTitle), preflightSkipped)
 	if err != nil {
 		if startup.pane.ID == "" && startup.pane.Name == "" {
 			failUnspawnedAssignment(err)
 		} else {
-			failSpawnedAssignment(startup.pane, startup.worker, err)
+			d.failPendingAssignment(ctx, projectPath, issue, startup.task, clone, startup.pane, startup.worker, profile, prNumber, err, restoreReservation)
 		}
 		return err
 	}
@@ -364,7 +370,7 @@ func promptMentionsDifferentIssue(prompt, issue string) bool {
 	return false
 }
 
-func (d *Daemon) failPendingAssignment(ctx context.Context, projectPath, issue string, clone Clone, pane Pane, worker Worker, profile AgentProfile, prNumber int, err error, releaseReservation func()) {
+func (d *Daemon) failPendingAssignment(ctx context.Context, projectPath, issue string, task Task, clone Clone, pane Pane, worker Worker, profile AgentProfile, prNumber int, err error, releaseReservation func()) {
 	d.emitAssignFailure(ctx, projectPath, issue, worker.WorkerID, profile.Name, clone, pane, prNumber, err)
 	_ = d.rollbackAssignmentForProject(context.WithoutCancel(ctx), projectPath, clone, pane, issue)
 	if assignmentStartupFailureCountsTowardQuarantine(err) {
@@ -373,7 +379,51 @@ func (d *Daemon) failPendingAssignment(ctx context.Context, projectPath, issue s
 	if releaseErr := d.releaseWorkerClaim(context.WithoutCancel(ctx), worker); releaseErr != nil && !errors.Is(releaseErr, ErrWorkerNotFound) {
 		_ = releaseErr
 	}
+	if assignmentStartupPromptPhaseFailed(err) {
+		d.storeFailedAssignmentTask(context.WithoutCancel(ctx), projectPath, issue, task, clone, pane, worker, profile)
+		return
+	}
 	releaseReservation()
+}
+
+func assignmentStartupPromptPhaseFailed(err error) bool {
+	var phaseErr assignStartupAttemptError
+	return errors.As(err, &phaseErr) && phaseErr.phase == assignStartupPhasePrompt
+}
+
+func (d *Daemon) storeFailedAssignmentTask(ctx context.Context, projectPath, issue string, task Task, clone Clone, pane Pane, worker Worker, profile AgentProfile) {
+	now := d.now()
+	task.Project = projectPath
+	task.Issue = issue
+	task.Status = TaskStatusFailed
+	if task.Branch == "" {
+		task.Branch = issue
+	}
+	if task.CloneName == "" {
+		task.CloneName = clone.Name
+	}
+	if task.ClonePath == "" {
+		task.ClonePath = clone.Path
+	}
+	if task.PaneID == "" {
+		task.PaneID = pane.ID
+	}
+	if task.PaneName == "" {
+		task.PaneName = pane.Name
+	}
+	if task.WorkerID == "" {
+		task.WorkerID = worker.WorkerID
+	}
+	if task.AgentProfile == "" {
+		task.AgentProfile = profile.Name
+	}
+	if task.CreatedAt.IsZero() {
+		task.CreatedAt = now
+	}
+	task.UpdatedAt = now
+	if err := d.state.PutTask(ctx, task); err != nil && d.logf != nil {
+		d.logf("store failed assignment task failed: project=%s issue=%s error=%v", projectPath, issue, err)
+	}
 }
 
 type cloneAssignmentTracker interface {

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -389,8 +391,12 @@ func TestAssignRollsBackOnPromptSendFailure(t *testing.T) {
 		t.Fatal("Assign() succeeded, want error")
 	}
 
-	if _, ok := deps.state.task("LAB-689"); ok {
-		t.Fatal("task stored despite rollback")
+	task, ok := deps.state.task("LAB-689")
+	if !ok {
+		t.Fatal("task missing after prompt delivery failure")
+	}
+	if got, want := task.Status, TaskStatusFailed; got != want {
+		t.Fatalf("task.Status = %q, want %q", got, want)
 	}
 	worker, ok := deps.state.worker("worker-01")
 	if !ok {
@@ -530,6 +536,83 @@ func TestAssignSubmitsCodexPromptWhenHeartbeatIsStale(t *testing.T) {
 	}
 }
 
+func TestAssignPromotesLargeCodexPromptToCloneFile(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	project := t.TempDir()
+	clonePath := filepath.Join(project, OrcaPoolSubdir, "clone-01")
+	if err := os.MkdirAll(clonePath, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", clonePath, err)
+	}
+	deps.pool.clone = Clone{Name: "clone-01", Path: clonePath}
+	d := deps.newDaemonWithOptions(t, func(opts *Options) {
+		opts.Project = project
+	})
+	ctx := context.Background()
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	excludePath := filepath.Join(deps.pool.clone.Path, ".git", "info", "exclude")
+	if err := os.MkdirAll(filepath.Dir(excludePath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", filepath.Dir(excludePath), err)
+	}
+	if err := os.WriteFile(excludePath, []byte("# local excludes"), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", excludePath, err)
+	}
+
+	prompt := "Implement LAB-1871.\n\n" + strings.Repeat("Preserve the caller's detailed assignment text. ", 60)
+	if err := d.Assign(ctx, "LAB-1871", prompt, "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	task, ok := deps.state.task("LAB-1871")
+	if !ok {
+		t.Fatal("task missing after assignment")
+	}
+	promptFile, err := assignmentPromptFilePath(task)
+	if err != nil {
+		t.Fatalf("assignmentPromptFilePath() error = %v", err)
+	}
+	content, err := os.ReadFile(promptFile)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", promptFile, err)
+	}
+	wantPrompt := wrapAssignmentPrompt(AgentProfile{Name: "codex"}, "LAB-1871", prompt)
+	if got := string(content); got != wantPrompt+"\n" {
+		t.Fatalf("prompt file content = %q, want wrapped assignment prompt", got)
+	}
+
+	deliveryPrompt := codexAssignmentPromptFileReference(assignmentPromptFileReferencePath(task, promptFile))
+	if len([]byte(deliveryPrompt)) > codexLargePromptThresholdBytes {
+		t.Fatalf("delivery prompt length = %d, want <= %d", len([]byte(deliveryPrompt)), codexLargePromptThresholdBytes)
+	}
+	deps.amux.requireSentKeys(t, "pane-1", []string{deliveryPrompt + "\n"})
+	sentKeys := snapshotSentKeys(deps.amux)["pane-1"]
+	if len(sentKeys) != 1 {
+		t.Fatalf("sent keys = %#v, want one file-reference prompt", sentKeys)
+	}
+	if strings.Contains(sentKeys[0], "Preserve the caller's detailed assignment text") {
+		t.Fatalf("sent keys include large prompt instead of file reference: %q", sentKeys[0])
+	}
+	if got := task.Prompt; got != wantPrompt {
+		t.Fatalf("task.Prompt = %q, want full wrapped prompt", got)
+	}
+	exclude, err := os.ReadFile(excludePath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", excludePath, err)
+	}
+	if !strings.Contains(string(exclude), "\n"+assignmentPromptGitExclude+"\n") {
+		t.Fatalf("git exclude = %q, want assignment prompt exclude", string(exclude))
+	}
+}
+
 func TestAssignRetriesCodexPromptDeliveryAfterPaneReturnsToShell(t *testing.T) {
 	t.Parallel()
 
@@ -621,8 +704,12 @@ func TestAssignRollsBackWhenPromptDeliveryCheckReturnsHardError(t *testing.T) {
 		t.Fatalf("Assign() error = %v, want prompt delivery capture failure", err)
 	}
 
-	if _, ok := deps.state.task("LAB-899"); ok {
-		t.Fatal("task stored despite prompt delivery classification failure")
+	task, ok := deps.state.task("LAB-899")
+	if !ok {
+		t.Fatal("failed task missing after prompt delivery classification failure")
+	}
+	if got, want := task.Status, TaskStatusFailed; got != want {
+		t.Fatalf("task.Status = %q, want %q", got, want)
 	}
 	worker, ok := deps.state.worker("worker-01")
 	if !ok {
@@ -821,8 +908,12 @@ func TestAssignRollsBackWhenCodexPromptNeverShowsWorking(t *testing.T) {
 		t.Fatalf("Assign() error = %v, want prompt retry exhaustion", err)
 	}
 
-	if _, ok := deps.state.task("LAB-898"); ok {
-		t.Fatal("task stored despite prompt delivery rollback")
+	task, ok := deps.state.task("LAB-898")
+	if !ok {
+		t.Fatal("failed task missing after prompt delivery rollback")
+	}
+	if got, want := task.Status, TaskStatusFailed; got != want {
+		t.Fatalf("task.Status = %q, want %q", got, want)
 	}
 	worker, ok := deps.state.worker("worker-01")
 	if !ok {
