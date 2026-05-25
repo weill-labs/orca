@@ -134,7 +134,7 @@ func (t *pollTickTiming) log(logf func(string, ...any)) {
 	githubAPI := t.githubAPI
 	t.mu.Unlock()
 
-	parts := make([]string, 0, len(stages)+9)
+	parts := make([]string, 0, len(stages)+12)
 	parts = append(parts, fmt.Sprintf("daemon %s tick timing:", t.kind))
 	parts = append(parts, "total="+formatPollTickDuration(total))
 	for _, stage := range stages {
@@ -146,7 +146,10 @@ func (t *pollTickTiming) log(logf func(string, ...any)) {
 	parts = append(parts, fmt.Sprintf("github_graphql_estimated_points=%d", githubAPI.GraphQLEstimatedPoints))
 	parts = append(parts, fmt.Sprintf("github_graphql_terminal_state_calls=%d", githubAPI.GraphQLTerminalStateCalls))
 	parts = append(parts, fmt.Sprintf("github_graphql_review_calls=%d", githubAPI.GraphQLReviewCalls))
+	parts = append(parts, fmt.Sprintf("github_graphql_other_calls=%d", githubAPI.GraphQLOtherCalls))
 	parts = append(parts, fmt.Sprintf("github_rest_calls=%d", githubAPI.RESTCalls))
+	parts = append(parts, fmt.Sprintf("github_rest_review_calls=%d", githubAPI.RESTReviewCalls))
+	parts = append(parts, fmt.Sprintf("github_rest_other_calls=%d", githubAPI.RESTOtherCalls))
 
 	logf("%s", strings.Join(parts, " "))
 }

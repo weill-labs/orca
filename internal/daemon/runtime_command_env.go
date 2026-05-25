@@ -34,18 +34,14 @@ func mergeCommandEnv(base, overrides []string) []string {
 		if !ok || key == "" {
 			continue
 		}
-		replaced := false
 		prefix := key + "="
-		for i, existing := range out {
-			if strings.HasPrefix(existing, prefix) {
-				out[i] = entry
-				replaced = true
-				break
+		filtered := out[:0]
+		for _, existing := range out {
+			if !strings.HasPrefix(existing, prefix) {
+				filtered = append(filtered, existing)
 			}
 		}
-		if !replaced {
-			out = append(out, entry)
-		}
+		out = append(filtered, entry)
 	}
 	return out
 }

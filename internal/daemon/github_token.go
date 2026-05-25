@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"fmt"
 	"strings"
 )
 
@@ -29,5 +30,5 @@ func (r gitHubTokenCommandRunner) Run(ctx context.Context, dir, name string, arg
 	if runner, ok := r.base.(envCommandRunner); ok {
 		return runner.RunWithEnv(ctx, dir, name, []string{"GH_TOKEN=" + r.token}, args...)
 	}
-	return r.base.Run(ctx, dir, name, args...)
+	return nil, fmt.Errorf("github token command runner requires env-capable command runner for gh: %T", r.base)
 }
