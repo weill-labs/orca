@@ -36,12 +36,14 @@ func (d *Daemon) pruneMissingPoolEntries(ctx context.Context) {
 		if clone.Path == "" {
 			continue
 		}
-		if _, err := os.Stat(clone.Path); err == nil {
-			continue
-		} else if !errors.Is(err, os.ErrNotExist) {
+		missing, err := clonePathMissing(clone.Path)
+		if err != nil {
 			if d.logf != nil {
 				d.logf("pool prune failed to inspect clone %q: %v", clone.Path, err)
 			}
+			continue
+		}
+		if !missing {
 			continue
 		}
 
@@ -60,6 +62,15 @@ func (d *Daemon) pruneMissingPoolEntries(ctx context.Context) {
 			Message:   fmt.Sprintf("pruned missing pool entry %s", filepath.Base(clone.Path)),
 		})
 	}
+}
+
+func clonePathMissing(path string) (bool, error) {
+	if _, err := os.Stat(path); err == nil {
+		return false, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return false, err
+	}
+	return true, nil
 }
 
 func isCloneAlreadyDeletedError(err error) bool {
