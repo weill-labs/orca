@@ -311,10 +311,12 @@ func (d *Daemon) lookupPRTerminalState(ctx context.Context, projectPath string, 
 	if state, ok := batchedPRTerminalState(ctx, projectPath, prNumber); ok {
 		return state, nil
 	}
+	ctx = withGitHubAPIConsumer(ctx, githubAPIConsumerTerminalState)
 	return d.gitHubClientForContext(ctx, projectPath).lookupPRTerminalState(ctx, prNumber)
 }
 
 func (d *Daemon) isPRMerged(ctx context.Context, projectPath string, prNumber int) (bool, error) {
+	ctx = withGitHubAPIConsumer(ctx, githubAPIConsumerTerminalState)
 	return d.gitHubClientForContext(ctx, projectPath).isPRMerged(ctx, prNumber)
 }
 

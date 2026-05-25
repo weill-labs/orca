@@ -19,6 +19,7 @@ type pollTickTiming struct {
 	stages         []pollTickStageTiming
 	githubCalls    int
 	githubDuration time.Duration
+	githubAPI      githubAPICounters
 }
 
 type pollTickStageTiming struct {
@@ -54,9 +55,9 @@ func pollTickTimingFromContext(ctx context.Context) *pollTickTiming {
 	return nil
 }
 
-func pollTickGitHubCall(ctx context.Context) func() {
+func pollTickGitHubCall(ctx context.Context, args ...string) func() {
 	if timing := pollTickTimingFromContext(ctx); timing != nil {
-		return timing.githubCall()
+		return timing.githubCall(classifyGitHubAPICall(ctx, args))
 	}
 	return func() {}
 }
@@ -71,13 +72,13 @@ func (t *pollTickTiming) stage(name string) func() {
 	}
 }
 
-func (t *pollTickTiming) githubCall() func() {
+func (t *pollTickTiming) githubCall(call githubAPICallMetrics) func() {
 	if t == nil {
 		return func() {}
 	}
 	startedAt := t.now()
 	return func() {
-		t.recordGitHubCall(t.now().Sub(startedAt))
+		t.recordGitHubCall(t.now().Sub(startedAt), call)
 	}
 }
 
@@ -93,7 +94,7 @@ func (t *pollTickTiming) recordStage(name string, duration time.Duration) {
 	t.stages = append(t.stages, pollTickStageTiming{name: name, duration: duration})
 }
 
-func (t *pollTickTiming) recordGitHubCall(duration time.Duration) {
+func (t *pollTickTiming) recordGitHubCall(duration time.Duration, call githubAPICallMetrics) {
 	if t == nil {
 		return
 	}
@@ -104,6 +105,16 @@ func (t *pollTickTiming) recordGitHubCall(duration time.Duration) {
 	defer t.mu.Unlock()
 	t.githubCalls++
 	t.githubDuration += duration
+	t.githubAPI.add(call)
+}
+
+func (t *pollTickTiming) githubAPICounters() githubAPICounters {
+	if t == nil {
+		return githubAPICounters{}
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.githubAPI
 }
 
 func (t *pollTickTiming) log(logf func(string, ...any)) {
@@ -120,9 +131,10 @@ func (t *pollTickTiming) log(logf func(string, ...any)) {
 	stages := append([]pollTickStageTiming(nil), t.stages...)
 	githubCalls := t.githubCalls
 	githubDuration := t.githubDuration
+	githubAPI := t.githubAPI
 	t.mu.Unlock()
 
-	parts := make([]string, 0, len(stages)+4)
+	parts := make([]string, 0, len(stages)+9)
 	parts = append(parts, fmt.Sprintf("daemon %s tick timing:", t.kind))
 	parts = append(parts, "total="+formatPollTickDuration(total))
 	for _, stage := range stages {
@@ -130,6 +142,11 @@ func (t *pollTickTiming) log(logf func(string, ...any)) {
 	}
 	parts = append(parts, fmt.Sprintf("github_calls=%d", githubCalls))
 	parts = append(parts, "github_total="+formatPollTickDuration(githubDuration))
+	parts = append(parts, fmt.Sprintf("github_graphql_calls=%d", githubAPI.GraphQLCalls))
+	parts = append(parts, fmt.Sprintf("github_graphql_estimated_points=%d", githubAPI.GraphQLEstimatedPoints))
+	parts = append(parts, fmt.Sprintf("github_graphql_terminal_state_calls=%d", githubAPI.GraphQLTerminalStateCalls))
+	parts = append(parts, fmt.Sprintf("github_graphql_review_calls=%d", githubAPI.GraphQLReviewCalls))
+	parts = append(parts, fmt.Sprintf("github_rest_calls=%d", githubAPI.RESTCalls))
 
 	logf("%s", strings.Join(parts, " "))
 }
@@ -172,7 +189,7 @@ func (r *timingCommandRunner) Run(ctx context.Context, dir, name string, args ..
 	if name != "gh" {
 		return r.base.Run(ctx, dir, name, args...)
 	}
-	done := r.timing.githubCall()
+	done := r.timing.githubCall(classifyGitHubAPICall(ctx, args))
 	defer done()
 	return r.base.Run(ctx, dir, name, args...)
 }

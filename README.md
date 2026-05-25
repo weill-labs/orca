@@ -83,6 +83,8 @@ done
 
 # 5. Start the daemon
 export AMUX_SESSION=my-session
+# Optional: isolate daemon GitHub polling from your interactive gh budget.
+export ORCA_GITHUB_TOKEN=github_pat_or_app_installation_token
 orca start --project ~/sync/github/myproject/myproject
 
 # 6. Assign work

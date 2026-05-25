@@ -187,6 +187,9 @@ func (d *Daemon) runCaptureTick(ctx context.Context) *pollTickTiming {
 
 func (d *Daemon) runPollTick(ctx context.Context) *pollTickTiming {
 	timing := newPollTickTiming("poll", d.now)
+	defer func() {
+		d.recordPollGitHubAPIStats(timing.githubAPICounters())
+	}()
 	ctx = withPollTickTiming(ctx, timing)
 	ctx = withPRLookupCloneEventTracker(ctx)
 	ctx = d.withMonitorCircuits(ctx)

@@ -91,6 +91,7 @@ func runProcess(ctx context.Context, req ServeRequest, deps serveDeps) error {
 	}
 	relayURL := strings.TrimSpace(os.Getenv("ORCA_RELAY_URL"))
 	relayToken := strings.TrimSpace(os.Getenv("ORCA_RELAY_TOKEN"))
+	githubToken := strings.TrimSpace(os.Getenv("ORCA_GITHUB_TOKEN"))
 	hostname, _ := os.Hostname()
 
 	issueTracker, err := newLinearIssueTrackerFromEnv()
@@ -134,6 +135,7 @@ func runProcess(ctx context.Context, req ServeRequest, deps serveDeps) error {
 		IssueTracker:         issueTracker,
 		Commands:             commandRunner,
 		Events:               deps.events,
+		GitHubToken:          githubToken,
 		NewWatchdogTicker: func(interval time.Duration) Ticker {
 			return realTicker{Ticker: time.NewTicker(interval)}
 		},

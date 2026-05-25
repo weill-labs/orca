@@ -458,14 +458,17 @@ func (d *Daemon) recordWorkerOutput(update *TaskStateUpdate, profile AgentProfil
 }
 
 func (d *Daemon) lookupPRReviews(ctx context.Context, projectPath string, prNumber int) (prReviewPayload, bool, error) {
+	ctx = withGitHubAPIConsumer(ctx, githubAPIConsumerReview)
 	return d.gitHubClientForContext(ctx, projectPath).lookupPRReviews(ctx, prNumber)
 }
 
 func (d *Daemon) lookupPRReviewComments(ctx context.Context, projectPath string, prNumber int) ([]prReviewComment, error) {
+	ctx = withGitHubAPIConsumer(ctx, githubAPIConsumerReview)
 	return d.gitHubClientForContext(ctx, projectPath).lookupPRReviewComments(ctx, prNumber)
 }
 
 func (d *Daemon) lookupPRReviewThreads(ctx context.Context, projectPath string, prNumber int) ([]prReviewThread, error) {
+	ctx = withGitHubAPIConsumer(ctx, githubAPIConsumerReview)
 	return d.gitHubClientForContext(ctx, projectPath).lookupPRReviewThreads(ctx, prNumber)
 }
 
