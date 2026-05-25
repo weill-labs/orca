@@ -145,6 +145,96 @@ func TestDaemonStartSweepsEmptyProjectOrphanWorkerFromClonePath(t *testing.T) {
 	}
 }
 
+func TestDaemonStartDeletesClonePathProjectOrphanWorker(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	cloneProject := filepath.Join("/tmp/project", OrcaPoolSubdir, "clone-05")
+	seedMalformedProjectWorker(t, deps, Worker{
+		Project:      cloneProject,
+		WorkerID:     "worker-clone-project-orphan",
+		PaneID:       "pane-clone-project-orphan",
+		PaneName:     "worker-clone-project-orphan",
+		AgentProfile: "codex",
+		Health:       WorkerHealthHealthy,
+		CreatedAt:    deps.clock.Now(),
+		LastSeenAt:   deps.clock.Now(),
+		UpdatedAt:    deps.clock.Now(),
+	})
+
+	d := deps.newDaemon(t)
+	if err := d.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	waitFor(t, "clone-path-project orphan worker startup cleanup", func() bool {
+		_, orphanExists := deps.state.worker("worker-clone-project-orphan")
+		return !orphanExists
+	})
+
+	if _, ok := deps.state.worker("worker-clone-project-orphan"); ok {
+		t.Fatal("clone-path-project orphan worker still present after startup")
+	}
+}
+
+func TestReconcileOrphanWorkersNormalizesClonePathProjectWorkerWithLiveTask(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	cloneProject := filepath.Join("/tmp/project", OrcaPoolSubdir, "clone-06")
+	markClonePathForTest(t, cloneProject)
+	now := deps.clock.Now()
+	if err := deps.state.PutTask(context.Background(), Task{
+		Project:      "/tmp/project",
+		Issue:        "LAB-1896",
+		Status:       TaskStatusActive,
+		State:        TaskStateAssigned,
+		WorkerID:     "worker-clone-project-live",
+		PaneID:       "pane-clone-project-live",
+		ClonePath:    cloneProject,
+		Branch:       "LAB-1896",
+		AgentProfile: "codex",
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}); err != nil {
+		t.Fatalf("PutTask() error = %v", err)
+	}
+	seedMalformedProjectWorker(t, deps, Worker{
+		Project:      cloneProject,
+		WorkerID:     "worker-clone-project-live",
+		PaneID:       "pane-clone-project-live",
+		PaneName:     "worker-clone-project-live",
+		Issue:        "LAB-1896",
+		ClonePath:    cloneProject,
+		AgentProfile: "codex",
+		Health:       WorkerHealthHealthy,
+		CreatedAt:    now,
+		LastSeenAt:   now,
+		UpdatedAt:    now,
+	})
+	deps.amux.paneExists = map[string]bool{"pane-clone-project-live": true}
+
+	d := deps.newDaemon(t)
+	d.reconcileOrphanWorkers(context.Background())
+
+	worker, ok := deps.state.worker("worker-clone-project-live")
+	if !ok {
+		t.Fatal("live worker missing after startup")
+	}
+	if got, want := worker.Project, "/tmp/project"; got != want {
+		t.Fatalf("worker.Project = %q, want %q", got, want)
+	}
+	if got, want := worker.Issue, "LAB-1896"; got != want {
+		t.Fatalf("worker.Issue = %q, want %q", got, want)
+	}
+	if got := deps.pool.releasedClones(); len(got) != 0 {
+		t.Fatalf("released clones = %#v, want none", got)
+	}
+}
+
 func TestDaemonStartDeletesEmptyProjectOrphanWorkerWithNoClone(t *testing.T) {
 	t.Parallel()
 
@@ -177,6 +267,14 @@ func TestDaemonStartDeletesEmptyProjectOrphanWorkerWithNoClone(t *testing.T) {
 	if got := deps.pool.releasedClones(); len(got) != 0 {
 		t.Fatalf("released clones = %#v, want none", got)
 	}
+}
+
+func seedMalformedProjectWorker(t *testing.T, deps *testDeps, worker Worker) {
+	t.Helper()
+
+	deps.state.mu.Lock()
+	defer deps.state.mu.Unlock()
+	deps.state.workers[workerKey(worker)] = worker
 }
 
 func TestDaemonStartEmitsFindingWhenOrphanWorkerCleanupFails(t *testing.T) {
