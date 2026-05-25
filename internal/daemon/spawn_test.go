@@ -605,6 +605,27 @@ func TestSpawnWorkerPaneKillsOrphanPaneWithTargetName(t *testing.T) {
 	}
 }
 
+func TestSpawnWorkerPanePassesProfileCWDWaitTimeout(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	profile := deps.config.profiles["codex"]
+	profile.SpawnCWDWaitTimeout = 45 * time.Second
+	d := deps.newDaemon(t)
+
+	_, err := d.spawnWorkerPane(context.Background(), Task{Project: "/tmp/project", Issue: "LAB-1907"}, "worker-01", deps.pool.clone.Path, profile)
+	if err != nil {
+		t.Fatalf("spawnWorkerPane() error = %v", err)
+	}
+
+	if got, want := len(deps.amux.spawnRequests), 1; got != want {
+		t.Fatalf("spawn requests = %d, want %d", got, want)
+	}
+	if got, want := deps.amux.spawnRequests[0].CWDWaitTimeout, 45*time.Second; got != want {
+		t.Fatalf("spawn request CWDWaitTimeout = %v, want %v", got, want)
+	}
+}
+
 func TestSpawnWorkerPaneFailsWhenTargetNameBelongsToActiveTask(t *testing.T) {
 	t.Parallel()
 

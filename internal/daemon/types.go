@@ -191,16 +191,18 @@ type Ticker interface {
 }
 
 type AgentProfile struct {
-	Name              string
-	StartCommand      string
-	ReadyPattern      string
-	ResumeSequence    []string
-	PostmortemEnabled bool
-	StuckTextPatterns []string
-	StuckTimeout      time.Duration
-	GoBased           bool
-	NudgeCommand      string
-	MaxNudgeRetries   int
+	Name                string
+	StartCommand        string
+	ReadyPattern        string
+	ResumeSequence      []string
+	PostmortemEnabled   bool
+	StuckTextPatterns   []string
+	StuckTimeout        time.Duration
+	SpawnCWDWaitTimeout time.Duration
+	StartupTimeout      time.Duration
+	GoBased             bool
+	NudgeCommand        string
+	MaxNudgeRetries     int
 }
 
 type Clone = pool.Clone

@@ -57,11 +57,12 @@ func (c *LocalController) Spawn(ctx context.Context, req SpawnPaneRequest) (Spaw
 
 	window := resolveWindowFromPane(ctx, amuxClient, req.LeadPane)
 	pane, err := amuxClient.Spawn(ctx, amux.SpawnRequest{
-		Session: req.Session,
-		Window:  window,
-		Name:    req.Title,
-		CWD:     spawnCWD,
-		Command: command,
+		Session:        req.Session,
+		Window:         window,
+		Name:           req.Title,
+		CWD:            spawnCWD,
+		CWDWaitTimeout: profile.SpawnCWDWaitTimeout,
+		Command:        command,
 	})
 	if err != nil {
 		releaseErr := manager.Release(ctx, clone.Path, clone.CurrentBranch)
@@ -319,11 +320,12 @@ func (d *Daemon) spawnWorkerPane(ctx context.Context, task Task, stableRef, clon
 	}
 
 	return d.amux.Spawn(ctx, SpawnRequest{
-		Session: d.session,
-		Window:  d.spawnWindowTarget(ctx, task),
-		Name:    paneName,
-		CWD:     spawnCWD,
-		Command: profile.StartCommand,
+		Session:        d.session,
+		Window:         d.spawnWindowTarget(ctx, task),
+		Name:           paneName,
+		CWD:            spawnCWD,
+		CWDWaitTimeout: profile.SpawnCWDWaitTimeout,
+		Command:        profile.StartCommand,
 	})
 }
 

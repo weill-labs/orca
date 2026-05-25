@@ -55,6 +55,12 @@ func TestBuiltinConfigProviderAgentProfile(t *testing.T) {
 		if got, want := profile.ResumeSequence, []string{"codex --yolo resume", "Enter", "."}; !reflect.DeepEqual(got, want) {
 			t.Fatalf("ResumeSequence = %#v, want %#v", got, want)
 		}
+		if got, want := profile.SpawnCWDWaitTimeout, 60*time.Second; got != want {
+			t.Fatalf("SpawnCWDWaitTimeout = %v, want %v", got, want)
+		}
+		if got, want := profile.StartupTimeout, 90*time.Second; got != want {
+			t.Fatalf("StartupTimeout = %v, want %v", got, want)
+		}
 	})
 
 	t.Run("case insensitive lookup", func(t *testing.T) {

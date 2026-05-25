@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	amuxapi "github.com/weill-labs/orca/internal/amux"
 )
@@ -25,7 +26,7 @@ var ErrAgentStartupNotReady = errors.New("agent startup not ready")
 
 func (d *Daemon) agentHandshake(ctx context.Context, paneID string, profile AgentProfile) (PaneCapture, error) {
 	d.emitHandshakeEvent(ctx, paneID, profile, handshakeStepWait)
-	if err := d.waitHandshakeIdle(ctx, paneID, handshakeStepWait); err != nil {
+	if err := d.waitHandshakeIdle(ctx, paneID, profile, handshakeStepWait); err != nil {
 		return PaneCapture{}, err
 	}
 
@@ -61,7 +62,7 @@ func (d *Daemon) agentHandshake(ctx context.Context, paneID string, profile Agen
 		}
 
 		d.emitHandshakeEvent(ctx, paneID, profile, handshakeStepWait)
-		if err := d.waitHandshakeIdle(ctx, paneID, "wait for post-startup action idle"); err != nil {
+		if err := d.waitHandshakeIdle(ctx, paneID, profile, "wait for post-startup action idle"); err != nil {
 			return PaneCapture{}, err
 		}
 	}
@@ -76,7 +77,7 @@ func (d *Daemon) waitForReadyMarker(ctx context.Context, paneID string, profile 
 	validated := snapshot
 	if !hasReadyPattern(profile, snapshot.Output()) {
 		d.emitHandshakeEvent(ctx, paneID, profile, handshakeStepWaitReadyContent)
-		if err := d.amux.WaitContent(ctx, paneID, pattern, defaultAgentHandshakeTimeout); err != nil {
+		if err := d.amux.WaitContent(ctx, paneID, pattern, agentStartupTimeout(profile)); err != nil {
 			waitErr := fmt.Errorf("wait for ready pattern %q: %w", pattern, err)
 			return PaneCapture{}, fmt.Errorf("%w: %w", ErrAgentStartupNotReady, waitErr)
 		}
@@ -117,14 +118,14 @@ func (d *Daemon) confirmTrustPromptIfPresent(ctx context.Context, paneID string,
 	}
 	d.emitHandshakeEvent(ctx, paneID, profile, handshakeStepTrustEnter)
 	d.emitHandshakeEvent(ctx, paneID, profile, handshakeStepWait)
-	if err := d.waitHandshakeIdle(ctx, paneID, "wait for post-startup action idle"); err != nil {
+	if err := d.waitHandshakeIdle(ctx, paneID, profile, "wait for post-startup action idle"); err != nil {
 		return false, err
 	}
 	return true, nil
 }
 
-func (d *Daemon) waitHandshakeIdle(ctx context.Context, paneID, stage string) error {
-	if err := d.amux.WaitIdle(ctx, paneID, defaultAgentHandshakeTimeout); err != nil {
+func (d *Daemon) waitHandshakeIdle(ctx context.Context, paneID string, profile AgentProfile, stage string) error {
+	if err := d.amux.WaitIdle(ctx, paneID, agentStartupTimeout(profile)); err != nil {
 		return d.handshakeIdleError(ctx, paneID, stage, err)
 	}
 	return nil
@@ -236,6 +237,13 @@ func readyPatternText(profile AgentProfile) (string, bool) {
 	default:
 		return "", false
 	}
+}
+
+func agentStartupTimeout(profile AgentProfile) time.Duration {
+	if profile.StartupTimeout > 0 {
+		return profile.StartupTimeout
+	}
+	return defaultAgentHandshakeTimeout
 }
 
 func describePaneSnapshot(snapshot PaneCapture) string {

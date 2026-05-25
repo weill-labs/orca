@@ -24,6 +24,8 @@ var (
 var ErrWaitContentTimeout = errors.New("amux wait content timeout")
 var ErrPaneNotFound = errors.New("amux pane not found")
 
+const defaultSpawnCWDWaitTimeout = 5 * time.Second
+
 type paneNotFoundError struct {
 	err error
 }
@@ -150,7 +152,7 @@ func (c *CLIClient) Spawn(ctx context.Context, req SpawnRequest) (Pane, error) {
 			_ = c.KillPane(ctx, paneRef)
 			return Pane{}, fmt.Errorf("send Enter after cd: %w", err)
 		}
-		if err := c.WaitIdle(ctx, paneRef, 5*time.Second); err != nil {
+		if err := c.WaitIdle(ctx, paneRef, spawnCWDWaitTimeout(req)); err != nil {
 			_ = c.KillPane(ctx, paneRef)
 			return Pane{}, fmt.Errorf("wait for cd: %w", err)
 		}
@@ -169,6 +171,13 @@ func (c *CLIClient) Spawn(ctx context.Context, req SpawnRequest) (Pane, error) {
 
 	pane.ID = paneRef
 	return pane, nil
+}
+
+func spawnCWDWaitTimeout(req SpawnRequest) time.Duration {
+	if req.CWDWaitTimeout > 0 {
+		return req.CWDWaitTimeout
+	}
+	return defaultSpawnCWDWaitTimeout
 }
 
 // ListPanes returns all panes in the session, enriching each pane with its

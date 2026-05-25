@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -278,6 +279,45 @@ func TestAssignWaitsForCodexReadyPatternBeforeSendingPrompt(t *testing.T) {
 	}
 }
 
+func TestAgentHandshakeUsesProfileStartupTimeout(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	profile := deps.config.profiles["codex"]
+	profile.StartupTimeout = 45 * time.Second
+	deps.amux.captureSequence("pane-1", []string{"zsh prompt without codex marker"})
+	deps.amux.waitIdleFunc = func(_ context.Context, _ string, timeout, _ time.Duration) error {
+		if timeout < profile.StartupTimeout {
+			return errors.New("slow prompt still rendering")
+		}
+		return nil
+	}
+	deps.amux.waitContentFunc = func(_ string, substring string, timeout time.Duration) (bool, error) {
+		if substring != codexReadyPattern {
+			return false, nil
+		}
+		if timeout != profile.StartupTimeout {
+			return true, fmt.Errorf("ready timeout = %v, want %v", timeout, profile.StartupTimeout)
+		}
+		return false, nil
+	}
+	d := deps.newDaemon(t)
+
+	if _, err := d.agentHandshake(context.Background(), "pane-1", profile); err != nil {
+		t.Fatalf("agentHandshake() error = %v", err)
+	}
+
+	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{{PaneID: "pane-1", Timeout: 45 * time.Second}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("waitIdle calls = %#v, want %#v", got, want)
+	}
+	if got, want := deps.amux.waitContentCalls, []waitContentCall{
+		{PaneID: "pane-1", Substring: "do you trust", Timeout: defaultTrustPromptTimeout},
+		{PaneID: "pane-1", Substring: codexReadyPattern, Timeout: 45 * time.Second},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("waitContent calls = %#v, want %#v", got, want)
+	}
+}
+
 func TestAssignRetriesCodexStartupAfterBareBashHandshakeFailure(t *testing.T) {
 	t.Parallel()
 
@@ -545,6 +585,29 @@ func TestResumeAgentInPaneReturnsWaitContentError(t *testing.T) {
 	deps.amux.requireSentKeys(t, "pane-1", []string{"codex --yolo resume\n"})
 	if got, want := deps.amux.waitContentCalls, []waitContentCall{
 		{PaneID: "pane-1", Substring: "›", Timeout: defaultAgentHandshakeTimeout},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("waitContent calls = %#v, want %#v", got, want)
+	}
+}
+
+func TestResumeAgentInPaneUsesProfileStartupTimeout(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	d := deps.newDaemon(t)
+	profile := AgentProfile{
+		Name:           "codex",
+		ResumeSequence: []string{"codex --yolo resume", "Enter", "."},
+		StartupTimeout: 45 * time.Second,
+	}
+
+	if err := d.resumeAgentInPane(context.Background(), "pane-1", profile); err != nil {
+		t.Fatalf("resumeAgentInPane() error = %v", err)
+	}
+
+	deps.amux.requireSentKeys(t, "pane-1", []string{"codex --yolo resume\n", "."})
+	if got, want := deps.amux.waitContentCalls, []waitContentCall{
+		{PaneID: "pane-1", Substring: "›", Timeout: 45 * time.Second},
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("waitContent calls = %#v, want %#v", got, want)
 	}
