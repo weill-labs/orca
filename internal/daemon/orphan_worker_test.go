@@ -225,7 +225,6 @@ func TestDaemonStartDeletesOrphanWorkerWithMissingCloneMarker(t *testing.T) {
 	if err := os.MkdirAll(orphanClonePath, 0o755); err != nil {
 		t.Fatalf("MkdirAll(%q) error = %v", orphanClonePath, err)
 	}
-	deps.pool.releaseErr = errors.New("pool: clone path is missing .orca-pool marker")
 	seedOrphanWorker(t, deps, "LAB-1889", "worker-missing-marker", "pane-missing-marker", orphanClonePath)
 
 	d := deps.newDaemon(t)
@@ -258,7 +257,6 @@ func TestDaemonStartDeletesOrphanWorkerWithMissingCloneDirectory(t *testing.T) {
 
 	deps := newTestDeps(t)
 	orphanClonePath := filepath.Join(t.TempDir(), OrcaPoolSubdir, "clone-missing-dir")
-	deps.pool.releaseErr = errors.New("pool: clone path does not exist")
 	seedOrphanWorker(t, deps, "LAB-1889", "worker-missing-dir", "pane-missing-dir", orphanClonePath)
 
 	d := deps.newDaemon(t)
@@ -286,6 +284,40 @@ func TestDaemonStartDeletesOrphanWorkerWithMissingCloneDirectory(t *testing.T) {
 	}
 }
 
+func TestDaemonStartKeepsOrphanWorkerWhenCloneMarkerInspectionFails(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	orphanClonePath := filepath.Join(t.TempDir(), OrcaPoolSubdir, "clone-bad-marker")
+	markerPath := filepath.Join(orphanClonePath, pool.ClonePoolMarker)
+	if err := os.MkdirAll(markerPath, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", markerPath, err)
+	}
+	seedOrphanWorker(t, deps, "LAB-1889", "worker-bad-marker", "pane-bad-marker", orphanClonePath)
+
+	d := deps.newDaemon(t)
+	if err := d.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	waitFor(t, "bad marker orphan worker cleanup failure", func() bool {
+		event, ok := deps.events.lastEventOfType(EventReconcileFinding)
+		return ok &&
+			event.WorkerID == "worker-bad-marker" &&
+			strings.Contains(event.Message, "must be a regular file")
+	})
+
+	if _, ok := deps.state.worker("worker-bad-marker"); !ok {
+		t.Fatal("orphan worker was deleted after marker inspection failure")
+	}
+	if got := deps.pool.releasedClones(); len(got) != 0 {
+		t.Fatalf("released clones = %#v, want none", got)
+	}
+}
+
 func TestDaemonStartPrunesMissingPoolEntriesBeforeOrphanWorkerCleanup(t *testing.T) {
 	t.Parallel()
 
@@ -298,7 +330,6 @@ func TestDaemonStartPrunesMissingPoolEntriesBeforeOrphanWorkerCleanup(t *testing
 		Branch:    "LAB-1889",
 		UpdatedAt: deps.clock.Now(),
 	})
-	deps.pool.releaseErr = errors.New("pool release should be skipped after startup prune")
 	seedOrphanWorker(t, deps, "LAB-1889", "worker-missing-record", "pane-missing-record", orphanClonePath)
 
 	d := deps.newDaemon(t)

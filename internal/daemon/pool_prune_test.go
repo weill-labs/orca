@@ -12,6 +12,34 @@ import (
 	legacy "github.com/weill-labs/orca/internal/state"
 )
 
+type stateWithoutClonePrune struct {
+	StateStore
+}
+
+func TestDaemonStartLogsWhenStateDoesNotSupportPoolPrune(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	logs := make([]string, 0)
+
+	d := deps.newDaemonWithOptions(t, func(opts *Options) {
+		opts.State = stateWithoutClonePrune{StateStore: deps.state}
+		opts.Logf = func(format string, args ...any) {
+			logs = append(logs, fmt.Sprintf(format, args...))
+		}
+	})
+	if err := d.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if !strings.Contains(strings.Join(logs, "\n"), "state store does not support clone pruning") {
+		t.Fatalf("logs = %#v, want unsupported prune store message", logs)
+	}
+}
+
 func TestDaemonStartLogsAndContinuesWhenPoolPruneListFails(t *testing.T) {
 	t.Parallel()
 

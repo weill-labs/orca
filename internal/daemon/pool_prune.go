@@ -20,6 +20,9 @@ type poolPruneStateStore interface {
 func (d *Daemon) pruneMissingPoolEntries(ctx context.Context) {
 	store, ok := d.state.(poolPruneStateStore)
 	if !ok {
+		if d.logf != nil {
+			d.logf("pool prune skipped: state store does not support clone pruning")
+		}
 		return
 	}
 
