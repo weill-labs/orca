@@ -239,8 +239,7 @@ func (d *Daemon) normalizeClonePathProjectWorkerIfLive(ctx context.Context, work
 	var result error
 	if err := d.state.PutWorker(cleanupCtx, worker); err != nil {
 		result = errors.Join(result, fmt.Errorf("normalize worker project: %w", err))
-	}
-	if ref := workerRef(worker); ref == "" {
+	} else if ref := workerRef(worker); ref == "" {
 		result = errors.Join(result, errors.New("clone-path-project worker has no worker or pane reference"))
 	} else if err := d.state.DeleteWorker(cleanupCtx, originalProject, ref); err != nil && !errors.Is(err, ErrWorkerNotFound) {
 		result = errors.Join(result, fmt.Errorf("delete malformed worker row: %w", err))
