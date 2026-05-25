@@ -25,6 +25,39 @@ func CanonicalPath(path string) (string, error) {
 	return repoRoot(resolvedPath)
 }
 
+func NormalizeWorkerProjectPath(path string) string {
+	if projectPath := ProjectRootFromPoolClonePath(path); projectPath != "" {
+		return projectPath
+	}
+	return strings.TrimSpace(path)
+}
+
+func ProjectRootFromPoolClonePath(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+
+	cleaned := filepath.Clean(path)
+	if !strings.HasPrefix(filepath.Base(cleaned), "clone-") {
+		return ""
+	}
+
+	poolRoot := filepath.Dir(cleaned)
+	if filepath.Base(poolRoot) != "pool" {
+		return ""
+	}
+	orcaRoot := filepath.Dir(poolRoot)
+	if filepath.Base(orcaRoot) != ".orca" {
+		return ""
+	}
+	projectPath := filepath.Dir(orcaRoot)
+	if projectPath == "." {
+		return ""
+	}
+	return projectPath
+}
+
 func resolvePath(path string) (string, error) {
 	absPath, err := filepath.Abs(path)
 	if err != nil {

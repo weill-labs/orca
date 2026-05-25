@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	projectpath "github.com/weill-labs/orca/internal/project"
 	legacy "github.com/weill-labs/orca/internal/state"
 )
 
@@ -94,6 +95,7 @@ func (s *PostgresStore) UpsertTask(ctx context.Context, project string, task Tas
 }
 
 func (s *PostgresStore) UpsertWorker(ctx context.Context, project string, worker Worker) error {
+	project = projectpath.NormalizeWorkerProjectPath(project)
 	now := s.now()
 	if worker.CreatedAt.IsZero() {
 		worker.CreatedAt = now
@@ -141,6 +143,7 @@ func (s *PostgresStore) UpsertWorker(ctx context.Context, project string, worker
 }
 
 func (s *PostgresStore) ClaimWorker(ctx context.Context, project string, worker Worker) (Worker, error) {
+	project = projectpath.NormalizeWorkerProjectPath(project)
 	now := s.now()
 	if worker.CreatedAt.IsZero() {
 		worker.CreatedAt = now

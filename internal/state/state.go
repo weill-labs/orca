@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
+	projectpath "github.com/weill-labs/orca/internal/project"
 	_ "modernc.org/sqlite"
 )
 
@@ -951,10 +952,10 @@ func canonicalizeProject(project string) (string, error) {
 
 	resolvedPath, err := filepath.EvalSymlinks(absPath)
 	if err == nil {
-		return resolvedPath, nil
+		return projectpath.NormalizeWorkerProjectPath(resolvedPath), nil
 	}
 	if errors.Is(err, os.ErrNotExist) {
-		return filepath.Clean(absPath), nil
+		return projectpath.NormalizeWorkerProjectPath(filepath.Clean(absPath)), nil
 	}
 
 	return "", fmt.Errorf("canonicalize project path: %w", err)

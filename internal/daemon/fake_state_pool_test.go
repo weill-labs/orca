@@ -260,7 +260,7 @@ func (s *fakeState) ListWorkers(ctx context.Context, project string) ([]Worker, 
 
 	workers := make([]Worker, 0, len(s.workers))
 	for _, worker := range s.workers {
-		if worker.Project != "" && worker.Project != project {
+		if project != "" && worker.Project != "" && worker.Project != project {
 			continue
 		}
 		workers = append(workers, worker)

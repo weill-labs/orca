@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/weill-labs/orca/internal/amux"
+	projectpath "github.com/weill-labs/orca/internal/project"
 	legacy "github.com/weill-labs/orca/internal/state"
 	_ "modernc.org/sqlite"
 )
@@ -885,6 +886,7 @@ func (s *SQLiteStore) UpsertTask(ctx context.Context, project string, task Task)
 }
 
 func (s *SQLiteStore) UpsertWorker(ctx context.Context, project string, worker Worker) error {
+	project = projectpath.NormalizeWorkerProjectPath(project)
 	now := s.now()
 	if worker.CreatedAt.IsZero() {
 		worker.CreatedAt = now
@@ -933,6 +935,7 @@ func (s *SQLiteStore) UpsertWorker(ctx context.Context, project string, worker W
 }
 
 func (s *SQLiteStore) ClaimWorker(ctx context.Context, project string, worker Worker) (Worker, error) {
+	project = projectpath.NormalizeWorkerProjectPath(project)
 	now := s.now()
 	if worker.CreatedAt.IsZero() {
 		worker.CreatedAt = now
