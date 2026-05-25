@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -23,11 +24,11 @@ func TestDaemonStartLogsAndContinuesWhenPoolPruneListFails(t *testing.T) {
 			logs = append(logs, fmt.Sprintf(format, args...))
 		}
 	})
-	if err := d.Start(t.Context()); err != nil {
+	if err := d.Start(context.Background()); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
 	t.Cleanup(func() {
-		_ = d.Stop(t.Context())
+		_ = d.Stop(context.Background())
 	})
 
 	if !strings.Contains(strings.Join(logs, "\n"), "list unavailable") {
@@ -46,11 +47,11 @@ func TestDaemonStartSkipsEmptyPoolClonePath(t *testing.T) {
 	})
 
 	d := deps.newDaemon(t)
-	if err := d.Start(t.Context()); err != nil {
+	if err := d.Start(context.Background()); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
 	t.Cleanup(func() {
-		_ = d.Stop(t.Context())
+		_ = d.Stop(context.Background())
 	})
 
 	if got := deps.events.countType(EventPoolEntryPruned); got != 0 {
@@ -71,11 +72,11 @@ func TestDaemonStartKeepsExistingPoolEntryDuringStartupPrune(t *testing.T) {
 	})
 
 	d := deps.newDaemon(t)
-	if err := d.Start(t.Context()); err != nil {
+	if err := d.Start(context.Background()); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
 	t.Cleanup(func() {
-		_ = d.Stop(t.Context())
+		_ = d.Stop(context.Background())
 	})
 
 	if _, ok := deps.state.clone(clonePath); !ok {
@@ -103,11 +104,11 @@ func TestDaemonStartLogsAndContinuesWhenPoolPruneInspectFails(t *testing.T) {
 			logs = append(logs, fmt.Sprintf(format, args...))
 		}
 	})
-	if err := d.Start(t.Context()); err != nil {
+	if err := d.Start(context.Background()); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
 	t.Cleanup(func() {
-		_ = d.Stop(t.Context())
+		_ = d.Stop(context.Background())
 	})
 
 	if _, ok := deps.state.clone(clonePath); !ok {
@@ -136,11 +137,11 @@ func TestDaemonStartLogsAndContinuesWhenPoolPruneDeleteFails(t *testing.T) {
 			logs = append(logs, fmt.Sprintf(format, args...))
 		}
 	})
-	if err := d.Start(t.Context()); err != nil {
+	if err := d.Start(context.Background()); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
 	t.Cleanup(func() {
-		_ = d.Stop(t.Context())
+		_ = d.Stop(context.Background())
 	})
 
 	if _, ok := deps.state.clone(clonePath); !ok {
@@ -167,11 +168,11 @@ func TestDaemonStartEmitsPoolPruneEventWhenEntryAlreadyDeleted(t *testing.T) {
 	deps.state.deleteCloneErr = state.ErrNotFound
 
 	d := deps.newDaemon(t)
-	if err := d.Start(t.Context()); err != nil {
+	if err := d.Start(context.Background()); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
 	t.Cleanup(func() {
-		_ = d.Stop(t.Context())
+		_ = d.Stop(context.Background())
 	})
 
 	if got := deps.events.countType(EventPoolEntryPruned); got != 1 {
