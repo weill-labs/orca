@@ -42,8 +42,8 @@ func TestPRReviewPollingPromotesLargeReviewNudgeToFile(t *testing.T) {
 	expectedFullPrompt := formatBlockingReviewFeedback(1902, []prFeedback{
 		{Author: "greptile-apps", Body: body},
 	})
-	promptFile := filepath.Join(deps.pool.clone.Path, assignmentPromptFileDir, "review-1902.md")
-	expectedReference := "Read " + assignmentPromptFileDir + "/review-1902.md and address the review feedback on PR #1902, then push."
+	promptFile := filepath.Join(deps.pool.clone.Path, promptFileDir, "review-1902.md")
+	expectedReference := "Read " + promptFileDir + "/review-1902.md and address the review feedback on PR #1902, then push."
 
 	tickAndWaitForHeartbeat(t, d, deps, prTicker, adaptivePRFastPollInterval, "large review poll cycle completion")
 	waitFor(t, "large review nudge reference prompt", func() bool {
@@ -105,7 +105,7 @@ func TestPRReviewPollingKeepsSmallReviewNudgeInline(t *testing.T) {
 		return deps.amux.countKey("pane-1", expectedPrompt+"\n") == 1
 	})
 
-	promptFile := filepath.Join(deps.pool.clone.Path, assignmentPromptFileDir, "review-1903.md")
+	promptFile := filepath.Join(deps.pool.clone.Path, promptFileDir, "review-1903.md")
 	if _, err := os.Stat(promptFile); !os.IsNotExist(err) {
 		t.Fatalf("review prompt file stat error = %v, want not exist", err)
 	}
