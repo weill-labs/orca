@@ -590,6 +590,29 @@ func TestResumeAgentInPaneReturnsWaitContentError(t *testing.T) {
 	}
 }
 
+func TestResumeAgentInPaneUsesProfileStartupTimeout(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	d := deps.newDaemon(t)
+	profile := AgentProfile{
+		Name:           "codex",
+		ResumeSequence: []string{"codex --yolo resume", "Enter", "."},
+		StartupTimeout: 45 * time.Second,
+	}
+
+	if err := d.resumeAgentInPane(context.Background(), "pane-1", profile); err != nil {
+		t.Fatalf("resumeAgentInPane() error = %v", err)
+	}
+
+	deps.amux.requireSentKeys(t, "pane-1", []string{"codex --yolo resume\n", "."})
+	if got, want := deps.amux.waitContentCalls, []waitContentCall{
+		{PaneID: "pane-1", Substring: "›", Timeout: 45 * time.Second},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("waitContent calls = %#v, want %#v", got, want)
+	}
+}
+
 func TestConfirmTrustPromptIfPresentIgnoresProfilesWithoutTrustPrompt(t *testing.T) {
 	t.Parallel()
 

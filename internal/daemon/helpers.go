@@ -794,7 +794,7 @@ func (d *Daemon) resumeAgentInPane(ctx context.Context, paneID string, profile A
 	}
 	pattern, ok := readyPatternText(profile)
 	if !ok {
-		return nil
+		return fmt.Errorf("resume ready pattern is not configured for profile %q", profile.Name)
 	}
 	if err := d.amux.WaitContent(ctx, paneID, pattern, agentStartupTimeout(profile)); err != nil {
 		return err
