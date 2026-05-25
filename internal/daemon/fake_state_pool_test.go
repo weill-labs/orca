@@ -26,6 +26,7 @@ type fakeState struct {
 	listClonesErr         error
 	deleteCloneErr        error
 	taskByIssueErr        error
+	taskByIssueErrs       []error
 	putTaskErrs           []error
 	putWorkerErrs         []error
 	nonTerminalErr        error
@@ -46,6 +47,13 @@ func newFakeState() *fakeState {
 func (s *fakeState) TaskByIssue(ctx context.Context, project, issue string) (Task, error) {
 	if s.rejectCanceledContext && ctx.Err() != nil {
 		return Task{}, ctx.Err()
+	}
+	if len(s.taskByIssueErrs) > 0 {
+		err := s.taskByIssueErrs[0]
+		s.taskByIssueErrs = s.taskByIssueErrs[1:]
+		if err != nil {
+			return Task{}, err
+		}
 	}
 	if s.taskByIssueErr != nil {
 		return Task{}, s.taskByIssueErr

@@ -138,6 +138,11 @@ func TestProjectRootFromPoolClonePath(t *testing.T) {
 			want: "",
 		},
 		{
+			name: "non-numeric clone name",
+			path: filepath.Join("/tmp/project", ".orca", "pool", "clone-backup", "subdir"),
+			want: "",
+		},
+		{
 			name: "empty path",
 			path: " \t ",
 			want: "",
@@ -178,6 +183,11 @@ func TestNormalizeWorkerProjectPath(t *testing.T) {
 			name: "regular project",
 			path: " \t/tmp/project\n",
 			want: "/tmp/project",
+		},
+		{
+			name: "non-numeric clone name",
+			path: filepath.Join("/tmp/project", ".orca", "pool", "clone-backup", "subdir"),
+			want: filepath.Join("/tmp/project", ".orca", "pool", "clone-backup", "subdir"),
 		},
 		{
 			name: "empty path",

@@ -287,6 +287,145 @@ func TestReconcileOrphanWorkersKeepsClonePathProjectWorkerWhenNormalizeWriteFail
 	}
 }
 
+func TestReconcileOrphanWorkersKeepsLiveClonePathProjectWorkerWhenTaskLookupFailsDuringNormalize(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	cloneProject := filepath.Join("/tmp/project", OrcaPoolSubdir, "clone-08")
+	markClonePathForTest(t, cloneProject)
+	now := deps.clock.Now()
+	if err := deps.state.PutTask(context.Background(), Task{
+		Project:      "/tmp/project",
+		Issue:        "LAB-1896",
+		Status:       TaskStatusActive,
+		State:        TaskStateAssigned,
+		WorkerID:     "worker-task-lookup-fails",
+		PaneID:       "pane-task-lookup-fails",
+		ClonePath:    cloneProject,
+		Branch:       "LAB-1896",
+		AgentProfile: "codex",
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}); err != nil {
+		t.Fatalf("PutTask() error = %v", err)
+	}
+	seedMalformedProjectWorker(t, deps, Worker{
+		Project:      cloneProject,
+		WorkerID:     "worker-task-lookup-fails",
+		PaneID:       "pane-task-lookup-fails",
+		PaneName:     "worker-task-lookup-fails",
+		Issue:        "LAB-1896",
+		ClonePath:    cloneProject,
+		AgentProfile: "codex",
+		Health:       WorkerHealthHealthy,
+		CreatedAt:    now,
+		LastSeenAt:   now,
+		UpdatedAt:    now,
+	})
+	deps.state.taskByIssueErrs = []error{nil, errors.New("state temporarily unavailable")}
+
+	d := deps.newDaemon(t)
+	d.reconcileOrphanWorkers(context.Background())
+
+	worker, ok := deps.state.worker("worker-task-lookup-fails")
+	if !ok {
+		t.Fatal("live worker was deleted after normalization task lookup failed")
+	}
+	if got, want := worker.Project, cloneProject; got != want {
+		t.Fatalf("worker.Project = %q, want original malformed project %q", got, want)
+	}
+	if got := deps.pool.releasedClones(); len(got) != 0 {
+		t.Fatalf("released clones = %#v, want none", got)
+	}
+	event, ok := deps.events.lastEventOfType(EventReconcileFinding)
+	if !ok {
+		t.Fatal("reconcile finding event missing")
+	}
+	if !strings.Contains(event.Message, "state temporarily unavailable") {
+		t.Fatalf("reconcile event message = %q, want task lookup failure", event.Message)
+	}
+}
+
+func TestReconcileOrphanWorkersDoesNotNormalizeClonePathProjectWorkerWithoutReference(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	cloneProject := filepath.Join("/tmp/project", OrcaPoolSubdir, "clone-09")
+	now := deps.clock.Now()
+	if err := deps.state.PutTask(context.Background(), Task{
+		Project:      "/tmp/project",
+		Issue:        "LAB-1896",
+		Status:       TaskStatusActive,
+		State:        TaskStateAssigned,
+		AgentProfile: "codex",
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}); err != nil {
+		t.Fatalf("PutTask() error = %v", err)
+	}
+	seedMalformedProjectWorker(t, deps, Worker{
+		Project:      cloneProject,
+		Issue:        "LAB-1896",
+		AgentProfile: "codex",
+		Health:       WorkerHealthHealthy,
+		CreatedAt:    now,
+		LastSeenAt:   now,
+		UpdatedAt:    now,
+	})
+
+	d := deps.newDaemon(t)
+	d.reconcileOrphanWorkers(context.Background())
+
+	worker, ok := deps.state.worker("")
+	if !ok {
+		t.Fatal("reference-less worker missing after reconcile")
+	}
+	if got, want := worker.Project, cloneProject; got != want {
+		t.Fatalf("worker.Project = %q, want original malformed project %q", got, want)
+	}
+}
+
+func TestReconcileOrphanWorkersTreatsAnonymousClonePathProjectWorkersAsOrphans(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	cloneProject := filepath.Join("/tmp/project", OrcaPoolSubdir, "clone-10")
+	now := deps.clock.Now()
+	if err := deps.state.PutTask(context.Background(), Task{
+		Project:      "/tmp/project",
+		Issue:        "LAB-1896",
+		Status:       TaskStatusActive,
+		State:        TaskStateAssigned,
+		AgentProfile: "codex",
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}); err != nil {
+		t.Fatalf("PutTask() error = %v", err)
+	}
+	for _, paneID := range []string{"pane-anonymous-a", "pane-anonymous-b"} {
+		seedMalformedProjectWorker(t, deps, Worker{
+			Project:      cloneProject,
+			PaneID:       paneID,
+			PaneName:     paneID,
+			Issue:        "LAB-1896",
+			AgentProfile: "codex",
+			Health:       WorkerHealthHealthy,
+			CreatedAt:    now,
+			LastSeenAt:   now,
+			UpdatedAt:    now,
+		})
+	}
+
+	d := deps.newDaemon(t)
+	d.reconcileOrphanWorkers(context.Background())
+
+	for _, paneID := range []string{"pane-anonymous-a", "pane-anonymous-b"} {
+		if worker, ok := deps.state.worker(paneID); ok {
+			t.Fatalf("anonymous worker %q still present after reconcile: %#v", paneID, worker)
+		}
+	}
+}
+
 func TestDaemonStartDeletesEmptyProjectOrphanWorkerWithNoClone(t *testing.T) {
 	t.Parallel()
 
