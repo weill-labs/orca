@@ -33,6 +33,11 @@ var builtinProfiles = map[string]AgentProfile{
 	},
 }
 
+const (
+	codexSpawnCWDWaitTimeout = 60 * time.Second
+	codexStartupTimeout      = 90 * time.Second
+)
+
 type builtinConfigProvider struct{}
 
 func (builtinConfigProvider) AgentProfile(_ context.Context, name string) (AgentProfile, error) {
@@ -50,6 +55,12 @@ func applyAgentProfileQuirks(profile AgentProfile) AgentProfile {
 		profile.StartCommand = normalizeCodexStartCommand(profile.StartCommand)
 		if strings.TrimSpace(profile.ReadyPattern) == "" {
 			profile.ReadyPattern = codexReadyPattern
+		}
+		if profile.SpawnCWDWaitTimeout <= 0 {
+			profile.SpawnCWDWaitTimeout = codexSpawnCWDWaitTimeout
+		}
+		if profile.StartupTimeout <= 0 {
+			profile.StartupTimeout = codexStartupTimeout
 		}
 		profile.ResumeSequence = []string{
 			profile.StartCommand + " resume",

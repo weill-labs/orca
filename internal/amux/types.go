@@ -21,12 +21,13 @@ func (p Pane) Ref() string {
 }
 
 type SpawnRequest struct {
-	Session string `json:"session,omitempty"`
-	AtPane  string `json:"at_pane,omitempty"`
-	Window  string `json:"window,omitempty"`
-	Name    string `json:"name,omitempty"`
-	CWD     string `json:"cwd,omitempty"`
-	Command string `json:"command,omitempty"`
+	Session        string        `json:"session,omitempty"`
+	AtPane         string        `json:"at_pane,omitempty"`
+	Window         string        `json:"window,omitempty"`
+	Name           string        `json:"name,omitempty"`
+	CWD            string        `json:"cwd,omitempty"`
+	CWDWaitTimeout time.Duration `json:"cwd_wait_timeout,omitempty"`
+	Command        string        `json:"command,omitempty"`
 }
 
 type PaneCapture struct {
