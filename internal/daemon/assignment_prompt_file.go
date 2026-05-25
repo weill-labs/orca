@@ -10,50 +10,76 @@ import (
 
 const (
 	codexLargePromptThresholdBytes = 500
-	assignmentPromptFileDir        = ".orca/prompts"
-	assignmentPromptGitExclude     = assignmentPromptFileDir + "/"
+	promptFileDir                  = ".orca/prompts"
+	promptFileGitExclude           = promptFileDir + "/"
+	assignmentPromptFileDir        = promptFileDir
+	assignmentPromptGitExclude     = promptFileGitExclude
 )
 
+type promptFileDelivery struct {
+	clonePath       string
+	fileName        string
+	kind            string
+	referencePrompt func(path string) string
+}
+
 func (d *Daemon) prepareAssignmentPromptForDelivery(task Task, profile AgentProfile, prompt string) (string, error) {
+	return d.preparePromptForDelivery(profile, prompt, promptFileDelivery{
+		clonePath:       task.ClonePath,
+		fileName:        task.Issue,
+		kind:            "assignment",
+		referencePrompt: codexAssignmentPromptFileReference,
+	})
+}
+
+func (d *Daemon) preparePromptForDelivery(profile AgentProfile, prompt string, delivery promptFileDelivery) (string, error) {
 	if !strings.EqualFold(profile.Name, "codex") || len([]byte(prompt)) <= codexLargePromptThresholdBytes {
 		return prompt, nil
 	}
 
-	path, err := assignmentPromptFilePath(task)
+	path, err := promptFilePath(delivery.clonePath, delivery.fileName, delivery.kind)
 	if err != nil {
 		return "", err
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return "", fmt.Errorf("create assignment prompt directory: %w", err)
+		return "", fmt.Errorf("create %s prompt directory: %w", delivery.kind, err)
 	}
 	content := prompt
 	if !strings.HasSuffix(content, "\n") {
 		content += "\n"
 	}
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-		return "", fmt.Errorf("write assignment prompt file: %w", err)
+		return "", fmt.Errorf("write %s prompt file: %w", delivery.kind, err)
 	}
-	if err := ensureAssignmentPromptFileIgnored(task.ClonePath); err != nil && d.logf != nil {
-		d.logf("ignore assignment prompt files failed: clone=%s error=%v", task.ClonePath, err)
+	if err := ensurePromptFileIgnored(delivery.clonePath); err != nil && d.logf != nil {
+		d.logf("ignore %s prompt files failed: clone=%s error=%v", delivery.kind, delivery.clonePath, err)
 	}
-	return codexAssignmentPromptFileReference(assignmentPromptFileReferencePath(task, path)), nil
+	return delivery.referencePrompt(promptFileReferencePath(delivery.clonePath, path)), nil
 }
 
 func assignmentPromptFilePath(task Task) (string, error) {
-	clonePath := strings.TrimSpace(task.ClonePath)
+	return promptFilePath(task.ClonePath, task.Issue, "assignment")
+}
+
+func promptFilePath(clonePath, fileName, kind string) (string, error) {
+	clonePath = strings.TrimSpace(clonePath)
 	if clonePath == "" {
-		return "", errors.New("assignment prompt file requires clone path")
+		return "", fmt.Errorf("%s prompt file requires clone path", kind)
 	}
 
-	name := sanitizeAssignmentPromptFileName(task.Issue)
+	name := sanitizePromptFileName(fileName)
 	if name == "" {
-		name = "assignment"
+		name = sanitizePromptFileName(kind)
 	}
-	return filepath.Join(clonePath, assignmentPromptFileDir, name+".md"), nil
+	return filepath.Join(clonePath, promptFileDir, name+".md"), nil
 }
 
 func assignmentPromptFileReferencePath(task Task, path string) string {
-	clonePath := strings.TrimSpace(task.ClonePath)
+	return promptFileReferencePath(task.ClonePath, path)
+}
+
+func promptFileReferencePath(clonePath, path string) string {
+	clonePath = strings.TrimSpace(clonePath)
 	if clonePath == "" {
 		return path
 	}
@@ -69,6 +95,10 @@ func codexAssignmentPromptFileReference(path string) string {
 }
 
 func ensureAssignmentPromptFileIgnored(clonePath string) error {
+	return ensurePromptFileIgnored(clonePath)
+}
+
+func ensurePromptFileIgnored(clonePath string) error {
 	gitDir := filepath.Join(clonePath, ".git")
 	infoDir := filepath.Join(gitDir, "info")
 	if stat, err := os.Stat(gitDir); err != nil || !stat.IsDir() {
@@ -80,7 +110,7 @@ func ensureAssignmentPromptFileIgnored(clonePath string) error {
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	if gitExcludeContainsLine(string(existing), assignmentPromptGitExclude) {
+	if gitExcludeContainsLine(string(existing), promptFileGitExclude) {
 		return nil
 	}
 	if err := os.MkdirAll(infoDir, 0o755); err != nil {
@@ -97,7 +127,7 @@ func ensureAssignmentPromptFileIgnored(clonePath string) error {
 			return err
 		}
 	}
-	_, err = file.WriteString(assignmentPromptGitExclude + "\n")
+	_, err = file.WriteString(promptFileGitExclude + "\n")
 	return err
 }
 
@@ -111,6 +141,10 @@ func gitExcludeContainsLine(content, line string) bool {
 }
 
 func sanitizeAssignmentPromptFileName(value string) string {
+	return sanitizePromptFileName(value)
+}
+
+func sanitizePromptFileName(value string) string {
 	var builder strings.Builder
 	for _, r := range strings.TrimSpace(value) {
 		switch {
