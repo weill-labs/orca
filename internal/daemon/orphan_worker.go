@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/weill-labs/orca/internal/pool"
 )
 
 type orphanWorkerCleanupMode struct {
@@ -118,11 +120,17 @@ func (d *Daemon) cleanupOrphanWorker(ctx context.Context, projectPath string, wo
 	}
 
 	if clonePath != "" {
-		clone := Clone{
-			Name: filepath.Base(clonePath),
-			Path: clonePath,
+		hasMarker, err := pool.HasCloneMarker(clonePath)
+		if err != nil {
+			result = errors.Join(result, err)
 		}
-		result = errors.Join(result, d.cleanupCloneAndReleaseForProject(cleanupCtx, cleanupProjectPath, clone, branch))
+		if hasMarker {
+			clone := Clone{
+				Name: filepath.Base(clonePath),
+				Path: clonePath,
+			}
+			result = errors.Join(result, d.cleanupCloneAndReleaseForProject(cleanupCtx, cleanupProjectPath, clone, branch))
+		}
 	}
 
 	if result != nil {

@@ -252,6 +252,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 	d.stopContext, d.stopCancel = context.WithCancel(context.Background())
 	d.cleanupDrainCtx, d.cleanupDrainCancel = context.WithCancel(context.Background())
 	d.lastHeartbeat.Store(d.now().UnixMilli())
+	d.pruneMissingPoolEntries(ctx)
 	d.releaseStalePoolClones(ctx)
 	d.reconcileOrphanWorkers(ctx)
 	d.reconcileStrandedMergedTasks(ctx)

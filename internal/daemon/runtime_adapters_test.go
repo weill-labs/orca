@@ -10,6 +10,7 @@ import (
 	"time"
 
 	state "github.com/weill-labs/orca/internal/daemonstate"
+	legacy "github.com/weill-labs/orca/internal/state"
 )
 
 func TestBuiltinConfigProviderAgentProfile(t *testing.T) {
@@ -155,6 +156,47 @@ func TestSQLiteStateAdapterStatsSources(t *testing.T) {
 	}
 	if got, want := count, 0; got != want {
 		t.Fatalf("fallback ReconcileFindingCount() = %d, want %d", got, want)
+	}
+}
+
+func TestSQLiteStateAdapterClonePruneMethods(t *testing.T) {
+	t.Parallel()
+
+	store := openDaemonStateStore(t)
+	adapter := newSQLiteStateAdapter(store)
+	clonePath := filepath.Join(t.TempDir(), OrcaPoolSubdir, "clone-01")
+	if _, err := store.EnsureClone(context.Background(), "/repo", clonePath); err != nil {
+		t.Fatalf("EnsureClone() error = %v", err)
+	}
+
+	clones, err := adapter.ListClones(context.Background(), "/repo")
+	if err != nil {
+		t.Fatalf("ListClones() error = %v", err)
+	}
+	if got, want := len(clones), 1; got != want {
+		t.Fatalf("len(clones) = %d, want %d", got, want)
+	}
+	if got, want := clones[0].Path, clonePath; got != want {
+		t.Fatalf("clone path = %q, want %q", got, want)
+	}
+
+	if err := adapter.DeleteClone(context.Background(), "/repo", clonePath); err != nil {
+		t.Fatalf("DeleteClone() error = %v", err)
+	}
+	clones, err = adapter.ListClones(context.Background(), "/repo")
+	if err != nil {
+		t.Fatalf("ListClones() after delete error = %v", err)
+	}
+	if got := len(clones); got != 0 {
+		t.Fatalf("len(clones) after delete = %d, want 0", got)
+	}
+	if err := adapter.DeleteClone(context.Background(), "/repo", clonePath); !errors.Is(err, legacy.ErrCloneNotFound) {
+		t.Fatalf("DeleteClone() missing error = %v, want ErrCloneNotFound", err)
+	}
+
+	fallback := newSQLiteStateAdapter(fakeDaemonStateStore{})
+	if err := fallback.DeleteClone(context.Background(), "/repo", clonePath); err == nil {
+		t.Fatal("fallback DeleteClone() error = nil, want non-nil")
 	}
 }
 
