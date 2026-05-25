@@ -237,7 +237,7 @@ func (d *Daemon) checkTaskReviewPoll(ctx context.Context, active ActiveAssignmen
 		return traceAndReturn(&nextReviewState, len(blocking), reviewPollIdleNotChecked, "escalate_review_feedback", true)
 	}
 
-	feedback := formatBlockingReviewFeedback(update.Active.Task.PRNumber, blocking)
+	reviewPrompt := formatBlockingReviewFeedback(update.Active.Task.PRNumber, blocking)
 	// A fresh capture can update LastCapture/LastActivityAt before we decide whether to defer.
 	idle, idleResult := d.workerAppearsIdleForReviewNudge(ctx, &update, profile, now)
 	if !idle {
@@ -246,7 +246,14 @@ func (d *Daemon) checkTaskReviewPoll(ctx context.Context, active ActiveAssignmen
 	nudgedReviewState := nextReviewState
 	nudgedReviewState.reviewNudgeCount++
 	update.queueNudge(func(ctx context.Context, d *Daemon, update *TaskStateUpdate) {
-		if err := d.sendPromptAndEnter(ctx, update.Active.Task.PaneID, feedback); err != nil {
+		deliveryPrompt, err := d.prepareReviewPromptForDelivery(update.Active.Task, profile, reviewPrompt)
+		if err != nil {
+			if d.logf != nil {
+				d.logf("prepare review prompt delivery failed: issue=%s pr_number=%d error=%v", update.Active.Task.Issue, update.Active.Task.PRNumber, err)
+			}
+			return
+		}
+		if err := d.sendPromptAndEnter(ctx, update.Active.Task.PaneID, deliveryPrompt); err != nil {
 			if isPaneGoneError(err) {
 				d.escalateTaskState(update, profile, "worker pane missing during review nudge", now)
 			}
@@ -488,6 +495,28 @@ func formatBlockingReviewFeedback(prNumber int, feedback []prFeedback) string {
 	}
 	builder.WriteString("\nAddress the feedback in the PR review and push an update.")
 	return builder.String()
+}
+
+func (d *Daemon) prepareReviewPromptForDelivery(task Task, profile AgentProfile, prompt string) (string, error) {
+	fileName := "review"
+	if task.PRNumber > 0 {
+		fileName = fmt.Sprintf("review-%d", task.PRNumber)
+	}
+	return d.preparePromptForDelivery(profile, prompt, promptFileDelivery{
+		clonePath: task.ClonePath,
+		fileName:  fileName,
+		kind:      "review",
+		referencePrompt: func(path string) string {
+			return codexReviewPromptFileReference(path, task.PRNumber)
+		},
+	})
+}
+
+func codexReviewPromptFileReference(path string, prNumber int) string {
+	if prNumber > 0 {
+		return fmt.Sprintf("Read %s and address the review feedback on PR #%d, then push.", path, prNumber)
+	}
+	return fmt.Sprintf("Read %s and address the PR review feedback, then push.", path)
 }
 
 func (d *Daemon) notifyCallerPaneReviewEscalation(ctx context.Context, active ActiveAssignment, feedback []prFeedback) {
