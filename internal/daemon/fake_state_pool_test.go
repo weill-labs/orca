@@ -23,6 +23,8 @@ type fakeState struct {
 	cloneOccupancies      []CloneOccupancy
 	mergeQueue            []MergeQueueEntry
 	knownProjectsErr      error
+	listClonesErr         error
+	deleteCloneErr        error
 	taskByIssueErr        error
 	putTaskErrs           []error
 	putWorkerErrs         []error
@@ -360,6 +362,9 @@ func (s *fakeState) ListClones(ctx context.Context, project string) ([]state.Clo
 	if s.rejectCanceledContext && ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
+	if s.listClonesErr != nil {
+		return nil, s.listClonesErr
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -376,6 +381,9 @@ func (s *fakeState) ListClones(ctx context.Context, project string) ([]state.Clo
 func (s *fakeState) DeleteClone(ctx context.Context, project, path string) error {
 	if s.rejectCanceledContext && ctx.Err() != nil {
 		return ctx.Err()
+	}
+	if s.deleteCloneErr != nil {
+		return s.deleteCloneErr
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
