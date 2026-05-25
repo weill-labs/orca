@@ -306,6 +306,22 @@ func (a *sqliteStateAdapter) StaleCloneOccupancies(ctx context.Context, project 
 	return out, nil
 }
 
+type cloneDeleteStore interface {
+	DeleteClone(ctx context.Context, project, path string) error
+}
+
+func (a *sqliteStateAdapter) ListClones(ctx context.Context, project string) ([]state.Clone, error) {
+	return a.store.ListClones(ctx, project)
+}
+
+func (a *sqliteStateAdapter) DeleteClone(ctx context.Context, project, path string) error {
+	store, ok := a.store.(cloneDeleteStore)
+	if !ok {
+		return errors.New("state store does not support clone pruning")
+	}
+	return store.DeleteClone(ctx, project, path)
+}
+
 func (a *sqliteStateAdapter) TasksByPane(ctx context.Context, project, paneID string) ([]Task, error) {
 	tasks, err := a.store.TasksByPane(ctx, project, paneID)
 	if err != nil {
