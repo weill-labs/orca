@@ -39,20 +39,13 @@ func ProjectRootFromPoolClonePath(path string) string {
 	}
 
 	cleaned := filepath.Clean(path)
-	if !strings.HasPrefix(filepath.Base(cleaned), "clone-") {
+	marker := string(filepath.Separator) + filepath.Join(".orca", "pool") + string(filepath.Separator) + "clone-"
+	idx := strings.Index(cleaned, marker)
+	if idx <= 0 {
 		return ""
 	}
-
-	poolRoot := filepath.Dir(cleaned)
-	if filepath.Base(poolRoot) != "pool" {
-		return ""
-	}
-	orcaRoot := filepath.Dir(poolRoot)
-	if filepath.Base(orcaRoot) != ".orca" {
-		return ""
-	}
-	projectPath := filepath.Dir(orcaRoot)
-	if projectPath == "." {
+	projectPath := cleaned[:idx]
+	if projectPath == "." || projectPath == string(filepath.Separator) {
 		return ""
 	}
 	return projectPath
