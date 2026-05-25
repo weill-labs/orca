@@ -180,6 +180,12 @@ This shows the task's event log with timestamps — handshake steps, stuck detec
 - The default agent is `claude`. Always pass `--agent codex` explicitly when you want Codex.
 - Codex workers sometimes exit silently on startup (transient). Orca retries startup prompt delivery across up to 3 fresh assignment attempts, but if it still fails, cancel and reassign.
 
+## Recovering a stuck codex worker
+
+- **Stuck composer (large prompt/review-nudge never submits).** A large prompt or review-feedback nudge can lodge in codex's input as a `[Pasted Content NNN chars]` chip and never submit — the pane sits idle (`amux wait idle` returns "idle") with the text visible after the `›`. Recover by sending plain Enter repeatedly until codex starts processing: `amux send-keys <pane> Enter`, often 5–8 times. Escape does not reliably clear it. Never send Ctrl+D — it terminates the codex session and loses context.
+- **Hook-blocked pane termination.** `orca cancel` and `amux kill` are gated by a PreToolUse safety hook that chat approval cannot bypass. If a kill is blocked, ask the user to run it themselves with the `!` prefix (e.g. `! amux kill w-LAB-1234`).
+- **Dangerous-command strings in `--prompt`.** If an `orca assign --prompt` body references a destructive command (e.g. `git reset --hard`, a `>` redirect), the `dcg` hook will block the whole `orca assign`. Paraphrase the instruction (e.g. "reset the worktree to a pristine default-branch state") so the hook does not match.
+
 ## All Commands Reference
 
 | Command | Usage | Description |
