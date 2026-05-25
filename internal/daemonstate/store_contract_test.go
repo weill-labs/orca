@@ -274,6 +274,42 @@ func testStoreLifecycleAndQueries(t *testing.T, h storeContractHarness) {
 	}
 }
 
+func testStoreNormalizesWorkerClonePathProject(t *testing.T, h storeContractHarness) {
+	t.Helper()
+
+	ctx := context.Background()
+	project := "/repo"
+	cloneProject := filepath.Join(project, ".orca", "pool", "clone-05")
+	if err := h.store.UpsertWorker(ctx, cloneProject, Worker{
+		WorkerID:      "worker-01",
+		CurrentPaneID: "pane-1",
+		Agent:         "codex",
+		State:         "healthy",
+		Issue:         "LAB-1896",
+	}); err != nil {
+		t.Fatalf("UpsertWorker(clone project) error = %v", err)
+	}
+
+	workers, err := h.store.ListWorkers(ctx, project)
+	if err != nil {
+		t.Fatalf("ListWorkers(root project) error = %v", err)
+	}
+	if got, want := len(workers), 1; got != want {
+		t.Fatalf("len(ListWorkers(root project)) = %d, want %d", got, want)
+	}
+	if got, want := workers[0].Project, project; got != want {
+		t.Fatalf("worker.Project = %q, want %q", got, want)
+	}
+
+	malformedWorkers, err := h.store.ListWorkers(ctx, cloneProject)
+	if err != nil {
+		t.Fatalf("ListWorkers(clone project) error = %v", err)
+	}
+	if got := len(malformedWorkers); got != 0 {
+		t.Fatalf("len(ListWorkers(clone project)) = %d, want 0", got)
+	}
+}
+
 func testStoreNotFoundBehavior(t *testing.T, h storeContractHarness) {
 	t.Helper()
 

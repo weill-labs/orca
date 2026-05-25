@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -99,6 +100,49 @@ WHERE type = 'index' AND name = 'idx_event_log_project_created_at';
 			})
 
 			tt.check(t, store)
+		})
+	}
+}
+
+func TestCanonicalizeProjectNormalizesClonePathProjects(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		setup func(t *testing.T, projectPath string)
+	}{
+		{
+			name: "existing clone path",
+			setup: func(t *testing.T, projectPath string) {
+				t.Helper()
+				if err := os.MkdirAll(projectPath, 0o755); err != nil {
+					t.Fatalf("MkdirAll(%q): %v", projectPath, err)
+				}
+			},
+		},
+		{
+			name: "missing clone path",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			projectRoot := filepath.Join(t.TempDir(), "repo")
+			cloneProject := filepath.Join(projectRoot, ".orca", "pool", "clone-07")
+			if tt.setup != nil {
+				tt.setup(t, cloneProject)
+			}
+
+			got, err := canonicalizeProject(cloneProject)
+			if err != nil {
+				t.Fatalf("canonicalizeProject(%q) error = %v", cloneProject, err)
+			}
+			if got != projectRoot {
+				t.Fatalf("canonicalizeProject(%q) = %q, want %q", cloneProject, got, projectRoot)
+			}
 		})
 	}
 }

@@ -20,6 +20,11 @@ func TestSQLiteStoreLifecycleAndQueries(t *testing.T) {
 	testStoreLifecycleAndQueries(t, newSQLiteContractHarness(t))
 }
 
+func TestSQLiteStoreNormalizesWorkerClonePathProject(t *testing.T) {
+	t.Parallel()
+	testStoreNormalizesWorkerClonePathProject(t, newSQLiteContractHarness(t))
+}
+
 func TestSQLiteStoreCloneFailureQuarantine(t *testing.T) {
 	t.Parallel()
 	testStoreCloneFailureQuarantine(t, newSQLiteContractHarness(t))
