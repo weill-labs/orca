@@ -34,6 +34,24 @@ func TestClassifyGitHubAPICall(t *testing.T) {
 			want: githubAPICallMetrics{kind: githubAPIKindGraphQL, consumer: githubAPIConsumerReview, estimatedPoints: 1},
 		},
 		{
+			name: "review thread query infers graphql review consumer",
+			ctx:  context.Background(),
+			args: []string{"api", "graphql", "-f", "query=" + prReviewThreadsGraphQLQuery},
+			want: githubAPICallMetrics{kind: githubAPIKindGraphQL, consumer: githubAPIConsumerReview, estimatedPoints: 1},
+		},
+		{
+			name: "snapshot fields infer graphql terminal state consumer",
+			ctx:  context.Background(),
+			args: []string{"pr", "view", "42", "--json", prSnapshotJSONFields},
+			want: githubAPICallMetrics{kind: githubAPIKindGraphQL, consumer: githubAPIConsumerTerminalState, estimatedPoints: 1},
+		},
+		{
+			name: "batch query fragment infers graphql terminal state consumer",
+			ctx:  context.Background(),
+			args: []string{"api", "graphql", "-f", "query=query{repository{pullRequest{number mergedAt merged state}}}"},
+			want: githubAPICallMetrics{kind: githubAPIKindGraphQL, consumer: githubAPIConsumerTerminalState, estimatedPoints: 1},
+		},
+		{
 			name: "api graphql command is graphql",
 			ctx:  context.Background(),
 			args: []string{"api", "graphql", "-f", "query=query{viewer{login}}"},
