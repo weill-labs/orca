@@ -111,6 +111,30 @@ func TestAssignmentPromptFilePathSanitizesIssue(t *testing.T) {
 	}
 }
 
+func TestAssignmentPromptFilePathFallsBackToAssignmentName(t *testing.T) {
+	t.Parallel()
+
+	path, err := assignmentPromptFilePath(Task{Issue: " /// ", ClonePath: "/tmp/clone"})
+	if err != nil {
+		t.Fatalf("assignmentPromptFilePath() error = %v", err)
+	}
+	if got, want := filepath.Base(path), "assignment.md"; got != want {
+		t.Fatalf("prompt file base = %q, want %q", got, want)
+	}
+}
+
+func TestPromptFilePathFallsBackToKindName(t *testing.T) {
+	t.Parallel()
+
+	path, err := promptFilePath("/tmp/clone", " /// ", "review")
+	if err != nil {
+		t.Fatalf("promptFilePath() error = %v", err)
+	}
+	if got, want := filepath.Base(path), "review.md"; got != want {
+		t.Fatalf("prompt file base = %q, want %q", got, want)
+	}
+}
+
 func TestAssignmentPromptFileReferencePathFallsBackOutsideClone(t *testing.T) {
 	t.Parallel()
 
@@ -124,11 +148,41 @@ func TestAssignmentPromptFileReferencePathFallsBackOutsideClone(t *testing.T) {
 	}
 }
 
+func TestPreparePromptForDeliveryReportsDirectoryCreationError(t *testing.T) {
+	t.Parallel()
+
+	clonePath := t.TempDir()
+	if err := os.WriteFile(filepath.Join(clonePath, ".orca"), []byte("not a directory"), 0o600); err != nil {
+		t.Fatalf("WriteFile(.orca) error = %v", err)
+	}
+
+	d := &Daemon{}
+	_, err := d.preparePromptForDelivery(AgentProfile{Name: "codex"}, strings.Repeat("x", 600), promptFileDelivery{
+		clonePath: clonePath,
+		fileName:  "review-1902",
+		kind:      "review",
+		referencePrompt: func(path string) string {
+			return "read " + path
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "create review prompt directory") {
+		t.Fatalf("preparePromptForDelivery() error = %v, want directory creation error", err)
+	}
+}
+
 func TestEnsureAssignmentPromptFileIgnoredSkipsNonGitClone(t *testing.T) {
 	t.Parallel()
 
 	if err := ensureAssignmentPromptFileIgnored(t.TempDir()); err != nil {
 		t.Fatalf("ensureAssignmentPromptFileIgnored(non-git) error = %v", err)
+	}
+}
+
+func TestSanitizeAssignmentPromptFileName(t *testing.T) {
+	t.Parallel()
+
+	if got, want := sanitizeAssignmentPromptFileName(" LAB/1902: review? "), "LAB-1902--review"; got != want {
+		t.Fatalf("sanitizeAssignmentPromptFileName() = %q, want %q", got, want)
 	}
 }
 

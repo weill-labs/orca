@@ -2,10 +2,12 @@ package daemon
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestPRReviewPollingPromotesLargeReviewNudgeToFile(t *testing.T) {
@@ -113,6 +115,78 @@ func TestPRReviewPollingKeepsSmallReviewNudgeInline(t *testing.T) {
 	})
 }
 
+func TestPrepareReviewPromptForDeliveryRequiresClonePath(t *testing.T) {
+	t.Parallel()
+
+	d := &Daemon{}
+	_, err := d.prepareReviewPromptForDelivery(Task{PRNumber: 42}, AgentProfile{Name: "codex"}, strings.Repeat("x", 600))
+	if err == nil || !strings.Contains(err.Error(), "review prompt file requires clone path") {
+		t.Fatalf("prepareReviewPromptForDelivery() error = %v, want clone path error", err)
+	}
+}
+
+func TestReviewNudgePrepareFailureLeavesNudgeUnpersisted(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	body := strings.Repeat("Greptile posted a long blocking review comment. ", 20)
+	queuePRReviewPayload(deps, 42, marshalReviewPayload(t, "CHANGES_REQUESTED", []prReview{
+		testReview("greptile-apps", "CHANGES_REQUESTED", body),
+	}, nil))
+
+	var logs []string
+	d := deps.newDaemonWithOptions(t, func(opts *Options) {
+		opts.Logf = func(format string, args ...any) {
+			logs = append(logs, fmt.Sprintf(format, args...))
+		}
+	})
+	now := deps.clock.Now()
+	active := ActiveAssignment{
+		Task: Task{
+			Project:      "/tmp/project",
+			Issue:        "LAB-1904",
+			PaneID:       "pane-1",
+			ClonePath:    "",
+			AgentProfile: "codex",
+			PRNumber:     42,
+		},
+		Worker: Worker{
+			Project:        "/tmp/project",
+			WorkerID:       "worker-01",
+			PaneID:         "pane-1",
+			Issue:          "LAB-1904",
+			AgentProfile:   "codex",
+			LastCapture:    defaultCodexReadyOutput(),
+			LastActivityAt: now.Add(-11 * time.Second),
+		},
+	}
+
+	update := d.checkTaskReviewPoll(context.Background(), active, AgentProfile{Name: "codex"})
+	if !update.hasNudges() {
+		t.Fatal("expected review nudge to be queued")
+	}
+	update.runNudges(context.Background(), d)
+
+	if got := update.Active.Worker.ReviewNudgeCount; got != 0 {
+		t.Fatalf("ReviewNudgeCount = %d, want 0", got)
+	}
+	if update.WorkerChanged {
+		t.Fatal("WorkerChanged = true, want false after prepare failure")
+	}
+	deps.amux.requireSentKeys(t, "pane-1", nil)
+	if !containsLogLine(logs, "prepare review prompt delivery failed") {
+		t.Fatalf("logs = %#v, want prepare failure log", logs)
+	}
+}
+
+func TestCodexReviewPromptFileReferenceWithoutPRNumber(t *testing.T) {
+	t.Parallel()
+
+	if got, want := codexReviewPromptFileReference(".orca/prompts/review.md", 0), "Read .orca/prompts/review.md and address the PR review feedback, then push."; got != want {
+		t.Fatalf("codexReviewPromptFileReference() = %q, want %q", got, want)
+	}
+}
+
 func newReviewPromptFileTestDeps(t *testing.T) *testDeps {
 	t.Helper()
 
@@ -121,4 +195,13 @@ func newReviewPromptFileTestDeps(t *testing.T) *testDeps {
 	markClonePathForTest(t, clonePath)
 	deps.pool.clone.Path = clonePath
 	return deps
+}
+
+func containsLogLine(logs []string, needle string) bool {
+	for _, line := range logs {
+		if strings.Contains(line, needle) {
+			return true
+		}
+	}
+	return false
 }

@@ -24,13 +24,9 @@ type promptFileDelivery struct {
 }
 
 func (d *Daemon) prepareAssignmentPromptForDelivery(task Task, profile AgentProfile, prompt string) (string, error) {
-	fileName := sanitizePromptFileName(task.Issue)
-	if fileName == "" {
-		fileName = "assignment"
-	}
 	return d.preparePromptForDelivery(profile, prompt, promptFileDelivery{
 		clonePath:       task.ClonePath,
-		fileName:        fileName,
+		fileName:        task.Issue,
 		kind:            "assignment",
 		referencePrompt: codexAssignmentPromptFileReference,
 	})
@@ -62,11 +58,7 @@ func (d *Daemon) preparePromptForDelivery(profile AgentProfile, prompt string, d
 }
 
 func assignmentPromptFilePath(task Task) (string, error) {
-	name := sanitizePromptFileName(task.Issue)
-	if name == "" {
-		name = "assignment"
-	}
-	return promptFilePath(task.ClonePath, name, "assignment")
+	return promptFilePath(task.ClonePath, task.Issue, "assignment")
 }
 
 func promptFilePath(clonePath, fileName, kind string) (string, error) {
