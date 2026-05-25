@@ -155,6 +155,30 @@ func TestCLIClientSpawn(t *testing.T) {
 			wantPane: Pane{ID: "w-LAB-99", Name: "w-LAB-99"},
 		},
 		{
+			name: "uses configured cwd wait timeout",
+			config: Config{
+				Session: "main",
+			},
+			req: SpawnRequest{
+				Name:           "w-LAB-1907",
+				CWD:            "/tmp/slow-shell",
+				Command:        "codex --yolo",
+				CWDWaitTimeout: 45 * time.Second,
+			},
+			queue: []runnerResult{
+				{output: []byte("Split vertical: new pane w-LAB-1907\n")},
+			},
+			wantCmds: []recordedCommand{
+				{name: "amux", args: []string{"-s", "main", "spawn", "--auto", "--name", "w-LAB-1907"}},
+				{name: "amux", args: []string{"-s", "main", "send-keys", "w-LAB-1907", "--delay-final", "250ms", "cd '/tmp/slow-shell'"}},
+				{name: "amux", args: []string{"-s", "main", "send-keys", "w-LAB-1907", "--delay-final", "250ms", "Enter"}},
+				{name: "amux", args: []string{"-s", "main", "wait", "idle", "w-LAB-1907", "--timeout", "45s"}},
+				{name: "amux", args: []string{"-s", "main", "send-keys", "w-LAB-1907", "--delay-final", "250ms", "codex --yolo"}},
+				{name: "amux", args: []string{"-s", "main", "send-keys", "w-LAB-1907", "--delay-final", "250ms", "Enter"}},
+			},
+			wantPane: Pane{ID: "w-LAB-1907", Name: "w-LAB-1907"},
+		},
+		{
 			name: "returns runner error on spawn failure",
 			config: Config{
 				Session: "default",
