@@ -229,7 +229,19 @@ func (d *Daemon) normalizeClonePathProjectWorkerIfLive(ctx context.Context, work
 		return false
 	}
 	task, err := d.state.TaskByIssue(ctx, normalizedProject, issue)
-	if err != nil || !workerMatchesTask(worker, task) {
+	if err != nil {
+		if errors.Is(err, ErrTaskNotFound) {
+			return false
+		}
+		d.emitClonePathWorkerNormalizationFailure(ctx, normalizedProject, worker, issue, fmt.Errorf("lookup task for worker normalization: %w", err), mode)
+		return true
+	}
+	ref := workerRef(worker)
+	if ref == "" {
+		d.emitClonePathWorkerNormalizationFailure(ctx, normalizedProject, worker, issue, errors.New("clone-path-project worker has no worker or pane reference"), mode)
+		return true
+	}
+	if !workerMatchesTask(worker, task) {
 		return false
 	}
 
@@ -239,8 +251,6 @@ func (d *Daemon) normalizeClonePathProjectWorkerIfLive(ctx context.Context, work
 	var result error
 	if err := d.state.PutWorker(cleanupCtx, worker); err != nil {
 		result = errors.Join(result, fmt.Errorf("normalize worker project: %w", err))
-	} else if ref := workerRef(worker); ref == "" {
-		result = errors.Join(result, errors.New("clone-path-project worker has no worker or pane reference"))
 	} else if err := d.state.DeleteWorker(cleanupCtx, originalProject, ref); err != nil && !errors.Is(err, ErrWorkerNotFound) {
 		result = errors.Join(result, fmt.Errorf("delete malformed worker row: %w", err))
 	}
@@ -257,6 +267,14 @@ func (d *Daemon) normalizeClonePathProjectWorkerIfLive(ctx context.Context, work
 		d.emitOrphanWorkerReconcileFinding(cleanupCtx, normalizedProject, worker, issue, paneID, clonePath, branch, firstNonEmpty(mode.message, "orphan worker row project normalized"))
 	}
 	return true
+}
+
+func (d *Daemon) emitClonePathWorkerNormalizationFailure(ctx context.Context, projectPath string, worker Worker, issue string, err error, mode orphanWorkerCleanupMode) {
+	cleanupCtx := d.cleanupContext(ctx)
+	paneID := strings.TrimSpace(worker.PaneID)
+	clonePath := strings.TrimSpace(worker.ClonePath)
+	branch := firstNonEmpty(mode.branch, issue)
+	d.emitOrphanWorkerCleanupFailure(cleanupCtx, projectPath, worker, issue, paneID, clonePath, branch, err, mode)
 }
 
 func orphanWorkerCleanupProjectPath(projectPath string, worker Worker) string {
@@ -340,7 +358,13 @@ func sortWorkers(workers []Worker) {
 func workerMatchesTask(worker Worker, task Task) bool {
 	workerID := strings.TrimSpace(worker.WorkerID)
 	taskWorkerID := strings.TrimSpace(task.WorkerID)
-	return workerID == "" || taskWorkerID == "" || workerID == taskWorkerID
+	if workerID != "" && taskWorkerID != "" {
+		return workerID == taskWorkerID
+	}
+
+	workerPaneID := strings.TrimSpace(worker.PaneID)
+	taskPaneID := strings.TrimSpace(task.PaneID)
+	return workerPaneID != "" && taskPaneID != "" && workerPaneID == taskPaneID
 }
 
 func workerProjectRef(worker Worker) string {

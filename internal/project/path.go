@@ -39,16 +39,39 @@ func ProjectRootFromPoolClonePath(path string) string {
 	}
 
 	cleaned := filepath.Clean(path)
-	marker := string(filepath.Separator) + filepath.Join(".orca", "pool") + string(filepath.Separator) + "clone-"
+	marker := string(filepath.Separator) + filepath.Join(".orca", "pool") + string(filepath.Separator)
 	idx := strings.Index(cleaned, marker)
 	if idx <= 0 {
 		return ""
 	}
+
+	clonePath := cleaned[idx+len(marker):]
+	cloneName, _, _ := strings.Cut(clonePath, string(filepath.Separator))
+	if !isNumericPoolCloneName(cloneName) {
+		return ""
+	}
+
 	projectPath := cleaned[:idx]
 	if projectPath == "." || projectPath == string(filepath.Separator) {
 		return ""
 	}
 	return projectPath
+}
+
+func isNumericPoolCloneName(name string) bool {
+	if !strings.HasPrefix(name, "clone-") {
+		return false
+	}
+	suffix := strings.TrimPrefix(name, "clone-")
+	if suffix == "" {
+		return false
+	}
+	for _, r := range suffix {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func resolvePath(path string) (string, error) {

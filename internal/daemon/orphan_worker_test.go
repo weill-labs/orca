@@ -35,7 +35,7 @@ func TestDaemonStartSweepsOrphanWorkersAndKeepsHealthyWorkers(t *testing.T) {
 	t.Parallel()
 
 	deps := newTestDeps(t)
-	orphanClonePath := filepath.Join("/tmp/project", OrcaPoolSubdir, "clone-orphan")
+	orphanClonePath := filepath.Join("/tmp/project", OrcaPoolSubdir, "clone-01")
 	markClonePathForTest(t, orphanClonePath)
 	seedOrphanWorker(t, deps, "LAB-1852", "worker-orphan", "pane-orphan", orphanClonePath)
 	seedActiveAssignment(t, deps, "LAB-1853", "pane-healthy")
@@ -81,7 +81,7 @@ func TestDaemonStartSweepsOrphanWorkersAndKeepsHealthyWorkers(t *testing.T) {
 		t.Fatalf("healthy worker pane = %q, want %q", got, want)
 	}
 	if got, want := deps.pool.releasedClones(), []Clone{{
-		Name:          "clone-orphan",
+		Name:          "clone-01",
 		Path:          orphanClonePath,
 		CurrentBranch: "LAB-1852",
 		AssignedTask:  "LAB-1852",
@@ -102,7 +102,7 @@ func TestDaemonStartSweepsEmptyProjectOrphanWorkerFromClonePath(t *testing.T) {
 
 	deps := newTestDeps(t)
 	deps.pool.requireProjectRelease = true
-	orphanClonePath := filepath.Join("/tmp/project", OrcaPoolSubdir, "clone-orphan")
+	orphanClonePath := filepath.Join("/tmp/project", OrcaPoolSubdir, "clone-02")
 	markClonePathForTest(t, orphanClonePath)
 	worker := seedOrphanWorker(t, deps, "LAB-1885", "worker-empty-project", "pane-empty-project", orphanClonePath)
 	worker.Project = ""
@@ -129,7 +129,7 @@ func TestDaemonStartSweepsEmptyProjectOrphanWorkerFromClonePath(t *testing.T) {
 		t.Fatal("empty-project orphan worker still present after startup")
 	}
 	if got, want := deps.pool.releasedClones(), []Clone{{
-		Name:          "clone-orphan",
+		Name:          "clone-02",
 		Path:          orphanClonePath,
 		CurrentBranch: "LAB-1885",
 		AssignedTask:  "LAB-1885",
@@ -473,7 +473,7 @@ func TestDaemonStartEmitsFindingWhenOrphanWorkerCleanupFails(t *testing.T) {
 
 	deps := newTestDeps(t)
 	deps.pool.releaseErr = errors.New("release unavailable")
-	orphanClonePath := filepath.Join("/tmp/project", OrcaPoolSubdir, "clone-orphan")
+	orphanClonePath := filepath.Join("/tmp/project", OrcaPoolSubdir, "clone-03")
 	markClonePathForTest(t, orphanClonePath)
 	seedOrphanWorker(t, deps, "LAB-1887", "worker-cleanup-fails", "pane-cleanup-fails", orphanClonePath)
 
