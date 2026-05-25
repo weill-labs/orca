@@ -235,6 +235,58 @@ func TestReconcileOrphanWorkersNormalizesClonePathProjectWorkerWithLiveTask(t *t
 	}
 }
 
+func TestReconcileOrphanWorkersKeepsClonePathProjectWorkerWhenNormalizeWriteFails(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	cloneProject := filepath.Join("/tmp/project", OrcaPoolSubdir, "clone-07")
+	now := deps.clock.Now()
+	if err := deps.state.PutTask(context.Background(), Task{
+		Project:      "/tmp/project",
+		Issue:        "LAB-1896",
+		Status:       TaskStatusActive,
+		State:        TaskStateAssigned,
+		WorkerID:     "worker-normalize-fails",
+		PaneID:       "pane-normalize-fails",
+		AgentProfile: "codex",
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}); err != nil {
+		t.Fatalf("PutTask() error = %v", err)
+	}
+	seedMalformedProjectWorker(t, deps, Worker{
+		Project:      cloneProject,
+		WorkerID:     "worker-normalize-fails",
+		PaneID:       "pane-normalize-fails",
+		PaneName:     "worker-normalize-fails",
+		Issue:        "LAB-1896",
+		AgentProfile: "codex",
+		Health:       WorkerHealthHealthy,
+		CreatedAt:    now,
+		LastSeenAt:   now,
+		UpdatedAt:    now,
+	})
+	deps.state.putWorkerErrs = []error{errors.New("write unavailable")}
+
+	d := deps.newDaemon(t)
+	d.reconcileOrphanWorkers(context.Background())
+
+	worker, ok := deps.state.worker("worker-normalize-fails")
+	if !ok {
+		t.Fatal("malformed worker was deleted after normalization write failed")
+	}
+	if got, want := worker.Project, cloneProject; got != want {
+		t.Fatalf("worker.Project = %q, want original malformed project %q", got, want)
+	}
+	event, ok := deps.events.lastEventOfType(EventReconcileFinding)
+	if !ok {
+		t.Fatal("reconcile finding event missing")
+	}
+	if !strings.Contains(event.Message, "write unavailable") {
+		t.Fatalf("reconcile event message = %q, want write failure", event.Message)
+	}
+}
+
 func TestDaemonStartDeletesEmptyProjectOrphanWorkerWithNoClone(t *testing.T) {
 	t.Parallel()
 
