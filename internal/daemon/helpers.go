@@ -792,7 +792,11 @@ func (d *Daemon) resumeAgentInPane(ctx context.Context, paneID string, profile A
 	if err := d.sendKeysToLivePane(ctx, paneID, profile.ResumeSequence[:2]...); err != nil {
 		return err
 	}
-	if err := d.amux.WaitContent(ctx, paneID, "›", agentStartupTimeout(profile)); err != nil {
+	pattern, ok := readyPatternText(profile)
+	if !ok {
+		return nil
+	}
+	if err := d.amux.WaitContent(ctx, paneID, pattern, agentStartupTimeout(profile)); err != nil {
 		return err
 	}
 	return d.sendKeysToLivePane(ctx, paneID, profile.ResumeSequence[2:]...)
