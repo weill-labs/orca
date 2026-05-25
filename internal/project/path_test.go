@@ -109,6 +109,95 @@ func TestCanonicalPathRejectsMissingPath(t *testing.T) {
 	}
 }
 
+func TestProjectRootFromPoolClonePath(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		path string
+		want string
+	}{
+		{
+			name: "clone directory",
+			path: filepath.Join("/tmp/project", ".orca", "pool", "clone-07"),
+			want: "/tmp/project",
+		},
+		{
+			name: "clone descendant",
+			path: filepath.Join("/tmp/project", ".orca", "pool", "clone-07", "internal", "daemon"),
+			want: "/tmp/project",
+		},
+		{
+			name: "trims whitespace",
+			path: " \t" + filepath.Join("/tmp/project", ".orca", "pool", "clone-07") + "\n",
+			want: "/tmp/project",
+		},
+		{
+			name: "regular project",
+			path: "/tmp/project",
+			want: "",
+		},
+		{
+			name: "empty path",
+			path: " \t ",
+			want: "",
+		},
+		{
+			name: "root pool path",
+			path: filepath.Join(string(filepath.Separator), ".orca", "pool", "clone-07"),
+			want: "",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := ProjectRootFromPoolClonePath(tt.path); got != tt.want {
+				t.Fatalf("ProjectRootFromPoolClonePath(%q) = %q, want %q", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNormalizeWorkerProjectPath(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		path string
+		want string
+	}{
+		{
+			name: "clone project",
+			path: filepath.Join("/tmp/project", ".orca", "pool", "clone-07"),
+			want: "/tmp/project",
+		},
+		{
+			name: "regular project",
+			path: " \t/tmp/project\n",
+			want: "/tmp/project",
+		},
+		{
+			name: "empty path",
+			path: " \t ",
+			want: "",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := NormalizeWorkerProjectPath(tt.path); got != tt.want {
+				t.Fatalf("NormalizeWorkerProjectPath(%q) = %q, want %q", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
 func newRepoRoot(t *testing.T) string {
 	t.Helper()
 
