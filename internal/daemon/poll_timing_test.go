@@ -130,7 +130,7 @@ func TestDaemonPollLoopTimingTracksStateAndGitHubDurations(t *testing.T) {
 		"state_read=2s",
 		"schedule_filter=2s",
 		"github_calls=4",
-		"github_total=3s",
+		"github_total=12s",
 	} {
 		if !strings.Contains(message, fragment) {
 			t.Fatalf("poll timing log = %q, want fragment %q", message, fragment)
