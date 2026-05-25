@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 
+	state "github.com/weill-labs/orca/internal/daemonstate"
 	"github.com/weill-labs/orca/internal/pool"
 )
 
@@ -18,6 +19,7 @@ type fakeState struct {
 	rejectCanceledContext bool
 	tasks                 map[string]Task
 	workers               map[string]Worker
+	clones                map[string]state.Clone
 	cloneOccupancies      []CloneOccupancy
 	mergeQueue            []MergeQueueEntry
 	knownProjectsErr      error
@@ -35,6 +37,7 @@ func newFakeState() *fakeState {
 	return &fakeState{
 		tasks:   make(map[string]Task),
 		workers: make(map[string]Worker),
+		clones:  make(map[string]state.Clone),
 	}
 }
 
@@ -353,6 +356,37 @@ func (s *fakeState) StaleCloneOccupancies(ctx context.Context, project string) (
 	return occupancies, nil
 }
 
+func (s *fakeState) ListClones(ctx context.Context, project string) ([]state.Clone, error) {
+	if s.rejectCanceledContext && ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	clones := make([]state.Clone, 0, len(s.clones))
+	for _, clone := range s.clones {
+		clones = append(clones, clone)
+	}
+	sort.Slice(clones, func(i, j int) bool {
+		return clones[i].Path < clones[j].Path
+	})
+	return clones, nil
+}
+
+func (s *fakeState) DeleteClone(ctx context.Context, project, path string) error {
+	if s.rejectCanceledContext && ctx.Err() != nil {
+		return ctx.Err()
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, ok := s.clones[path]; !ok {
+		return state.ErrNotFound
+	}
+	delete(s.clones, path)
+	return nil
+}
+
 func (s *fakeState) TasksByPane(ctx context.Context, project, paneID string) ([]Task, error) {
 	if s.rejectCanceledContext && ctx.Err() != nil {
 		return nil, ctx.Err()
@@ -587,6 +621,19 @@ func (s *fakeState) putTaskForTest(task Task) {
 	defer s.mu.Unlock()
 	task.WorkerID = taskWorkerID(task)
 	s.tasks[task.Issue] = task
+}
+
+func (s *fakeState) putCloneForTest(clone state.Clone) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.clones[clone.Path] = clone
+}
+
+func (s *fakeState) clone(path string) (state.Clone, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	clone, ok := s.clones[path]
+	return clone, ok
 }
 
 func (s *fakeState) worker(workerID string) (Worker, bool) {

@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/weill-labs/orca/internal/pool"
 )
 
 type testDeps struct {
@@ -33,9 +35,7 @@ func newTestDeps(t *testing.T) *testDeps {
 
 	tmp := t.TempDir()
 	clonePath := filepath.Join("/tmp/project", OrcaPoolSubdir, "clone-01")
-	if err := os.MkdirAll(clonePath, 0o755); err != nil {
-		t.Fatalf("MkdirAll(%q) error = %v", clonePath, err)
-	}
+	markClonePathForTest(t, clonePath)
 
 	return &testDeps{
 		clock: &fakeClock{now: time.Date(2026, 4, 2, 9, 0, 0, 0, time.UTC)},
@@ -63,6 +63,18 @@ func newTestDeps(t *testing.T) *testDeps {
 		watchdogTickers: &fakeTickerFactory{},
 		pidPath:         filepath.Join(tmp, "orca.pid"),
 		sleep:           noSleep,
+	}
+}
+
+func markClonePathForTest(t *testing.T, clonePath string) {
+	t.Helper()
+
+	if err := os.MkdirAll(clonePath, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", clonePath, err)
+	}
+	markerPath := filepath.Join(clonePath, pool.ClonePoolMarker)
+	if err := os.WriteFile(markerPath, []byte("orca clone pool\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", markerPath, err)
 	}
 }
 
