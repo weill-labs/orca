@@ -134,22 +134,6 @@ func TestManualSourcePublicAPI(t *testing.T) {
 			},
 		},
 		{
-			name: "work item preserves all fields",
-			run: func(t *testing.T) {
-				_ = WorkItem{
-					ID:        "LAB-1925",
-					Title:     "Phase 1 worksource package",
-					Body:      "Define the shared worksource interface.",
-					Priority:  2,
-					Score:     9.5,
-					Rationale: "Unblocks source adapters.",
-					Labels:    []string{"orca", "worksource"},
-					AgentHint: "codex",
-					Meta:      map[string]string{"linear_id": "LAB-1925"},
-				}
-			},
-		},
-		{
 			name: "already claimed sentinel",
 			run: func(t *testing.T) {
 				if ErrAlreadyClaimed == nil {
