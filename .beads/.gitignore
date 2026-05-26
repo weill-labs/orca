@@ -9,6 +9,9 @@ sync-state.json
 last-touched
 .exclusive-lock
 
+# Local per-machine activity log (churns on every bd command; not shared)
+interactions.jsonl
+
 # Daemon runtime (lock, log, pid)
 daemon.*
 
