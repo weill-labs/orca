@@ -3,6 +3,7 @@ package worksource
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"testing"
 )
@@ -157,8 +158,13 @@ func TestManualSourcePublicAPI(t *testing.T) {
 		{
 			name: "already claimed sentinel",
 			run: func(t *testing.T) {
-				if !errors.Is(ErrAlreadyClaimed, ErrAlreadyClaimed) {
-					t.Fatal("ErrAlreadyClaimed should match itself")
+				if ErrAlreadyClaimed == nil {
+					t.Fatal("ErrAlreadyClaimed = nil, want sentinel error")
+				}
+
+				err := fmt.Errorf("wrapped: %w", ErrAlreadyClaimed)
+				if !errors.Is(err, ErrAlreadyClaimed) {
+					t.Fatal("wrapped ErrAlreadyClaimed did not match sentinel")
 				}
 			},
 		},
