@@ -225,10 +225,13 @@ func (d *Daemon) completeWorkSource(ctx context.Context, active ActiveAssignment
 	if !ok {
 		return
 	}
-	if err := d.workSource.Complete(ctx, active.Task.Issue, outcome); err != nil && d.logf != nil {
-		d.logf("%s", workSourceCompleteErrorMessage(active, status, outcome, err))
-	} else if err != nil {
-		log.Print(workSourceCompleteErrorMessage(active, status, outcome, err))
+	if err := d.workSource.Complete(ctx, active.Task.Issue, outcome); err != nil {
+		message := workSourceCompleteErrorMessage(active, status, outcome, err)
+		if d.logf != nil {
+			d.logf("%s", message)
+			return
+		}
+		log.Print(message)
 	}
 }
 
