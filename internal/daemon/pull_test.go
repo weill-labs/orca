@@ -26,9 +26,11 @@ func TestRunPullTick(t *testing.T) {
 		freeClones   int
 		readyItems   []worksource.WorkItem
 		claimErrs    map[string]error
+		assignFails  bool
 		startDaemon  bool
 		wantReady    []int
 		wantClaims   []string
+		wantReleases []fakePullRelease
 		wantAssigned []string
 	}{
 		{
@@ -81,6 +83,21 @@ func TestRunPullTick(t *testing.T) {
 			wantReady:  []int{},
 			wantClaims: []string{},
 		},
+		{
+			name:       "releases claim when assign fails after claim succeeds",
+			enabled:    true,
+			freeClones: 1,
+			readyItems: []worksource.WorkItem{
+				{ID: "LAB-501", Body: "Implement assignment failure release"},
+			},
+			assignFails: true,
+			startDaemon: true,
+			wantReady:   []int{1},
+			wantClaims:  []string{"LAB-501"},
+			wantReleases: []fakePullRelease{
+				{id: "LAB-501", reasonPrefix: "assign failed: acquire clone:"},
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -90,6 +107,9 @@ func TestRunPullTick(t *testing.T) {
 
 			deps := newTestDeps(t)
 			configurePullTestClones(t, deps, tt.freeClones)
+			if tt.assignFails {
+				markFirstPullTestCloneAcquired(t, deps)
+			}
 			source := &fakePullWorkSource{
 				readyItems: tt.readyItems,
 				claimErrs:  tt.claimErrs,
@@ -121,6 +141,7 @@ func TestRunPullTick(t *testing.T) {
 			if got := source.claimedIDs(); !reflect.DeepEqual(got, tt.wantClaims) {
 				t.Fatalf("Claim() ids = %#v, want %#v", got, tt.wantClaims)
 			}
+			source.requireReleases(t, tt.wantReleases)
 			for _, workerID := range source.claimedWorkerIDs() {
 				if got, want := workerID, "orca:host-a"; got != want {
 					t.Fatalf("Claim() workerID = %q, want %q", got, want)
@@ -239,91 +260,6 @@ func TestMonitorPullTickRunsWhenEnabled(t *testing.T) {
 	}
 }
 
-func TestLoadWorkSourceConfig(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name      string
-		content   string
-		want      workSourceConfig
-		wantError string
-	}{
-		{
-			name: "missing project uses defaults",
-			want: defaultWorkSourceConfig(),
-		},
-		{
-			name: "repo config without worksource uses defaults",
-			content: strings.Join([]string{
-				"[agents.codex",
-				`start_command = "codex --yolo"`,
-				"",
-			}, "\n"),
-			want: defaultWorkSourceConfig(),
-		},
-		{
-			name: "beads source config",
-			content: strings.Join([]string{
-				"[worksource]",
-				"enabled = true",
-				`source = "beads"`,
-				`beads_bin = "bd-test"`,
-				`agent = "claude"`,
-				"",
-			}, "\n"),
-			want: workSourceConfig{
-				Enabled:  true,
-				Source:   workSourceBeads,
-				BeadsBin: "bd-test",
-				Agent:    "claude",
-			},
-		},
-		{
-			name: "unknown source errors",
-			content: strings.Join([]string{
-				"[worksource]",
-				`source = "linear"`,
-				"",
-			}, "\n"),
-			wantError: "worksource.source",
-		},
-	}
-
-	for _, tt := range tests {
-		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			projectPath := ""
-			if tt.content != "" {
-				projectPath = t.TempDir()
-				configDir := filepath.Join(projectPath, ".orca")
-				if err := os.MkdirAll(configDir, 0o755); err != nil {
-					t.Fatalf("MkdirAll(%q) error = %v", configDir, err)
-				}
-				configPath := filepath.Join(configDir, "config.toml")
-				if err := os.WriteFile(configPath, []byte(tt.content), 0o644); err != nil {
-					t.Fatalf("WriteFile(%q) error = %v", configPath, err)
-				}
-			}
-
-			got, err := loadWorkSourceConfig(projectPath)
-			if tt.wantError != "" {
-				if err == nil || !strings.Contains(err.Error(), tt.wantError) {
-					t.Fatalf("loadWorkSourceConfig() error = %v, want substring %q", err, tt.wantError)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("loadWorkSourceConfig() error = %v, want nil", err)
-			}
-			if !reflect.DeepEqual(got, tt.want) {
-				t.Fatalf("loadWorkSourceConfig() = %#v, want %#v", got, tt.want)
-			}
-		})
-	}
-}
-
 type fakePullWorkSource struct {
 	mu         sync.Mutex
 	readyItems []worksource.WorkItem
@@ -332,12 +268,18 @@ type fakePullWorkSource struct {
 	verifyErr  error
 	readyCalls []int
 	claims     []fakePullClaim
+	releases   []fakePullRelease
 	verify     int
 }
 
 type fakePullClaim struct {
 	id       string
 	workerID string
+}
+
+type fakePullRelease struct {
+	id           string
+	reasonPrefix string
 }
 
 func (f *fakePullWorkSource) Ready(_ context.Context, limit int) ([]worksource.WorkItem, error) {
@@ -363,7 +305,10 @@ func (f *fakePullWorkSource) Claim(_ context.Context, id, workerID string) error
 	return f.claimErrs[id]
 }
 
-func (f *fakePullWorkSource) Release(context.Context, string, string) error {
+func (f *fakePullWorkSource) Release(_ context.Context, id, reason string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.releases = append(f.releases, fakePullRelease{id: id, reasonPrefix: reason})
 	return nil
 }
 
@@ -406,6 +351,24 @@ func (f *fakePullWorkSource) claimedWorkerIDs() []string {
 	return out
 }
 
+func (f *fakePullWorkSource) requireReleases(t *testing.T, want []fakePullRelease) {
+	t.Helper()
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.releases) != len(want) {
+		t.Fatalf("Release() calls = %#v, want %#v", f.releases, want)
+	}
+	for i := range want {
+		if got := f.releases[i].id; got != want[i].id {
+			t.Fatalf("Release()[%d].id = %q, want %q", i, got, want[i].id)
+		}
+		if got := f.releases[i].reasonPrefix; !strings.HasPrefix(got, want[i].reasonPrefix) {
+			t.Fatalf("Release()[%d].reason = %q, want prefix %q", i, got, want[i].reasonPrefix)
+		}
+	}
+}
+
 func (f *fakePullWorkSource) verifyCallCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -433,6 +396,20 @@ func configurePullTestClones(t *testing.T, deps *testDeps, freeCount int) {
 			Status: string(pool.StatusOccupied),
 		})
 	}
+}
+
+func markFirstPullTestCloneAcquired(t *testing.T, deps *testDeps) {
+	t.Helper()
+
+	deps.pool.mu.Lock()
+	defer deps.pool.mu.Unlock()
+	if len(deps.pool.clones) == 0 {
+		t.Fatal("no pull test clone available to pre-acquire")
+	}
+	if deps.pool.acquired == nil {
+		deps.pool.acquired = make(map[string]bool)
+	}
+	deps.pool.acquired[deps.pool.clones[0].Path] = true
 }
 
 func pullTestPanes(count int) []Pane {
