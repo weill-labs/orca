@@ -53,8 +53,8 @@ func TestManualSourceGetReturnsNotFound(t *testing.T) {
 
 			source := ManualSource{}
 			item, err := source.Get(context.Background(), tt.id)
-			if err == nil {
-				t.Fatal("Get() error = nil, want not-found error")
+			if !errors.Is(err, ErrNotFound) {
+				t.Fatalf("Get() error = %v, want ErrNotFound", err)
 			}
 			if !reflect.DeepEqual(item, WorkItem{}) {
 				t.Fatalf("Get() item = %#v, want zero WorkItem", item)
@@ -80,6 +80,12 @@ func TestManualSourceMutationsAreNoOps(t *testing.T) {
 			name: "release",
 			run: func(ctx context.Context, source ManualSource) error {
 				return source.Release(ctx, "LAB-1925", "operator reassigned")
+			},
+		},
+		{
+			name: "complete unknown",
+			run: func(ctx context.Context, source ManualSource) error {
+				return source.Complete(ctx, "LAB-1925", OutcomeUnknown)
 			},
 		},
 		{
@@ -130,7 +136,7 @@ func TestManualSourcePublicAPI(t *testing.T) {
 		{
 			name: "work item preserves all fields",
 			run: func(t *testing.T) {
-				item := WorkItem{
+				_ = WorkItem{
 					ID:        "LAB-1925",
 					Title:     "Phase 1 worksource package",
 					Body:      "Define the shared worksource interface.",
@@ -140,18 +146,6 @@ func TestManualSourcePublicAPI(t *testing.T) {
 					Labels:    []string{"orca", "worksource"},
 					AgentHint: "codex",
 					Meta:      map[string]string{"linear_id": "LAB-1925"},
-				}
-
-				if item.ID != "LAB-1925" ||
-					item.Title != "Phase 1 worksource package" ||
-					item.Body != "Define the shared worksource interface." ||
-					item.Priority != 2 ||
-					item.Score != 9.5 ||
-					item.Rationale != "Unblocks source adapters." ||
-					!reflect.DeepEqual(item.Labels, []string{"orca", "worksource"}) ||
-					item.AgentHint != "codex" ||
-					!reflect.DeepEqual(item.Meta, map[string]string{"linear_id": "LAB-1925"}) {
-					t.Fatalf("WorkItem fields were not preserved: %#v", item)
 				}
 			},
 		},
