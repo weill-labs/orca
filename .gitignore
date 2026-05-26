@@ -40,3 +40,7 @@ results.junit.xml
 *.db
 *.db-journal
 *.db-wal
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+.beads-credential-key

@@ -6,7 +6,42 @@ Orca is a deterministic agent orchestration daemon for amux. It manages the full
 
 See [docs/specs/orca-design.md](docs/specs/orca-design.md) for the full design document.
 
-Linear project: https://linear.app/weill-labs/project/orca-0582da3ac28f — file all orca issues under this project.
+## Task tracking (beads + Linear)
+
+Orca dev work is tracked in two complementary places:
+
+- **Linear** (https://linear.app/weill-labs/project/orca-0582da3ac28f) is the
+  stakeholder **system of record**. File substantive orca issues here as `LAB-####`.
+- **beads** (`bd`, committed in-repo at `.beads/`) is the agent-facing
+  **dependency graph** used to plan and execute work. It's seeded from Linear via
+  `bd linear sync --pull` (pull-only — orca keeps real-time Linear write-back; do
+  not enable `--push`). `.beads/issues.jsonl` is the reviewable source of truth;
+  the Dolt DB and runtime files are gitignored.
+
+Use the Go/Dolt **`bd`**, never the rust `br` — their JSON and error handling
+differ (e.g. a lost `--claim` is exit-1 plain-text on `bd`, JSON on `br`). On a
+machine where `bd` is aliased to `br`, invoke `bd` by path or fix the alias.
+
+Core workflow:
+
+```bash
+bd ready --json                 # actionable, unblocked work (filter out epics)
+bd show <id> --json             # details (title, description, labels, deps)
+bd update <id> --claim          # atomically claim (assignee + in_progress)
+bd dep add <child> <parent>     # <child> is blocked by <parent> (parent finishes first)
+bd close <id> --suggest-next    # close + list newly-unblocked dependents
+```
+
+The "Adopt beads as a worksource in orca" initiative is tracked under epic
+`orca-y5r` (children `orca-y5r.1`..`.8`), linked to Linear `LAB-1922` (the plan
+and current status live there).
+
+Never run `bd config set` for secret keys (`linear.api_key`, `github.token`) —
+`.beads/config.yaml` is git-tracked, so a key written there would be committed.
+Keep secrets in environment variables (`LINEAR_API_KEY`, `GITHUB_TOKEN`).
+
+When running `bd init` in any orca repo, always pass `--skip-agents --skip-hooks`
+so it does not overwrite this `CLAUDE.md`, the `AGENTS.md` symlink, or git hooks.
 
 ## Architecture
 
