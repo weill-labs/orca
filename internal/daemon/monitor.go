@@ -23,6 +23,7 @@ const (
 	monitorTickCapture monitorTickKind = iota
 	monitorTickPoll
 	monitorTickStats
+	monitorTickPull
 )
 
 type monitorTickResult struct {
@@ -49,15 +50,22 @@ func (d *Daemon) runLoop(ctx context.Context, done chan struct{}) {
 		defer statsTick.Stop()
 		statsTickCh = statsTick.C()
 	}
+	var pullTickCh <-chan time.Time
+	if d.workSourceEnabled {
+		pullTick := d.newTicker(d.workSourcePullInterval)
+		defer pullTick.Stop()
+		pullTickCh = pullTick.C()
+	}
 	captureTickCh := captureTick.C()
 	pollTickCh := pollTick.C()
 	pollIntervalCh := d.pollIntervalCh
 	// Monitor work can include worker cleanup. Keep it outside the select loop so
 	// later ticks can refresh heartbeat while in-flight work is coalesced.
-	tickDone := make(chan monitorTickResult, 3)
+	tickDone := make(chan monitorTickResult, 4)
 	captureInFlight := false
 	pollInFlight := false
 	statsInFlight := false
+	pullInFlight := false
 	var lastPollTickFinishedAt time.Time
 	var lastMissingPRNumberReconcile time.Time
 
@@ -74,6 +82,8 @@ func (d *Daemon) runLoop(ctx context.Context, done chan struct{}) {
 				lastPollTickFinishedAt = result.finishedAt
 			case monitorTickStats:
 				statsInFlight = false
+			case monitorTickPull:
+				pullInFlight = false
 			}
 			d.recordHeartbeat(ctx)
 		case <-captureTickCh:
@@ -128,6 +138,16 @@ func (d *Daemon) runLoop(ctx context.Context, done chan struct{}) {
 			statsInFlight = true
 			d.startMonitorTick(ctx, tickDone, monitorTickStats, func() {
 				d.emitDaemonStats(ctx)
+			})
+		case <-pullTickCh:
+			if pullInFlight {
+				d.recordHeartbeat(ctx)
+				drainMonitorTicks(pullTickCh)
+				continue
+			}
+			pullInFlight = true
+			d.startMonitorTick(ctx, tickDone, monitorTickPull, func() {
+				d.runPullTick(ctx)
 			})
 		}
 	}

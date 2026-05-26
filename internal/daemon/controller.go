@@ -23,6 +23,8 @@ var (
 	ErrDaemonNotRunning     = errors.New("orca daemon is not running")
 )
 
+const daemonProjectEnvVar = "ORCA_DAEMON_PROJECT"
+
 type Controller interface {
 	Start(ctx context.Context, req StartRequest) (StartResult, error)
 	Stop(ctx context.Context, req StopRequest) (StopResult, error)
@@ -291,6 +293,7 @@ func (c *LocalController) Start(ctx context.Context, req StartRequest) (StartRes
 	cmd.Stdin = devNull
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
+	cmd.Env = daemonProcessEnv(projectPath)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 
 	if err := cmd.Start(); err != nil {
@@ -328,6 +331,22 @@ func (c *LocalController) Start(ctx context.Context, req StartRequest) (StartRes
 		}
 		return StartResult{}, waitErr
 	}
+}
+
+func daemonProcessEnv(projectPath string) []string {
+	env := os.Environ()
+	filtered := env[:0]
+	prefix := daemonProjectEnvVar + "="
+	for _, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			continue
+		}
+		filtered = append(filtered, entry)
+	}
+	if projectPath != "" {
+		filtered = append(filtered, prefix+projectPath)
+	}
+	return filtered
 }
 
 func (c *LocalController) Stop(ctx context.Context, req StopRequest) (StopResult, error) {

@@ -7,6 +7,7 @@ import (
 
 	"github.com/weill-labs/orca/internal/amux"
 	"github.com/weill-labs/orca/internal/pool"
+	"github.com/weill-labs/orca/internal/worksource"
 )
 
 const (
@@ -116,6 +117,11 @@ type Options struct {
 	RelayToken               string
 	Hostname                 string
 	DetectOrigin             func(projectDir string) (string, error)
+	WorkSourceEnabled        bool
+	WorkSourceProject        string
+	WorkSource               worksource.Source
+	WorkSourceAgent          string
+	WorkSourcePullInterval   time.Duration
 }
 
 type ConfigProvider interface {
