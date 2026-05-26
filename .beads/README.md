@@ -1,81 +1,17 @@
-# Beads - AI-Native Issue Tracking
+# orca beads database
 
-Welcome to Beads! This repository uses **Beads** for issue tracking - a modern, AI-native tool designed to live directly in your codebase alongside your code.
+This directory is orca's [beads](https://github.com/gastownhall/beads) (`bd`)
+issue tracker — the in-repo, dependency-aware **work graph** for orca development.
 
-## What is Beads?
+- `issues.jsonl` is the reviewable source of truth (one issue per line).
+- The Dolt database (`embeddeddolt/`) and all runtime/lock/credential files are
+  gitignored; only `config.yaml`, `metadata.json`, and `issues.jsonl` are tracked.
 
-Beads is issue tracking that lives in your repo, making it perfect for AI coding agents and developers who want their issues close to their code. No web UI required - everything works through the CLI and integrates seamlessly with git.
+Workflow, the Linear ↔ beads split, and the `bd` (Go/Dolt) vs `br` (rust)
+distinction are documented in the repo-root `CLAUDE.md` → "Task tracking
+(beads + Linear)". Linear is the system of record; beads is seeded pull-only.
 
-**Learn more:** [github.com/steveyegge/beads](https://github.com/steveyegge/beads)
-
-## Quick Start
-
-### Essential Commands
-
-```bash
-# Create new issues
-bd create "Add user authentication"
-
-# View all issues
-bd list
-
-# View issue details
-bd show <issue-id>
-
-# Update issue status
-bd update <issue-id> --claim
-bd update <issue-id> --status done
-
-# Sync with Dolt remote
-bd dolt push
-```
-
-### Working with Issues
-
-Issues in Beads are:
-- **Git-native**: Stored in Dolt database with version control and branching
-- **AI-friendly**: CLI-first design works perfectly with AI coding agents
-- **Branch-aware**: Issues can follow your branch workflow
-- **Always in sync**: Auto-syncs with your commits
-
-## Why Beads?
-
-✨ **AI-Native Design**
-- Built specifically for AI-assisted development workflows
-- CLI-first interface works seamlessly with AI coding agents
-- No context switching to web UIs
-
-🚀 **Developer Focused**
-- Issues live in your repo, right next to your code
-- Works offline, syncs when you push
-- Fast, lightweight, and stays out of your way
-
-🔧 **Git Integration**
-- Automatic sync with git commits
-- Branch-aware issue tracking
-- Dolt-native three-way merge resolution
-
-## Get Started with Beads
-
-Try Beads in your own projects:
-
-```bash
-# Install Beads
-curl -sSL https://raw.githubusercontent.com/steveyegge/beads/main/scripts/install.sh | bash
-
-# Initialize in your repo
-bd init
-
-# Create your first issue
-bd create "Try out Beads"
-```
-
-## Learn More
-
-- **Documentation**: [github.com/steveyegge/beads/docs](https://github.com/steveyegge/beads/tree/main/docs)
-- **Quick Start Guide**: Run `bd quickstart`
-- **Examples**: [github.com/steveyegge/beads/examples](https://github.com/steveyegge/beads/tree/main/examples)
-
----
-
-*Beads: Issue tracking that moves at the speed of thought* ⚡
+Use the Go/Dolt `bd` binary. Install per your platform's package manager or the
+project's internal install docs — and verify the download checksum before first
+run. When initializing in a repo, pass `bd init --skip-agents --skip-hooks` so it
+does not overwrite `CLAUDE.md`, the `AGENTS.md` symlink, or git hooks.

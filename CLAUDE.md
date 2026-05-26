@@ -28,12 +28,17 @@ Core workflow:
 bd ready --json                 # actionable, unblocked work (filter out epics)
 bd show <id> --json             # details (title, description, labels, deps)
 bd update <id> --claim          # atomically claim (assignee + in_progress)
-bd dep add <child> <parent>     # <child> depends on <parent> (blocks)
+bd dep add <child> <parent>     # <child> is blocked by <parent> (parent finishes first)
 bd close <id> --suggest-next    # close + list newly-unblocked dependents
 ```
 
 The "Adopt beads as a worksource in orca" initiative is tracked under epic
-`orca-y5r` (children `orca-y5r.1`..`.8`); see `task_plan.md` for the full plan.
+`orca-y5r` (children `orca-y5r.1`..`.8`), linked to Linear `LAB-1922` (the plan
+and current status live there).
+
+Never run `bd config set` for secret keys (`linear.api_key`, `github.token`) —
+`.beads/config.yaml` is git-tracked, so a key written there would be committed.
+Keep secrets in environment variables (`LINEAR_API_KEY`, `GITHUB_TOKEN`).
 
 When running `bd init` in any orca repo, always pass `--skip-agents --skip-hooks`
 so it does not overwrite this `CLAUDE.md`, the `AGENTS.md` symlink, or git hooks.
