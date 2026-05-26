@@ -11,7 +11,6 @@ import (
 type fakeBeadsRunner struct {
 	t       *testing.T
 	results []fakeBeadsResult
-	calls   []fakeBeadsCall
 }
 
 type fakeBeadsResult struct {
@@ -20,11 +19,6 @@ type fakeBeadsResult struct {
 	stdout string
 	stderr string
 	err    error
-}
-
-type fakeBeadsCall struct {
-	bin  string
-	args []string
 }
 
 func (f *fakeBeadsRunner) run(ctx context.Context, bin string, args ...string) ([]byte, []byte, error) {
@@ -36,7 +30,6 @@ func (f *fakeBeadsRunner) run(ctx context.Context, bin string, args ...string) (
 
 	result := f.results[0]
 	f.results = f.results[1:]
-	f.calls = append(f.calls, fakeBeadsCall{bin: bin, args: append([]string(nil), args...)})
 
 	if result.bin != "" && result.bin != bin {
 		f.t.Fatalf("run() bin = %q, want %q", bin, result.bin)
@@ -288,6 +281,108 @@ func TestBeadsSourceVerify(t *testing.T) {
 				}
 			} else if err == nil || !strings.Contains(err.Error(), tt.wantError) {
 				t.Fatalf("Verify() error = %v, want substring %q", err, tt.wantError)
+			}
+			runner.assertDone()
+		})
+	}
+}
+
+func TestBeadsSourceErrors(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		results   []fakeBeadsResult
+		run       func(context.Context, *BeadsSource) error
+		wantError string
+		wantIs    error
+	}{
+		{
+			name: "ready command failure includes stderr",
+			results: []fakeBeadsResult{
+				{args: []string{"ready", "--json", "--limit", "1"}, stderr: "database locked\n", err: errors.New("exit status 1")},
+			},
+			run: func(ctx context.Context, source *BeadsSource) error {
+				_, err := source.Ready(ctx, 1)
+				return err
+			},
+			wantError: "database locked",
+		},
+		{
+			name: "ready invalid stdout json",
+			results: []fakeBeadsResult{
+				{args: []string{"ready", "--json", "--limit", "1"}, stdout: "warning: not json\n"},
+			},
+			run: func(ctx context.Context, source *BeadsSource) error {
+				_, err := source.Ready(ctx, 1)
+				return err
+			},
+			wantError: "invalid JSON on stdout",
+		},
+		{
+			name: "get empty array is not found",
+			results: []fakeBeadsResult{
+				{args: []string{"show", "missing", "--json"}, stdout: "[]"},
+			},
+			run: func(ctx context.Context, source *BeadsSource) error {
+				_, err := source.Get(ctx, "missing")
+				return err
+			},
+			wantIs: ErrNotFound,
+		},
+		{
+			name: "claim command failure without already claimed",
+			results: []fakeBeadsResult{
+				{args: []string{"update", "orca-y5r.1", "--claim", "--actor", "worker-1", "--json"}, stderr: "network unavailable\n", err: errors.New("exit status 1")},
+			},
+			run: func(ctx context.Context, source *BeadsSource) error {
+				return source.Claim(ctx, "orca-y5r.1", "worker-1")
+			},
+			wantError: "network unavailable",
+		},
+		{
+			name: "release command failure",
+			results: []fakeBeadsResult{
+				{args: []string{"update", "orca-y5r.1", "--status", "open", "--assignee", "", "--json"}, stderr: "write failed\n", err: errors.New("exit status 1")},
+			},
+			run: func(ctx context.Context, source *BeadsSource) error {
+				return source.Release(ctx, "orca-y5r.1", "handoff")
+			},
+			wantError: "write failed",
+		},
+		{
+			name: "complete merged invalid object",
+			results: []fakeBeadsResult{
+				{args: []string{"close", "orca-y5r.1", "--suggest-next", "--json"}, stdout: "[]"},
+			},
+			run: func(ctx context.Context, source *BeadsSource) error {
+				return source.Complete(ctx, "orca-y5r.1", OutcomeMerged)
+			},
+			wantError: "invalid JSON on stdout",
+		},
+		{
+			name: "complete unsupported outcome",
+			run: func(ctx context.Context, source *BeadsSource) error {
+				return source.Complete(ctx, "orca-y5r.1", OutcomeUnknown)
+			},
+			wantError: "unsupported worksource outcome",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			runner := &fakeBeadsRunner{t: t, results: tt.results}
+			source := NewBeadsSource("bd", runner)
+
+			err := tt.run(context.Background(), source)
+			if tt.wantIs != nil {
+				if !errors.Is(err, tt.wantIs) {
+					t.Fatalf("error = %v, want errors.Is %v", err, tt.wantIs)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+				t.Fatalf("error = %v, want substring %q", err, tt.wantError)
 			}
 			runner.assertDone()
 		})
