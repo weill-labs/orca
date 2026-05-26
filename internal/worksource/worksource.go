@@ -5,7 +5,8 @@ import (
 	"errors"
 )
 
-var errManualSourceNotFound = errors.New("work item not found")
+// ErrNotFound reports that a source could not find the requested work item.
+var ErrNotFound = errors.New("work item not found")
 
 // ErrAlreadyClaimed reports that a work item was claimed by another worker.
 var ErrAlreadyClaimed = errors.New("work item already claimed")
@@ -27,7 +28,8 @@ type WorkItem struct {
 type Outcome int
 
 const (
-	OutcomeMerged Outcome = iota
+	OutcomeUnknown Outcome = iota
+	OutcomeMerged
 	OutcomeAbandoned
 	OutcomeFailed
 )
@@ -49,7 +51,7 @@ func (ManualSource) Ready(ctx context.Context, limit int) ([]WorkItem, error) {
 }
 
 func (ManualSource) Get(ctx context.Context, id string) (WorkItem, error) {
-	return WorkItem{}, errManualSourceNotFound
+	return WorkItem{}, ErrNotFound
 }
 
 func (ManualSource) Claim(ctx context.Context, id, workerID string) error {
