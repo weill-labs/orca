@@ -10,6 +10,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/weill-labs/orca/internal/worksource"
 )
 
 const (
@@ -23,6 +25,8 @@ const (
 	defaultShutdownCleanupDeadline  = 30 * time.Second
 	defaultDaemonStopTimeout        = defaultShutdownCleanupDeadline + 5*time.Second
 	defaultDaemonStatusWriteTimeout = 2 * time.Second
+	defaultWorkSourcePullInterval   = 30 * time.Second
+	defaultWorkSourceAgentProfile   = "codex"
 	relayHealthyPollInterval        = 5 * time.Minute
 )
 
@@ -61,6 +65,11 @@ type Daemon struct {
 	relayToken              string
 	hostname                string
 	detectOrigin            func(projectDir string) (string, error)
+	workSourceEnabled       bool
+	workSourceProject       string
+	workSource              worksource.Source
+	workSourceAgent         string
+	workSourcePullInterval  time.Duration
 
 	started              atomic.Bool
 	lastHeartbeat        atomic.Int64
@@ -141,6 +150,15 @@ func New(opts Options) (*Daemon, error) {
 	if opts.MergeGracePeriod <= 0 {
 		opts.MergeGracePeriod = defaultMergeGracePeriod
 	}
+	if opts.WorkSource == nil {
+		opts.WorkSource = worksource.ManualSource{}
+	}
+	if strings.TrimSpace(opts.WorkSourceAgent) == "" {
+		opts.WorkSourceAgent = defaultWorkSourceAgentProfile
+	}
+	if opts.WorkSourcePullInterval <= 0 {
+		opts.WorkSourcePullInterval = defaultWorkSourcePullInterval
+	}
 	if opts.ShutdownCleanupDeadline <= 0 {
 		opts.ShutdownCleanupDeadline = defaultShutdownCleanupDeadline
 	}
@@ -202,6 +220,11 @@ func New(opts Options) (*Daemon, error) {
 		relayToken:              strings.TrimSpace(opts.RelayToken),
 		hostname:                strings.TrimSpace(opts.Hostname),
 		detectOrigin:            opts.DetectOrigin,
+		workSourceEnabled:       opts.WorkSourceEnabled,
+		workSourceProject:       strings.TrimSpace(opts.WorkSourceProject),
+		workSource:              opts.WorkSource,
+		workSourceAgent:         strings.TrimSpace(opts.WorkSourceAgent),
+		workSourcePullInterval:  opts.WorkSourcePullInterval,
 		monitorGitHubCircuit:    NewCircuitBreakerWithHooks(opts.Now, defaultCircuitBreakerFailureThreshold, defaultCircuitBreakerCooldown, daemonCircuitHooks(opts.Project, opts.Now, opts.State, opts.Events, "monitor github")),
 	}, nil
 }
@@ -247,6 +270,10 @@ func formatCircuitOpenedMessage(name string, info CircuitBreakerTransition) stri
 func (d *Daemon) Start(ctx context.Context) error {
 	if !d.started.CompareAndSwap(false, true) {
 		return ErrAlreadyStarted
+	}
+	if err := d.verifyWorkSource(ctx); err != nil {
+		d.started.Store(false)
+		return err
 	}
 	if err := d.initializePIDFile(); err != nil {
 		d.started.Store(false)

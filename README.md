@@ -73,6 +73,14 @@ stuck_timeout = "5m"
 stuck_text_patterns = ["permission prompt"]
 nudge_command = "Enter"
 max_nudge_retries = 3
+
+# Optional: pull ready beads work when clones are free.
+[worksource]
+enabled = false
+source = "manual"
+# source = "beads"
+# beads_bin = "bd"
+# agent = "codex"
 EOF
 
 # 4. Create clones with pool markers

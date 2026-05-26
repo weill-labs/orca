@@ -41,6 +41,7 @@ var (
 
 type ServeRequest struct {
 	Session     string
+	Project     string
 	StateDB     string
 	PIDFile     string
 	LogFile     string
@@ -72,6 +73,19 @@ func runProcess(ctx context.Context, req ServeRequest, deps serveDeps) error {
 		return err
 	}
 	defer store.Close()
+
+	workSourceProject, err := daemonWorkSourceProject(req.Project, os.Getenv(daemonProjectEnvVar))
+	if err != nil {
+		return err
+	}
+	workSourceConfig, err := loadWorkSourceConfig(workSourceProject)
+	if err != nil {
+		return err
+	}
+	source, err := newWorkSourceFromConfig(workSourceConfig)
+	if err != nil {
+		return err
+	}
 
 	detectOrigin := deps.detectOrigin
 	if detectOrigin == nil {
@@ -146,6 +160,10 @@ func runProcess(ctx context.Context, req ServeRequest, deps serveDeps) error {
 		RelayToken:         relayToken,
 		Hostname:           strings.TrimSpace(hostname),
 		DetectOrigin:       detectOrigin,
+		WorkSourceEnabled:  workSourceConfig.Enabled,
+		WorkSourceProject:  workSourceProject,
+		WorkSource:         source,
+		WorkSourceAgent:    workSourceConfig.Agent,
 	})
 	if err != nil {
 		return fmt.Errorf("create daemon: %w", err)
@@ -177,6 +195,21 @@ func runProcess(ctx context.Context, req ServeRequest, deps serveDeps) error {
 		return errors.Join(serverErr, stopErr, markStoppedErr)
 	}
 	return errors.Join(stopErr, markStoppedErr)
+}
+
+func daemonWorkSourceProject(rawProject string, rawEnvProject string) (string, error) {
+	projectPath := strings.TrimSpace(rawProject)
+	if projectPath == "" {
+		projectPath = strings.TrimSpace(rawEnvProject)
+	}
+	if projectPath == "" {
+		return "", nil
+	}
+	resolvedProject, err := project.CanonicalPath(projectPath)
+	if err != nil {
+		return "", fmt.Errorf("resolve daemon project: %w", err)
+	}
+	return resolvedProject, nil
 }
 
 func startDaemonLifecycle(ctx context.Context, instance daemonLifecycle, statusWriter daemonStatusWriter, startedAt time.Time, markStopped func(context.Context, time.Time) error) error {
