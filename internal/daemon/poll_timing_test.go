@@ -46,6 +46,9 @@ func TestDaemonPollLoopLogsPollTickTiming(t *testing.T) {
 		"missing_pr_reconcile=",
 		"github_calls=0",
 		"github_total=0s",
+		"github_graphql_other_calls=0",
+		"github_rest_review_calls=0",
+		"github_rest_other_calls=0",
 	} {
 		if !strings.Contains(message, fragment) {
 			t.Fatalf("poll timing log = %q, want fragment %q", message, fragment)
@@ -130,7 +133,10 @@ func TestDaemonPollLoopTimingTracksStateAndGitHubDurations(t *testing.T) {
 		"state_read=2s",
 		"schedule_filter=2s",
 		"github_calls=4",
-		"github_total=3s",
+		"github_total=12s",
+		"github_graphql_terminal_state_calls=1",
+		"github_graphql_review_calls=1",
+		"github_graphql_other_calls=2",
 	} {
 		if !strings.Contains(message, fragment) {
 			t.Fatalf("poll timing log = %q, want fragment %q", message, fragment)

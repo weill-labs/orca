@@ -98,6 +98,7 @@ type Options struct {
 	IssueTracker         IssueTracker
 	Commands             CommandRunner
 	Events               EventSink
+	GitHubToken          string
 	Now                  func() time.Time
 	NewTicker            func(time.Duration) Ticker
 	Sleep                func(context.Context, time.Duration) error

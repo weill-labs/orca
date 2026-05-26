@@ -787,6 +787,7 @@ type commandCall struct {
 	Dir  string
 	Name string
 	Args []string
+	Env  []string
 }
 
 type commandResult struct {
@@ -806,13 +807,18 @@ func newFakeCommands() *fakeCommands {
 	}
 }
 
-func (c *fakeCommands) Run(_ context.Context, dir, name string, args ...string) ([]byte, error) {
+func (c *fakeCommands) Run(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
+	return c.RunWithEnv(ctx, dir, name, nil, args...)
+}
+
+func (c *fakeCommands) RunWithEnv(_ context.Context, dir, name string, env []string, args ...string) ([]byte, error) {
 	c.mu.Lock()
 
 	call := commandCall{
 		Dir:  dir,
 		Name: name,
 		Args: append([]string(nil), args...),
+		Env:  append([]string(nil), env...),
 	}
 	c.calls = append(c.calls, call)
 

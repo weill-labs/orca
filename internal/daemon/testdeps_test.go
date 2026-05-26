@@ -116,7 +116,7 @@ func (d *testDeps) newDaemonWithOptions(t *testing.T, mutate func(*Options)) *Da
 	}
 	daemon.github = newGitHubCLIClient(gitHubCLIClientConfig{
 		project:     "/tmp/project",
-		commands:    d.commands,
+		commands:    daemon.commands,
 		now:         d.clock.Now,
 		sleep:       noSleep,
 		maxAttempts: 1,

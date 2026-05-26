@@ -20,6 +20,23 @@ type daemonStatsTestMessage struct {
 		Open   int `json:"open"`
 		Closed int `json:"closed"`
 	} `json:"breaker_states"`
+	GitHubAPI struct {
+		GraphQL struct {
+			LastPollCalls              int `json:"last_poll_calls"`
+			LastPollEstimatedPoints    int `json:"last_poll_estimated_points"`
+			LastPollTerminalStateCalls int `json:"last_poll_terminal_state_calls"`
+			LastPollReviewCalls        int `json:"last_poll_review_calls"`
+			LastPollOtherCalls         int `json:"last_poll_other_calls"`
+			TotalCalls                 int `json:"total_calls"`
+			TotalEstimatedPoints       int `json:"total_estimated_points"`
+		} `json:"graphql"`
+		REST struct {
+			LastPollCalls       int `json:"last_poll_calls"`
+			LastPollReviewCalls int `json:"last_poll_review_calls"`
+			LastPollOtherCalls  int `json:"last_poll_other_calls"`
+			TotalCalls          int `json:"total_calls"`
+		} `json:"rest"`
+	} `json:"github_api"`
 	ReconcileFindings   int               `json:"reconcile_findings"`
 	WorkerRows          int               `json:"worker_rows"`
 	PoolEntriesByStatus map[string]int    `json:"pool_entries_by_status"`
@@ -230,6 +247,54 @@ func TestDaemonStatsMessageIncludesPopulatedFields(t *testing.T) {
 	}
 	if got, want := stats.PoolEntriesByStatus["quarantined"], 1; got != want {
 		t.Fatalf("pool_entries_by_status.quarantined = %d, want %d", got, want)
+	}
+}
+
+func TestDaemonStatsIncludesGitHubAPIPollConsumption(t *testing.T) {
+	deps := newTestDeps(t)
+	seedTaskMonitorAssignment(t, deps, "LAB-1918", "pane-1", 42)
+
+	refs := []githubPRTerminalStateRef{
+		{Key: prTerminalStateKey{Project: "/tmp/project", PRNumber: 42}, Owner: "weill-labs", Repo: "orca", PRNumber: 42},
+	}
+	deps.commands.queue("gh", prTerminalStateGraphQLArgs(refs), `{
+		"data": {
+			"pr0": {"pullRequest": {"number": 42, "merged": false, "mergedAt": null, "state": "OPEN"}}
+		}
+	}`, nil)
+	deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, `[{"bucket":"pass"}]`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prMergeableJSONFields}, ``, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prReviewJSONFields}, ``, nil)
+
+	d := deps.newDaemonWithOptions(t, func(opts *Options) {
+		opts.DetectOrigin = func(string) (string, error) {
+			return "https://github.com/weill-labs/orca.git", nil
+		}
+	})
+	t.Cleanup(func() {
+		d.stopAllTaskMonitors(true)
+	})
+
+	d.runPollTick(context.Background())
+	stats := d.collectDaemonStats(context.Background())
+
+	if got, want := stats.GitHubAPI.GraphQL.LastPollCalls, 4; got != want {
+		t.Fatalf("github_api.graphql.last_poll_calls = %d, want %d", got, want)
+	}
+	if got, want := stats.GitHubAPI.GraphQL.LastPollEstimatedPoints, 4; got != want {
+		t.Fatalf("github_api.graphql.last_poll_estimated_points = %d, want %d", got, want)
+	}
+	if got, want := stats.GitHubAPI.GraphQL.LastPollTerminalStateCalls, 1; got != want {
+		t.Fatalf("github_api.graphql.last_poll_terminal_state_calls = %d, want %d", got, want)
+	}
+	if got, want := stats.GitHubAPI.GraphQL.LastPollReviewCalls, 1; got != want {
+		t.Fatalf("github_api.graphql.last_poll_review_calls = %d, want %d", got, want)
+	}
+	if got, want := stats.GitHubAPI.GraphQL.LastPollOtherCalls, 2; got != want {
+		t.Fatalf("github_api.graphql.last_poll_other_calls = %d, want %d", got, want)
+	}
+	if got, want := stats.GitHubAPI.REST.LastPollCalls, 0; got != want {
+		t.Fatalf("github_api.rest.last_poll_calls = %d, want %d", got, want)
 	}
 }
 

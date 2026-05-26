@@ -14,6 +14,7 @@ type daemonStatsSnapshot struct {
 	InFlightTasks       int                        `json:"in_flight_tasks"`
 	PostgresConnections postgresConnectionSnapshot `json:"postgres_connections"`
 	BreakerStates       circuitBreakerStateCounts  `json:"breaker_states"`
+	GitHubAPI           githubAPIStatsSnapshot     `json:"github_api"`
 	ReconcileFindings   int                        `json:"reconcile_findings"`
 	WorkerRows          int                        `json:"worker_rows"`
 	PoolEntriesByStatus map[string]int             `json:"pool_entries_by_status"`
@@ -61,6 +62,7 @@ func (d *Daemon) collectDaemonStats(ctx context.Context) daemonStatsSnapshot {
 	snapshot := daemonStatsSnapshot{
 		Goroutines:          runtime.NumGoroutine(),
 		BreakerStates:       d.daemonCircuitBreakerStates(),
+		GitHubAPI:           d.githubAPIStatsSnapshot(),
 		PoolEntriesByStatus: make(map[string]int),
 	}
 	d.collectTaskStats(ctx, &snapshot)

@@ -657,9 +657,22 @@ func TestExecCommandRunner(t *testing.T) {
 		t.Fatalf("Run() output = %q, want %q", got, want)
 	}
 
+	out, err = runner.RunWithEnv(context.Background(), t.TempDir(), "sh", []string{"GH_TOKEN=from-test"}, "-c", "printf %s \"$GH_TOKEN\"")
+	if err != nil {
+		t.Fatalf("RunWithEnv() success error = %v", err)
+	}
+	if got, want := string(out), "from-test"; got != want {
+		t.Fatalf("RunWithEnv() output = %q, want %q", got, want)
+	}
+
 	_, err = runner.Run(context.Background(), t.TempDir(), "sh", "-c", "echo boom; exit 1")
 	if err == nil || !strings.Contains(err.Error(), "boom") {
 		t.Fatalf("Run() failure error = %v, want stderr in message", err)
+	}
+
+	_, err = runner.Run(context.Background(), t.TempDir(), "sh", "-c", "exit 1")
+	if err == nil || !strings.Contains(err.Error(), "exit status 1") {
+		t.Fatalf("Run() no-output failure error = %v, want exit status in message", err)
 	}
 }
 

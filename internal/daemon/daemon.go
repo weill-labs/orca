@@ -40,6 +40,9 @@ type Daemon struct {
 	github                  gitHubClient
 	githubMu                sync.Mutex
 	githubClients           map[string]gitHubClient
+	githubMetricsMu         sync.Mutex
+	lastPollGitHubAPI       githubAPICounters
+	totalGitHubAPI          githubAPICounters
 	events                  EventSink
 	now                     func() time.Time
 	newTicker               func(time.Duration) Ticker
@@ -159,6 +162,7 @@ func New(opts Options) (*Daemon, error) {
 	if opts.Session == "" {
 		opts.Session = "orca"
 	}
+	opts.Commands = newGitHubTokenCommandRunner(opts.Commands, opts.GitHubToken)
 	if strings.TrimSpace(opts.Hostname) == "" {
 		if hostname, err := os.Hostname(); err == nil {
 			opts.Hostname = hostname

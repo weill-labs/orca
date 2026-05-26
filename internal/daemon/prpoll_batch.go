@@ -32,6 +32,7 @@ func (d *Daemon) lookupBatchedPRTerminalStates(ctx context.Context, assignments 
 	if err != nil || len(refs) == 0 {
 		return nil, err
 	}
+	ctx = withGitHubAPIConsumer(ctx, githubAPIConsumerTerminalState)
 
 	client, ok := d.gitHubClientForContext(ctx, d.project).(prTerminalStateBatchLookup)
 	if !ok {

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -675,19 +674,8 @@ func runtimeWorkerFromState(project string, worker state.Worker) Worker {
 
 type execCommandRunner struct{}
 
-func (execCommandRunner) Run(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.Dir = dir
-
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		if message := strings.TrimSpace(string(output)); message != "" {
-			return output, fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, message)
-		}
-		return output, fmt.Errorf("%s %s: %w", name, strings.Join(args, " "), err)
-	}
-
-	return output, nil
+func (r execCommandRunner) Run(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
+	return r.RunWithEnv(ctx, dir, name, nil, args...)
 }
 
 func newLinearIssueTrackerFromEnv() (IssueTracker, error) {
