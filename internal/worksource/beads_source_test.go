@@ -151,11 +151,12 @@ func TestBeadsSourceMutations(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name string
-		run  func(t *testing.T, source *BeadsSource) error
-		want []string
-		out  string
-		err  error
+		name   string
+		run    func(t *testing.T, source *BeadsSource) error
+		want   []string
+		out    string
+		stderr string
+		err    error
 	}{
 		{
 			name: "claim success",
@@ -174,8 +175,9 @@ func TestBeadsSourceMutations(t *testing.T) {
 				}
 				return nil
 			},
-			want: []string{"update", "orca-y5r.1", "--claim", "--actor", "worker-1", "--json"},
-			err:  errors.New("exit status 1"),
+			want:   []string{"update", "orca-y5r.1", "--claim", "--actor", "worker-1", "--json"},
+			stderr: "Error claiming orca-y5r.1: issue already claimed by worker-2\n",
+			err:    errors.New("exit status 1"),
 		},
 		{
 			name: "release clears assignee",
@@ -215,14 +217,10 @@ func TestBeadsSourceMutations(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			stderr := ""
-			if tt.name == "claim already claimed" {
-				stderr = "Error claiming orca-y5r.1: issue already claimed by worker-2\n"
-			}
 			runner := &fakeBeadsRunner{
 				t: t,
 				results: []fakeBeadsResult{
-					{args: tt.want, stdout: tt.out, stderr: stderr, err: tt.err},
+					{args: tt.want, stdout: tt.out, stderr: tt.stderr, err: tt.err},
 				},
 			}
 			source := NewBeadsSource("bd", runner)
@@ -331,6 +329,28 @@ func TestBeadsSourceErrors(t *testing.T) {
 			wantIs: ErrNotFound,
 		},
 		{
+			name: "get command failure includes stderr",
+			results: []fakeBeadsResult{
+				{args: []string{"show", "orca-y5r.1", "--json"}, stderr: "read failed\n", err: errors.New("exit status 1")},
+			},
+			run: func(ctx context.Context, source *BeadsSource) error {
+				_, err := source.Get(ctx, "orca-y5r.1")
+				return err
+			},
+			wantError: "read failed",
+		},
+		{
+			name: "get invalid stdout json",
+			results: []fakeBeadsResult{
+				{args: []string{"show", "orca-y5r.1", "--json"}, stdout: "warning: not json\n"},
+			},
+			run: func(ctx context.Context, source *BeadsSource) error {
+				_, err := source.Get(ctx, "orca-y5r.1")
+				return err
+			},
+			wantError: "invalid JSON on stdout",
+		},
+		{
 			name: "claim command failure without already claimed",
 			results: []fakeBeadsResult{
 				{args: []string{"update", "orca-y5r.1", "--claim", "--actor", "worker-1", "--json"}, stderr: "network unavailable\n", err: errors.New("exit status 1")},
@@ -341,6 +361,22 @@ func TestBeadsSourceErrors(t *testing.T) {
 			wantError: "network unavailable",
 		},
 		{
+			name: "claim already claimed reports stderr",
+			results: []fakeBeadsResult{
+				{
+					args:   []string{"update", "orca-y5r.1", "--claim", "--actor", "worker-1", "--json"},
+					stdout: `{"id":"orca-y5r.1"}`,
+					stderr: "Error claiming orca-y5r.1: issue already claimed by worker-2\n",
+					err:    errors.New("exit status 1"),
+				},
+			},
+			run: func(ctx context.Context, source *BeadsSource) error {
+				return source.Claim(ctx, "orca-y5r.1", "worker-1")
+			},
+			wantError: "Error claiming orca-y5r.1",
+			wantIs:    ErrAlreadyClaimed,
+		},
+		{
 			name: "release command failure",
 			results: []fakeBeadsResult{
 				{args: []string{"update", "orca-y5r.1", "--status", "open", "--assignee", "", "--json"}, stderr: "write failed\n", err: errors.New("exit status 1")},
@@ -349,6 +385,16 @@ func TestBeadsSourceErrors(t *testing.T) {
 				return source.Release(ctx, "orca-y5r.1", "handoff")
 			},
 			wantError: "write failed",
+		},
+		{
+			name: "complete merged command failure",
+			results: []fakeBeadsResult{
+				{args: []string{"close", "orca-y5r.1", "--suggest-next", "--json"}, stderr: "close failed\n", err: errors.New("exit status 1")},
+			},
+			run: func(ctx context.Context, source *BeadsSource) error {
+				return source.Complete(ctx, "orca-y5r.1", OutcomeMerged)
+			},
+			wantError: "close failed",
 		},
 		{
 			name: "complete merged invalid object",
@@ -381,8 +427,12 @@ func TestBeadsSourceErrors(t *testing.T) {
 				if !errors.Is(err, tt.wantIs) {
 					t.Fatalf("error = %v, want errors.Is %v", err, tt.wantIs)
 				}
-			} else if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+			}
+			if tt.wantError != "" && (err == nil || !strings.Contains(err.Error(), tt.wantError)) {
 				t.Fatalf("error = %v, want substring %q", err, tt.wantError)
+			}
+			if tt.wantIs == nil && tt.wantError == "" && err != nil {
+				t.Fatalf("error = %v, want nil", err)
 			}
 			runner.assertDone()
 		})

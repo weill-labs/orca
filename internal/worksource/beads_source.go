@@ -94,7 +94,7 @@ func (s *BeadsSource) Claim(ctx context.Context, id, workerID string) error {
 	if err != nil {
 		combined := strings.ToLower(string(stdout) + string(stderr))
 		if strings.Contains(combined, "already claimed") {
-			return fmt.Errorf("%w: %s", ErrAlreadyClaimed, strings.TrimSpace(string(stdout)+string(stderr)))
+			return fmt.Errorf("%w%s", ErrAlreadyClaimed, stderrMessage(stderr))
 		}
 		return s.commandError(err, stderr, args...)
 	}
@@ -102,6 +102,8 @@ func (s *BeadsSource) Claim(ctx context.Context, id, workerID string) error {
 	return s.decodeIssueArray(stdout, args...)
 }
 
+// Release resets the issue to open/unassigned. The reason string is accepted
+// for interface compatibility but is not forwarded to bd; bd has no --reason flag.
 func (s *BeadsSource) Release(ctx context.Context, id, reason string) error {
 	return s.release(ctx, id)
 }
