@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"path/filepath"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/weill-labs/orca/internal/amux"
+	"github.com/weill-labs/orca/internal/worksource"
 )
 
 const (
@@ -181,6 +183,7 @@ func (d *Daemon) finishAssignmentWithMessageAndPrompt(ctx context.Context, activ
 		}
 	}
 	d.requestRelayReconnect()
+	d.completeWorkSource(cleanupCtx, active, status)
 
 	if message == "" {
 		message = "task finished"
@@ -212,6 +215,55 @@ func (d *Daemon) finishAssignmentWithMessageAndPrompt(ctx context.Context, activ
 		Message:      message,
 	})
 	return result
+}
+
+func (d *Daemon) completeWorkSource(ctx context.Context, active ActiveAssignment, status string) {
+	if d.workSource == nil {
+		return
+	}
+	outcome, ok := workSourceOutcomeForTerminalStatus(status)
+	if !ok {
+		return
+	}
+	if err := d.workSource.Complete(ctx, active.Task.Issue, outcome); err != nil {
+		message := workSourceCompleteErrorMessage(active, status, outcome, err)
+		if d.logf != nil {
+			d.logf("%s", message)
+			return
+		}
+		log.Print(message)
+	}
+}
+
+func workSourceCompleteErrorMessage(active ActiveAssignment, status string, outcome worksource.Outcome, err error) string {
+	return fmt.Sprintf("worksource complete failed: project=%s issue=%s status=%s outcome=%s error=%v",
+		active.Task.Project, active.Task.Issue, status, workSourceOutcomeName(outcome), err)
+}
+
+func workSourceOutcomeForTerminalStatus(status string) (worksource.Outcome, bool) {
+	switch status {
+	case TaskStatusDone:
+		return worksource.OutcomeMerged, true
+	case TaskStatusCancelled:
+		return worksource.OutcomeAbandoned, true
+	case TaskStatusFailed:
+		return worksource.OutcomeFailed, true
+	default:
+		return worksource.OutcomeUnknown, false
+	}
+}
+
+func workSourceOutcomeName(outcome worksource.Outcome) string {
+	switch outcome {
+	case worksource.OutcomeMerged:
+		return "merged"
+	case worksource.OutcomeAbandoned:
+		return "abandoned"
+	case worksource.OutcomeFailed:
+		return "failed"
+	default:
+		return "unknown"
+	}
 }
 
 func (d *Daemon) cleanupContext(ctx context.Context) context.Context {
