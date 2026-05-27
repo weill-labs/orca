@@ -27,11 +27,14 @@ func TestRunPullTick(t *testing.T) {
 		readyItems   []worksource.WorkItem
 		claimErrs    map[string]error
 		assignFails  bool
+		spawnErr     error
 		startDaemon  bool
+		ticks        int
 		wantReady    []int
 		wantClaims   []string
 		wantReleases []fakePullRelease
 		wantAssigned []string
+		wantSpawns   int
 	}{
 		{
 			name:       "disabled flag results in no source calls",
@@ -84,19 +87,31 @@ func TestRunPullTick(t *testing.T) {
 			wantClaims: []string{},
 		},
 		{
-			name:       "releases claim when assign fails after claim succeeds",
+			name:       "parks claim when assign fails after claim succeeds",
 			enabled:    true,
 			freeClones: 1,
 			readyItems: []worksource.WorkItem{
-				{ID: "LAB-501", Body: "Implement assignment failure release"},
+				{ID: "LAB-501", Body: "Implement assignment failure park"},
 			},
 			assignFails: true,
 			startDaemon: true,
-			wantReady:   []int{1},
+			ticks:       3,
+			wantReady:   []int{1, 1, 1},
 			wantClaims:  []string{"LAB-501"},
-			wantReleases: []fakePullRelease{
-				{id: "LAB-501", reasonPrefix: "assign failed: acquire clone:"},
+		},
+		{
+			name:       "parks claim when spawn fails after claim succeeds",
+			enabled:    true,
+			freeClones: 1,
+			readyItems: []worksource.WorkItem{
+				{ID: "LAB-502", Body: "Implement spawn failure park"},
 			},
+			spawnErr:    errors.New("spawn failed"),
+			startDaemon: true,
+			ticks:       3,
+			wantReady:   []int{1, 1, 1},
+			wantClaims:  []string{"LAB-502"},
+			wantSpawns:  1,
 		},
 	}
 
@@ -117,6 +132,7 @@ func TestRunPullTick(t *testing.T) {
 			if tt.freeClones > 0 {
 				deps.amux.spawnPanes = pullTestPanes(tt.freeClones)
 			}
+			deps.amux.spawnErr = tt.spawnErr
 			d := deps.newDaemonWithOptions(t, func(opts *Options) {
 				opts.WorkSourceEnabled = tt.enabled
 				opts.WorkSource = source
@@ -133,7 +149,13 @@ func TestRunPullTick(t *testing.T) {
 				})
 			}
 
-			d.runPullTick(ctx)
+			ticks := tt.ticks
+			if ticks == 0 {
+				ticks = 1
+			}
+			for range ticks {
+				d.runPullTick(ctx)
+			}
 
 			if got := source.readyLimits(); !reflect.DeepEqual(got, tt.wantReady) {
 				t.Fatalf("Ready() limits = %#v, want %#v", got, tt.wantReady)
@@ -159,7 +181,11 @@ func TestRunPullTick(t *testing.T) {
 					t.Fatalf("task %s agent = %q, want %q", issue, got, want)
 				}
 			}
-			if got, want := len(deps.amux.spawnRequests), len(tt.wantAssigned); got != want {
+			wantSpawns := tt.wantSpawns
+			if wantSpawns == 0 {
+				wantSpawns = len(tt.wantAssigned)
+			}
+			if got, want := len(deps.amux.spawnRequests), wantSpawns; got != want {
 				t.Fatalf("spawn request count = %d, want %d", got, want)
 			}
 		})
@@ -269,6 +295,7 @@ type fakePullWorkSource struct {
 	readyCalls []int
 	claims     []fakePullClaim
 	releases   []fakePullRelease
+	claimed    map[string]bool
 	verify     int
 }
 
@@ -289,8 +316,13 @@ func (f *fakePullWorkSource) Ready(_ context.Context, limit int) ([]worksource.W
 	if f.readyErr != nil {
 		return nil, f.readyErr
 	}
-	items := make([]worksource.WorkItem, len(f.readyItems))
-	copy(items, f.readyItems)
+	items := make([]worksource.WorkItem, 0, len(f.readyItems))
+	for _, item := range f.readyItems {
+		if f.claimed[item.ID] {
+			continue
+		}
+		items = append(items, item)
+	}
 	return items, nil
 }
 
@@ -302,13 +334,21 @@ func (f *fakePullWorkSource) Claim(_ context.Context, id, workerID string) error
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.claims = append(f.claims, fakePullClaim{id: id, workerID: workerID})
-	return f.claimErrs[id]
+	if err := f.claimErrs[id]; err != nil {
+		return err
+	}
+	if f.claimed == nil {
+		f.claimed = make(map[string]bool)
+	}
+	f.claimed[id] = true
+	return nil
 }
 
 func (f *fakePullWorkSource) Release(_ context.Context, id, reason string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.releases = append(f.releases, fakePullRelease{id: id, reasonPrefix: reason})
+	delete(f.claimed, id)
 	return nil
 }
 
