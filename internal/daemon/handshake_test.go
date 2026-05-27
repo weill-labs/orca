@@ -837,11 +837,27 @@ func TestHandshakePromptDetectionHelpers(t *testing.T) {
 		wantReady  bool
 	}{
 		{
-			name:       "codex detects trust prompt and resume prompt",
+			name:       "codex detects trust prompt and resume prompt but not ready",
 			profile:    AgentProfile{Name: "codex", ResumeSequence: []string{"codex --yolo resume", "Enter", "."}},
 			output:     "Do you trust this folder? Resume your previous session ›",
 			wantTrust:  true,
 			wantResume: true,
+			wantReady:  false,
+		},
+		{
+			name:       "codex trust prompt UI does not look ready",
+			profile:    AgentProfile{Name: "codex"},
+			output:     "You are in /tmp/clone-03\nDo you trust the contents of this directory?\n› 1. Yes, continue\n  2. No, quit",
+			wantTrust:  true,
+			wantResume: false,
+			wantReady:  false,
+		},
+		{
+			name:       "codex post-trust ready state looks ready",
+			profile:    AgentProfile{Name: "codex"},
+			output:     "OpenAI Codex\n›\n  gpt-5.5 xhigh · ~/tmp/clone-03",
+			wantTrust:  false,
+			wantResume: false,
 			wantReady:  true,
 		},
 		{
@@ -878,6 +894,32 @@ func TestHandshakePromptDetectionHelpers(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAgentHandshakeCatchesTrustPromptRenderedAfterWaitTimeout(t *testing.T) {
+	t.Parallel()
+
+	// The codex trust prompt can render just after the trust WaitContent's
+	// last poll gives up. agentHandshake must re-check the snapshot it
+	// already captured and send Enter — otherwise the handshake mistakes
+	// the trust menu's own `›` selector for the ready marker, types the
+	// user's prompt into the menu, and codex exits back to shell.
+	deps := newTestDeps(t)
+	deps.amux.waitContentResults = []error{
+		amuxapi.ErrWaitContentTimeout, // iter 1 trust wait races the prompt render
+		amuxapi.ErrWaitContentTimeout, // iter 2 trust wait: prompt already cleared by Enter
+	}
+	deps.amux.captureSequence("pane-1", []string{
+		"You are in /tmp/clone-03\nDo you trust the contents of this directory?\n› 1. Yes, continue\n  2. No, quit",
+		defaultCodexReadyOutput(),
+	})
+	d := deps.newDaemon(t)
+
+	if _, err := d.agentHandshake(context.Background(), "pane-1", deps.config.profiles["codex"]); err != nil {
+		t.Fatalf("agentHandshake() error = %v", err)
+	}
+
+	deps.amux.requireSentKeys(t, "pane-1", []string{"Enter"})
 }
 
 func TestAssignEmitsCodexHandshakeDiagnostics(t *testing.T) {

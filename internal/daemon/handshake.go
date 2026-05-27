@@ -47,6 +47,18 @@ func (d *Daemon) agentHandshake(ctx context.Context, paneID string, profile Agen
 		}
 		d.emitHandshakeEvent(ctx, paneID, profile, handshakeStepCapture)
 
+		// The trust prompt may have rendered just after
+		// confirmTrustPromptIfPresent's WaitContent gave up — its `›` selector
+		// looks identical to the codex ready marker, so without this check we
+		// would mistake the trust menu for the ready state and type the user's
+		// prompt at the menu.
+		if hasTrustPrompt(profile, output) {
+			if err := d.acceptTrustPrompt(ctx, paneID, profile); err != nil {
+				return PaneCapture{}, err
+			}
+			continue
+		}
+
 		switch {
 		case !resumed && hasResumePrompt(profile, output):
 			if err := d.resumeAgentInPane(ctx, paneID, profile); err != nil {
@@ -112,16 +124,24 @@ func (d *Daemon) confirmTrustPromptIfPresent(ctx context.Context, paneID string,
 		return false, fmt.Errorf("wait for trust prompt: %w", err)
 	}
 
-	d.emitHandshakeEvent(ctx, paneID, profile, handshakeStepTrustDetected)
-	if err := d.amux.SendKeys(ctx, paneID, "Enter"); err != nil {
-		return false, fmt.Errorf("confirm trust prompt: %w", err)
-	}
-	d.emitHandshakeEvent(ctx, paneID, profile, handshakeStepTrustEnter)
-	d.emitHandshakeEvent(ctx, paneID, profile, handshakeStepWait)
-	if err := d.waitHandshakeIdle(ctx, paneID, profile, "wait for post-startup action idle"); err != nil {
+	if err := d.acceptTrustPrompt(ctx, paneID, profile); err != nil {
 		return false, err
 	}
 	return true, nil
+}
+
+// acceptTrustPrompt sends Enter to clear a detected codex trust prompt and
+// waits for the resulting post-startup idle. Used both by the WaitContent fast
+// path in confirmTrustPromptIfPresent and by the snapshot fallback in
+// agentHandshake.
+func (d *Daemon) acceptTrustPrompt(ctx context.Context, paneID string, profile AgentProfile) error {
+	d.emitHandshakeEvent(ctx, paneID, profile, handshakeStepTrustDetected)
+	if err := d.amux.SendKeys(ctx, paneID, "Enter"); err != nil {
+		return fmt.Errorf("confirm trust prompt: %w", err)
+	}
+	d.emitHandshakeEvent(ctx, paneID, profile, handshakeStepTrustEnter)
+	d.emitHandshakeEvent(ctx, paneID, profile, handshakeStepWait)
+	return d.waitHandshakeIdle(ctx, paneID, profile, "wait for post-startup action idle")
 }
 
 func (d *Daemon) waitHandshakeIdle(ctx context.Context, paneID string, profile AgentProfile, stage string) error {
@@ -206,7 +226,13 @@ func hasResumePrompt(profile AgentProfile, output string) bool {
 
 func hasReadyPattern(profile AgentProfile, output string) bool {
 	pattern, ok := readyPatternText(profile)
-	return ok && containsFold(output, pattern)
+	if !ok || !containsFold(output, pattern) {
+		return false
+	}
+	// The codex trust prompt renders its own selector glyph (the same as the
+	// ready marker) inside "› 1. Yes, continue". Don't false-positive ready
+	// while the trust prompt is still on screen.
+	return !hasTrustPrompt(profile, output)
 }
 
 func normalizedProfileName(profile AgentProfile) string {
