@@ -149,9 +149,9 @@ func (s *realAmuxSession) start(t *testing.T) error {
 
 	if !waitForRealAmuxOutput(t, &outputMu, &output, done, updates, []byte(s.name), 10*time.Second) {
 		if err := realAmuxWaitResult(&waitMu, &waitErr, done); err != nil {
-			return fmt.Errorf("session exited before bootstrap: %w\n%s", err, string(copyBytes(&outputMu, output)))
+			return fmt.Errorf("session exited before bootstrap: %w\n%s", err, string(copyBytes(&outputMu, &output)))
 		}
-		return fmt.Errorf("timed out waiting for session bootstrap\n%s", string(copyBytes(&outputMu, output)))
+		return fmt.Errorf("timed out waiting for session bootstrap\n%s", string(copyBytes(&outputMu, &output)))
 	}
 
 	if _, err := ptmx.Write([]byte{1, 'd'}); err != nil {
@@ -162,12 +162,12 @@ func (s *realAmuxSession) start(t *testing.T) error {
 	case <-done:
 		err := realAmuxWaitResult(&waitMu, &waitErr, done)
 		if err != nil {
-			return fmt.Errorf("wait for detached client exit: %w\n%s", err, string(copyBytes(&outputMu, output)))
+			return fmt.Errorf("wait for detached client exit: %w\n%s", err, string(copyBytes(&outputMu, &output)))
 		}
 	case <-time.After(10 * time.Second):
 		_ = cmd.Process.Kill()
 		<-done
-		return fmt.Errorf("timed out waiting for detached client exit\n%s", string(copyBytes(&outputMu, output)))
+		return fmt.Errorf("timed out waiting for detached client exit\n%s", string(copyBytes(&outputMu, &output)))
 	}
 
 	deadline := time.Now().Add(10 * time.Second)
@@ -332,7 +332,7 @@ func waitForRealAmuxOutput(t *testing.T, outputMu *sync.Mutex, output *[]byte, d
 
 	deadline := time.Now().Add(timeout)
 	for {
-		if bytes.Contains(copyBytes(outputMu, *output), want) {
+		if bytes.Contains(copyBytes(outputMu, output), want) {
 			return true
 		}
 
@@ -346,17 +346,17 @@ func waitForRealAmuxOutput(t *testing.T, outputMu *sync.Mutex, output *[]byte, d
 
 		select {
 		case <-done:
-			return bytes.Contains(copyBytes(outputMu, *output), want)
+			return bytes.Contains(copyBytes(outputMu, output), want)
 		case <-updates:
 		case <-time.After(remaining):
 		}
 	}
 }
 
-func copyBytes(outputMu *sync.Mutex, output []byte) []byte {
+func copyBytes(outputMu *sync.Mutex, output *[]byte) []byte {
 	outputMu.Lock()
 	defer outputMu.Unlock()
-	return append([]byte(nil), output...)
+	return append([]byte(nil), (*output)...)
 }
 
 func realAmuxSessionMissing(err error) bool {
