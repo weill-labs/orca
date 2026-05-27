@@ -286,6 +286,45 @@ func TestMonitorPullTickRunsWhenEnabled(t *testing.T) {
 	}
 }
 
+func TestMonitorPullTickBacksOffConsecutiveFailures(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	configurePullTestClones(t, deps, 1)
+	captureTick := newFakeTicker()
+	pollTick := newFakeTicker()
+	pullTick := newFakeTicker()
+	deps.tickers.enqueue(captureTick, pollTick, pullTick)
+	source := &fakePullWorkSource{readyErr: errors.New("bd ready failed")}
+	d := deps.newDaemonWithOptions(t, func(opts *Options) {
+		opts.WorkSourceEnabled = true
+		opts.WorkSource = source
+		opts.WorkSourcePullInterval = 30 * time.Second
+	})
+
+	if err := d.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	tickAndRequirePullReadyCalls(t, d, deps, pullTick, 1*time.Second, source, 1)
+	tickAndRequirePullReadyCalls(t, d, deps, pullTick, 29*time.Second, source, 1)
+	tickAndRequirePullReadyCalls(t, d, deps, pullTick, 1*time.Second, source, 2)
+	tickAndRequirePullReadyCalls(t, d, deps, pullTick, 30*time.Second, source, 2)
+	tickAndRequirePullReadyCalls(t, d, deps, pullTick, 30*time.Second, source, 3)
+	tickAndRequirePullReadyCalls(t, d, deps, pullTick, 90*time.Second, source, 3)
+	tickAndRequirePullReadyCalls(t, d, deps, pullTick, 30*time.Second, source, 4)
+
+	source.setReadyErr(nil)
+	tickAndRequirePullReadyCalls(t, d, deps, pullTick, 4*time.Minute, source, 5)
+
+	source.setReadyErr(errors.New("bd ready failed again"))
+	tickAndRequirePullReadyCalls(t, d, deps, pullTick, 30*time.Second, source, 6)
+	tickAndRequirePullReadyCalls(t, d, deps, pullTick, 30*time.Second, source, 7)
+}
+
 type fakePullWorkSource struct {
 	mu         sync.Mutex
 	readyItems []worksource.WorkItem
@@ -363,6 +402,12 @@ func (f *fakePullWorkSource) Verify(context.Context) error {
 	return f.verifyErr
 }
 
+func (f *fakePullWorkSource) setReadyErr(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.readyErr = err
+}
+
 func (f *fakePullWorkSource) readyLimits() []int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -389,6 +434,15 @@ func (f *fakePullWorkSource) claimedWorkerIDs() []string {
 		out = append(out, claim.workerID)
 	}
 	return out
+}
+
+func tickAndRequirePullReadyCalls(t *testing.T, d *Daemon, deps *testDeps, ticker *fakeTicker, advance time.Duration, source *fakePullWorkSource, want int) {
+	t.Helper()
+
+	tickAndWaitForHeartbeat(t, d, deps, ticker, advance, "pull tick")
+	if got := len(source.readyLimits()); got != want {
+		t.Fatalf("Ready() call count = %d, want %d", got, want)
+	}
 }
 
 func (f *fakePullWorkSource) requireReleases(t *testing.T, want []fakePullRelease) {

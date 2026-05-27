@@ -5,11 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	state "github.com/weill-labs/orca/internal/daemonstate"
 	"github.com/weill-labs/orca/internal/pool"
 	"github.com/weill-labs/orca/internal/worksource"
 )
+
+const workSourcePullBackoffCap = 5 * time.Minute
 
 type workSourceVerifier interface {
 	Verify(context.Context) error
@@ -40,13 +43,13 @@ func (d *Daemon) verifyWorkSource(ctx context.Context) error {
 	return nil
 }
 
-func (d *Daemon) runPullTick(ctx context.Context) {
+func (d *Daemon) runPullTick(ctx context.Context) error {
 	summary, enabled, err := d.pullReadyWork(ctx)
 	if err != nil {
 		if d.logf != nil {
 			d.logf("worksource pull tick failed: %v", err)
 		}
-		return
+		return err
 	}
 	if enabled && d.logf != nil {
 		d.logf(
@@ -57,6 +60,38 @@ func (d *Daemon) runPullTick(ctx context.Context) {
 			summary.skippedAlreadyClaimed,
 		)
 	}
+	return nil
+}
+
+type pullTickBackoff struct {
+	failures      int
+	nextAttemptAt time.Time
+}
+
+func (b pullTickBackoff) shouldSkip(now time.Time) bool {
+	return !b.nextAttemptAt.IsZero() && now.Before(b.nextAttemptAt)
+}
+
+func (b *pullTickBackoff) record(err error, now time.Time, baseInterval time.Duration) {
+	if err == nil {
+		b.failures = 0
+		b.nextAttemptAt = time.Time{}
+		return
+	}
+
+	b.failures++
+	b.nextAttemptAt = now.Add(workSourcePullBackoffDelay(b.failures, baseInterval))
+}
+
+func workSourcePullBackoffDelay(failures int, baseInterval time.Duration) time.Duration {
+	if baseInterval <= 0 {
+		baseInterval = defaultWorkSourcePullInterval
+	}
+	delay := baseInterval
+	for i := 1; i < failures; i++ {
+		delay = nextBackoff(delay, workSourcePullBackoffCap)
+	}
+	return delay
 }
 
 func (d *Daemon) pullReadyWork(ctx context.Context) (pullTickSummary, bool, error) {
