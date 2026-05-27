@@ -32,6 +32,13 @@ bd dep add <child> <parent>     # <child> is blocked by <parent> (parent finishe
 bd close <id> --suggest-next    # close + list newly-unblocked dependents
 ```
 
+`bd` auto-flushes `.beads/issues.jsonl` but does NOT auto-commit it, and the live
+Dolt DB (`.beads/embeddeddolt/`) is gitignored — so **commit `.beads/issues.jsonl`
+whenever you close or change issue state** (e.g. as part of the post-merge
+`bd close` step). Otherwise the committed graph drifts from the live DB and a
+fresh clone — which rebuilds its DB from the JSONL — sees stale, already-done work
+as still open.
+
 The "Adopt beads as a worksource in orca" initiative is tracked under epic
 `orca-y5r` (children `orca-y5r.1`..`.8`), linked to Linear `LAB-1922` (the plan
 and current status live there).
