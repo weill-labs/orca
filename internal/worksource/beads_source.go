@@ -6,11 +6,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 )
 
 const defaultBeadsBin = "bd"
+
+var externalRefIssuePattern = regexp.MustCompile(`^[A-Z][A-Z0-9]*-\d+$`)
 
 type runner interface {
 	run(ctx context.Context, bin string, args ...string) (stdout []byte, stderr []byte, err error)
@@ -37,6 +40,7 @@ type BeadsSource struct {
 }
 
 var _ Source = (*BeadsSource)(nil)
+var _ IDResolver = (*BeadsSource)(nil)
 
 func NewBeadsSource(bin string, r runner) *BeadsSource {
 	if bin == "" {
@@ -88,6 +92,27 @@ func (s *BeadsSource) Get(ctx context.Context, id string) (WorkItem, error) {
 	return issues[0].workItem(), nil
 }
 
+func (s *BeadsSource) ResolveID(ctx context.Context, id string) (IDPair, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return IDPair{}, ErrNotFound
+	}
+
+	if externalRefIssuePattern.MatchString(id) {
+		beadsID, err := s.beadsIDByExternalRef(ctx, id)
+		return IDPair{BeadsID: beadsID, LinearID: id}, err
+	}
+
+	item, err := s.Get(ctx, id)
+	if err != nil {
+		return IDPair{BeadsID: id}, err
+	}
+	return IDPair{
+		BeadsID:  item.ID,
+		LinearID: strings.TrimSpace(item.Meta["external_ref"]),
+	}, nil
+}
+
 func (s *BeadsSource) Claim(ctx context.Context, id, workerID string) error {
 	args := []string{"update", id, "--claim", "--actor", workerID, "--json"}
 	stdout, stderr, err := s.run(ctx, args...)
@@ -131,6 +156,30 @@ func (s *BeadsSource) Complete(ctx context.Context, id string, outcome Outcome) 
 	default:
 		return fmt.Errorf("unsupported worksource outcome %d for %s", outcome, id)
 	}
+}
+
+func (s *BeadsSource) beadsIDByExternalRef(ctx context.Context, externalRef string) (string, error) {
+	externalRef = strings.TrimSpace(externalRef)
+	if externalRef == "" {
+		return "", ErrNotFound
+	}
+
+	args := []string{"search", "--external-contains", externalRef, "--json"}
+	stdout, stderr, err := s.run(ctx, args...)
+	if err != nil {
+		return "", s.commandError(err, stderr, args...)
+	}
+
+	var issues []beadsIssue
+	if err := decodeStdout(stdout, &issues, s.command(args...)); err != nil {
+		return "", err
+	}
+	for _, issue := range issues {
+		if strings.EqualFold(strings.TrimSpace(issue.ExternalRef), externalRef) {
+			return strings.TrimSpace(issue.ID), nil
+		}
+	}
+	return "", ErrNotFound
 }
 
 func (s *BeadsSource) Verify(ctx context.Context) error {
@@ -202,16 +251,21 @@ type beadsIssue struct {
 	Priority    int      `json:"priority"`
 	Labels      []string `json:"labels"`
 	IssueType   string   `json:"issue_type"`
+	ExternalRef string   `json:"external_ref"`
 }
 
 func (i beadsIssue) workItem() WorkItem {
-	return WorkItem{
+	item := WorkItem{
 		ID:       i.ID,
 		Title:    i.Title,
 		Body:     i.Description,
 		Priority: i.Priority,
 		Labels:   i.Labels,
 	}
+	if externalRef := strings.TrimSpace(i.ExternalRef); externalRef != "" {
+		item.Meta = map[string]string{"external_ref": externalRef}
+	}
+	return item
 }
 
 type beadsCloseResult struct {

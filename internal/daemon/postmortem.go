@@ -225,7 +225,11 @@ func (d *Daemon) completeWorkSource(ctx context.Context, active ActiveAssignment
 	if !ok {
 		return
 	}
-	if err := d.workSource.Complete(ctx, active.Task.Issue, outcome); err != nil {
+	id, ok := d.beadsIDForCompletion(ctx, active, status, outcome)
+	if !ok {
+		return
+	}
+	if err := d.workSource.Complete(ctx, id, outcome); err != nil {
 		message := workSourceCompleteErrorMessage(active, status, outcome, err)
 		if d.logf != nil {
 			d.logf("%s", message)
@@ -233,6 +237,20 @@ func (d *Daemon) completeWorkSource(ctx context.Context, active ActiveAssignment
 		}
 		log.Print(message)
 	}
+}
+
+func (d *Daemon) logWorkSourceCompleteSkip(active ActiveAssignment, status string, outcome worksource.Outcome, reason string) {
+	message := workSourceCompleteSkipMessage(active, status, outcome, reason)
+	if d.logf != nil {
+		d.logf("%s", message)
+		return
+	}
+	log.Print(message)
+}
+
+func workSourceCompleteSkipMessage(active ActiveAssignment, status string, outcome worksource.Outcome, reason string) string {
+	return fmt.Sprintf("worksource complete skipped: project=%s issue=%s status=%s outcome=%s reason=%s",
+		active.Task.Project, active.Task.Issue, status, workSourceOutcomeName(outcome), reason)
 }
 
 func workSourceCompleteErrorMessage(active ActiveAssignment, status string, outcome worksource.Outcome, err error) string {
