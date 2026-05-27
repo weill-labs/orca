@@ -54,7 +54,7 @@ orca assign ISSUE --prompt "DETAILED INSTRUCTIONS" --agent AGENT
 - `--prompt` — detailed instructions for the worker. Be specific: include what to change, which files, what to test, and any review feedback to address.
 
 **Optional flags:**
-- `--agent` — agent profile to use. Default is `claude`. Use `codex` for Codex workers.
+- `--agent` — agent profile to use. Default is `codex`. Pass `--agent claude` to use Claude Code instead.
 - `--project` — target a specific project. Defaults to cwd.
 
 **Example — fresh issue:**
@@ -67,7 +67,6 @@ orca assign LAB-784 \
 **Example — existing PR with review feedback:**
 ```bash
 orca assign LAB-761 \
-  --agent claude \
   --prompt "Pick up PR #57 (branch LAB-761). Address review feedback: (1) Add t.Parallel() to test functions missing it. (2) Verify patch coverage meets 80%. Push and iterate until CI is green."
 ```
 
@@ -177,7 +176,6 @@ This shows the task's event log with timestamps — handshake steps, stuck detec
 ## Known Limitations
 
 - `orca resume` tries to spawn a new pane rather than reconnecting to an existing one. If the worker is still running, use `orca cancel` then `orca assign` instead.
-- The default agent is `claude`. Always pass `--agent codex` explicitly when you want Codex.
 - Codex workers sometimes exit silently on startup (transient). Orca retries startup prompt delivery across up to 3 fresh assignment attempts, but if it still fails, cancel and reassign.
 
 ## Recovering a stuck codex worker
