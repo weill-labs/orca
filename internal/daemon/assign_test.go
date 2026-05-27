@@ -949,7 +949,7 @@ func TestAssignRollsBackWhenCodexPromptNeverShowsWorking(t *testing.T) {
 	deps.events.requireTypes(t, EventDaemonStarted, EventTaskAssignFailed)
 }
 
-func TestAssignQuarantinesCloneAfterConsecutivePromptDeliveryFailures(t *testing.T) {
+func TestAssignPromptDeliveryFailuresDoNotQuarantineClone(t *testing.T) {
 	t.Parallel()
 
 	deps := newTestDeps(t)
@@ -987,19 +987,49 @@ func TestAssignQuarantinesCloneAfterConsecutivePromptDeliveryFailures(t *testing
 		}
 	}
 
-	if got, want := deps.pool.cloneFailureCount(deps.pool.clone.Path), 3; got != want {
+	if got, want := deps.pool.cloneFailureCount(deps.pool.clone.Path), 0; got != want {
 		t.Fatalf("clone failure count = %d, want %d", got, want)
 	}
-	if !deps.pool.cloneQuarantined(deps.pool.clone.Path) {
-		t.Fatalf("clone %q is not quarantined", deps.pool.clone.Path)
+	if deps.pool.cloneQuarantined(deps.pool.clone.Path) {
+		t.Fatalf("clone %q was quarantined", deps.pool.clone.Path)
+	}
+}
+
+func TestAssignmentStartupFailureCountsTowardQuarantine(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "prompt delivery not confirmed is agent side",
+			err:  fmt.Errorf("prompt delivery failed after 3 attempts: %w", ErrPromptDeliveryNotConfirmed),
+		},
+		{
+			name: "agent startup not ready is agent side",
+			err:  fmt.Errorf("agent handshake failed after 3 attempts: %w", ErrAgentStartupNotReady),
+		},
+		{
+			name: "codex update required is agent side",
+			err:  fmt.Errorf("agent handshake: %w", ErrCodexUpdateRequired),
+		},
+		{
+			name: "unrelated error does not count",
+			err:  errors.New("spawn pane: unavailable"),
+		},
 	}
 
-	err := d.Assign(ctx, "LAB-1700", "Verify quarantined clone exclusion", "codex")
-	if err == nil {
-		t.Fatal("Assign() succeeded, want quarantined clone error")
-	}
-	if !strings.Contains(err.Error(), "acquire clone: no available clones; 1 are quarantined: clone-01") {
-		t.Fatalf("Assign() error = %v, want quarantined clone error", err)
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := assignmentStartupFailureCountsTowardQuarantine(tt.err); got != tt.want {
+				t.Fatalf("assignmentStartupFailureCountsTowardQuarantine() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 
