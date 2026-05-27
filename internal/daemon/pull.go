@@ -81,9 +81,9 @@ func (d *Daemon) pullReadyWork(ctx context.Context) error {
 		}
 
 		if err := d.assign(ctx, projectPath, id, item.Body, d.workSourceAgentProfile(), "", item.Title); err != nil {
-			if releaseErr := d.workSource.Release(context.WithoutCancel(ctx), id, "assign failed: "+err.Error()); releaseErr != nil && d.logf != nil {
-				d.logf("worksource release after assign failure failed: id=%s error=%v", id, releaseErr)
-			}
+			// Keep the worksource claim parked. Releasing a beads item resets it
+			// to open/unassigned, which makes the next pull tick retry the same
+			// poison item indefinitely.
 			return fmt.Errorf("dispatch work item %s: %w", id, err)
 		}
 		remaining--
