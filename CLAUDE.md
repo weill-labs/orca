@@ -32,6 +32,13 @@ bd dep add <child> <parent>     # <child> is blocked by <parent> (parent finishe
 bd close <id> --suggest-next    # close + list newly-unblocked dependents
 ```
 
+`bd` auto-flushes `.beads/issues.jsonl` but does NOT auto-commit it, and the live
+Dolt DB (`.beads/embeddeddolt/`) is gitignored — so **commit `.beads/issues.jsonl`
+whenever you close or change issue state** (e.g. as part of the post-merge
+`bd close` step). Otherwise the committed graph drifts from the live DB and a
+fresh clone — which rebuilds its DB from the JSONL — sees stale, already-done work
+as still open.
+
 The "Adopt beads as a worksource in orca" initiative is tracked under epic
 `orca-y5r` (children `orca-y5r.1`..`.8`), linked to Linear `LAB-1922` (the plan
 and current status live there).
@@ -42,6 +49,28 @@ Keep secrets in environment variables (`LINEAR_API_KEY`, `GITHUB_TOKEN`).
 
 When running `bd init` in any orca repo, always pass `--skip-agents --skip-hooks`
 so it does not overwrite this `CLAUDE.md`, the `AGENTS.md` symlink, or git hooks.
+
+### Pull-based dispatch (opt-in)
+
+Orca can drain `bd ready` automatically via the `worksource` pull loop instead of
+manual `orca assign`. It is **OFF by default**. Enable it per project in
+`.orca/config.toml`:
+
+```toml
+[worksource]
+enabled = true
+source  = "beads"
+# beads_bin = "bd"   # Go/Dolt bd, verified at daemon startup
+# agent     = "codex"
+```
+
+With it enabled the daemon polls every 30s, and on a free clone pulls the next
+ready item, claims it, and dispatches it through the normal assign path; on a
+task merging it runs `bd close --suggest-next` to unblock dependents. Enabling
+requires a daemon rebuild + restart (`make install && orca stop && orca start`) —
+`orca start` fails fast if the configured `bd` is missing or is the rust `br`.
+Fleet hosts that run workers need `bd` installed for `BeadsSource` to work there.
+See [docs/specs/orca-design.md](docs/specs/orca-design.md) "Work Source".
 
 ## Architecture
 
