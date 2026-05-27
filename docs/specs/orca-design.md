@@ -179,6 +179,58 @@ Codex-specific startup quirks stay in the profile adapter: Orca ensures the
 start command includes `--yolo`, and if startup output offers resume it sends
 `codex --yolo resume`, `Enter`, then `.` before delivering the task prompt.
 
+### Work Source (pull-based dispatch)
+
+By default orca is **push-only**: the lieutenant hands it issues via `orca assign`.
+A work source lets orca instead **pull** the next ready item from a backlog and
+dispatch it itself — turning the daemon into a dependency-aware DAG drainer. This
+is opt-in and OFF by default.
+
+Work sources sit behind a small interface (`internal/worksource`):
+
+```go
+type Source interface {
+    Ready(ctx, limit) ([]WorkItem, error)   // actionable, unblocked work, best-first
+    Get(ctx, id) (WorkItem, error)
+    Claim(ctx, id, workerID) error           // atomic; ErrAlreadyClaimed on lost race
+    Release(ctx, id, reason) error
+    Complete(ctx, id, Outcome) error         // Merged / Abandoned / Failed
+}
+```
+
+- **`ManualSource`** (default) is a no-op: `Ready` returns nothing, mutations
+  no-op. This preserves today's push model — orca only acts on `orca assign`.
+- **`BeadsSource`** shells the Go/Dolt **`bd`** CLI (`bd ready` / `bd show` /
+  `bd update --claim` / `bd close --suggest-next`). It is **not** the rust `br` —
+  the two differ in JSON shapes and error handling (a lost claim is exit-1
+  plain-text on `bd`, not a JSON envelope), so the binary is verified at startup.
+
+**The pull loop** is a tick in the daemon `runLoop` (`monitorTickPull`), gated by
+config and a true no-op when disabled. Each tick (every 30s) it reads the free
+clone count from the store, asks the source for that many ready items, atomically
+claims each (skipping items another actor won), and dispatches them through the
+**same assignment path** `orca assign` uses. It holds no in-memory state — free
+clones are recomputed from the store each tick, preserving the stateless-daemon
+contract.
+
+**Completion closes the loop.** When a task reaches a terminal state,
+`finishAssignment` calls `Source.Complete`: a merged task runs
+`bd close --suggest-next`, which unblocks its dependents so the next tick can
+dispatch them. Orca still **never merges PRs** — `Complete` runs only after orca's
+existing merge detection has already observed the merge; it reports, it does not
+merge.
+
+**Beads + Linear.** When using `BeadsSource`, beads is the agent-facing dependency
+graph and **Linear stays the system of record**. beads is seeded from Linear
+**pull-only** (`bd linear sync --pull`); orca keeps its existing real-time Linear
+status write-back, so there is no double-write to Linear.
+
+**Storage.** The beads database is daemon-owned at a fixed `BEADS_DIR` **outside**
+`.orca/pool/`. One daemon per project means a single beads writer, so embedded
+mode suffices — no Dolt server needed. The DB must not live inside pool clones:
+clone cleanup runs `git clean -fdx` which would wipe a `.beads/` directory, and
+orca keeps independent **clones** (not worktrees) for build isolation regardless.
+
 ### Notifications
 
 Orca needs to alert the lieutenant (Claude Code in the lead pane) when events
@@ -351,6 +403,15 @@ notification_pane = "pane-1" # fragile — see open question 2 re: auto-detectio
 [pool]
 pattern = "~/sync/github/amux/amux*"
 clone_origin = "git@github.com:weill-labs/amux.git"
+
+# Optional pull-based dispatch. OFF by default; with it disabled (or the section
+# omitted) orca stays push-only and there is zero behavior change.
+[worksource]
+enabled = false       # set true to drain ready work automatically
+source  = "manual"    # "manual" (no-op) or "beads"
+# beads_bin = "bd"    # must be the Go/Dolt bd, not the rust br (verified at startup)
+# agent     = "codex" # agent profile used for pulled work
+# The pull loop polls every 30s and is not separately configurable.
 
 [agents.codex]
 start_command = "codex"

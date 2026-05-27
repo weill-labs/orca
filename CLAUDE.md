@@ -43,6 +43,28 @@ Keep secrets in environment variables (`LINEAR_API_KEY`, `GITHUB_TOKEN`).
 When running `bd init` in any orca repo, always pass `--skip-agents --skip-hooks`
 so it does not overwrite this `CLAUDE.md`, the `AGENTS.md` symlink, or git hooks.
 
+### Pull-based dispatch (opt-in)
+
+Orca can drain `bd ready` automatically via the `worksource` pull loop instead of
+manual `orca assign`. It is **OFF by default**. Enable it per project in
+`.orca/config.toml`:
+
+```toml
+[worksource]
+enabled = true
+source  = "beads"
+# beads_bin = "bd"   # Go/Dolt bd, verified at daemon startup
+# agent     = "codex"
+```
+
+With it enabled the daemon polls every 30s, and on a free clone pulls the next
+ready item, claims it, and dispatches it through the normal assign path; on a
+task merging it runs `bd close --suggest-next` to unblock dependents. Enabling
+requires a daemon rebuild + restart (`make install && orca stop && orca start`) —
+`orca start` fails fast if the configured `bd` is missing or is the rust `br`.
+Fleet hosts that run workers need `bd` installed for `BeadsSource` to work there.
+See [docs/specs/orca-design.md](docs/specs/orca-design.md) "Work Source".
+
 ## Architecture
 
 - **Daemon**: long-lived background process per project, Postgres state by default via `~/.config/orca/config.toml`
