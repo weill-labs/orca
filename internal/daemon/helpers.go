@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/weill-labs/orca/internal/amux"
-	"github.com/weill-labs/orca/internal/linear"
 	"github.com/weill-labs/orca/internal/pool"
 )
 
@@ -512,27 +511,6 @@ func (d *Daemon) resolveAssignmentTitle(ctx context.Context, issue string, title
 		return resolved
 	}
 	return resolveTaskTitle(issue, issueTitle)
-}
-
-func (d *Daemon) setIssueStatus(ctx context.Context, projectPath, issue, state string) error {
-	if d.issueTracker == nil || isGitHubIssueIdentifier(issue) {
-		return nil
-	}
-	err := d.issueTracker.SetIssueStatus(ctx, issue, state)
-	if err == nil {
-		return nil
-	}
-	if errors.Is(err, linear.ErrEntityNotFound) {
-		d.emit(ctx, Event{
-			Time:    d.now(),
-			Type:    EventIssueStatusSkipped,
-			Project: projectPath,
-			Issue:   issue,
-			Message: fmt.Sprintf("skipped Linear issue status update to %q: %v", state, err),
-		})
-		return nil
-	}
-	return err
 }
 
 func (d *Daemon) profileForTask(ctx context.Context, task Task) (AgentProfile, error) {
