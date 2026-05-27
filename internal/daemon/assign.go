@@ -435,9 +435,8 @@ func assignmentStartupFailureCountsTowardQuarantine(err error) bool {
 	if errors.Is(err, ErrCodexUpdateRequired) {
 		return false
 	}
-	if errors.Is(err, ErrPromptDeliveryNotConfirmed) || errors.Is(err, ErrAgentStartupNotReady) {
-		return false
-	}
+	// Startup failures happen before a worker accepts the assignment, so they do
+	// not prove that the clone itself is faulty.
 	return false
 }
 
