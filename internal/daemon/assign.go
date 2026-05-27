@@ -435,7 +435,10 @@ func assignmentStartupFailureCountsTowardQuarantine(err error) bool {
 	if errors.Is(err, ErrCodexUpdateRequired) {
 		return false
 	}
-	return errors.Is(err, ErrPromptDeliveryNotConfirmed) || errors.Is(err, ErrAgentStartupNotReady)
+	if errors.Is(err, ErrPromptDeliveryNotConfirmed) || errors.Is(err, ErrAgentStartupNotReady) {
+		return false
+	}
+	return false
 }
 
 func (d *Daemon) recordCloneAssignmentFailure(ctx context.Context, projectPath string, clone Clone) {

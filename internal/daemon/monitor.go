@@ -29,6 +29,7 @@ const (
 type monitorTickResult struct {
 	kind       monitorTickKind
 	finishedAt time.Time
+	err        error
 }
 
 func (d *Daemon) runLoop(ctx context.Context, done chan struct{}) {
@@ -68,6 +69,7 @@ func (d *Daemon) runLoop(ctx context.Context, done chan struct{}) {
 	pullInFlight := false
 	var lastPollTickFinishedAt time.Time
 	var lastMissingPRNumberReconcile time.Time
+	var pullBackoff pullTickBackoff
 
 	for {
 		select {
@@ -84,6 +86,7 @@ func (d *Daemon) runLoop(ctx context.Context, done chan struct{}) {
 				statsInFlight = false
 			case monitorTickPull:
 				pullInFlight = false
+				pullBackoff.record(result.err, result.finishedAt, d.workSourcePullInterval)
 			}
 			d.recordHeartbeat(ctx)
 		case <-captureTickCh:
@@ -93,9 +96,10 @@ func (d *Daemon) runLoop(ctx context.Context, done chan struct{}) {
 				continue
 			}
 			captureInFlight = true
-			d.startMonitorTick(ctx, tickDone, monitorTickCapture, func() {
+			d.startMonitorTick(ctx, tickDone, monitorTickCapture, func() error {
 				timing := d.runCaptureTick(ctx)
 				timing.log(d.logf)
+				return nil
 			})
 		case interval := <-pollIntervalCh:
 			if interval <= 0 || interval == pollInterval {
@@ -120,7 +124,7 @@ func (d *Daemon) runLoop(ctx context.Context, done chan struct{}) {
 			if runMissingPRNumberReconcile {
 				lastMissingPRNumberReconcile = pollTickStartedAt
 			}
-			d.startMonitorTick(ctx, tickDone, monitorTickPoll, func() {
+			d.startMonitorTick(ctx, tickDone, monitorTickPoll, func() error {
 				timing := d.runPollTick(ctx)
 				if runMissingPRNumberReconcile {
 					done := timing.stage("missing_pr_reconcile")
@@ -128,6 +132,7 @@ func (d *Daemon) runLoop(ctx context.Context, done chan struct{}) {
 					done()
 				}
 				timing.log(d.logf)
+				return nil
 			})
 		case <-statsTickCh:
 			if statsInFlight {
@@ -136,31 +141,38 @@ func (d *Daemon) runLoop(ctx context.Context, done chan struct{}) {
 				continue
 			}
 			statsInFlight = true
-			d.startMonitorTick(ctx, tickDone, monitorTickStats, func() {
+			d.startMonitorTick(ctx, tickDone, monitorTickStats, func() error {
 				d.emitDaemonStats(ctx)
+				return nil
 			})
 		case <-pullTickCh:
+			pullTickStartedAt := d.now()
+			if pullBackoff.shouldSkip(pullTickStartedAt) {
+				d.recordHeartbeat(ctx)
+				continue
+			}
 			if pullInFlight {
 				d.recordHeartbeat(ctx)
 				drainMonitorTicks(pullTickCh)
 				continue
 			}
 			pullInFlight = true
-			d.startMonitorTick(ctx, tickDone, monitorTickPull, func() {
-				d.runPullTick(ctx)
+			d.startMonitorTick(ctx, tickDone, monitorTickPull, func() error {
+				return d.runPullTick(ctx)
 			})
 		}
 	}
 }
 
-func (d *Daemon) startMonitorTick(ctx context.Context, done chan<- monitorTickResult, kind monitorTickKind, run func()) {
+func (d *Daemon) startMonitorTick(ctx context.Context, done chan<- monitorTickResult, kind monitorTickKind, run func() error) {
 	d.monitorRuns.Add(1)
 	go func() {
 		defer d.monitorRuns.Done()
-		run()
+		err := run()
 		result := monitorTickResult{
 			kind:       kind,
 			finishedAt: d.now(),
+			err:        err,
 		}
 		select {
 		case done <- result:
