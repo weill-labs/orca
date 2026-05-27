@@ -19,6 +19,13 @@ type cloneLister interface {
 	ListClones(context.Context, string) ([]state.Clone, error)
 }
 
+type pullTickSummary struct {
+	freeClones            int
+	readyItems            int
+	dispatched            int
+	skippedAlreadyClaimed int
+}
+
 func (d *Daemon) verifyWorkSource(ctx context.Context) error {
 	if !d.workSourceEnabled {
 		return nil
@@ -34,62 +41,80 @@ func (d *Daemon) verifyWorkSource(ctx context.Context) error {
 }
 
 func (d *Daemon) runPullTick(ctx context.Context) {
-	if err := d.pullReadyWork(ctx); err != nil && d.logf != nil {
-		d.logf("worksource pull tick failed: %v", err)
+	summary, enabled, err := d.pullReadyWork(ctx)
+	if err != nil {
+		if d.logf != nil {
+			d.logf("worksource pull tick failed: %v", err)
+		}
+		return
+	}
+	if enabled && d.logf != nil {
+		d.logf(
+			"daemon worksource pull tick: free_clones=%d ready=%d dispatched=%d skipped_already_claimed=%d",
+			summary.freeClones,
+			summary.readyItems,
+			summary.dispatched,
+			summary.skippedAlreadyClaimed,
+		)
 	}
 }
 
-func (d *Daemon) pullReadyWork(ctx context.Context) error {
+func (d *Daemon) pullReadyWork(ctx context.Context) (pullTickSummary, bool, error) {
+	var summary pullTickSummary
 	if !d.workSourceEnabled {
-		return nil
+		return summary, false, nil
 	}
 
 	projectPath := d.pullProject()
 	if projectPath == "" {
-		return errors.New("worksource pull requires a project")
+		return summary, true, errors.New("worksource pull requires a project")
 	}
 
 	freeClones, err := d.freeCloneCount(ctx, projectPath)
 	if err != nil {
-		return err
+		return summary, true, err
 	}
+	summary.freeClones = freeClones
 	if freeClones == 0 {
-		return nil
+		return summary, true, nil
 	}
 
 	items, err := d.workSource.Ready(ctx, freeClones)
 	if err != nil {
-		return fmt.Errorf("list ready work: %w", err)
+		return summary, true, fmt.Errorf("list ready work: %w", err)
 	}
+	summary.readyItems = len(items)
 
 	remaining := freeClones
 	for _, item := range items {
 		if remaining == 0 {
-			return nil
+			return summary, true, nil
 		}
 
 		id := strings.TrimSpace(item.ID)
 		if id == "" {
-			return errors.New("work source returned an item with empty id")
+			return summary, true, errors.New("work source returned an item with empty id")
 		}
 
 		if err := d.workSource.Claim(ctx, id, d.workSourceClaimWorkerID()); err != nil {
 			if errors.Is(err, worksource.ErrAlreadyClaimed) {
+				summary.skippedAlreadyClaimed++
 				continue
 			}
-			return fmt.Errorf("claim work item %s: %w", id, err)
+			return summary, true, fmt.Errorf("claim work item %s: %w", id, err)
 		}
 
 		if err := d.assign(ctx, projectPath, id, item.Body, d.workSourceAgentProfile(), "", item.Title); err != nil {
 			// Keep the worksource claim parked. Releasing a beads item resets it
 			// to open/unassigned, which makes the next pull tick retry the same
 			// poison item indefinitely.
-			return fmt.Errorf("dispatch work item %s: %w", id, err)
+			return summary, true, fmt.Errorf("dispatch work item %s: %w", id, err)
 		}
+		summary.dispatched++
 		remaining--
 	}
 
-	return nil
+	return summary, true, nil
 }
 
 func (d *Daemon) freeCloneCount(ctx context.Context, projectPath string) (int, error) {
