@@ -24,6 +24,17 @@ type WorkItem struct {
 	Meta      map[string]string
 }
 
+// IDPair holds source-specific identifiers for the same unit of work.
+type IDPair struct {
+	BeadsID  string
+	LinearID string
+}
+
+// IDResolver resolves an orca task id to the backing source ids used by side effects.
+type IDResolver interface {
+	ResolveID(ctx context.Context, id string) (IDPair, error)
+}
+
 // Outcome records the final disposition of a completed work item.
 type Outcome int
 

@@ -3,7 +3,6 @@ package daemon
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 
 	"github.com/weill-labs/orca/internal/linear"
@@ -13,18 +12,16 @@ func (d *Daemon) setIssueStatus(ctx context.Context, projectPath, issue, state s
 	if d.issueTracker == nil || isGitHubIssueIdentifier(issue) {
 		return nil
 	}
-	err := d.issueTracker.SetIssueStatus(ctx, issue, state)
+	linearIssue, ok := d.linearIssueIDForStatus(ctx, projectPath, issue, state)
+	if !ok {
+		return nil
+	}
+	err := d.issueTracker.SetIssueStatus(ctx, linearIssue, state)
 	if err == nil {
 		return nil
 	}
 	if isLinearEntityNotFoundError(err) {
-		d.emit(ctx, Event{
-			Time:    d.now(),
-			Type:    EventIssueStatusSkipped,
-			Project: projectPath,
-			Issue:   issue,
-			Message: fmt.Sprintf("skipped Linear issue status update to %q: %v", state, err),
-		})
+		d.emitIssueStatusSkipped(ctx, projectPath, linearIssue, state, err.Error())
 		return nil
 	}
 	return err
