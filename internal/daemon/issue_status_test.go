@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -9,6 +10,93 @@ import (
 
 	"github.com/weill-labs/orca/internal/linear"
 )
+
+func TestAssignLinearStatusWriteBack(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		issue       string
+		statusErr   error
+		wantSkipped bool
+	}{
+		{
+			name:  "existing Linear issue updates status",
+			issue: "LAB-1944",
+		},
+		{
+			name:        "missing beads issue logs and continues",
+			issue:       "orca-p32",
+			statusErr:   errors.New("Entity not found: Issue (INPUT_ERROR)"),
+			wantSkipped: true,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			deps := newTestDeps(t)
+			deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+			if tt.statusErr != nil {
+				deps.issueTracker.errors = map[string]error{
+					IssueStateInProgress: tt.statusErr,
+				}
+			}
+			d := deps.newDaemon(t)
+			ctx := context.Background()
+
+			if err := d.Start(ctx); err != nil {
+				t.Fatalf("Start() error = %v", err)
+			}
+			t.Cleanup(func() {
+				_ = d.Stop(context.Background())
+			})
+
+			if err := d.Assign(ctx, tt.issue, "Implement status write-back handling.", "codex"); err != nil {
+				t.Fatalf("Assign() error = %v, want success", err)
+			}
+
+			task, ok := deps.state.task(tt.issue)
+			if !ok {
+				t.Fatal("task missing after assign")
+			}
+			if got, want := task.Status, TaskStatusActive; got != want {
+				t.Fatalf("task.Status = %q, want %q", got, want)
+			}
+			if _, ok := deps.state.worker("pane-1"); !ok {
+				t.Fatal("worker missing after assign")
+			}
+			if got, want := deps.issueTracker.statuses(), []issueStatusUpdate{{Issue: tt.issue, State: IssueStateInProgress}}; !reflect.DeepEqual(got, want) {
+				t.Fatalf("issue tracker statuses = %#v, want %#v", got, want)
+			}
+			if got := deps.events.countType(EventTaskAssignFailed); got != 0 {
+				t.Fatalf("assign failure events = %d, want 0", got)
+			}
+
+			wantSkippedEvents := 0
+			if tt.wantSkipped {
+				wantSkippedEvents = 1
+			}
+			if got := deps.events.countType(EventIssueStatusSkipped); got != wantSkippedEvents {
+				t.Fatalf("status skipped events = %d, want %d", got, wantSkippedEvents)
+			}
+			if tt.wantSkipped {
+				event, ok := deps.events.lastEventOfType(EventIssueStatusSkipped)
+				if !ok {
+					t.Fatal("missing issue status skipped event")
+				}
+				if got, want := event.Issue, tt.issue; got != want {
+					t.Fatalf("event.Issue = %q, want %q", got, want)
+				}
+				if !strings.Contains(event.Message, "INPUT_ERROR") {
+					t.Fatalf("event.Message = %q, want INPUT_ERROR context", event.Message)
+				}
+			}
+		})
+	}
+}
 
 func TestAssignContinuesWhenLinearIssueLookupReturnsEntityNotFound(t *testing.T) {
 	t.Parallel()
