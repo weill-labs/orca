@@ -178,6 +178,18 @@ This shows the task's event log with timestamps — handshake steps, stuck detec
 - `orca resume` tries to spawn a new pane rather than reconnecting to an existing one. If the worker is still running, use `orca cancel` then `orca assign` instead.
 - Codex workers sometimes exit silently on startup (transient). Orca retries startup prompt delivery across up to 3 fresh assignment attempts, but if it still fails, cancel and reassign.
 
+## Codex worker pre-flight (before `orca assign --agent codex`)
+
+Codex workers run a self-update and auth check on startup. A stale install or an expired login makes `orca assign` fail with `prompt delivery not confirmed` (the pane drops back to bash before the prompt lands). These have recurred across sessions, so verify prereqs *before* assigning a codex worker:
+
+1. **Auth is live.** `codex login status` must show signed in. If it reports an invalidated/expired token (e.g. "refresh token already used"), the user must re-auth interactively: `codex logout && codex login` (OAuth/browser flow — run it directly in a terminal, not via the `!` prefix, which cannot answer the password/OAuth prompt). Re-verify with `codex login status`.
+2. **No stale npm temp dir blocking the self-update.** Codex startup runs `npm install -g @openai/codex`, which renames `@openai/codex` to a temp name `@openai/.codex-<suffix>`. An interrupted `sudo` install leaves a **root-owned** `.codex-<suffix>` orphan that the next update collides with → `EACCES: permission denied, rename`. Check `ls -la "$(npm root -g)/@openai/"` for a root-owned `.codex-*` dir. Recover **without sudo** by renaming it aside — you own the parent `@openai`, and a rename only needs write on the parent, whereas `rm -rf` recurses into the root-owned contents and *does* need sudo:
+   `mv "$(npm root -g)/@openai/.codex-<suffix>" "$(npm root -g)/@openai/.codex-orphan-bak"`
+   That frees the temp name so the self-update renames cleanly. (Deleting the orphan later still needs `sudo rm -rf`, which the user must run.)
+3. **MCP servers authed.** If codex startup logs `MCP startup failed ... 401 / token_invalidated` for a server, re-auth it: `codex mcp login <server>`. Non-fatal MCP warnings (e.g. an invalid local `SKILL.md`) do not block the worker.
+
+After fixing prereqs, (re)assign. If a prior attempt left the task `failed`, just run `orca assign` again — it starts a fresh attempt.
+
 ## Recovering a stuck codex worker
 
 - **Stuck composer (large prompt/review-nudge never submits).** A large prompt or review-feedback nudge can lodge in codex's input as a `[Pasted Content NNN chars]` chip and never submit — the pane sits idle (`amux wait idle` returns "idle") with the text visible after the `›`. Recover by sending plain Enter repeatedly until codex starts processing: `amux send-keys <pane> Enter`, often 5–8 times. Escape does not reliably clear it. Never send Ctrl+D — it terminates the codex session and loses context.
