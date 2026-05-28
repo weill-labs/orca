@@ -181,6 +181,7 @@ func writeAssignmentPlan(w io.Writer, result daemon.AssignmentPlanResult) error 
 			fmt.Fprintf(tw, "%s\t%s\t%s\n", warning.Issue, warning.Kind, warning.Message)
 		}
 		_ = tw.Flush()
+		fmt.Fprintln(&builder)
 	}
 
 	_, err := io.WriteString(w, builder.String())

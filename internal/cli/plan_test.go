@@ -88,6 +88,9 @@ func TestRunPlanParallelFormatsBatchesAndOverrides(t *testing.T) {
 			t.Fatalf("stdout = %q, want substring %q", output, want)
 		}
 	}
+	if !strings.HasSuffix(output, "\n\n") {
+		t.Fatalf("stdout = %q, want final blank line", output)
+	}
 	if stderr.Len() != 0 {
 		t.Fatalf("stderr = %q, want empty", stderr.String())
 	}
