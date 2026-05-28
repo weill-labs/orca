@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"io"
 	"strings"
@@ -69,9 +70,11 @@ func (a *App) runPlan(ctx context.Context, args []string) error {
 	return writeAssignmentPlan(a.stdout, result)
 }
 
-func parsePlanArgs(fs interface {
-	Parse([]string) error
-}, args []string) ([]string, error) {
+type boolFlag interface {
+	IsBoolFlag() bool
+}
+
+func parsePlanArgs(fs *flag.FlagSet, args []string) ([]string, error) {
 	flagArgs := make([]string, 0, len(args))
 	issues := make([]string, 0, len(args))
 
@@ -87,7 +90,7 @@ func parsePlanArgs(fs interface {
 		}
 
 		flagArgs = append(flagArgs, arg)
-		if planFlagConsumesValue(arg) && !strings.Contains(arg, "=") {
+		if planFlagConsumesValue(fs, arg) && !strings.Contains(arg, "=") {
 			if i+1 >= len(args) {
 				return nil, fmt.Errorf("flag needs an argument: %s", arg)
 			}
@@ -102,17 +105,19 @@ func parsePlanArgs(fs interface {
 	return issues, nil
 }
 
-func planFlagConsumesValue(arg string) bool {
+func planFlagConsumesValue(fs *flag.FlagSet, arg string) bool {
 	name := strings.TrimLeft(arg, "-")
 	if before, _, ok := strings.Cut(name, "="); ok {
 		name = before
 	}
-	switch name {
-	case "project", "path":
-		return true
-	default:
+	flag := fs.Lookup(name)
+	if flag == nil {
 		return false
 	}
+	if value, ok := flag.Value.(boolFlag); ok && value.IsBoolFlag() {
+		return false
+	}
+	return true
 }
 
 func parsePlanPathOverrides(values []string) (map[string][]string, error) {

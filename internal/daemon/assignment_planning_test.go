@@ -118,7 +118,7 @@ func TestPlanParallelAssignmentsUsesCandidateOrderWhenIssuesOmitted(t *testing.T
 		Parallel: true,
 	}, []AssignmentPlanCandidate{
 		{Issue: "LAB-301", Body: "Files: internal/daemon"},
-		{Issue: "LAB-302", Body: "Files:\n- internal/daemon/assign.go\n# Notes\n- internal/daemon/ignored.go"},
+		{Issue: "LAB-302", Body: "Files:\n- internal/daemon/assign.go\n- Requires go 1.22.0 and interface amux.Client\n# Notes\n- internal/daemon/ignored.go"},
 		{Issue: "LAB-303", Body: "Files: internal/cli/plan.go"},
 	})
 	if err != nil {
@@ -273,7 +273,7 @@ func TestLocalControllerPlanUsesReadyBeadsWhenIssuesOmitted(t *testing.T) {
 		t.Fatalf("Mkdir(.beads) error = %v", err)
 	}
 	issues := strings.Join([]string{
-		`{"_type":"issue","id":"orca-ready","title":"Ready","description":"Files: internal/cli/plan.go","status":"open","issue_type":"task","dependency_count":0}`,
+		`{"_type":"issue","id":"orca-ready","title":"Ready","description":"No parseable ownership yet.","status":"open","issue_type":"task","external_ref":"LAB-601","dependency_count":0}`,
 		`{"_type":"issue","id":"orca-blocked","title":"Blocked","description":"Files: internal/daemon/assign.go","status":"open","issue_type":"task","dependency_count":1}`,
 		`{"_type":"issue","id":"orca-done","title":"Done","description":"Files: internal/daemon/helpers.go","status":"closed","issue_type":"task","dependency_count":0}`,
 		`{"_type":"issue","id":"orca-epic","title":"Epic","description":"Files: docs/specs/orca-design.md","status":"open","issue_type":"epic","dependency_count":0}`,
@@ -286,12 +286,19 @@ func TestLocalControllerPlanUsesReadyBeadsWhenIssuesOmitted(t *testing.T) {
 	result, err := controller.Plan(context.Background(), AssignmentPlanRequest{
 		Project:  projectPath,
 		Parallel: true,
+		PathOverrides: map[string][]string{
+			"LAB-601": {"internal/cli/plan.go"},
+		},
 	})
 	if err != nil {
 		t.Fatalf("Plan() error = %v", err)
 	}
-	if got, want := planBatchIssues(result.Batches), [][]string{{"orca-ready"}}; !reflect.DeepEqual(got, want) {
+	if got, want := planBatchIssues(result.Batches), [][]string{{"LAB-601"}}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("batches = %#v, want %#v", got, want)
+	}
+	planned := requirePlannedIssue(t, result, "LAB-601")
+	if got, want := planned.OwnershipSource, "override"; got != want {
+		t.Fatalf("ownership source = %q, want %q", got, want)
 	}
 }
 

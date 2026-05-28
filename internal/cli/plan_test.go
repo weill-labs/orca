@@ -219,10 +219,12 @@ func TestParsePlanArgsInterspersedFlags(t *testing.T) {
 	fs := newFlagSet("plan")
 	var parallel bool
 	var projectPath string
+	var agent string
 	fs.BoolVar(&parallel, "parallel", false, "")
 	fs.StringVar(&projectPath, "project", "", "")
+	fs.StringVar(&agent, "agent", "", "")
 
-	issues, err := parsePlanArgs(fs, []string{"LAB-401", "--parallel", "--project", "/repo", "--", "LAB-402"})
+	issues, err := parsePlanArgs(fs, []string{"LAB-401", "--parallel", "--agent", "codex", "--project", "/repo", "--", "LAB-402"})
 	if err != nil {
 		t.Fatalf("parsePlanArgs() error = %v", err)
 	}
@@ -235,8 +237,12 @@ func TestParsePlanArgsInterspersedFlags(t *testing.T) {
 	if got, want := projectPath, "/repo"; got != want {
 		t.Fatalf("projectPath = %q, want %q", got, want)
 	}
+	if got, want := agent, "codex"; got != want {
+		t.Fatalf("agent = %q, want %q", got, want)
+	}
 
 	fs = flag.NewFlagSet("plan", flag.ContinueOnError)
+	fs.String("project", "", "")
 	_, err = parsePlanArgs(fs, []string{"--project"})
 	if err == nil || !strings.Contains(err.Error(), "flag needs an argument") {
 		t.Fatalf("parsePlanArgs() missing value error = %v, want flag needs argument", err)

@@ -17,7 +17,7 @@ const (
 
 var (
 	ownershipLinePattern = regexp.MustCompile(`(?i)^\s*(?:[-*]\s*)?(?:files?|owned\s+paths?|ownership|touches|paths?|likely\s+ownership)\s*:\s*(.*)$`)
-	pathTokenPattern     = regexp.MustCompile("`([^`]+)`|([A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+|[A-Za-z0-9_.-]+\\.[A-Za-z0-9_.-]+)")
+	pathTokenPattern     = regexp.MustCompile("`([^`]+)`|([A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+)")
 )
 
 type AssignmentPlanRequest struct {
@@ -184,14 +184,6 @@ func normalizePathOverrides(overrides map[string][]string) (map[string][]string,
 func planIssueOwnership(issue string, candidate AssignmentPlanCandidate, overrides map[string][]string) AssignmentPlanIssue {
 	issue = normalizeIssueIdentifier(issue)
 	if override := overrides[issue]; len(override) > 0 {
-		return AssignmentPlanIssue{
-			Issue:           issue,
-			Title:           strings.TrimSpace(candidate.Title),
-			OwnedPaths:      override,
-			OwnershipSource: ownershipSourceOverride,
-		}
-	}
-	if override := overrides[strings.ToLower(issue)]; len(override) > 0 {
 		return AssignmentPlanIssue{
 			Issue:           issue,
 			Title:           strings.TrimSpace(candidate.Title),

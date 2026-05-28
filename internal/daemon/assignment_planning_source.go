@@ -137,12 +137,19 @@ func readyBeadsPlanCandidates(issues []beadsPlanIssue) []AssignmentPlanCandidate
 			continue
 		}
 		candidates = append(candidates, AssignmentPlanCandidate{
-			Issue: issue.ID,
+			Issue: beadsPlanIssueIdentifier(issue),
 			Title: issue.Title,
 			Body:  issue.Description,
 		})
 	}
 	return candidates
+}
+
+func beadsPlanIssueIdentifier(issue beadsPlanIssue) string {
+	if externalRef := strings.TrimSpace(issue.ExternalRef); externalRef != "" {
+		return externalRef
+	}
+	return issue.ID
 }
 
 func unknownAssignmentPlanCandidates(issues []string) []AssignmentPlanCandidate {
