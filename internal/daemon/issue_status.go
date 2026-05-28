@@ -12,11 +12,18 @@ func (d *Daemon) setIssueStatus(ctx context.Context, projectPath, issue, state s
 	if d.issueTracker == nil || isGitHubIssueIdentifier(issue) {
 		return nil
 	}
+	integrations, err := d.integrationConfigForProject(projectPath)
+	if err != nil {
+		return err
+	}
+	if !integrations.linearEnabled() {
+		return nil
+	}
 	linearIssue, ok := d.linearIssueIDForStatus(ctx, projectPath, issue, state)
 	if !ok {
 		return nil
 	}
-	err := d.issueTracker.SetIssueStatus(ctx, linearIssue, state)
+	err = d.issueTracker.SetIssueStatus(ctx, linearIssue, state)
 	if err == nil {
 		return nil
 	}

@@ -120,6 +120,186 @@ func TestLoadWorkSourceConfig(t *testing.T) {
 	}
 }
 
+func TestLoadLandingConfig(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		content   string
+		want      LandingConfig
+		wantError string
+	}{
+		{
+			name: "missing project uses direct defaults",
+			want: defaultLandingConfig(),
+		},
+		{
+			name: "repo config without landing uses direct defaults",
+			content: strings.Join([]string{
+				"[worksource]",
+				`source = "manual"`,
+				"",
+			}, "\n"),
+			want: defaultLandingConfig(),
+		},
+		{
+			name: "pr landing config",
+			content: strings.Join([]string{
+				"[landing]",
+				`mode = "pr"`,
+				`base_branch = "main"`,
+				"",
+			}, "\n"),
+			want: LandingConfig{
+				Mode:       LandingModePR,
+				BaseBranch: "main",
+			},
+		},
+		{
+			name: "direct landing config",
+			content: strings.Join([]string{
+				"[landing]",
+				`mode = "direct"`,
+				`base_branch = "trunk"`,
+				`quality_gate = "uv run pytest -q"`,
+				"",
+			}, "\n"),
+			want: LandingConfig{
+				Mode:        LandingModeDirect,
+				BaseBranch:  "trunk",
+				QualityGate: "uv run pytest -q",
+			},
+		},
+		{
+			name: "section header allows inline comment",
+			content: strings.Join([]string{
+				"[landing] # direct local landing",
+				`mode = "direct"`,
+				`base_branch = "trunk"`,
+				"",
+			}, "\n"),
+			want: LandingConfig{
+				Mode:       LandingModeDirect,
+				BaseBranch: "trunk",
+			},
+		},
+		{
+			name: "invalid landing mode errors",
+			content: strings.Join([]string{
+				"[landing]",
+				`mode = "magic"`,
+				"",
+			}, "\n"),
+			wantError: "landing.mode",
+		},
+		{
+			name: "invalid toml errors when landing section exists",
+			content: strings.Join([]string{
+				"[landing]",
+				"mode =",
+				"",
+			}, "\n"),
+			wantError: "decode repo config",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			projectPath := ""
+			if tt.content != "" {
+				projectPath = writeWorkSourceConfigTestFile(t, tt.content)
+			}
+
+			got, err := loadLandingConfig(projectPath)
+			if tt.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+					t.Fatalf("loadLandingConfig() error = %v, want substring %q", err, tt.wantError)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("loadLandingConfig() error = %v, want nil", err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("loadLandingConfig() = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoadIntegrationConfig(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		content   string
+		want      IntegrationConfig
+		wantError string
+	}{
+		{
+			name: "missing project disables external integrations",
+			want: defaultIntegrationConfig(),
+		},
+		{
+			name: "repo config without integrations disables external integrations",
+			content: strings.Join([]string{
+				"[landing]",
+				`mode = "direct"`,
+				"",
+			}, "\n"),
+			want: defaultIntegrationConfig(),
+		},
+		{
+			name: "github and linear integrations",
+			content: strings.Join([]string{
+				"[integrations]",
+				"github = true",
+				"linear = true",
+				"",
+			}, "\n"),
+			want: IntegrationConfig{GitHub: true, Linear: true},
+		},
+		{
+			name: "invalid toml errors when integrations section exists",
+			content: strings.Join([]string{
+				"[integrations]",
+				"github =",
+				"",
+			}, "\n"),
+			wantError: "decode repo config",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			projectPath := ""
+			if tt.content != "" {
+				projectPath = writeWorkSourceConfigTestFile(t, tt.content)
+			}
+
+			got, err := loadIntegrationConfig(projectPath)
+			if tt.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+					t.Fatalf("loadIntegrationConfig() error = %v, want substring %q", err, tt.wantError)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("loadIntegrationConfig() error = %v, want nil", err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("loadIntegrationConfig() = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestNewWorkSourceFromConfig(t *testing.T) {
 	t.Parallel()
 

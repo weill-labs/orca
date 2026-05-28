@@ -121,6 +121,14 @@ func (p *multiProjectPool) manager(projectPath string) (*pool.Manager, error) {
 	if err := os.MkdirAll(poolDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create pool directory: %w", err)
 	}
+	landing, err := loadLandingConfig(projectPath)
+	if err != nil {
+		return nil, fmt.Errorf("load landing config: %w", err)
+	}
+	baseBranch := ""
+	if landing.directMode() {
+		baseBranch = landing.BaseBranch
+	}
 
 	options := []pool.Option{
 		pool.WithCWDUsageChecker(amuxCWDUsageChecker{amux: p.amux}),
@@ -129,7 +137,7 @@ func (p *multiProjectPool) manager(projectPath string) (*pool.Manager, error) {
 		options = append(options, pool.WithRunner(p.runner))
 	}
 
-	manager, err := pool.New(projectPath, internalPoolConfig{poolDir: poolDir, origin: origin}, p.store, options...)
+	manager, err := pool.New(projectPath, internalPoolConfig{poolDir: poolDir, origin: origin, baseBranch: baseBranch}, p.store, options...)
 	if err != nil {
 		return nil, fmt.Errorf("create pool manager: %w", err)
 	}

@@ -47,8 +47,9 @@ User (CEO)
   └─ Claude Code (lieutenant, lead pane)
        └─ orca CLI ─── orca daemon
             ├─ amux        (pane/PTY infrastructure)
-            ├─ GitHub API  (issue fetch, PR merge detection)
-            ├─ Linear API  (issue fetch)
+            ├─ git         (local or remote branch landing)
+            ├─ GitHub API  (optional PR integration)
+            ├─ Linear API  (optional status/title integration)
             └─ clone pool  (filesystem)
 ```
 
@@ -220,10 +221,10 @@ dispatch them. Orca still **never merges PRs** — `Complete` runs only after or
 existing merge detection has already observed the merge; it reports, it does not
 merge.
 
-**Beads + Linear.** When using `BeadsSource`, beads is the agent-facing dependency
-graph and **Linear stays the system of record**. beads is seeded from Linear
-**pull-only** (`bd linear sync --pull`); orca keeps its existing real-time Linear
-status write-back, so there is no double-write to Linear.
+**Beads.** When using `BeadsSource`, beads is the agent-facing dependency graph
+and can be the only issue tracker for a local project. If a project also mirrors
+beads to Linear, keep that sync explicit (for example `bd linear sync --pull`)
+and enable Orca's Linear status integration only for projects that need it.
 
 **Storage.** The beads database is daemon-owned at a fixed `BEADS_DIR` **outside**
 `.orca/pool/`. One daemon per project means a single beads writer, so embedded
@@ -260,7 +261,7 @@ assignments omit the convention silently and continue to rely on events/status.
 
 Structured, auditable notifications are still a possible future channel. Until
 then, the raw `send-keys` convention is deliberately limited to blocking
-questions and milestones such as PR opened.
+questions and milestones.
 
 ### PR Merge Detection
 
@@ -282,12 +283,75 @@ On merge detection:
 4. Mark the task as done.
 5. Notify the lead pane.
 
+### Landing Modes
+
+Landing is configured per project in `.orca/config.toml`. The default is direct
+mode so a fresh local repo can use local git remotes and beads without GitHub or
+Linear:
+
+```toml
+[landing]
+mode = "direct"
+base_branch = "main"
+# quality_gate = "uv run pytest -q"
+```
+
+PR mode is an opt-in compatibility mode for projects that want the existing
+GitHub PR-shaped workflow:
+
+```toml
+[landing]
+mode = "pr"
+base_branch = "main"
+
+[integrations]
+github = true
+linear = true # optional Linear status/title sync
+```
+
+In direct mode, `orca assign` prompts workers to implement, test, commit, push
+their branch, and run `orca enqueue ISSUE_OR_BRANCH`. The prompt does not ask
+workers to open a PR. `orca enqueue` resolves the target to an active issue or
+branch and places that worker branch in the same persisted merge queue used by
+PR landing.
+
+The direct landing lane:
+
+1. Fetch `origin/<base_branch>` in the worker clone.
+2. Check out the worker branch.
+3. Rebase the worker branch onto `origin/<base_branch>`.
+4. Run `quality_gate` from the worker clone when configured.
+5. Push `HEAD:<base_branch>` to `origin`.
+6. Mark the task done, complete the work source, and release the clone.
+
+For local filesystem remotes, `origin` must be a bare repository path such as
+`/path/to/repo.git`. Non-bare local remotes with the base branch checked out are
+not supported because Git rejects pushes to that branch by default.
+
+For local beads tracking, projects can enable:
+
+```toml
+[worksource]
+enabled = true
+source = "beads"
+beads_bin = "bd"
+agent = "codex"
+```
+
+This keeps issue discovery, claim, and close operations in the local `bd`
+database. Linear mirroring is optional and stays outside the default path.
+
+On direct rebase conflicts, Orca preserves the conflict state in the worker
+clone, notifies the worker pane with the conflicted file list and retry command,
+emits `direct.landing_conflict` with structured metadata, marks the worker
+escalated, and leaves the task active for the worker to fix and re-queue.
+
 ## Task Lifecycle
 
 ```
 Claude: orca assign LAB-123 --prompt "Implement the auth feature..."
 
-  1. Fetch issue from Linear or GitHub
+  1. Read the provided issue/prompt, or pull local beads work when enabled
   2. Pick a free clone from the pool
   3. In clone: git fetch origin main && git checkout main && git reset --hard origin/main && git checkout -B LAB-123
   4. Spawn amux pane with cwd = clone path
@@ -295,9 +359,9 @@ Claude: orca assign LAB-123 --prompt "Implement the auth feature..."
   6. Send prompt (provided by Claude) to the pane
   7. Set pane metadata: task, issue, branch
   8. Monitor: health checks, stuck detection, auto-nudge per profile
-  9. Poll for PR creation (gh pr list --head BRANCH, 30s interval) → record PR number
- 10. Poll for PR merge
- 11. On merge: notify agent "PR merged, wrap up"
+  9. In PR mode, poll for PR creation (gh pr list --head BRANCH, 30s interval) → record PR number
+ 10. In PR mode, poll for PR merge; in direct mode, wait for `orca enqueue ISSUE_OR_BRANCH`
+ 11. On merge/direct landing: notify agent to wrap up
  12. Wait for agent idle/exit (max 10m, force-kill if exceeded)
  13. Clean clone: git reset --hard && git checkout main && git fetch origin main && git reset --hard origin/main && git clean -fdx --exclude=.orca-pool && git branch -D TASK_BRANCH
  14. Return clone to pool, mark task done
@@ -326,7 +390,8 @@ orca status [ISSUE] [--project PATH]            # daemon or task status
 ```bash
 orca assign ISSUE [--prompt "..."] [--agent PROFILE] [--project PATH]
                                                  # assign issue to a worker
-orca enqueue PR_NUMBER [--project PATH]          # queue a PR for landing
+orca enqueue ISSUE_OR_BRANCH [--project PATH]    # queue direct landing
+orca enqueue PR_NUMBER [--project PATH]          # PR mode only
 orca cancel ISSUE [--project PATH]              # abort task, clean clone
 orca complete ISSUE                             # manual completion trigger
 orca status ISSUE [--project PATH]              # task status + history
@@ -415,11 +480,20 @@ clone_origin = "git@github.com:weill-labs/amux.git"
 [notifications]
 notification_pane = "pane-1"
 
+[landing]
+mode = "direct"         # default; use "pr" for GitHub PR landing
+base_branch = "main"
+# quality_gate = "uv run pytest -q"
+
+[integrations]
+github = false          # true for GitHub issue context in direct mode
+linear = false          # true for Linear title/status sync
+
 # Optional pull-based dispatch. OFF by default; with it disabled (or the section
 # omitted) orca stays push-only and there is zero behavior change.
 [worksource]
 enabled = false       # set true to drain ready work automatically
-source  = "manual"    # "manual" (no-op) or "beads"
+source  = "manual"    # "manual" (no-op) or local "beads"
 # beads_bin = "bd"    # must be the Go/Dolt bd, not the rust br (verified at startup)
 # agent     = "codex" # agent profile used for pulled work
 # The pull loop polls every 30s and is not separately configurable.

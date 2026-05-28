@@ -188,6 +188,71 @@ func TestMergeQueueActorProcessQueueNormalizesUnknownStatus(t *testing.T) {
 	}
 }
 
+func TestMergeQueueActorProcessQueueStartsOneDirectLandingAndContinuesPRs(t *testing.T) {
+	t.Parallel()
+
+	commands := newFakeCommands()
+	block := commands.block("git", []string{"fetch", "origin", "main"})
+	defer close(block.release)
+	updates := make(chan MergeQueueUpdate, 8)
+	actor := newMergeQueueActor("/tmp/project", commands, updates)
+
+	actor.processQueue(context.Background(), ProcessQueue{
+		Entries: []MergeQueueEntry{
+			{
+				Project:    "/tmp/project",
+				Issue:      "LAB-1969",
+				PRNumber:   -1,
+				Mode:       LandingModeDirect,
+				Branch:     "LAB-1969",
+				ClonePath:  "/tmp/clone-1",
+				BaseBranch: "main",
+				Status:     MergeQueueStatusQueued,
+			},
+			{
+				Project:    "/tmp/project",
+				Issue:      "LAB-1970",
+				PRNumber:   -2,
+				Mode:       LandingModeDirect,
+				Branch:     "LAB-1970",
+				ClonePath:  "/tmp/clone-2",
+				BaseBranch: "main",
+				Status:     MergeQueueStatusQueued,
+			},
+			{
+				Project:  "/tmp/project",
+				Issue:    "LAB-689",
+				PRNumber: 42,
+				Status:   MergeQueueStatusQueued,
+			},
+		},
+	})
+
+	updatesGot := drainMergeQueueUpdates(updates)
+	directStarted := 0
+	prStarted := 0
+	for _, update := range updatesGot {
+		switch update.EventType {
+		case EventDirectLandingStarted:
+			directStarted++
+			if got, want := update.Entry.Branch, "LAB-1969"; got != want {
+				t.Fatalf("direct landing branch = %q, want %q", got, want)
+			}
+		case EventPRLandingStarted:
+			prStarted++
+			if got, want := update.Entry.PRNumber, 42; got != want {
+				t.Fatalf("PR landing number = %d, want %d", got, want)
+			}
+		}
+	}
+	if got, want := directStarted, 1; got != want {
+		t.Fatalf("direct landing started updates = %d, want %d (%#v)", got, want, updatesGot)
+	}
+	if got, want := prStarted, 1; got != want {
+		t.Fatalf("PR landing started updates = %d, want %d (%#v)", got, want, updatesGot)
+	}
+}
+
 func TestDispatchMergeQueueSkipsInFlightAndCleansInvalidEntries(t *testing.T) {
 	t.Parallel()
 

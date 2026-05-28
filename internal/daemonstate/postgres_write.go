@@ -319,9 +319,9 @@ func (s *PostgresStore) EnqueueMergeEntry(ctx context.Context, entry MergeQueueE
 	}()
 
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO merge_queue(project, pr_number, issue, status, created_at, updated_at)
-		VALUES($1, $2, $3, $4, $5, $6)
-	`, entry.Project, entry.PRNumber, entry.Issue, entry.Status, normalizeTime(entry.CreatedAt), normalizeTime(entry.UpdatedAt)); err != nil {
+		INSERT INTO merge_queue(project, pr_number, issue, mode, target, branch, clone_path, base_branch, quality_gate, status, created_at, updated_at)
+		VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+	`, entry.Project, entry.PRNumber, entry.Issue, entry.Mode, entry.Target, entry.Branch, entry.ClonePath, entry.BaseBranch, entry.QualityGate, entry.Status, normalizeTime(entry.CreatedAt), normalizeTime(entry.UpdatedAt)); err != nil {
 		return 0, fmt.Errorf("enqueue merge entry: %w", err)
 	}
 
@@ -347,9 +347,9 @@ func (s *PostgresStore) UpdateMergeEntry(ctx context.Context, entry MergeQueueEn
 
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE merge_queue
-		SET issue = $1, status = $2, updated_at = $3
-		WHERE project = $4 AND pr_number = $5
-	`, entry.Issue, entry.Status, normalizeTime(entry.UpdatedAt), entry.Project, entry.PRNumber)
+		SET issue = $1, mode = $2, target = $3, branch = $4, clone_path = $5, base_branch = $6, quality_gate = $7, status = $8, updated_at = $9
+		WHERE project = $10 AND pr_number = $11
+	`, entry.Issue, entry.Mode, entry.Target, entry.Branch, entry.ClonePath, entry.BaseBranch, entry.QualityGate, entry.Status, normalizeTime(entry.UpdatedAt), entry.Project, entry.PRNumber)
 	if err != nil {
 		return fmt.Errorf("update merge entry: %w", err)
 	}

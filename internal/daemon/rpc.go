@@ -71,6 +71,7 @@ type resumeRPCParams struct {
 type enqueueRPCParams struct {
 	Project  string `json:"project"`
 	PRNumber int    `json:"pr_number"`
+	Target   string `json:"target"`
 }
 
 type statusRPCParams struct {

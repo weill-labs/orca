@@ -160,7 +160,11 @@ func TestAssignParallelLargeCodexPromptFanoutN10(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ReadFile(%q) error = %v", promptFile, err)
 		}
-		if got, want := string(content), wrapAssignmentPrompt(AgentProfile{Name: "codex"}, assignment.issue, assignment.prompt)+"\n"; got != want {
+		wantPrompt := wrapAssignmentPromptForLanding(AgentProfile{Name: "codex"}, assignment.issue, assignment.prompt, LandingConfig{
+			Mode:       LandingModePR,
+			BaseBranch: "main",
+		})
+		if got, want := string(content), wantPrompt+"\n"; got != want {
 			t.Fatalf("prompt file for %s = %q, want wrapped prompt", assignment.issue, got)
 		}
 	}

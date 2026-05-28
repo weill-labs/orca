@@ -76,6 +76,11 @@ const (
 	EventPRClosedWithoutMerge       = "pr.closed_without_merge"
 	EventPRMerged                   = "pr.merged"
 	EventPRClosed                   = "pr.closed"
+	EventDirectEnqueued             = "direct.enqueued"
+	EventDirectLandingStarted       = "direct.landing_started"
+	EventDirectLandingFailed        = "direct.landing_failed"
+	EventDirectLandingConflict      = "direct.landing_conflict"
+	EventDirectLanded               = "direct.landed"
 	EventReconcileFinding           = "reconcile.finding"
 	EventPoolEntryPruned            = "pool.entry_pruned"
 )
@@ -123,6 +128,8 @@ type Options struct {
 	WorkSourceAgent          string
 	WorkSourcePullInterval   time.Duration
 	NotificationPane         string
+	LandingConfig            LandingConfig
+	IntegrationConfig        IntegrationConfig
 }
 
 type ConfigProvider interface {
@@ -285,12 +292,18 @@ type ActiveAssignment struct {
 }
 
 type MergeQueueEntry struct {
-	Project   string    `json:"project,omitempty"`
-	Issue     string    `json:"issue,omitempty"`
-	PRNumber  int       `json:"pr_number,omitempty"`
-	Status    string    `json:"status,omitempty"`
-	CreatedAt time.Time `json:"created_at,omitempty"`
-	UpdatedAt time.Time `json:"updated_at,omitempty"`
+	Project     string    `json:"project,omitempty"`
+	Issue       string    `json:"issue,omitempty"`
+	PRNumber    int       `json:"pr_number,omitempty"`
+	Mode        string    `json:"mode,omitempty"`
+	Target      string    `json:"target,omitempty"`
+	Branch      string    `json:"branch,omitempty"`
+	ClonePath   string    `json:"clone_path,omitempty"`
+	BaseBranch  string    `json:"base_branch,omitempty"`
+	QualityGate string    `json:"quality_gate,omitempty"`
+	Status      string    `json:"status,omitempty"`
+	CreatedAt   time.Time `json:"created_at,omitempty"`
+	UpdatedAt   time.Time `json:"updated_at,omitempty"`
 }
 
 type ProcessQueue struct {
@@ -299,11 +312,15 @@ type ProcessQueue struct {
 }
 
 type MergeQueueUpdate struct {
-	Entry         MergeQueueEntry
-	Delete        bool
-	EventType     string
-	EventMessage  string
-	FailurePrompt string
+	Entry                  MergeQueueEntry
+	Delete                 bool
+	CompleteDirect         bool
+	ConflictStatePreserved bool
+	ConflictedFiles        string
+	FailedAction           string
+	EventType              string
+	EventMessage           string
+	FailurePrompt          string
 }
 
 type Event struct {
@@ -319,6 +336,13 @@ type Event struct {
 	Branch                 string    `json:"branch,omitempty"`
 	AgentProfile           string    `json:"agent_profile,omitempty"`
 	PRNumber               int       `json:"pr_number,omitempty"`
+	LandingMode            string    `json:"landing_mode,omitempty"`
+	Target                 string    `json:"target,omitempty"`
+	BaseBranch             string    `json:"base_branch,omitempty"`
+	QualityGate            string    `json:"quality_gate,omitempty"`
+	ConflictedFiles        []string  `json:"conflicted_files,omitempty"`
+	FailedAction           string    `json:"failed_action,omitempty"`
+	ConflictStatePreserved bool      `json:"conflict_state_preserved,omitempty"`
 	Retry                  int       `json:"retry,omitempty"`
 	RestartAttempt         int       `json:"restart_attempt,omitempty"`
 	Scrollback             []string  `json:"scrollback,omitempty"`

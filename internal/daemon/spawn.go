@@ -143,6 +143,14 @@ func (c *LocalController) spawnRuntime(projectPath, session string) (*pool.Manag
 	if err := os.MkdirAll(poolDir, 0o755); err != nil {
 		return nil, nil, fmt.Errorf("create pool directory: %w", err)
 	}
+	landing, err := loadLandingConfig(projectPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("load landing config: %w", err)
+	}
+	baseBranch := ""
+	if landing.directMode() {
+		baseBranch = landing.BaseBranch
+	}
 
 	amuxClient := c.amux
 	if amuxClient == nil {
@@ -156,7 +164,7 @@ func (c *LocalController) spawnRuntime(projectPath, session string) (*pool.Manag
 		managerOptions = append(managerOptions, pool.WithRunner(c.poolRunner))
 	}
 
-	manager, err := pool.New(projectPath, internalPoolConfig{poolDir: poolDir, origin: origin}, poolStore, managerOptions...)
+	manager, err := pool.New(projectPath, internalPoolConfig{poolDir: poolDir, origin: origin, baseBranch: baseBranch}, poolStore, managerOptions...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("create pool manager: %w", err)
 	}

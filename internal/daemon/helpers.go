@@ -80,11 +80,15 @@ func workerGitIdentity(workerID string) (name string, email string) {
 	return "Orca " + trimmed, trimmed + "@orca.local"
 }
 
-func (d *Daemon) prepareClone(ctx context.Context, clonePath, branch, workerID string) error {
+func (d *Daemon) prepareClone(ctx context.Context, clonePath, branch, workerID string, landing LandingConfig) error {
+	baseBranch := "main"
+	if landing.directMode() {
+		baseBranch = landing.BaseBranch
+	}
 	commands := [][]string{
-		{"fetch", "origin", "main"},
-		{"checkout", "--detach", "origin/main"},
-		{"reset", "--hard", "origin/main"},
+		{"fetch", "origin", baseBranch},
+		{"checkout", "--detach", "origin/" + baseBranch},
+		{"reset", "--hard", "origin/" + baseBranch},
 		pool.CleanCloneArgs(),
 	}
 	if name, email := workerGitIdentity(workerID); name != "" && email != "" {
@@ -102,7 +106,7 @@ func (d *Daemon) prepareClone(ctx context.Context, clonePath, branch, workerID s
 	return nil
 }
 
-func (d *Daemon) prepareAdoptedClone(ctx context.Context, clonePath, branch, workerID string) error {
+func (d *Daemon) prepareAdoptedClone(ctx context.Context, clonePath, branch, workerID string, _ LandingConfig) error {
 	commands := [][]string{
 		{"fetch", "origin"},
 	}
@@ -503,9 +507,13 @@ func (d *Daemon) setPaneMetadata(ctx context.Context, paneID string, metadata ma
 	return d.amuxClient(ctx).SetMetadata(ctx, paneID, metadata)
 }
 
-func (d *Daemon) resolveAssignmentTitle(ctx context.Context, issue string, title string) string {
+func (d *Daemon) resolveAssignmentTitle(ctx context.Context, projectPath, issue string, title string) string {
 	resolved := resolveTaskTitle(issue, title)
 	if strings.TrimSpace(title) != "" || d.issueTracker == nil || !isLinearIssueIdentifier(issue) {
+		return resolved
+	}
+	integrations, err := d.integrationConfigForProject(projectPath)
+	if err != nil || !integrations.linearEnabled() {
 		return resolved
 	}
 

@@ -218,7 +218,7 @@ func scanPostgresAssignment(scanner rowScanner, includeProject bool) (Assignment
 
 func scanPostgresMergeQueueEntry(scanner rowScanner) (MergeQueueEntry, error) {
 	var entry MergeQueueEntry
-	if err := scanner.Scan(&entry.Project, &entry.Issue, &entry.PRNumber, &entry.Status, &entry.CreatedAt, &entry.UpdatedAt); err != nil {
+	if err := scanner.Scan(&entry.Project, &entry.Issue, &entry.PRNumber, &entry.Mode, &entry.Target, &entry.Branch, &entry.ClonePath, &entry.BaseBranch, &entry.QualityGate, &entry.Status, &entry.CreatedAt, &entry.UpdatedAt); err != nil {
 		return MergeQueueEntry{}, err
 	}
 	entry.CreatedAt = normalizeTime(entry.CreatedAt)

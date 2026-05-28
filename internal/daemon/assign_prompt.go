@@ -7,13 +7,21 @@ import (
 
 const workerPRCreateCommand = "gh pr create --base main"
 const codexAssignmentPromptSuffix = "When tests pass, commit, push, and open a PR with " + workerPRCreateCommand + "."
+const codexDirectLandingPromptSuffix = "When tests pass, commit, push the branch, and queue direct landing with `orca enqueue %s`. Do not open a GitHub PR."
 const assignPreflightSkippedPrompt = "Orca skipped its open PR preflight because GitHub is rate limited. Before editing, check whether an open PR already exists for %s. If one exists, fetch and resume that branch before making changes."
 const notifyConventionPrefix = "To notify or ask the lieutenant, run `amux send-keys "
 
 func wrapAssignmentPrompt(profile AgentProfile, issue, prompt string) string {
+	return wrapAssignmentPromptForLanding(profile, issue, prompt, defaultLandingConfig())
+}
+
+func wrapAssignmentPromptForLanding(profile AgentProfile, issue, prompt string, landing LandingConfig) string {
 	prompt = strings.TrimSpace(prompt)
 	if !strings.EqualFold(profile.Name, "codex") {
 		return prompt
+	}
+	if landing.directMode() {
+		return wrapDirectAssignmentPrompt(issue, prompt)
 	}
 
 	titlePrompt := codexAssignmentPRTitlePrompt(issue)
@@ -38,6 +46,21 @@ func wrapAssignmentPrompt(profile AgentProfile, issue, prompt string) string {
 		separator = "\n"
 	}
 	return prompt + separator + strings.Join(reminders, "\n")
+}
+
+func wrapDirectAssignmentPrompt(issue, prompt string) string {
+	target := normalizeIssueIdentifier(issue)
+	if target == "" {
+		target = "<issue-or-branch>"
+	}
+	reminder := fmt.Sprintf(codexDirectLandingPromptSuffix, target)
+	if strings.Contains(prompt, "queue direct landing") || strings.Contains(prompt, "orca enqueue "+target) {
+		return prompt
+	}
+	if prompt == "" {
+		return reminder
+	}
+	return prompt + "\n\n" + reminder
 }
 
 func codexAssignmentPRTitlePrompt(issue string) string {
@@ -80,7 +103,7 @@ func appendNotifyConvention(prompt, pane string) string {
 func notifyConvention(pane string) string {
 	return strings.Join([]string{
 		fmt.Sprintf("To notify or ask the lieutenant, run `amux send-keys %s \"<one-line message>\"`.", shellQuote(pane)),
-		"Use it for: a blocking question before you guess, or a milestone (PR opened).",
+		"Use it for: a blocking question before you guess, or a milestone.",
 		"Keep messages to one line; do not spam.",
 	}, "\n")
 }

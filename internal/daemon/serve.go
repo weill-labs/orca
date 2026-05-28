@@ -510,7 +510,11 @@ func dispatchRPCRequest(ctx context.Context, request rpcRequest, instance *Daemo
 			return failure
 		}
 
-		result, err := instance.enqueue(ctx, projectPath, params.PRNumber)
+		result, err := instance.enqueueRequest(ctx, projectPath, EnqueueRequest{
+			Project:  projectPath,
+			PRNumber: params.PRNumber,
+			Target:   params.Target,
+		})
 		if err != nil {
 			return rpcFailure(request.ID, -32000, err)
 		}

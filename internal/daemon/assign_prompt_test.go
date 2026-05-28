@@ -14,20 +14,22 @@ func TestWrapAssignmentPrompt(t *testing.T) {
 		profile AgentProfile
 		issue   string
 		prompt  string
+		landing LandingConfig
 		want    string
 	}{
 		{
-			name:    "appends codex pr reminder and title convention",
+			name:    "appends codex direct landing reminder by default",
 			profile: AgentProfile{Name: "codex"},
 			issue:   "LAB-892",
 			prompt:  "Implement daemon core",
-			want:    wantedCodexAssignmentPrompt("LAB-892", "Implement daemon core"),
+			want:    "Implement daemon core\n\nWhen tests pass, commit, push the branch, and queue direct landing with `orca enqueue LAB-892`. Do not open a GitHub PR.",
 		},
 		{
 			name:    "appends only missing title convention reminder",
 			profile: AgentProfile{Name: "codex"},
 			issue:   "LAB-893",
 			prompt:  "Implement daemon core\n\nWhen tests pass, commit, push, and open a PR with gh pr create --base main.",
+			landing: LandingConfig{Mode: LandingModePR, BaseBranch: "main"},
 			want:    "Implement daemon core\n\n" + wantedCodexAssignmentReminder("LAB-893"),
 		},
 		{
@@ -35,18 +37,21 @@ func TestWrapAssignmentPrompt(t *testing.T) {
 			profile: AgentProfile{Name: "codex"},
 			issue:   "LAB-894",
 			prompt:  wantedCodexAssignmentPrompt("LAB-894", "Implement daemon core"),
+			landing: LandingConfig{Mode: LandingModePR, BaseBranch: "main"},
 			want:    wantedCodexAssignmentPrompt("LAB-894", "Implement daemon core"),
 		},
 		{
-			name:    "omits title convention when issue is empty",
+			name:    "omits title convention when issue is empty in pr mode",
 			profile: AgentProfile{Name: "codex"},
 			prompt:  "Implement daemon core",
+			landing: LandingConfig{Mode: LandingModePR, BaseBranch: "main"},
 			want:    "Implement daemon core\n\n" + codexAssignmentPromptSuffix,
 		},
 		{
-			name:    "returns reminder block for empty codex prompt",
+			name:    "returns reminder block for empty codex prompt in pr mode",
 			profile: AgentProfile{Name: "codex"},
 			issue:   "LAB-895",
+			landing: LandingConfig{Mode: LandingModePR, BaseBranch: "main"},
 			want:    wantedCodexAssignmentReminder("LAB-895"),
 		},
 		{
@@ -63,7 +68,11 @@ func TestWrapAssignmentPrompt(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			if got := wrapAssignmentPrompt(tt.profile, tt.issue, tt.prompt); got != tt.want {
+			landing := tt.landing
+			if !landingConfigExplicit(landing) {
+				landing = defaultLandingConfig()
+			}
+			if got := wrapAssignmentPromptForLanding(tt.profile, tt.issue, tt.prompt, landing); got != tt.want {
 				t.Fatalf("wrapAssignmentPrompt(%q, %q) = %q, want %q", tt.issue, tt.prompt, got, tt.want)
 			}
 		})
@@ -75,7 +84,7 @@ func TestAppendNotifyConvention(t *testing.T) {
 
 	convention := strings.Join([]string{
 		"To notify or ask the lieutenant, run `amux send-keys 'pane-13' \"<one-line message>\"`.",
-		"Use it for: a blocking question before you guess, or a milestone (PR opened).",
+		"Use it for: a blocking question before you guess, or a milestone.",
 		"Keep messages to one line; do not spam.",
 	}, "\n")
 	spaceConvention := strings.Replace(convention, "'pane-13'", "'my pane'", 1)
@@ -297,6 +306,102 @@ func TestAssignWrapsCodexPromptWithPROpeningInstructions(t *testing.T) {
 	}
 
 	deps.amux.requireSentKeys(t, "pane-1", []string{wrappedCodexPrompt("LAB-892", "Implement daemon core") + "\n"})
+}
+
+func TestAssignWrapsCodexPromptWithDirectLandingInstructions(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	d := deps.newDaemonWithOptions(t, func(opts *Options) {
+		opts.LandingConfig = LandingConfig{Mode: LandingModeDirect, BaseBranch: "main"}
+	})
+	ctx := context.Background()
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-1969", "Implement direct landing", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	waitFor(t, "task registration", func() bool {
+		task, ok := deps.state.task("LAB-1969")
+		return ok && task.Status == TaskStatusActive
+	})
+
+	task, ok := deps.state.task("LAB-1969")
+	if !ok {
+		t.Fatal("task not stored in state")
+	}
+	if strings.Contains(task.Prompt, "gh pr create") || strings.Contains(task.Prompt, "open a PR") {
+		t.Fatalf("direct-mode prompt contains PR-opening instructions: %q", task.Prompt)
+	}
+	for _, want := range []string{"commit", "push", "orca enqueue LAB-1969"} {
+		if !strings.Contains(task.Prompt, want) {
+			t.Fatalf("direct-mode prompt = %q, want substring %q", task.Prompt, want)
+		}
+	}
+}
+
+func TestAssignDefaultsToDirectLandingWithoutExternalIntegrations(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	d := deps.newDaemonWithProductDefaults(t, nil)
+	ctx := context.Background()
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-1969", "Implement local direct landing", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	waitFor(t, "task registration", func() bool {
+		task, ok := deps.state.task("LAB-1969")
+		return ok && task.Status == TaskStatusActive
+	})
+
+	task, ok := deps.state.task("LAB-1969")
+	if !ok {
+		t.Fatal("task not stored in state")
+	}
+	if strings.Contains(task.Prompt, "gh pr create") || strings.Contains(task.Prompt, "open a PR") {
+		t.Fatalf("default prompt contains PR-opening instructions: %q", task.Prompt)
+	}
+	if !strings.Contains(task.Prompt, "orca enqueue LAB-1969") {
+		t.Fatalf("default prompt = %q, want direct enqueue instructions", task.Prompt)
+	}
+	if ghCalls := deps.commands.callsByName("gh"); len(ghCalls) != 0 {
+		t.Fatalf("default assignment made GitHub calls: %#v", ghCalls)
+	}
+	if got := deps.issueTracker.statuses(); len(got) != 0 {
+		t.Fatalf("default assignment updated Linear statuses: %#v", got)
+	}
+	deps.commands.reset()
+	result, err := d.EnqueueTarget(ctx, "LAB-1969")
+	if err != nil {
+		t.Fatalf("EnqueueTarget() error = %v", err)
+	}
+	if got, want := result.Mode, LandingModeDirect; got != want {
+		t.Fatalf("result.Mode = %q, want %q", got, want)
+	}
+	if got, want := result.BaseBranch, "main"; got != want {
+		t.Fatalf("result.BaseBranch = %q, want %q", got, want)
+	}
+	if ghCalls := deps.commands.callsByName("gh"); len(ghCalls) != 0 {
+		t.Fatalf("default direct enqueue made GitHub calls: %#v", ghCalls)
+	}
 }
 
 func TestAssignAppendsOnlyMissingCodexPRTitleInstructions(t *testing.T) {

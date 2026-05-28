@@ -254,8 +254,42 @@ func TestAppRunDispatchesCommands(t *testing.T) {
 				if d.enqueueRequest.PRNumber != 42 {
 					t.Fatalf("expected PR 42, got %d", d.enqueueRequest.PRNumber)
 				}
+				if d.enqueueRequest.Target != "42" {
+					t.Fatalf("expected enqueue target 42, got %q", d.enqueueRequest.Target)
+				}
 				if !strings.Contains(stdout, "#42") {
 					t.Fatalf("expected PR number in output, got %q", stdout)
+				}
+			},
+		},
+		{
+			name: "enqueue direct target",
+			args: func(_, _ string) []string { return []string{"enqueue", "LAB-1969"} },
+			prepareDaemon: func(d *fakeDaemon) {
+				d.enqueueResult = daemon.MergeQueueActionResult{
+					Mode:      daemon.LandingModeDirect,
+					Project:   "/unused",
+					Issue:     "LAB-1969",
+					Branch:    "LAB-1969",
+					Target:    "LAB-1969",
+					Status:    "queued",
+					Position:  1,
+					UpdatedAt: now,
+				}
+			},
+			assert: func(t *testing.T, d *fakeDaemon, _ *fakeState, stdout, _ string, _, _ string) {
+				t.Helper()
+				if d.enqueueRequest == nil {
+					t.Fatal("expected enqueue to be called")
+				}
+				if d.enqueueRequest.PRNumber != 0 {
+					t.Fatalf("expected direct enqueue PRNumber 0, got %d", d.enqueueRequest.PRNumber)
+				}
+				if d.enqueueRequest.Target != "LAB-1969" {
+					t.Fatalf("expected direct enqueue target LAB-1969, got %q", d.enqueueRequest.Target)
+				}
+				if !strings.Contains(stdout, "LAB-1969") || !strings.Contains(stdout, "direct landing") {
+					t.Fatalf("expected direct landing output, got %q", stdout)
 				}
 			},
 		},
@@ -1431,7 +1465,7 @@ func allSubcommandHelpCases() []subcommandHelpCase {
 		{command: "refresh-codex", wantUsage: "usage: orca refresh-codex"},
 		{command: "assign", wantUsage: "usage: orca assign ISSUE"},
 		{command: "spawn", wantUsage: "usage: orca spawn"},
-		{command: "enqueue", wantUsage: "usage: orca enqueue PR_NUMBER"},
+		{command: "enqueue", wantUsage: "usage: orca enqueue TARGET"},
 		{command: "cancel", wantUsage: "usage: orca cancel ISSUE"},
 		{command: "resume", wantUsage: "usage: orca resume ISSUE"},
 		{command: "workers", wantUsage: "usage: orca workers"},
@@ -1529,7 +1563,7 @@ func TestAppRunParseErrors(t *testing.T) {
 		{name: "refresh codex extra arg", args: []string{"refresh-codex", "codex"}, wantErr: "refresh-codex does not accept positional arguments"},
 		{name: "batch unknown command", args: []string{"batch"}, wantErr: "unknown command \"batch\""},
 		{name: "spawn extra arg", args: []string{"spawn", "extra"}, wantErr: "spawn does not accept positional arguments"},
-		{name: "enqueue missing pr number", args: []string{"enqueue"}, wantErr: "enqueue requires PR_NUMBER"},
+		{name: "enqueue missing target", args: []string{"enqueue"}, wantErr: "enqueue requires TARGET"},
 		{name: "cancel missing issue", args: []string{"cancel"}, wantErr: "cancel requires ISSUE"},
 		{name: "resume missing issue", args: []string{"resume"}, wantErr: "resume requires ISSUE"},
 		{name: "workers extra arg", args: []string{"workers", "extra"}, wantErr: "workers does not accept positional arguments"},

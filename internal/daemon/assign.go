@@ -63,31 +63,50 @@ func (d *Daemon) assignWithPlanningDecision(ctx context.Context, projectPath, is
 		d.emitAssignFailure(ctx, projectPath, issue, "", profile.Name, Clone{}, Pane{}, 0, err)
 		return err
 	}
-	gitHubIssue, hasGitHubIssue, err := d.lookupGitHubIssue(ctx, projectPath, issue)
+	landingConfig, err := d.landingConfigForProject(projectPath)
 	if err != nil {
+		err = fmt.Errorf("load landing config: %w", err)
 		d.emitAssignFailure(ctx, projectPath, issue, "", profile.Name, Clone{}, Pane{}, 0, err)
 		return err
+	}
+	gitHubIssue := gitHubIssueDetails{}
+	hasGitHubIssue := false
+	githubEnabled, err := d.assignmentGitHubIntegrationEnabled(projectPath, landingConfig)
+	if err != nil {
+		err = fmt.Errorf("load integration config: %w", err)
+		d.emitAssignFailure(ctx, projectPath, issue, "", profile.Name, Clone{}, Pane{}, 0, err)
+		return err
+	}
+	if githubEnabled {
+		gitHubIssue, hasGitHubIssue, err = d.lookupGitHubIssue(ctx, projectPath, issue)
+		if err != nil {
+			d.emitAssignFailure(ctx, projectPath, issue, "", profile.Name, Clone{}, Pane{}, 0, err)
+			return err
+		}
 	}
 	if hasGitHubIssue {
 		prompt = withGitHubIssueContext(issue, gitHubIssue, prompt)
 	}
-	prompt = wrapAssignmentPrompt(profile, issue, prompt)
+	prompt = wrapAssignmentPromptForLanding(profile, issue, prompt, landingConfig)
 	prompt = appendNotifyConvention(prompt, resolveNotifyPane(notifyPane, callerPane, d.notificationPane))
 
 	assignmentBranch := issue
 	preflightSkipped := false
 	var preflightRateLimitedUntil time.Time
-	prNumber, err := d.lookupOpenPRNumber(ctx, projectPath, assignmentBranch)
-	if err != nil {
-		if until, ok := gitHubRateLimitUntil(err); ok {
-			preflightSkipped = true
-			preflightRateLimitedUntil = until
-			prompt = withAssignPreflightSkippedPrompt(prompt, issue)
-			d.emitAssignPreflightSkipped(ctx, projectPath, issue, profile.Name, assignmentBranch, until)
-		} else {
-			err = fmt.Errorf("check open PRs for %s: %w", issue, err)
-			d.emitAssignFailure(ctx, projectPath, issue, "", profile.Name, Clone{}, Pane{}, 0, err)
-			return err
+	prNumber := 0
+	if !landingConfig.directMode() {
+		prNumber, err = d.lookupOpenPRNumber(ctx, projectPath, assignmentBranch)
+		if err != nil {
+			if until, ok := gitHubRateLimitUntil(err); ok {
+				preflightSkipped = true
+				preflightRateLimitedUntil = until
+				prompt = withAssignPreflightSkippedPrompt(prompt, issue)
+				d.emitAssignPreflightSkipped(ctx, projectPath, issue, profile.Name, assignmentBranch, until)
+			} else {
+				err = fmt.Errorf("check open PRs for %s: %w", issue, err)
+				d.emitAssignFailure(ctx, projectPath, issue, "", profile.Name, Clone{}, Pane{}, 0, err)
+				return err
+			}
 		}
 	}
 	adoptingOpenPR := prNumber > 0
@@ -154,7 +173,7 @@ func (d *Daemon) assignWithPlanningDecision(ctx context.Context, projectPath, is
 	if adoptingOpenPR {
 		prepareClone = d.prepareAdoptedClone
 	}
-	if err := prepareClone(ctx, clone.Path, assignmentBranch, claimedWorker.WorkerID); err != nil {
+	if err := prepareClone(ctx, clone.Path, assignmentBranch, claimedWorker.WorkerID, landingConfig); err != nil {
 		_ = d.pool.Release(ctx, projectPath, clone)
 		restoreWorkerClaim()
 		restoreReservation()
@@ -222,7 +241,7 @@ func (d *Daemon) assignWithPlanningDecision(ctx context.Context, projectPath, is
 		failUnspawnedAssignment(err)
 		return err
 	}
-	startup, err := d.startAssignmentWorker(ctx, projectPath, clone, task, worker, profile, deliveryPrompt, d.resolveAssignmentTitle(ctx, issue, resolvedTitle), preflightSkipped, planningDecision)
+	startup, err := d.startAssignmentWorker(ctx, projectPath, clone, task, worker, profile, deliveryPrompt, d.resolveAssignmentTitle(ctx, projectPath, issue, resolvedTitle), preflightSkipped, planningDecision)
 	if err != nil {
 		if startup.pane.ID == "" && startup.pane.Name == "" {
 			failUnspawnedAssignment(err)
