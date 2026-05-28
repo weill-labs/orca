@@ -831,10 +831,10 @@ func TestReconcileFixCompletesStuckCleanupWithLivePane(t *testing.T) {
 	t.Parallel()
 
 	deps := newTestDeps(t)
-	setLifecyclePromptActiveAfterIdleProbes(deps, 0)
 	seedReconcileAssignment(t, deps, "LAB-1500", "pane-1500", "worker-1500", 500)
 	deps.amux.paneExists = map[string]bool{"pane-1500": true}
 	deps.amux.listPanes = []Pane{{ID: "pane-1500", Name: "w-LAB-1500"}}
+	deps.amux.waitIdleErr = errors.New("reconcile must not wait on a live pane")
 	queuePRSnapshot(deps, 500, `{"state":"MERGED","mergedAt":"2026-04-29T22:35:51Z"}`)
 
 	result, err := deps.newDaemon(t).Reconcile(context.Background(), ReconcileRequest{
@@ -853,6 +853,15 @@ func TestReconcileFixCompletesStuckCleanupWithLivePane(t *testing.T) {
 	if got, want := findingKindsByIssue(result.Findings), map[string]string{"LAB-1500": ReconcileStuckCleanup}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("finding kinds = %#v, want %#v", got, want)
 	}
+	finding := result.Findings[0]
+	if got, want := finding.Action, reconcileActionFixed; got != want {
+		t.Fatalf("finding.Action = %q, want %q", got, want)
+	}
+	for _, want := range []string{"task marked done", "clone released", "live pane", "human"} {
+		if !strings.Contains(finding.Message, want) {
+			t.Fatalf("finding.Message = %q, want %q", finding.Message, want)
+		}
+	}
 	task, ok := deps.state.task("LAB-1500")
 	if !ok {
 		t.Fatal("LAB-1500 task missing")
@@ -860,19 +869,38 @@ func TestReconcileFixCompletesStuckCleanupWithLivePane(t *testing.T) {
 	if got, want := task.Status, TaskStatusDone; got != want {
 		t.Fatalf("task.Status = %q, want %q", got, want)
 	}
+	worker, ok := deps.state.worker("worker-1500")
+	if !ok {
+		t.Fatal("worker-1500 missing")
+	}
+	if worker.PaneID != "" || worker.Issue != "" || worker.ClonePath != "" {
+		t.Fatalf("worker after release = %#v, want released worker claim", worker)
+	}
+	if got, want := deps.pool.releasedClones(), []Clone{{
+		Name:          "clone-LAB-1500",
+		Path:          "/tmp/LAB-1500",
+		CurrentBranch: "LAB-1500",
+		AssignedTask:  "LAB-1500",
+	}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("released clones = %#v, want %#v", got, want)
+	}
 	if len(deps.amux.killCalls) != 0 {
 		t.Fatalf("kill calls = %#v, want none", deps.amux.killCalls)
 	}
-	if got := len(deps.amux.waitIdleCalls); got < 2 {
-		t.Fatalf("wait idle call count = %d, want wrapup and postmortem waits", got)
+	if got := len(deps.amux.waitIdleCalls); got != 0 {
+		t.Fatalf("wait idle calls = %#v, want none for reconcile live-pane cleanup", deps.amux.waitIdleCalls)
 	}
-	deps.amux.requireSentKeys(t, "pane-1500", []string{
-		mergedWrapUpPrompt,
-		"Enter",
-		postmortemCommand,
-		"Enter",
+	deps.amux.requireSentKeys(t, "pane-1500", nil)
+	deps.amux.requireMetadata(t, "pane-1500", map[string]string{
+		"status":         "done",
+		"task":           "\x1b[2m\x1b[9mLAB-1500\x1b[29m\x1b[22m",
+		"tracked_issues": `[{"id":"LAB-1500","status":"completed"}]`,
+		"tracked_prs":    `[{"number":500,"status":"completed"}]`,
 	})
 	deps.events.requireTypes(t, EventReconcileFinding, EventPRMerged, EventWorkerPostmortem, EventTaskCompleted)
+	if got := deps.events.lastMessage(EventWorkerPostmortem); !strings.Contains(got, "postmortem skipped") || !strings.Contains(got, "live pane") {
+		t.Fatalf("worker.postmortem message = %q, want skipped live-pane postmortem", got)
+	}
 }
 
 func TestReconcileDiscoversMergedPRByIssueID(t *testing.T) {
