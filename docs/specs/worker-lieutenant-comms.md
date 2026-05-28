@@ -1,6 +1,6 @@
 # Worker → Lieutenant Communication
 
-Date: 2026-05-27. Linear: LAB-1946. Status: design spike (no implementation yet).
+Date: 2026-05-27. Linear: LAB-1946. Status: implemented in PR #268.
 
 ## Motivation
 
