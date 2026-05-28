@@ -144,9 +144,6 @@ func hasRepoConfigSection(data []byte, sections ...string) bool {
 		if index := strings.Index(trimmed, "#"); index >= 0 {
 			trimmed = strings.TrimSpace(trimmed[:index])
 		}
-		if strings.HasPrefix(trimmed, "#") {
-			continue
-		}
 		for _, section := range sections {
 			if strings.EqualFold(trimmed, "["+section+"]") {
 				return true
