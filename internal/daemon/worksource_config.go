@@ -18,14 +18,16 @@ const (
 )
 
 type workSourceConfig struct {
-	Enabled  bool
-	Source   string
-	BeadsBin string
-	Agent    string
+	Enabled          bool
+	Source           string
+	BeadsBin         string
+	Agent            string
+	NotificationPane string
 }
 
 type rawRepoConfig struct {
-	WorkSource rawWorkSourceConfig `toml:"worksource"`
+	WorkSource    rawWorkSourceConfig    `toml:"worksource"`
+	Notifications rawNotificationsConfig `toml:"notifications"`
 }
 
 type rawWorkSourceConfig struct {
@@ -33,6 +35,10 @@ type rawWorkSourceConfig struct {
 	Source   string `toml:"source"`
 	BeadsBin string `toml:"beads_bin"`
 	Agent    string `toml:"agent"`
+}
+
+type rawNotificationsConfig struct {
+	NotificationPane string `toml:"notification_pane"`
 }
 
 func loadWorkSourceConfig(projectPath string) (workSourceConfig, error) {
@@ -50,7 +56,7 @@ func loadWorkSourceConfig(projectPath string) (workSourceConfig, error) {
 		}
 		return workSourceConfig{}, fmt.Errorf("read repo config %s: %w", configPath, err)
 	}
-	if !hasWorkSourceSection(data) {
+	if !hasRepoConfigSection(data, "worksource", "notifications") {
 		return cfg, nil
 	}
 
@@ -69,20 +75,23 @@ func loadWorkSourceConfig(projectPath string) (workSourceConfig, error) {
 	if agent := strings.TrimSpace(raw.WorkSource.Agent); agent != "" {
 		cfg.Agent = agent
 	}
+	cfg.NotificationPane = strings.TrimSpace(raw.Notifications.NotificationPane)
 	if err := validateWorkSourceConfig(cfg); err != nil {
 		return workSourceConfig{}, fmt.Errorf("decode repo config %s: %w", configPath, err)
 	}
 	return cfg, nil
 }
 
-func hasWorkSourceSection(data []byte) bool {
+func hasRepoConfigSection(data []byte, sections ...string) bool {
 	for _, line := range strings.Split(string(data), "\n") {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "#") {
 			continue
 		}
-		if strings.EqualFold(trimmed, "[worksource]") {
-			return true
+		for _, section := range sections {
+			if strings.EqualFold(trimmed, "["+section+"]") {
+				return true
+			}
 		}
 	}
 	return false

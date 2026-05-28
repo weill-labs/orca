@@ -95,6 +95,7 @@ type AssignRequest struct {
 	Prompt     string
 	Agent      string
 	CallerPane string
+	NotifyPane string
 	Title      string
 }
 
@@ -436,6 +437,7 @@ func (c *LocalController) Assign(ctx context.Context, req AssignRequest) (TaskAc
 		Prompt:     req.Prompt,
 		Agent:      strings.TrimSpace(req.Agent),
 		CallerPane: strings.TrimSpace(req.CallerPane),
+		NotifyPane: strings.TrimSpace(req.NotifyPane),
 		Title:      strings.TrimSpace(req.Title),
 	}, &result)
 	if err != nil {

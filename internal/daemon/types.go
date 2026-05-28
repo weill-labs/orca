@@ -122,6 +122,7 @@ type Options struct {
 	WorkSource               worksource.Source
 	WorkSourceAgent          string
 	WorkSourcePullInterval   time.Duration
+	NotificationPane         string
 }
 
 type ConfigProvider interface {

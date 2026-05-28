@@ -8,6 +8,7 @@ import (
 const workerPRCreateCommand = "gh pr create --base main"
 const codexAssignmentPromptSuffix = "When tests pass, commit, push, and open a PR with " + workerPRCreateCommand + "."
 const assignPreflightSkippedPrompt = "Orca skipped its open PR preflight because GitHub is rate limited. Before editing, check whether an open PR already exists for %s. If one exists, fetch and resume that branch before making changes."
+const notifyConventionPrefix = "To notify or ask the lieutenant, run `amux send-keys "
 
 func wrapAssignmentPrompt(profile AgentProfile, issue, prompt string) string {
 	prompt = strings.TrimSpace(prompt)
@@ -57,4 +58,33 @@ func withAssignPreflightSkippedPrompt(prompt, issue string) string {
 		return prompt
 	}
 	return prompt + "\n\n" + note
+}
+
+func appendNotifyConvention(prompt, pane string) string {
+	prompt = strings.TrimSpace(prompt)
+	pane = strings.TrimSpace(pane)
+	if pane == "" {
+		return prompt
+	}
+
+	convention := notifyConvention(pane)
+	if strings.Contains(prompt, notifyConventionPrefix) {
+		return prompt
+	}
+	if prompt == "" {
+		return convention
+	}
+	return prompt + "\n\n" + convention
+}
+
+func notifyConvention(pane string) string {
+	return strings.Join([]string{
+		fmt.Sprintf("To notify or ask the lieutenant, run `amux send-keys %s \"<one-line message>\"`.", shellQuote(pane)),
+		"Use it for: a blocking question before you guess, or a milestone (PR opened).",
+		"Keep messages to one line; do not spam.",
+	}, "\n")
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
 }

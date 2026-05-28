@@ -50,10 +50,34 @@ func TestLoadWorkSourceConfig(t *testing.T) {
 			},
 		},
 		{
+			name: "notification pane config",
+			content: strings.Join([]string{
+				"[notifications]",
+				`notification_pane = "pane-99"`,
+				"",
+			}, "\n"),
+			want: workSourceConfig{
+				Enabled:          false,
+				Source:           workSourceManual,
+				BeadsBin:         defaultBeadsBin,
+				Agent:            defaultWorkSourceAgentProfile,
+				NotificationPane: "pane-99",
+			},
+		},
+		{
 			name: "invalid toml errors when worksource section exists",
 			content: strings.Join([]string{
 				"[worksource]",
 				"enabled =",
+				"",
+			}, "\n"),
+			wantError: "decode repo config",
+		},
+		{
+			name: "invalid toml errors when notifications section exists",
+			content: strings.Join([]string{
+				"[notifications]",
+				"notification_pane =",
 				"",
 			}, "\n"),
 			wantError: "decode repo config",

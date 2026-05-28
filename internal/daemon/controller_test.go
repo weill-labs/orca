@@ -682,6 +682,7 @@ func TestLocalControllerAssignCancelResumeRPC(t *testing.T) {
 		Prompt:     "Implement controller assign.",
 		Agent:      "  claude  ",
 		CallerPane: "  pane-13  ",
+		NotifyPane: "  pane-21  ",
 		Title:      "  Assign title  ",
 	})
 	if err != nil {
@@ -728,6 +729,7 @@ func TestLocalControllerAssignCancelResumeRPC(t *testing.T) {
 		Prompt:     "Implement controller assign.",
 		Agent:      "claude",
 		CallerPane: "pane-13",
+		NotifyPane: "pane-21",
 		Title:      "Assign title",
 	}); !reflect.DeepEqual(got, want) {
 		t.Fatalf("assign params = %#v, want %#v", got, want)

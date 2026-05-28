@@ -164,6 +164,7 @@ func runProcess(ctx context.Context, req ServeRequest, deps serveDeps) error {
 		WorkSourceProject:  workSourceProject,
 		WorkSource:         source,
 		WorkSourceAgent:    workSourceConfig.Agent,
+		NotificationPane:   workSourceConfig.NotificationPane,
 	})
 	if err != nil {
 		return fmt.Errorf("create daemon: %w", err)
@@ -452,7 +453,7 @@ func dispatchRPCRequest(ctx context.Context, request rpcRequest, instance *Daemo
 			return failure
 		}
 		issue := normalizeIssueIdentifier(params.Issue)
-		if err := instance.assign(ctx, projectPath, issue, params.Prompt, params.Agent, params.CallerPane, params.Title); err != nil {
+		if err := instance.assignWithNotifyPane(ctx, projectPath, issue, params.Prompt, params.Agent, params.CallerPane, params.NotifyPane, params.Title); err != nil {
 			return rpcFailure(request.ID, -32000, err)
 		}
 
