@@ -120,6 +120,90 @@ func TestLoadWorkSourceConfig(t *testing.T) {
 	}
 }
 
+func TestLoadLandingConfig(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		content   string
+		want      LandingConfig
+		wantError string
+	}{
+		{
+			name: "missing project uses pr defaults",
+			want: defaultLandingConfig(),
+		},
+		{
+			name: "repo config without landing uses pr defaults",
+			content: strings.Join([]string{
+				"[worksource]",
+				`source = "manual"`,
+				"",
+			}, "\n"),
+			want: defaultLandingConfig(),
+		},
+		{
+			name: "direct landing config",
+			content: strings.Join([]string{
+				"[landing]",
+				`mode = "direct"`,
+				`base_branch = "trunk"`,
+				`quality_gate = "uv run pytest -q"`,
+				"",
+			}, "\n"),
+			want: LandingConfig{
+				Mode:        LandingModeDirect,
+				BaseBranch:  "trunk",
+				QualityGate: "uv run pytest -q",
+			},
+		},
+		{
+			name: "invalid landing mode errors",
+			content: strings.Join([]string{
+				"[landing]",
+				`mode = "magic"`,
+				"",
+			}, "\n"),
+			wantError: "landing.mode",
+		},
+		{
+			name: "invalid toml errors when landing section exists",
+			content: strings.Join([]string{
+				"[landing]",
+				"mode =",
+				"",
+			}, "\n"),
+			wantError: "decode repo config",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			projectPath := ""
+			if tt.content != "" {
+				projectPath = writeWorkSourceConfigTestFile(t, tt.content)
+			}
+
+			got, err := loadLandingConfig(projectPath)
+			if tt.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+					t.Fatalf("loadLandingConfig() error = %v, want substring %q", err, tt.wantError)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("loadLandingConfig() error = %v, want nil", err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("loadLandingConfig() = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestNewWorkSourceFromConfig(t *testing.T) {
 	t.Parallel()
 

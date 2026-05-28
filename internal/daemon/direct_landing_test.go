@@ -1,0 +1,242 @@
+package daemon
+
+import (
+	"context"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestDirectLandingSucceedsWithLocalBareRemote(t *testing.T) {
+	ctx := context.Background()
+	remote, seed := newDirectLandingRemote(t, map[string]string{"README.md": "base\n"})
+	clonePath := cloneDirectLandingRepo(t, remote)
+	deps, d := newDirectLandingDaemon(t, clonePath, LandingConfig{
+		Mode:        LandingModeDirect,
+		BaseBranch:  "main",
+		QualityGate: "test -f landed.txt",
+	})
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+	if err := d.Assign(ctx, "LAB-1969", "Implement direct landing", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+	writeDirectLandingFile(t, clonePath, "landed.txt", "landed\n")
+	git(t, clonePath, "add", "landed.txt")
+	git(t, clonePath, "commit", "-m", "LAB-1969 direct landing")
+
+	result, err := d.EnqueueTarget(ctx, "LAB-1969")
+	if err != nil {
+		t.Fatalf("EnqueueTarget() error = %v", err)
+	}
+	if got, want := result.Mode, LandingModeDirect; got != want {
+		t.Fatalf("result.Mode = %q, want %q", got, want)
+	}
+	d.dispatchMergeQueue(ctx)
+
+	waitFor(t, "direct landing completion", func() bool {
+		task, ok := deps.state.task("LAB-1969")
+		return ok && task.Status == TaskStatusDone
+	})
+	if got, want := strings.TrimSpace(git(t, seed, "show", "origin/main:landed.txt")), "landed"; got != want {
+		t.Fatalf("origin/main:landed.txt = %q, want %q", got, want)
+	}
+	if got := deps.events.countType(EventDirectLandingConflict); got != 0 {
+		t.Fatalf("direct landing conflict event count = %d, want 0", got)
+	}
+	deps.events.requireTypes(t, EventDirectLandingStarted, EventDirectLanded, EventTaskCompleted)
+}
+
+func TestDirectLandingConflictNotifiesWorkerWithConflictedFiles(t *testing.T) {
+	ctx := context.Background()
+	remote, seed := newDirectLandingRemote(t, map[string]string{"README.md": "base\n"})
+	clonePath := cloneDirectLandingRepo(t, remote)
+	deps, d := newDirectLandingDaemon(t, clonePath, LandingConfig{
+		Mode:       LandingModeDirect,
+		BaseBranch: "main",
+	})
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+	if err := d.Assign(ctx, "LAB-1970", "Create a conflicting direct landing", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+	writeDirectLandingFile(t, clonePath, "README.md", "worker change\n")
+	git(t, clonePath, "add", "README.md")
+	git(t, clonePath, "commit", "-m", "LAB-1970 worker change")
+
+	writeDirectLandingFile(t, seed, "README.md", "base changed\n")
+	git(t, seed, "add", "README.md")
+	git(t, seed, "commit", "-m", "advance main")
+	git(t, seed, "push", "origin", "main")
+
+	if _, err := d.EnqueueTarget(ctx, "LAB-1970"); err != nil {
+		t.Fatalf("EnqueueTarget() error = %v", err)
+	}
+	d.dispatchMergeQueue(ctx)
+
+	waitFor(t, "direct landing conflict event", func() bool {
+		return deps.events.countType(EventDirectLandingConflict) == 1
+	})
+	task, ok := deps.state.task("LAB-1970")
+	if !ok {
+		t.Fatal("task missing after conflict")
+	}
+	if got, want := task.Status, TaskStatusActive; got != want {
+		t.Fatalf("task.Status = %q, want %q", got, want)
+	}
+	if got, want := task.State, TaskStateEscalated; got != want {
+		t.Fatalf("task.State = %q, want %q", got, want)
+	}
+	worker, ok := deps.state.worker("pane-1")
+	if !ok {
+		t.Fatal("worker missing after conflict")
+	}
+	if got, want := worker.Health, WorkerHealthEscalated; got != want {
+		t.Fatalf("worker.Health = %q, want %q", got, want)
+	}
+
+	event, ok := deps.events.lastEventOfType(EventDirectLandingConflict)
+	if !ok {
+		t.Fatal("direct landing conflict event missing")
+	}
+	if got, want := event.ConflictedFiles, []string{"README.md"}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("event.ConflictedFiles = %#v, want %#v", got, want)
+	}
+	if !event.ConflictStatePreserved {
+		t.Fatal("event.ConflictStatePreserved = false, want true")
+	}
+	if !strings.Contains(event.Message, "README.md") || !strings.Contains(event.Message, "orca enqueue LAB-1970") {
+		t.Fatalf("conflict event message = %q, want file and retry instructions", event.Message)
+	}
+	if got := deps.amux.countKey("pane-1", directLandingConflictPrompt("LAB-1970", "LAB-1970", "main", []string{"README.md"})+"\n"); got != 1 {
+		t.Fatalf("conflict prompt count = %d, want 1", got)
+	}
+}
+
+func TestDirectLandingQualityGateFailureKeepsTaskActive(t *testing.T) {
+	ctx := context.Background()
+	remote, _ := newDirectLandingRemote(t, map[string]string{"README.md": "base\n"})
+	clonePath := cloneDirectLandingRepo(t, remote)
+	deps, d := newDirectLandingDaemon(t, clonePath, LandingConfig{
+		Mode:        LandingModeDirect,
+		BaseBranch:  "main",
+		QualityGate: "test -f missing-quality-gate-file",
+	})
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+	if err := d.Assign(ctx, "LAB-1971", "Fail the quality gate", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+	writeDirectLandingFile(t, clonePath, "landed.txt", "landed\n")
+	git(t, clonePath, "add", "landed.txt")
+	git(t, clonePath, "commit", "-m", "LAB-1971 quality gate")
+
+	if _, err := d.EnqueueTarget(ctx, "LAB-1971"); err != nil {
+		t.Fatalf("EnqueueTarget() error = %v", err)
+	}
+	d.dispatchMergeQueue(ctx)
+
+	waitFor(t, "direct landing quality failure", func() bool {
+		return deps.events.countType(EventDirectLandingFailed) == 1
+	})
+	task, ok := deps.state.task("LAB-1971")
+	if !ok {
+		t.Fatal("task missing after quality gate failure")
+	}
+	if got, want := task.Status, TaskStatusActive; got != want {
+		t.Fatalf("task.Status = %q, want %q", got, want)
+	}
+	if entries, err := deps.state.MergeEntries(ctx, "/tmp/project"); err != nil || len(entries) != 0 {
+		t.Fatalf("merge entries after quality failure = %#v, %v, want none", entries, err)
+	}
+	if message := deps.events.lastMessage(EventDirectLandingFailed); !strings.Contains(message, "quality gate") {
+		t.Fatalf("direct landing failed message = %q, want quality gate detail", message)
+	}
+}
+
+func newDirectLandingDaemon(t *testing.T, clonePath string, landing LandingConfig) (*testDeps, *Daemon) {
+	t.Helper()
+
+	deps := newTestDeps(t)
+	deps.pool.clone = Clone{Name: filepath.Base(clonePath), Path: clonePath}
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	d := deps.newDaemonWithOptions(t, func(opts *Options) {
+		opts.Commands = execCommandRunner{}
+		opts.LandingConfig = landing
+	})
+	return deps, d
+}
+
+func newDirectLandingRemote(t *testing.T, files map[string]string) (string, string) {
+	t.Helper()
+
+	root := t.TempDir()
+	remote := filepath.Join(root, "origin.git")
+	git(t, root, "init", "--bare", remote)
+	seed := filepath.Join(root, "seed")
+	git(t, root, "clone", remote, seed)
+	git(t, seed, "checkout", "-b", "main")
+	git(t, seed, "config", "user.name", "Test User")
+	git(t, seed, "config", "user.email", "test@example.invalid")
+	for path, content := range files {
+		writeDirectLandingFile(t, seed, path, content)
+	}
+	git(t, seed, "add", ".")
+	git(t, seed, "commit", "-m", "initial commit")
+	git(t, seed, "push", "origin", "main")
+	git(t, remote, "symbolic-ref", "HEAD", "refs/heads/main")
+	return remote, seed
+}
+
+func cloneDirectLandingRepo(t *testing.T, remote string) string {
+	t.Helper()
+
+	clonePath := filepath.Join(t.TempDir(), "clone")
+	git(t, filepath.Dir(clonePath), "clone", remote, clonePath)
+	markClonePathForTest(t, clonePath)
+	return clonePath
+}
+
+func writeDirectLandingFile(t *testing.T, root, name, content string) {
+	t.Helper()
+
+	path := filepath.Join(root, name)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", filepath.Dir(path), err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", path, err)
+	}
+}
+
+func git(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = dir
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git -C %s %s failed: %v\n%s", dir, strings.Join(args, " "), err, strings.TrimSpace(string(output)))
+	}
+	return string(output)
+}

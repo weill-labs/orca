@@ -299,6 +299,46 @@ func TestAssignWrapsCodexPromptWithPROpeningInstructions(t *testing.T) {
 	deps.amux.requireSentKeys(t, "pane-1", []string{wrappedCodexPrompt("LAB-892", "Implement daemon core") + "\n"})
 }
 
+func TestAssignWrapsCodexPromptWithDirectLandingInstructions(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
+	d := deps.newDaemonWithOptions(t, func(opts *Options) {
+		opts.LandingConfig = LandingConfig{Mode: LandingModeDirect, BaseBranch: "main"}
+	})
+	ctx := context.Background()
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-1969", "Implement direct landing", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	waitFor(t, "task registration", func() bool {
+		task, ok := deps.state.task("LAB-1969")
+		return ok && task.Status == TaskStatusActive
+	})
+
+	task, ok := deps.state.task("LAB-1969")
+	if !ok {
+		t.Fatal("task not stored in state")
+	}
+	if strings.Contains(task.Prompt, "gh pr create") || strings.Contains(task.Prompt, "open a PR") {
+		t.Fatalf("direct-mode prompt contains PR-opening instructions: %q", task.Prompt)
+	}
+	for _, want := range []string{"commit", "push", "orca enqueue LAB-1969"} {
+		if !strings.Contains(task.Prompt, want) {
+			t.Fatalf("direct-mode prompt = %q, want substring %q", task.Prompt, want)
+		}
+	}
+}
+
 func TestAssignAppendsOnlyMissingCodexPRTitleInstructions(t *testing.T) {
 	t.Parallel()
 
