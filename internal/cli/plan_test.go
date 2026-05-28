@@ -3,7 +3,6 @@ package cli
 import (
 	"bytes"
 	"context"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -50,7 +49,7 @@ func TestRunPlanParallelFormatsBatchesAndOverrides(t *testing.T) {
 		Stdout: &stdout,
 		Stderr: &stderr,
 		Cwd: func() (string, error) {
-			return filepath.Join(repoRoot, "internal", "cli"), nil
+			return repoRoot, nil
 		},
 	})
 

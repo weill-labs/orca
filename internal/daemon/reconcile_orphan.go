@@ -111,7 +111,7 @@ func (d *Daemon) adoptOrphanPane(ctx context.Context, projectPath string, findin
 	if snapshotErr != nil {
 		message = appendAdoptionWarning(message, "pane capture failed", snapshotErr)
 	}
-	if metadata, err := d.assignmentPaneMetadata(ctx, projectPath, paneRef, agentProfile, branch, issue, taskTitle, 0, false); err != nil {
+	if metadata, err := d.assignmentPaneMetadata(ctx, projectPath, paneRef, agentProfile, branch, issue, taskTitle, 0, false, ""); err != nil {
 		message = appendAdoptionWarning(message, "metadata refresh failed", err)
 	} else if err := d.setPaneMetadata(ctx, paneRef, metadata); err != nil {
 		message = appendAdoptionWarning(message, "metadata refresh failed", err)

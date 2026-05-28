@@ -38,7 +38,12 @@ func (d *Daemon) assign(ctx context.Context, projectPath, issue, prompt, agentPr
 }
 
 func (d *Daemon) assignWithNotifyPane(ctx context.Context, projectPath, issue, prompt, agentProfile, callerPane, notifyPane string, title ...string) error {
+	return d.assignWithPlanningDecision(ctx, projectPath, issue, prompt, agentProfile, callerPane, notifyPane, "", title...)
+}
+
+func (d *Daemon) assignWithPlanningDecision(ctx context.Context, projectPath, issue, prompt, agentProfile, callerPane, notifyPane, planningDecision string, title ...string) error {
 	issue = normalizeIssueIdentifier(issue)
+	planningDecision = strings.TrimSpace(planningDecision)
 	if err := d.requireStarted(); err != nil {
 		return err
 	}
@@ -217,7 +222,7 @@ func (d *Daemon) assignWithNotifyPane(ctx context.Context, projectPath, issue, p
 		failUnspawnedAssignment(err)
 		return err
 	}
-	startup, err := d.startAssignmentWorker(ctx, projectPath, clone, task, worker, profile, deliveryPrompt, d.resolveAssignmentTitle(ctx, issue, resolvedTitle), preflightSkipped)
+	startup, err := d.startAssignmentWorker(ctx, projectPath, clone, task, worker, profile, deliveryPrompt, d.resolveAssignmentTitle(ctx, issue, resolvedTitle), preflightSkipped, planningDecision)
 	if err != nil {
 		if startup.pane.ID == "" && startup.pane.Name == "" {
 			failUnspawnedAssignment(err)
@@ -266,6 +271,7 @@ func (d *Daemon) assignWithNotifyPane(ctx context.Context, projectPath, issue, p
 		PRNumber:               prNumber,
 		GitHubRateLimitedUntil: preflightRateLimitedUntil,
 		PreflightSkipped:       preflightSkipped,
+		PlanningDecision:       planningDecision,
 		Message:                taskAssignedMessage(pane),
 	})
 	return nil

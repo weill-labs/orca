@@ -325,4 +325,5 @@ type Event struct {
 	Message                string    `json:"message,omitempty"`
 	GitHubRateLimitedUntil time.Time `json:"github_rate_limited_until,omitempty"`
 	PreflightSkipped       bool      `json:"preflight_skipped,omitempty"`
+	PlanningDecision       string    `json:"planning_decision,omitempty"`
 }

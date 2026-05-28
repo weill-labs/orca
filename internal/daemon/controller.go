@@ -29,6 +29,7 @@ type Controller interface {
 	Start(ctx context.Context, req StartRequest) (StartResult, error)
 	Stop(ctx context.Context, req StopRequest) (StopResult, error)
 	Reload(ctx context.Context, req ReloadRequest) (ReloadResult, error)
+	Plan(ctx context.Context, req AssignmentPlanRequest) (AssignmentPlanResult, error)
 	Assign(ctx context.Context, req AssignRequest) (TaskActionResult, error)
 	Spawn(ctx context.Context, req SpawnPaneRequest) (SpawnPaneResult, error)
 	Enqueue(ctx context.Context, req EnqueueRequest) (MergeQueueActionResult, error)
@@ -90,13 +91,14 @@ type ReloadResult struct {
 }
 
 type AssignRequest struct {
-	Project    string
-	Issue      string
-	Prompt     string
-	Agent      string
-	CallerPane string
-	NotifyPane string
-	Title      string
+	Project          string
+	Issue            string
+	Prompt           string
+	Agent            string
+	CallerPane       string
+	NotifyPane       string
+	PlanningDecision string
+	Title            string
 }
 
 type CancelRequest struct {
@@ -432,13 +434,14 @@ func (c *LocalController) Assign(ctx context.Context, req AssignRequest) (TaskAc
 	var result TaskActionResult
 	issue := normalizeIssueIdentifier(req.Issue)
 	err = callRPC(callCtx, c.paths.socketFile(), "assign", assignRPCParams{
-		Project:    projectPath,
-		Issue:      issue,
-		Prompt:     req.Prompt,
-		Agent:      strings.TrimSpace(req.Agent),
-		CallerPane: strings.TrimSpace(req.CallerPane),
-		NotifyPane: strings.TrimSpace(req.NotifyPane),
-		Title:      strings.TrimSpace(req.Title),
+		Project:          projectPath,
+		Issue:            issue,
+		Prompt:           req.Prompt,
+		Agent:            strings.TrimSpace(req.Agent),
+		CallerPane:       strings.TrimSpace(req.CallerPane),
+		NotifyPane:       strings.TrimSpace(req.NotifyPane),
+		PlanningDecision: strings.TrimSpace(req.PlanningDecision),
+		Title:            strings.TrimSpace(req.Title),
 	}, &result)
 	if err != nil {
 		return TaskActionResult{}, err

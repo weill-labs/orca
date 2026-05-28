@@ -453,7 +453,7 @@ func dispatchRPCRequest(ctx context.Context, request rpcRequest, instance *Daemo
 			return failure
 		}
 		issue := normalizeIssueIdentifier(params.Issue)
-		if err := instance.assignWithNotifyPane(ctx, projectPath, issue, params.Prompt, params.Agent, params.CallerPane, params.NotifyPane, params.Title); err != nil {
+		if err := instance.assignWithPlanningDecision(ctx, projectPath, issue, params.Prompt, params.Agent, params.CallerPane, params.NotifyPane, params.PlanningDecision, params.Title); err != nil {
 			return rpcFailure(request.ID, -32000, err)
 		}
 
