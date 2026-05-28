@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"flag"
 	"strings"
 	"testing"
 
@@ -122,5 +123,122 @@ func TestRunAssignPassesPlanningDecision(t *testing.T) {
 	}
 	if got, want := d.assignRequest.PlanningDecision, "parallel batch 1: no overlap"; got != want {
 		t.Fatalf("assign planning decision = %q, want %q", got, want)
+	}
+}
+
+func TestRunPlanParallelWritesJSON(t *testing.T) {
+	t.Parallel()
+
+	repoRoot := newRepoRoot(t)
+	d := &fakeDaemon{
+		planResult: daemon.AssignmentPlanResult{
+			Project:  repoRoot,
+			Parallel: true,
+			Batches: []daemon.AssignmentPlanBatch{
+				{
+					Number: 1,
+					Issues: []daemon.AssignmentPlanIssue{
+						{Issue: "LAB-201", OwnedPaths: []string{"internal/cli/plan.go"}, OwnershipSource: "parsed"},
+					},
+				},
+			},
+		},
+	}
+
+	var stdout bytes.Buffer
+	app := New(Options{
+		Daemon: d,
+		State:  &fakeState{},
+		Stdout: &stdout,
+		Stderr: &bytes.Buffer{},
+		Cwd: func() (string, error) {
+			return repoRoot, nil
+		},
+	})
+
+	err := app.Run(context.Background(), []string{"plan", "--json", "--parallel", "--path=LAB-201=internal/cli/plan.go", "LAB-201"})
+	if err != nil {
+		t.Fatalf("Run(plan --json) error = %v", err)
+	}
+	if !strings.Contains(stdout.String(), `"owned_paths":["internal/cli/plan.go"]`) {
+		t.Fatalf("stdout = %q, want JSON owned paths", stdout.String())
+	}
+}
+
+func TestRunPlanParallelValidation(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		args    []string
+		wantErr string
+	}{
+		{
+			name:    "requires parallel",
+			args:    []string{"plan", "LAB-301"},
+			wantErr: "plan requires --parallel",
+		},
+		{
+			name:    "rejects malformed path override",
+			args:    []string{"plan", "--parallel", "--path", "LAB-301", "LAB-301"},
+			wantErr: "--path must use ISSUE=path",
+		},
+		{
+			name:    "rejects empty path override",
+			args:    []string{"plan", "--parallel", "--path", "LAB-301=", "LAB-301"},
+			wantErr: "--path for LAB-301 requires at least one path",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			repoRoot := newRepoRoot(t)
+			app := New(Options{
+				Daemon: &fakeDaemon{},
+				State:  &fakeState{},
+				Stdout: &bytes.Buffer{},
+				Stderr: &bytes.Buffer{},
+				Cwd: func() (string, error) {
+					return repoRoot, nil
+				},
+			})
+			err := app.Run(context.Background(), tt.args)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("Run() error = %v, want substring %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestParsePlanArgsInterspersedFlags(t *testing.T) {
+	t.Parallel()
+
+	fs := newFlagSet("plan")
+	var parallel bool
+	var projectPath string
+	fs.BoolVar(&parallel, "parallel", false, "")
+	fs.StringVar(&projectPath, "project", "", "")
+
+	issues, err := parsePlanArgs(fs, []string{"LAB-401", "--parallel", "--project", "/repo", "--", "LAB-402"})
+	if err != nil {
+		t.Fatalf("parsePlanArgs() error = %v", err)
+	}
+	if got, want := strings.Join(issues, ","), "LAB-401,LAB-402"; got != want {
+		t.Fatalf("issues = %q, want %q", got, want)
+	}
+	if !parallel {
+		t.Fatal("parallel flag = false, want true")
+	}
+	if got, want := projectPath, "/repo"; got != want {
+		t.Fatalf("projectPath = %q, want %q", got, want)
+	}
+
+	fs = flag.NewFlagSet("plan", flag.ContinueOnError)
+	_, err = parsePlanArgs(fs, []string{"--project"})
+	if err == nil || !strings.Contains(err.Error(), "flag needs an argument") {
+		t.Fatalf("parsePlanArgs() missing value error = %v, want flag needs argument", err)
 	}
 }

@@ -142,64 +142,42 @@ func parsePlanPathOverrides(values []string) (map[string][]string, error) {
 }
 
 func writeAssignmentPlan(w io.Writer, result daemon.AssignmentPlanResult) error {
-	if _, err := fmt.Fprintf(w, "parallel assignment plan for %s\n\n", result.Project); err != nil {
-		return err
-	}
+	var builder strings.Builder
+	fmt.Fprintf(&builder, "parallel assignment plan for %s\n\n", result.Project)
 
 	for _, batch := range result.Batches {
-		if _, err := fmt.Fprintf(w, "batch %d\n", batch.Number); err != nil {
-			return err
-		}
-		tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-		if _, err := fmt.Fprintln(tw, "ISSUE\tOWNERSHIP\tOWNED PATHS"); err != nil {
-			return err
-		}
+		fmt.Fprintf(&builder, "batch %d\n", batch.Number)
+		tw := tabwriter.NewWriter(&builder, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(tw, "ISSUE\tOWNERSHIP\tOWNED PATHS")
 		for _, issue := range batch.Issues {
 			paths := "unknown"
 			if len(issue.OwnedPaths) > 0 {
 				paths = strings.Join(issue.OwnedPaths, ", ")
 			}
-			if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\n", issue.Issue, issue.OwnershipSource, paths); err != nil {
-				return err
-			}
+			fmt.Fprintf(tw, "%s\t%s\t%s\n", issue.Issue, issue.OwnershipSource, paths)
 		}
-		if err := tw.Flush(); err != nil {
-			return err
-		}
-		if _, err := fmt.Fprintln(w); err != nil {
-			return err
-		}
+		_ = tw.Flush()
+		fmt.Fprintln(&builder)
 	}
 
 	if len(result.Conflicts) > 0 {
-		if _, err := fmt.Fprintln(w, "conflicts"); err != nil {
-			return err
-		}
+		fmt.Fprintln(&builder, "conflicts")
 		for _, conflict := range result.Conflicts {
-			if _, err := fmt.Fprintf(w, "%s overlaps %s: %s\n", conflict.Issue, conflict.ConflictsWith, strings.Join(conflict.Paths, ", ")); err != nil {
-				return err
-			}
+			fmt.Fprintf(&builder, "%s overlaps %s: %s\n", conflict.Issue, conflict.ConflictsWith, strings.Join(conflict.Paths, ", "))
 		}
-		if _, err := fmt.Fprintln(w); err != nil {
-			return err
-		}
+		fmt.Fprintln(&builder)
 	}
 
 	if len(result.Warnings) > 0 {
-		if _, err := fmt.Fprintln(w, "warnings"); err != nil {
-			return err
-		}
-		tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-		if _, err := fmt.Fprintln(tw, "ISSUE\tKIND\tMESSAGE"); err != nil {
-			return err
-		}
+		fmt.Fprintln(&builder, "warnings")
+		tw := tabwriter.NewWriter(&builder, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(tw, "ISSUE\tKIND\tMESSAGE")
 		for _, warning := range result.Warnings {
-			if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\n", warning.Issue, warning.Kind, warning.Message); err != nil {
-				return err
-			}
+			fmt.Fprintf(tw, "%s\t%s\t%s\n", warning.Issue, warning.Kind, warning.Message)
 		}
-		return tw.Flush()
+		_ = tw.Flush()
 	}
 
-	return nil
+	_, err := io.WriteString(w, builder.String())
+	return err
 }

@@ -110,6 +110,79 @@ func TestPlanParallelAssignmentsUsesExplicitPathOverrides(t *testing.T) {
 	}
 }
 
+func TestPlanParallelAssignmentsUsesCandidateOrderWhenIssuesOmitted(t *testing.T) {
+	t.Parallel()
+
+	result, err := PlanParallelAssignments(AssignmentPlanRequest{
+		Project:  "/repo",
+		Parallel: true,
+	}, []AssignmentPlanCandidate{
+		{Issue: "LAB-301", Body: "Files: internal/daemon"},
+		{Issue: "LAB-302", Body: "Files:\n- internal/daemon/assign.go\n# Notes\n- internal/daemon/ignored.go"},
+		{Issue: "LAB-303", Body: "Files: internal/cli/plan.go"},
+	})
+	if err != nil {
+		t.Fatalf("PlanParallelAssignments() error = %v", err)
+	}
+
+	if got, want := planBatchIssues(result.Batches), [][]string{{"LAB-301", "LAB-303"}, {"LAB-302"}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("batches = %#v, want %#v", got, want)
+	}
+	if got, want := len(result.Conflicts), 1; got != want {
+		t.Fatalf("conflict count = %d, want %d (%#v)", got, want, result.Conflicts)
+	}
+	if got, want := result.Conflicts[0].Paths, []string{"internal/daemon"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("conflict paths = %#v, want %#v", got, want)
+	}
+	lab302 := requirePlannedIssue(t, result, "LAB-302")
+	if got, want := lab302.OwnedPaths, []string{"internal/daemon/assign.go"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("LAB-302 owned paths = %#v, want %#v", got, want)
+	}
+}
+
+func TestPlanParallelAssignmentsRejectsInvalidPathOverrides(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		overrides map[string][]string
+		wantErr   string
+	}{
+		{
+			name:      "missing issue",
+			overrides: map[string][]string{"": {"internal/daemon/assign.go"}},
+			wantErr:   "path override requires an issue id",
+		},
+		{
+			name:      "absolute path",
+			overrides: map[string][]string{"LAB-401": {"/tmp/assign.go"}},
+			wantErr:   "invalid path override",
+		},
+		{
+			name:      "empty path",
+			overrides: map[string][]string{"LAB-402": {""}},
+			wantErr:   "invalid path override",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := PlanParallelAssignments(AssignmentPlanRequest{
+				Project:       "/repo",
+				Parallel:      true,
+				Issues:        []string{"LAB-401"},
+				PathOverrides: tt.overrides,
+			}, []AssignmentPlanCandidate{{Issue: "LAB-401", Body: "Files: internal/daemon/assign.go"}})
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("PlanParallelAssignments() error = %v, want substring %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestAssignRecordsPlanningDecisionInPaneMetadata(t *testing.T) {
 	t.Parallel()
 
@@ -185,6 +258,68 @@ func TestLocalControllerPlanLoadsBeadsIssueDescriptions(t *testing.T) {
 	}
 	if got, want := result.Conflicts[0].Paths, []string{"internal/cli/app.go"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("conflict paths = %#v, want %#v", got, want)
+	}
+}
+
+func TestLocalControllerPlanUsesReadyBeadsWhenIssuesOmitted(t *testing.T) {
+	t.Parallel()
+
+	projectPath := t.TempDir()
+	if err := os.Mkdir(filepath.Join(projectPath, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+	beadsDir := filepath.Join(projectPath, ".beads")
+	if err := os.Mkdir(beadsDir, 0o755); err != nil {
+		t.Fatalf("Mkdir(.beads) error = %v", err)
+	}
+	issues := strings.Join([]string{
+		`{"_type":"issue","id":"orca-ready","title":"Ready","description":"Files: internal/cli/plan.go","status":"open","issue_type":"task","dependency_count":0}`,
+		`{"_type":"issue","id":"orca-blocked","title":"Blocked","description":"Files: internal/daemon/assign.go","status":"open","issue_type":"task","dependency_count":1}`,
+		`{"_type":"issue","id":"orca-done","title":"Done","description":"Files: internal/daemon/helpers.go","status":"closed","issue_type":"task","dependency_count":0}`,
+		`{"_type":"issue","id":"orca-epic","title":"Epic","description":"Files: docs/specs/orca-design.md","status":"open","issue_type":"epic","dependency_count":0}`,
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(beadsDir, "issues.jsonl"), []byte(issues+"\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(issues.jsonl) error = %v", err)
+	}
+
+	controller := &LocalController{}
+	result, err := controller.Plan(context.Background(), AssignmentPlanRequest{
+		Project:  projectPath,
+		Parallel: true,
+	})
+	if err != nil {
+		t.Fatalf("Plan() error = %v", err)
+	}
+	if got, want := planBatchIssues(result.Batches), [][]string{{"orca-ready"}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("batches = %#v, want %#v", got, want)
+	}
+}
+
+func TestLocalControllerPlanTreatsMissingBeadsIssueAsUnknown(t *testing.T) {
+	t.Parallel()
+
+	projectPath := t.TempDir()
+	if err := os.Mkdir(filepath.Join(projectPath, ".git"), 0o755); err != nil {
+		t.Fatalf("Mkdir(.git) error = %v", err)
+	}
+
+	controller := &LocalController{}
+	result, err := controller.Plan(context.Background(), AssignmentPlanRequest{
+		Project:  projectPath,
+		Parallel: true,
+		Issues:   []string{"LAB-501"},
+	})
+	if err != nil {
+		t.Fatalf("Plan() error = %v", err)
+	}
+	if got, want := planBatchIssues(result.Batches), [][]string{{"LAB-501"}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("batches = %#v, want %#v", got, want)
+	}
+	if got, want := len(result.Warnings), 1; got != want {
+		t.Fatalf("warning count = %d, want %d (%#v)", got, want, result.Warnings)
+	}
+	if got, want := result.Warnings[0].Kind, "unknown_ownership"; got != want {
+		t.Fatalf("warning kind = %q, want %q", got, want)
 	}
 }
 
