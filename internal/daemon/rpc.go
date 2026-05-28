@@ -48,6 +48,7 @@ type assignRPCParams struct {
 	Prompt     string `json:"prompt"`
 	Agent      string `json:"agent"`
 	CallerPane string `json:"caller_pane"`
+	NotifyPane string `json:"notify_pane"`
 	Title      string `json:"title"`
 }
 

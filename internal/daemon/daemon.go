@@ -70,6 +70,7 @@ type Daemon struct {
 	workSource              worksource.Source
 	workSourceAgent         string
 	workSourcePullInterval  time.Duration
+	notificationPane        string
 
 	started              atomic.Bool
 	lastHeartbeat        atomic.Int64
@@ -225,6 +226,7 @@ func New(opts Options) (*Daemon, error) {
 		workSource:              opts.WorkSource,
 		workSourceAgent:         strings.TrimSpace(opts.WorkSourceAgent),
 		workSourcePullInterval:  opts.WorkSourcePullInterval,
+		notificationPane:        strings.TrimSpace(opts.NotificationPane),
 		monitorGitHubCircuit:    NewCircuitBreakerWithHooks(opts.Now, defaultCircuitBreakerFailureThreshold, defaultCircuitBreakerCooldown, daemonCircuitHooks(opts.Project, opts.Now, opts.State, opts.Events, "monitor github")),
 	}, nil
 }

@@ -34,6 +34,10 @@ func (d *Daemon) AssignWithCallerPane(ctx context.Context, issue, prompt, agentP
 }
 
 func (d *Daemon) assign(ctx context.Context, projectPath, issue, prompt, agentProfile, callerPane string, title ...string) error {
+	return d.assignWithNotifyPane(ctx, projectPath, issue, prompt, agentProfile, callerPane, "", title...)
+}
+
+func (d *Daemon) assignWithNotifyPane(ctx context.Context, projectPath, issue, prompt, agentProfile, callerPane, notifyPane string, title ...string) error {
 	issue = normalizeIssueIdentifier(issue)
 	if err := d.requireStarted(); err != nil {
 		return err
@@ -63,6 +67,7 @@ func (d *Daemon) assign(ctx context.Context, projectPath, issue, prompt, agentPr
 		prompt = withGitHubIssueContext(issue, gitHubIssue, prompt)
 	}
 	prompt = wrapAssignmentPrompt(profile, issue, prompt)
+	prompt = appendNotifyConvention(prompt, resolveNotifyPane(notifyPane, callerPane, d.notificationPane))
 
 	assignmentBranch := issue
 	preflightSkipped := false
@@ -271,6 +276,15 @@ func taskAssignedMessage(pane Pane) string {
 		return fmt.Sprintf("task assigned in fallback amux window %s after target window ran out of split space", window)
 	}
 	return "task assigned"
+}
+
+func resolveNotifyPane(notifyPane, callerPane, configPane string) string {
+	for _, pane := range []string{notifyPane, callerPane, configPane} {
+		if pane = strings.TrimSpace(pane); pane != "" {
+			return pane
+		}
+	}
+	return ""
 }
 
 func (d *Daemon) validateAssignment(ctx context.Context, projectPath, issue, prompt string) error {

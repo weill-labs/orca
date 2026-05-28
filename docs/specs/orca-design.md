@@ -234,13 +234,17 @@ orca keeps independent **clones** (not worktrees) for build isolation regardless
 ### Notifications
 
 Orca needs to alert the lieutenant (Claude Code in the lead pane) when events
-require attention. Typing directly into the pane via `amux send-keys` would
-corrupt Claude Code's state if it's mid-task — it has no input queue, just a PTY.
+require attention. Earlier designs avoided direct `amux send-keys` injection
+because an agent pane is still a PTY and can be busy mid-task. The alphazero
+evidence in [Worker → Lieutenant Communication](worker-lieutenant-comms.md)
+shows the safer narrow form works in practice: workers send short, one-line
+messages to a pane id they were explicitly handed.
 
-**Approach: orca emits events, Claude Code polls.** Orca writes notifications to
-its own event stream (`orca events`) and to a notification log in SQLite. Claude
-Code (or a monitoring loop it runs) periodically checks `orca status` or
-subscribes to `orca events` to pick up alerts:
+**Approach: events by default, prompt convention when a pane resolves.** Orca
+writes notifications to its own event stream (`orca events`) and to a
+notification log in SQLite. Claude Code (or a monitoring loop it runs)
+periodically checks `orca status` or subscribes to `orca events` to pick up
+alerts:
 
 ```
 [orca] pane-5 stuck on LAB-123 — nudge failed 3x, needs attention
@@ -248,10 +252,15 @@ subscribes to `orca events` to pick up alerts:
 [orca] worker pool exhausted — 3 tasks queued, 0 clones free
 ```
 
-The exact integration mechanism (Claude Code polling, a background watcher
-process that alerts the lead pane during idle windows, or amux gaining a
-notification overlay) is an open question — the key constraint is that
-notifications must not corrupt an active agent's PTY state.
+For worker→lieutenant messages, `orca assign` can inject a prompt convention that
+tells the worker to run `amux send-keys <pane> "<one-line message>"`. The pane
+resolves from `--notify-pane`, then the caller `AMUX_PANE`, then repo config
+`[notifications] notification_pane`. If no pane resolves, autonomous pull-loop
+assignments omit the convention silently and continue to rely on events/status.
+
+Structured, auditable notifications are still a possible future channel. Until
+then, the raw `send-keys` convention is deliberately limited to blocking
+questions and milestones such as PR opened.
 
 ### PR Merge Detection
 
@@ -398,11 +407,13 @@ database before the daemon starts.
 ```toml
 [daemon]
 poll_interval = "30s"        # PR merge poll frequency
-notification_pane = "pane-1" # fragile — see open question 2 re: auto-detection
 
 [pool]
 pattern = "~/sync/github/amux/amux*"
 clone_origin = "git@github.com:weill-labs/amux.git"
+
+[notifications]
+notification_pane = "pane-1"
 
 # Optional pull-based dispatch. OFF by default; with it disabled (or the section
 # omitted) orca stays push-only and there is zero behavior change.

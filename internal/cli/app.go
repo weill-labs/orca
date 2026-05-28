@@ -89,15 +89,16 @@ Flags:
   --fix           Complete safe automated recovery for merged PR cleanup only
   --adopt-orphans Adopt orphan worker panes into active tasks
   --json          Emit JSON output`,
-	"assign": `usage: orca assign ISSUE --prompt TEXT [--agent NAME] [--project PATH] [--json]
+	"assign": `usage: orca assign ISSUE --prompt TEXT [--agent NAME] [--notify-pane PANE] [--project PATH] [--json]
 
 Assign an issue to a worker.
 
 Flags:
-  --prompt  Task prompt
-  --agent   Agent profile
-  --project Project path
-  --json    Emit JSON output`,
+  --prompt      Task prompt
+  --agent       Agent profile
+  --notify-pane Lieutenant notification pane
+  --project     Project path
+  --json        Emit JSON output`,
 	"spawn": `usage: orca spawn [--project PATH] [--session SESSION] [--lead-pane PANE] [--title TITLE] [--agent NAME] [--prompt TEXT] [--json]
 
 Open a clone in a new amux pane.`,
@@ -554,10 +555,12 @@ func (a *App) runAssign(ctx context.Context, args []string) error {
 	var prompt string
 	var agent string
 	var callerPane string
+	var notifyPane string
 	var projectPath string
 	var jsonOutput bool
 	fs.StringVar(&prompt, "prompt", "", "task prompt")
 	fs.StringVar(&agent, "agent", defaultAgent, "agent profile")
+	fs.StringVar(&notifyPane, "notify-pane", "", "lieutenant notification pane")
 	fs.StringVar(&projectPath, "project", "", "project path")
 	fs.BoolVar(&jsonOutput, "json", false, "emit JSON output")
 
@@ -581,6 +584,7 @@ func (a *App) runAssign(ctx context.Context, args []string) error {
 		Prompt:     prompt,
 		Agent:      agent,
 		CallerPane: callerPane,
+		NotifyPane: notifyPane,
 	})
 	if err != nil {
 		return err

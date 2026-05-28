@@ -58,3 +58,28 @@ func withAssignPreflightSkippedPrompt(prompt, issue string) string {
 	}
 	return prompt + "\n\n" + note
 }
+
+func appendNotifyConvention(prompt, pane string) string {
+	prompt = strings.TrimSpace(prompt)
+	pane = strings.TrimSpace(pane)
+	if pane == "" {
+		return prompt
+	}
+
+	convention := notifyConvention(pane)
+	if strings.Contains(prompt, convention) {
+		return prompt
+	}
+	if prompt == "" {
+		return convention
+	}
+	return prompt + "\n\n" + convention
+}
+
+func notifyConvention(pane string) string {
+	return strings.Join([]string{
+		fmt.Sprintf("To notify or ask the lieutenant, run `amux send-keys %s \"<one-line message>\"`.", pane),
+		"Use it for: a blocking question before you guess, or a milestone (PR opened).",
+		"Keep messages to one line; do not spam.",
+	}, "\n")
+}

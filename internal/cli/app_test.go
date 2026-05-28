@@ -1408,8 +1408,8 @@ func TestAppRunAssignPlumbsNotifyPaneFlag(t *testing.T) {
 	err := app.Run(context.Background(), []string{
 		"assign",
 		"--notify-pane", "pane-13",
-		"LAB-1946",
 		"--prompt", "Implement worker comms",
+		"LAB-1946",
 	})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
