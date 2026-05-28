@@ -42,19 +42,24 @@ func (a *mergeQueueActor) run(ctx context.Context, inbox <-chan ProcessQueue, do
 }
 
 func (a *mergeQueueActor) processQueue(ctx context.Context, msg ProcessQueue) {
+	directLandingStarted := false
 	for _, entry := range msg.Entries {
 		entry := entry
 		switch entry.Status {
 		case "", MergeQueueStatusQueued:
 			entry.Status = MergeQueueStatusRebasing
 			if mergeQueueEntryMode(entry) == LandingModeDirect {
+				if directLandingStarted {
+					continue
+				}
+				directLandingStarted = true
 				a.sendUpdate(ctx, MergeQueueUpdate{
 					Entry:        entry,
 					EventType:    EventDirectLandingStarted,
 					EventMessage: directLandingStartedMessage(entry),
 				})
 				go a.processDirectLanding(ctx, entry)
-				return
+				continue
 			}
 			a.sendUpdate(ctx, MergeQueueUpdate{
 				Entry:        entry,
@@ -66,7 +71,7 @@ func (a *mergeQueueActor) processQueue(ctx context.Context, msg ProcessQueue) {
 			if mergeQueueEntryMode(entry) == LandingModeDirect {
 				entry.Status = MergeQueueStatusQueued
 				a.sendUpdate(ctx, MergeQueueUpdate{Entry: entry})
-				return
+				continue
 			}
 			entry.Status = MergeQueueStatusCheckingCI
 			a.sendUpdate(ctx, MergeQueueUpdate{Entry: entry})
