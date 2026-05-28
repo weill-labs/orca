@@ -79,6 +79,7 @@ func TestAppendNotifyConvention(t *testing.T) {
 		"Keep messages to one line; do not spam.",
 	}, "\n")
 	spaceConvention := strings.Replace(convention, "'pane-13'", "'my pane'", 1)
+	quoteConvention := strings.Replace(convention, "'pane-13'", "'it'\\''s-a-pane'", 1)
 
 	tests := []struct {
 		name   string
@@ -103,6 +104,12 @@ func TestAppendNotifyConvention(t *testing.T) {
 			prompt: "Implement daemon core",
 			pane:   "my pane",
 			want:   "Implement daemon core\n\n" + spaceConvention,
+		},
+		{
+			name:   "quotes pane names with single quotes",
+			prompt: "Implement daemon core",
+			pane:   "it's-a-pane",
+			want:   "Implement daemon core\n\n" + quoteConvention,
 		},
 		{
 			name:   "omits convention when pane is empty",
