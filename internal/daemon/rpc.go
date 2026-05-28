@@ -43,13 +43,14 @@ type rpcError struct {
 }
 
 type assignRPCParams struct {
-	Project    string `json:"project"`
-	Issue      string `json:"issue"`
-	Prompt     string `json:"prompt"`
-	Agent      string `json:"agent"`
-	CallerPane string `json:"caller_pane"`
-	NotifyPane string `json:"notify_pane"`
-	Title      string `json:"title"`
+	Project          string `json:"project"`
+	Issue            string `json:"issue"`
+	Prompt           string `json:"prompt"`
+	Agent            string `json:"agent"`
+	CallerPane       string `json:"caller_pane"`
+	NotifyPane       string `json:"notify_pane"`
+	PlanningDecision string `json:"planning_decision"`
+	Title            string `json:"title"`
 }
 
 type cancelRPCParams struct {

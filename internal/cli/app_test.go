@@ -2797,6 +2797,7 @@ type fakeDaemon struct {
 	startRequest     *daemon.StartRequest
 	stopRequest      *daemon.StopRequest
 	reloadRequest    *daemon.ReloadRequest
+	planRequest      *daemon.AssignmentPlanRequest
 	assignRequest    *daemon.AssignRequest
 	spawnRequest     *daemon.SpawnPaneRequest
 	enqueueRequest   *daemon.EnqueueRequest
@@ -2807,6 +2808,7 @@ type fakeDaemon struct {
 	startResult     daemon.StartResult
 	stopResult      daemon.StopResult
 	reloadResult    daemon.ReloadResult
+	planResult      daemon.AssignmentPlanResult
 	assignResult    daemon.TaskActionResult
 	spawnResult     daemon.SpawnPaneResult
 	enqueueResult   daemon.MergeQueueActionResult
@@ -2841,6 +2843,14 @@ func (f *fakeDaemon) Reload(_ context.Context, req daemon.ReloadRequest) (daemon
 	}
 	f.reloadRequest = &req
 	return f.reloadResult, nil
+}
+
+func (f *fakeDaemon) Plan(_ context.Context, req daemon.AssignmentPlanRequest) (daemon.AssignmentPlanResult, error) {
+	if f.err != nil {
+		return daemon.AssignmentPlanResult{}, f.err
+	}
+	f.planRequest = &req
+	return f.planResult, nil
 }
 
 func (f *fakeDaemon) Assign(_ context.Context, req daemon.AssignRequest) (daemon.TaskActionResult, error) {

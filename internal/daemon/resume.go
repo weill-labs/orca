@@ -136,7 +136,7 @@ func (d *Daemon) resumeExistingPaneForProject(ctx context.Context, projectPath s
 	}
 	worker.LastCapture = startupSnapshot.Output()
 
-	metadata, err := d.assignmentPaneMetadata(ctx, projectPath, paneID, profile.Name, task.Branch, task.Issue, resolveTaskTitle(task.Issue, task.Issue), task.PRNumber, false)
+	metadata, err := d.assignmentPaneMetadata(ctx, projectPath, paneID, profile.Name, task.Branch, task.Issue, resolveTaskTitle(task.Issue, task.Issue), task.PRNumber, false, "")
 	if err != nil {
 		return fmt.Errorf("build pane metadata: %w", err)
 	}
@@ -198,7 +198,7 @@ func (d *Daemon) resumeWithFreshPaneForProject(ctx context.Context, projectPath 
 		}
 	}()
 
-	metadata, err := d.assignmentPaneMetadata(ctx, projectPath, pane.ID, profile.Name, task.Branch, task.Issue, resolveTaskTitle(task.Issue, task.Issue), task.PRNumber, false)
+	metadata, err := d.assignmentPaneMetadata(ctx, projectPath, pane.ID, profile.Name, task.Branch, task.Issue, resolveTaskTitle(task.Issue, task.Issue), task.PRNumber, false, "")
 	if err != nil {
 		return fmt.Errorf("build pane metadata: %w", err)
 	}

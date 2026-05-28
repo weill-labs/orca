@@ -971,6 +971,10 @@ func (*stubController) Reload(context.Context, daemon.ReloadRequest) (daemon.Rel
 	return daemon.ReloadResult{}, nil
 }
 
+func (*stubController) Plan(context.Context, daemon.AssignmentPlanRequest) (daemon.AssignmentPlanResult, error) {
+	return daemon.AssignmentPlanResult{}, nil
+}
+
 func (*stubController) Assign(context.Context, daemon.AssignRequest) (daemon.TaskActionResult, error) {
 	return daemon.TaskActionResult{}, nil
 }
