@@ -15,8 +15,8 @@ func TestAssignTypesIncludeNotifyPaneField(t *testing.T) {
 	if got, want := assignRequestField.Type.Kind(), reflect.String; got != want {
 		t.Fatalf("AssignRequest.NotifyPane kind = %v, want %v", got, want)
 	}
-	if got, want := assignRequestField.Tag.Get("json"), "notify_pane,omitempty"; got != want {
-		t.Fatalf("AssignRequest.NotifyPane json tag = %q, want %q", got, want)
+	if got := assignRequestField.Tag.Get("json"); got != "" {
+		t.Fatalf("AssignRequest.NotifyPane json tag = %q, want empty", got)
 	}
 
 	assignRPCField, ok := reflect.TypeOf(assignRPCParams{}).FieldByName("NotifyPane")

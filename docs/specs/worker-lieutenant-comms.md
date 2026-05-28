@@ -40,7 +40,7 @@ On assign, orca injects two things into the worker's brief:
 
 1. The **lieutenant/notification pane id** (the destination).
 2. A short **"how to reach me" convention**, e.g.:
-   > To notify or ask the lieutenant, run `amux send-keys <PANE> "<one-line message>"`.
+   > To notify or ask the lieutenant, run `amux send-keys '<PANE>' "<one-line message>"`.
    > Use it for: a blocking question before you guess, or a milestone (PR opened).
    > Keep messages to one line; do not spam.
 

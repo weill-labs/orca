@@ -74,10 +74,11 @@ func TestAppendNotifyConvention(t *testing.T) {
 	t.Parallel()
 
 	convention := strings.Join([]string{
-		"To notify or ask the lieutenant, run `amux send-keys pane-13 \"<one-line message>\"`.",
+		"To notify or ask the lieutenant, run `amux send-keys 'pane-13' \"<one-line message>\"`.",
 		"Use it for: a blocking question before you guess, or a milestone (PR opened).",
 		"Keep messages to one line; do not spam.",
 	}, "\n")
+	spaceConvention := strings.Replace(convention, "'pane-13'", "'my pane'", 1)
 
 	tests := []struct {
 		name   string
@@ -92,6 +93,18 @@ func TestAppendNotifyConvention(t *testing.T) {
 			want:   "Implement daemon core\n\n" + convention,
 		},
 		{
+			name:   "returns convention for empty prompt",
+			prompt: "",
+			pane:   "pane-13",
+			want:   convention,
+		},
+		{
+			name:   "quotes pane names with spaces",
+			prompt: "Implement daemon core",
+			pane:   "my pane",
+			want:   "Implement daemon core\n\n" + spaceConvention,
+		},
+		{
 			name:   "omits convention when pane is empty",
 			prompt: "Implement daemon core",
 			pane:   "",
@@ -101,6 +114,12 @@ func TestAppendNotifyConvention(t *testing.T) {
 			name:   "does not duplicate existing convention",
 			prompt: "Implement daemon core\n\n" + convention,
 			pane:   "pane-13",
+			want:   "Implement daemon core\n\n" + convention,
+		},
+		{
+			name:   "does not duplicate existing convention for different pane",
+			prompt: "Implement daemon core\n\n" + convention,
+			pane:   "pane-99",
 			want:   "Implement daemon core\n\n" + convention,
 		},
 	}
@@ -234,6 +253,7 @@ func TestAssignAppendsNotifyConventionFromConfigPane(t *testing.T) {
 	if got := task.Prompt; got != wantPrompt {
 		t.Fatalf("task.Prompt = %q, want %q", got, wantPrompt)
 	}
+	deps.amux.requireSentKeys(t, "pane-1", []string{normalizedPromptForTest(t, wantPrompt) + "\n"})
 }
 
 func TestAssignWrapsCodexPromptWithPROpeningInstructions(t *testing.T) {

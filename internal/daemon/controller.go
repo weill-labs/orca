@@ -95,7 +95,7 @@ type AssignRequest struct {
 	Prompt     string
 	Agent      string
 	CallerPane string
-	NotifyPane string `json:"notify_pane,omitempty"`
+	NotifyPane string
 	Title      string
 }
 

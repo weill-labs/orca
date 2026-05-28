@@ -253,7 +253,7 @@ alerts:
 ```
 
 For worker→lieutenant messages, `orca assign` can inject a prompt convention that
-tells the worker to run `amux send-keys <pane> "<one-line message>"`. The pane
+tells the worker to run `amux send-keys '<pane>' "<one-line message>"`. The pane
 resolves from `--notify-pane`, then the caller `AMUX_PANE`, then repo config
 `[notifications] notification_pane`. If no pane resolves, autonomous pull-loop
 assignments omit the convention silently and continue to rely on events/status.

@@ -74,6 +74,15 @@ func TestLoadWorkSourceConfig(t *testing.T) {
 			wantError: "decode repo config",
 		},
 		{
+			name: "invalid toml errors when notifications section exists",
+			content: strings.Join([]string{
+				"[notifications]",
+				"notification_pane =",
+				"",
+			}, "\n"),
+			wantError: "decode repo config",
+		},
+		{
 			name: "unknown source errors",
 			content: strings.Join([]string{
 				"[worksource]",
