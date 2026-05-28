@@ -113,6 +113,7 @@ func TestMergeQueueActorProcessAwaitingChecks(t *testing.T) {
 						PRNumber: 42,
 						Status:   MergeQueueStatusMerging,
 					},
+					// Delete with no event is the successful merge update.
 					Delete: true,
 				},
 			},

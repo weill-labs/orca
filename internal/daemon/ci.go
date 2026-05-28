@@ -168,7 +168,9 @@ func (d *Daemon) lookupFailedPRChecks(ctx context.Context, projectPath string, p
 func (d *Daemon) runPRChecksCommand(ctx context.Context, projectPath string, prNumber int, fields string) ([]byte, error) {
 	output, err := runPRChecksCommand(ctx, d.commandRunner(ctx), projectPath, prNumber, fields)
 	if err != nil {
-		return nil, wrapGitHubRateLimitError(err, output, d.now())
+		// Keep output on errors so no-CI detection can inspect either gh output
+		// or the wrapped command error, matching the package-level helper path.
+		return output, wrapGitHubRateLimitError(err, output, d.now())
 	}
 	return output, nil
 }
