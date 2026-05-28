@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -104,6 +103,7 @@ func (d *Daemon) Reconcile(ctx context.Context, req ReconcileRequest) (Reconcile
 				continue
 			}
 			finding.Action = reconcileActionFixed
+			finding.Message = fixedReconcileFindingMessage(finding)
 			result.Fixed++
 			if finding.Kind == ReconcileStuckCleanup {
 				fixedLivePaneIssues[strings.ToUpper(strings.TrimSpace(finding.Issue))] = true
@@ -425,6 +425,9 @@ func (d *Daemon) fixMergedReconcileFinding(ctx context.Context, task Task, findi
 	if finding.Kind == ReconcileRecoverableGhost {
 		return d.finishMergedAssignmentWithoutPane(ctx, active)
 	}
+	if finding.Kind == ReconcileStuckCleanup {
+		return d.finishMergedAssignmentWithLivePaneFromReconcile(ctx, active)
+	}
 	return d.finishAssignmentWithMessage(ctx, active, TaskStatusDone, EventTaskCompleted, true, "task finished")
 }
 
@@ -448,56 +451,6 @@ func (d *Daemon) reconcileActiveAssignment(ctx context.Context, task Task) Activ
 		}
 	}
 	return ActiveAssignment{Task: task, Worker: worker}
-}
-
-func (d *Daemon) finishMergedAssignmentWithoutPane(ctx context.Context, active ActiveAssignment) error {
-	var result error
-	cleanupCtx := d.cleanupContext(ctx)
-	d.stopTaskMonitorForProject(active.Task.Project, active.Task.Issue)
-
-	profile, err := d.profileForTask(cleanupCtx, active.Task)
-	if err != nil {
-		profile = AgentProfile{Name: active.Task.AgentProfile}
-	}
-	d.emit(cleanupCtx, Event{
-		Time:         d.now(),
-		Type:         EventWorkerPostmortem,
-		Project:      active.Task.Project,
-		Issue:        active.Task.Issue,
-		WorkerID:     active.Worker.WorkerID,
-		PaneID:       active.Task.PaneID,
-		PaneName:     assignmentPaneName(active.Task, active.Worker),
-		CloneName:    active.Task.CloneName,
-		ClonePath:    active.Task.ClonePath,
-		Branch:       active.Task.Branch,
-		AgentProfile: profile.Name,
-		PRNumber:     active.Task.PRNumber,
-		Message:      "postmortem skipped: worker pane missing",
-	})
-
-	clone := Clone{
-		Name: active.Task.CloneName,
-		Path: active.Task.ClonePath,
-	}
-	if clone.Name == "" && clone.Path != "" {
-		clone.Name = filepath.Base(clone.Path)
-	}
-	result = errors.Join(result, d.cleanupCloneAndReleaseForProject(cleanupCtx, active.Task.Project, clone, active.Task.Branch))
-
-	active.Task.Status = TaskStatusDone
-	active.Task.State = TaskStateDone
-	active.Task.UpdatedAt = d.now()
-	result = errors.Join(result, d.state.PutTask(cleanupCtx, active.Task))
-	result = errors.Join(result, d.releaseWorkerClaim(cleanupCtx, active.Worker))
-	if active.Task.PRNumber > 0 {
-		if err := d.state.DeleteMergeEntry(cleanupCtx, active.Task.Project, active.Task.PRNumber); err != nil && !errors.Is(err, ErrTaskNotFound) {
-			result = errors.Join(result, err)
-		}
-	}
-	d.requestRelayReconnect()
-
-	d.emit(cleanupCtx, d.assignmentEvent(active, profile, EventTaskCompleted, "task finished"))
-	return result
 }
 
 func (d *Daemon) emitReconcileFinding(ctx context.Context, projectPath string, finding ReconcileFinding) {
