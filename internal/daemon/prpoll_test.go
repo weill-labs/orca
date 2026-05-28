@@ -240,6 +240,89 @@ func TestQueuedPRMergePollingCompletesTaskWithoutExtraTick(t *testing.T) {
 	deps.events.requireTypes(t, EventDaemonStarted, EventTaskAssigned, EventPREnqueued, EventPRMerged, EventWorkerPostmortem, EventTaskCompleted)
 }
 
+func TestEnqueueNoCIPRMergesAndCompletesTask(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	captureTicker := newFakeTicker()
+	prTicker := newFakeTicker()
+	deps.tickers.enqueue(captureTicker, prTicker)
+	deps.amux.rejectCanceledContext = true
+	deps.pool.rejectCanceledContext = true
+	deps.state.rejectCanceledContext = true
+	setLifecyclePromptActiveAfterIdleProbes(deps, 0)
+
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, `{"mergedAt":null}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, `{"mergedAt":null}`, nil)
+	deps.commands.queue("gh", []string{"pr", "view", "42", "--json", prSnapshotJSONFields}, `{"mergedAt":"2026-04-02T12:00:00Z"}`, nil)
+	deps.commands.queue("gh", []string{"pr", "update-branch", "42", "--rebase"}, ``, nil)
+	deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, "no checks reported on the 'LAB-1965' branch\n", errors.New("gh pr checks 42 --json bucket: exit status 1: no checks reported on the 'LAB-1965' branch"))
+	deps.commands.queue("gh", []string{"pr", "merge", "42", "--squash"}, ``, nil)
+
+	d := deps.newDaemon(t)
+	ctx := context.Background()
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+
+	if err := d.Assign(ctx, "LAB-1965", "Fix LAB-1965 no-CI merge queue landing", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+
+	task, ok := deps.state.task("LAB-1965")
+	if !ok {
+		t.Fatal("LAB-1965 task missing from state")
+	}
+	task.PRNumber = 42
+	deps.state.putTaskForTest(task)
+
+	if _, err := d.Enqueue(ctx, 42); err != nil {
+		t.Fatalf("Enqueue(42) error = %v", err)
+	}
+
+	prTicker.tick(deps.clock.Now())
+	waitFor(t, "queued no-CI PR awaiting checks", func() bool {
+		entry, err := deps.state.MergeEntry(context.Background(), "/tmp/project", 42)
+		return err == nil && entry != nil && entry.Status == MergeQueueStatusAwaitingChecks
+	})
+
+	deps.clock.Advance(defaultPollInterval)
+	prTicker.tick(deps.clock.Now())
+	waitFor(t, "no-CI PR squash merge", func() bool {
+		return deps.commands.countCalls("gh", []string{"pr", "merge", "42", "--squash"}) == 1
+	})
+	waitFor(t, "no-CI PR merge entry removed", func() bool {
+		entry, err := deps.state.MergeEntry(context.Background(), "/tmp/project", 42)
+		return err == nil && entry == nil
+	})
+
+	deps.clock.Advance(defaultPollInterval)
+	prTicker.tick(deps.clock.Now())
+	waitFor(t, "no-CI queued task completion after merge", func() bool {
+		task, ok := deps.state.task("LAB-1965")
+		return ok && task.Status == TaskStatusDone
+	})
+
+	if _, ok := deps.state.worker("pane-1"); ok {
+		t.Fatal("worker still present after no-CI queued PR cleanup")
+	}
+	if got, want := deps.pool.releasedClones(), []Clone{{
+		Name:          deps.pool.clone.Name,
+		Path:          deps.pool.clone.Path,
+		CurrentBranch: "LAB-1965",
+		AssignedTask:  "LAB-1965",
+	}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("released clones = %#v, want %#v", got, want)
+	}
+	deps.events.requireTypes(t, EventPRLandingStarted, EventPRMerged, EventWorkerPostmortem, EventTaskCompleted)
+	if got := deps.events.countType(EventCIPollTrace); got != 0 {
+		t.Fatalf("ci poll trace count = %d, want 0 for no-checks PR", got)
+	}
+}
+
 func TestPRMergeCleanupContinuesWhenIssueTrackerDoneUpdateFails(t *testing.T) {
 	t.Parallel()
 

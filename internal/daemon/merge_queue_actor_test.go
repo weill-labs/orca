@@ -14,6 +14,7 @@ func TestMergeQueueActorProcessAwaitingChecks(t *testing.T) {
 		name         string
 		checksOutput string
 		checksErr    error
+		queueMerge   bool
 		mergeErr     error
 		want         []MergeQueueUpdate
 	}{
@@ -66,6 +67,7 @@ func TestMergeQueueActorProcessAwaitingChecks(t *testing.T) {
 		{
 			name:         "passing checks with merge error deletes entry and notifies worker",
 			checksOutput: `[{"bucket":"pass"}]`,
+			queueMerge:   true,
 			mergeErr:     errors.New("merge failed"),
 			want: []MergeQueueUpdate{
 				{
@@ -90,6 +92,32 @@ func TestMergeQueueActorProcessAwaitingChecks(t *testing.T) {
 				},
 			},
 		},
+		{
+			name:         "no checks reported merges queued pr",
+			checksOutput: "no checks reported on the 'LAB-689' branch\n",
+			checksErr:    errors.New("gh pr checks 42 --json bucket: exit status 1: no checks reported on the 'LAB-689' branch"),
+			queueMerge:   true,
+			want: []MergeQueueUpdate{
+				{
+					Entry: MergeQueueEntry{
+						Project:  "/tmp/project",
+						Issue:    "LAB-689",
+						PRNumber: 42,
+						Status:   MergeQueueStatusMerging,
+					},
+				},
+				{
+					Entry: MergeQueueEntry{
+						Project:  "/tmp/project",
+						Issue:    "LAB-689",
+						PRNumber: 42,
+						Status:   MergeQueueStatusMerging,
+					},
+					// Delete with no event is the successful merge update.
+					Delete: true,
+				},
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -100,7 +128,7 @@ func TestMergeQueueActorProcessAwaitingChecks(t *testing.T) {
 			commands := newFakeCommands()
 			checkArgs := []string{"pr", "checks", "42", "--json", "bucket"}
 			commands.queue("gh", checkArgs, tt.checksOutput, tt.checksErr)
-			if tt.checksErr == nil && strings.Contains(tt.checksOutput, `"pass"`) {
+			if tt.queueMerge {
 				commands.queue("gh", []string{"pr", "merge", "42", "--squash"}, ``, tt.mergeErr)
 			}
 

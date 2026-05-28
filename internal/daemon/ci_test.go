@@ -79,6 +79,68 @@ func TestCIFailurePrompt(t *testing.T) {
 	}
 }
 
+func TestParsePRChecksState(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		output  []byte
+		want    string
+		wantErr bool
+	}{
+		{
+			name:   "empty output has no state",
+			output: nil,
+		},
+		{
+			name:   "empty check array passes",
+			output: []byte(`[]`),
+			want:   ciStatePass,
+		},
+		{
+			name:   "pending outranks pass",
+			output: []byte(`[{"bucket":"pass"},{"bucket":"pending"}]`),
+			want:   ciStatePending,
+		},
+		{
+			name:    "invalid json fails",
+			output:  []byte(`not json`),
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := parsePRChecksState(tt.output)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("parsePRChecksState() error = %v, wantErr = %v", err, tt.wantErr)
+			}
+			if got != tt.want {
+				t.Fatalf("parsePRChecksState() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDaemonLookupPRChecksStateDetectsNoChecksFromOutputOnError(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	deps.commands.queue("gh", []string{"pr", "checks", "42", "--json", "bucket"}, "no checks reported on the 'LAB-1965' branch\n", errors.New("exit status 1"))
+
+	d := deps.newDaemon(t)
+	got, err := d.lookupPRChecksState(context.Background(), "/tmp/project", 42)
+	if err != nil {
+		t.Fatalf("lookupPRChecksState() error = %v, want nil", err)
+	}
+	if got != ciStatePass {
+		t.Fatalf("lookupPRChecksState() = %q, want %q", got, ciStatePass)
+	}
+}
+
 func TestPRPollRenudgesFailingCIOnScheduleAndEscalatesAfterMax(t *testing.T) {
 	t.Parallel()
 

@@ -154,10 +154,7 @@ func (d *Daemon) nudgeForCIFailure(ctx context.Context, update *TaskStateUpdate,
 
 func (d *Daemon) lookupPRChecksState(ctx context.Context, projectPath string, prNumber int) (string, error) {
 	output, err := d.runPRChecksCommand(ctx, projectPath, prNumber, "bucket")
-	if err != nil {
-		return "", err
-	}
-	return parsePRChecksState(output)
+	return prChecksStateFromCommandResult(output, err)
 }
 
 func (d *Daemon) lookupFailedPRChecks(ctx context.Context, projectPath string, prNumber int) ([]prCheck, error) {
@@ -171,7 +168,9 @@ func (d *Daemon) lookupFailedPRChecks(ctx context.Context, projectPath string, p
 func (d *Daemon) runPRChecksCommand(ctx context.Context, projectPath string, prNumber int, fields string) ([]byte, error) {
 	output, err := runPRChecksCommand(ctx, d.commandRunner(ctx), projectPath, prNumber, fields)
 	if err != nil {
-		return nil, wrapGitHubRateLimitError(err, output, d.now())
+		// Keep output on errors so no-CI detection can inspect either gh output
+		// or the wrapped command error, matching the package-level helper path.
+		return output, wrapGitHubRateLimitError(err, output, d.now())
 	}
 	return output, nil
 }
@@ -184,6 +183,13 @@ type prCheck struct {
 
 func lookupPRChecksState(ctx context.Context, commands CommandRunner, project string, prNumber int) (string, error) {
 	output, err := runPRChecksCommand(ctx, commands, project, prNumber, "bucket")
+	return prChecksStateFromCommandResult(output, err)
+}
+
+func prChecksStateFromCommandResult(output []byte, err error) (string, error) {
+	if isNoPRChecksReported(output, err) {
+		return ciStatePass, nil
+	}
 	if err != nil {
 		return "", err
 	}
@@ -200,6 +206,9 @@ func parsePRChecksState(output []byte) (string, error) {
 	}
 	if err := json.Unmarshal(output, &checks); err != nil {
 		return "", err
+	}
+	if len(checks) == 0 {
+		return ciStatePass, nil
 	}
 
 	bestState := ""
@@ -243,6 +252,14 @@ func parseFailedPRChecks(output []byte) ([]prCheck, error) {
 
 func runPRChecksCommand(ctx context.Context, commands CommandRunner, project string, prNumber int, fields string) ([]byte, error) {
 	return commands.Run(ctx, project, "gh", "pr", "checks", fmt.Sprintf("%d", prNumber), "--json", fields)
+}
+
+func isNoPRChecksReported(output []byte, err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(string(output) + "\n" + err.Error())
+	return strings.Contains(message, "no checks reported")
 }
 
 func ciFailurePrompt(prNumber int, failedChecks []prCheck) string {
