@@ -193,7 +193,7 @@ func TestBeadsSourceMutations(t *testing.T) {
 				return source.Complete(context.Background(), "orca-y5r.1", OutcomeMerged)
 			},
 			want: []string{"close", "orca-y5r.1", "--suggest-next", "--json"},
-			out:  `{"closed":["orca-y5r.1"],"unblocked":["orca-y5r.2"]}`,
+			out:  `{"closed":[{"id":"orca-y5r.1","status":"closed"}],"unblocked":[{"id":"orca-y5r.2","status":"ready"}]}`,
 		},
 		{
 			name: "complete merged closes with suggest next leaf array",
@@ -201,7 +201,7 @@ func TestBeadsSourceMutations(t *testing.T) {
 				return source.Complete(context.Background(), "orca-y5r.1", OutcomeMerged)
 			},
 			want: []string{"close", "orca-y5r.1", "--suggest-next", "--json"},
-			out:  `["orca-y5r.1"]`,
+			out:  `[{"id":"orca-y5r.1","status":"closed"}]`,
 		},
 		{
 			name: "complete abandoned releases",
@@ -443,6 +443,84 @@ func TestBeadsSourceErrors(t *testing.T) {
 				t.Fatalf("error = %v, want nil", err)
 			}
 			runner.assertDone()
+		})
+	}
+}
+
+func TestBeadsCloseResultUnmarshalJSON(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		input         string
+		wantClosed    []string
+		wantUnblocked []string
+		wantErr       string
+	}{
+		{
+			name:          "object shape with issue objects (real bd v1.0.4)",
+			input:         `{"closed":[{"id":"orca-y5r.1","status":"closed"}],"unblocked":[{"id":"orca-y5r.2","status":"ready"}]}`,
+			wantClosed:    []string{"orca-y5r.1"},
+			wantUnblocked: []string{"orca-y5r.2"},
+		},
+		{
+			name:       "bare array of issue objects (leaf close, real bd v1.0.4)",
+			input:      `[{"id":"orca-y5r.1","status":"closed"}]`,
+			wantClosed: []string{"orca-y5r.1"},
+		},
+		{
+			name:          "object shape with id strings (legacy/shim)",
+			input:         `{"closed":["orca-y5r.1"],"unblocked":["orca-y5r.2"]}`,
+			wantClosed:    []string{"orca-y5r.1"},
+			wantUnblocked: []string{"orca-y5r.2"},
+		},
+		{
+			name:       "bare array of id strings (legacy/shim)",
+			input:      `["orca-y5r.1"]`,
+			wantClosed: []string{"orca-y5r.1"},
+		},
+		{
+			name:       "empty unblocked field omitted",
+			input:      `{"closed":[{"id":"orca-y5r.1"}]}`,
+			wantClosed: []string{"orca-y5r.1"},
+		},
+		{
+			name:    "empty input",
+			input:   ``,
+			wantErr: "expected close result object or array",
+		},
+		{
+			name:    "unexpected scalar",
+			input:   `42`,
+			wantErr: "expected close result object or array",
+		},
+		{
+			name:    "unexpected element type inside array",
+			input:   `[42]`,
+			wantErr: "unexpected close result element",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var got beadsCloseResult
+			err := got.UnmarshalJSON([]byte(tt.input))
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("UnmarshalJSON(%q) error = %v, want substring %q", tt.input, err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("UnmarshalJSON(%q) error = %v, want nil", tt.input, err)
+			}
+			if !reflect.DeepEqual(got.Closed, tt.wantClosed) {
+				t.Fatalf("Closed = %#v, want %#v", got.Closed, tt.wantClosed)
+			}
+			if !reflect.DeepEqual(got.Unblocked, tt.wantUnblocked) {
+				t.Fatalf("Unblocked = %#v, want %#v", got.Unblocked, tt.wantUnblocked)
+			}
 		})
 	}
 }

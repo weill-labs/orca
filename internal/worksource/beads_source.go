@@ -281,23 +281,75 @@ func (r *beadsCloseResult) UnmarshalJSON(data []byte) error {
 
 	switch data[0] {
 	case '{':
-		type closeResult beadsCloseResult
-		var result closeResult
-		if err := json.Unmarshal(data, &result); err != nil {
+		var raw struct {
+			Closed    []json.RawMessage `json:"closed"`
+			Unblocked []json.RawMessage `json:"unblocked"`
+		}
+		if err := json.Unmarshal(data, &raw); err != nil {
 			return err
 		}
-		*r = beadsCloseResult(result)
+		closed, err := decodeBeadsCloseIDs(raw.Closed)
+		if err != nil {
+			return fmt.Errorf("decode closed: %w", err)
+		}
+		unblocked, err := decodeBeadsCloseIDs(raw.Unblocked)
+		if err != nil {
+			return fmt.Errorf("decode unblocked: %w", err)
+		}
+		*r = beadsCloseResult{Closed: closed, Unblocked: unblocked}
 		return nil
 	case '[':
-		var closed []string
-		if err := json.Unmarshal(data, &closed); err != nil {
+		var raw []json.RawMessage
+		if err := json.Unmarshal(data, &raw); err != nil {
 			return err
+		}
+		closed, err := decodeBeadsCloseIDs(raw)
+		if err != nil {
+			return fmt.Errorf("decode closed: %w", err)
 		}
 		*r = beadsCloseResult{Closed: closed}
 		return nil
 	default:
 		return fmt.Errorf("expected close result object or array")
 	}
+}
+
+// decodeBeadsCloseIDs extracts issue ids from `bd close --json` output. bd
+// v1.0.4 emits each entry as a full issue object ({"id":"...",...}); older or
+// shimmed builds may emit bare id strings. Accepting both keeps the parse
+// robust to either shape.
+func decodeBeadsCloseIDs(items []json.RawMessage) ([]string, error) {
+	if len(items) == 0 {
+		return nil, nil
+	}
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		b := bytes.TrimSpace(item)
+		if len(b) == 0 {
+			continue
+		}
+		var id string
+		switch b[0] {
+		case '"':
+			if err := json.Unmarshal(b, &id); err != nil {
+				return nil, err
+			}
+		case '{':
+			var obj struct {
+				ID string `json:"id"`
+			}
+			if err := json.Unmarshal(b, &obj); err != nil {
+				return nil, err
+			}
+			id = obj.ID
+		default:
+			return nil, fmt.Errorf("unexpected close result element: %s", string(b))
+		}
+		if id = strings.TrimSpace(id); id != "" {
+			out = append(out, id)
+		}
+	}
+	return out, nil
 }
 
 type beadsVersion struct {
