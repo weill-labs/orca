@@ -467,12 +467,18 @@ func (a *sqliteStateAdapter) ActiveAssignmentByPRNumber(ctx context.Context, pro
 
 func (a *sqliteStateAdapter) EnqueueMerge(ctx context.Context, entry MergeQueueEntry) (int, error) {
 	return a.store.EnqueueMergeEntry(ctx, state.MergeQueueEntry{
-		Project:   entry.Project,
-		Issue:     entry.Issue,
-		PRNumber:  entry.PRNumber,
-		Status:    entry.Status,
-		CreatedAt: entry.CreatedAt,
-		UpdatedAt: entry.UpdatedAt,
+		Project:     entry.Project,
+		Issue:       entry.Issue,
+		PRNumber:    entry.PRNumber,
+		Mode:        entry.Mode,
+		Target:      entry.Target,
+		Branch:      entry.Branch,
+		ClonePath:   entry.ClonePath,
+		BaseBranch:  entry.BaseBranch,
+		QualityGate: entry.QualityGate,
+		Status:      entry.Status,
+		CreatedAt:   entry.CreatedAt,
+		UpdatedAt:   entry.UpdatedAt,
 	})
 }
 
@@ -485,12 +491,18 @@ func (a *sqliteStateAdapter) MergeEntry(ctx context.Context, project string, prN
 		return nil, nil
 	}
 	return &MergeQueueEntry{
-		Project:   entry.Project,
-		Issue:     entry.Issue,
-		PRNumber:  entry.PRNumber,
-		Status:    entry.Status,
-		CreatedAt: entry.CreatedAt,
-		UpdatedAt: entry.UpdatedAt,
+		Project:     entry.Project,
+		Issue:       entry.Issue,
+		PRNumber:    entry.PRNumber,
+		Mode:        entry.Mode,
+		Target:      entry.Target,
+		Branch:      entry.Branch,
+		ClonePath:   entry.ClonePath,
+		BaseBranch:  entry.BaseBranch,
+		QualityGate: entry.QualityGate,
+		Status:      entry.Status,
+		CreatedAt:   entry.CreatedAt,
+		UpdatedAt:   entry.UpdatedAt,
 	}, nil
 }
 
@@ -503,12 +515,18 @@ func (a *sqliteStateAdapter) MergeEntries(ctx context.Context, project string) (
 	out := make([]MergeQueueEntry, 0, len(entries))
 	for _, entry := range entries {
 		out = append(out, MergeQueueEntry{
-			Project:   entry.Project,
-			Issue:     entry.Issue,
-			PRNumber:  entry.PRNumber,
-			Status:    entry.Status,
-			CreatedAt: entry.CreatedAt,
-			UpdatedAt: entry.UpdatedAt,
+			Project:     entry.Project,
+			Issue:       entry.Issue,
+			PRNumber:    entry.PRNumber,
+			Mode:        entry.Mode,
+			Target:      entry.Target,
+			Branch:      entry.Branch,
+			ClonePath:   entry.ClonePath,
+			BaseBranch:  entry.BaseBranch,
+			QualityGate: entry.QualityGate,
+			Status:      entry.Status,
+			CreatedAt:   entry.CreatedAt,
+			UpdatedAt:   entry.UpdatedAt,
 		})
 	}
 	return out, nil
@@ -516,12 +534,18 @@ func (a *sqliteStateAdapter) MergeEntries(ctx context.Context, project string) (
 
 func (a *sqliteStateAdapter) UpdateMergeEntry(ctx context.Context, entry MergeQueueEntry) error {
 	err := a.store.UpdateMergeEntry(ctx, state.MergeQueueEntry{
-		Project:   entry.Project,
-		Issue:     entry.Issue,
-		PRNumber:  entry.PRNumber,
-		Status:    entry.Status,
-		CreatedAt: entry.CreatedAt,
-		UpdatedAt: entry.UpdatedAt,
+		Project:     entry.Project,
+		Issue:       entry.Issue,
+		PRNumber:    entry.PRNumber,
+		Mode:        entry.Mode,
+		Target:      entry.Target,
+		Branch:      entry.Branch,
+		ClonePath:   entry.ClonePath,
+		BaseBranch:  entry.BaseBranch,
+		QualityGate: entry.QualityGate,
+		Status:      entry.Status,
+		CreatedAt:   entry.CreatedAt,
+		UpdatedAt:   entry.UpdatedAt,
 	})
 	if errors.Is(err, state.ErrNotFound) {
 		return ErrTaskNotFound
@@ -690,13 +714,14 @@ func newLinearIssueTrackerFromEnv() (IssueTracker, error) {
 }
 
 type internalPoolConfig struct {
-	poolDir string
-	origin  string
+	poolDir    string
+	origin     string
+	baseBranch string
 }
 
 func (c internalPoolConfig) PoolDir() string     { return c.poolDir }
 func (c internalPoolConfig) CloneOrigin() string { return c.origin }
-func (c internalPoolConfig) BaseBranch() string  { return "" }
+func (c internalPoolConfig) BaseBranch() string  { return c.baseBranch }
 
 type amuxCWDUsageChecker struct {
 	amux interface {

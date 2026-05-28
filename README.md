@@ -5,7 +5,7 @@
 
 Deterministic agent orchestration daemon for [amux](https://github.com/weill-labs/amux).
 
-Orca manages the full lifecycle of coding tasks: clone allocation, agent spawning, health monitoring, PR merge detection, and cleanup. It owns no AI — all intelligence lives in the worker agents (Claude Code, Codex, etc.).
+Orca manages the full lifecycle of coding tasks: clone allocation, agent spawning, health monitoring, serialized landing, and cleanup. It owns no AI — all intelligence lives in the worker agents (Claude Code, Codex, etc.).
 
 ## How it works
 
@@ -14,11 +14,11 @@ User
   └─ Claude Code (lead pane)
        └─ orca CLI ─── orca daemon
             ├─ amux        (pane/PTY infrastructure)
-            ├─ GitHub API  (PR merge detection)
+            ├─ git         (local or remote branch landing)
             └─ clone pool  (filesystem)
 ```
 
-The lead agent calls `orca assign` with an issue and prompt. Orca allocates git clones, spawns amux panes, starts coding agents, sends prompts, and monitors progress. When a PR is ready to land, the lead agent can queue it with `orca enqueue PR_NUMBER` so Orca rebases, waits for required checks, and squash-merges one PR at a time. When the PR merges, Orca cleans up the clone and returns it to the pool.
+The lead agent calls `orca assign` with an issue and prompt. Orca allocates git clones, spawns amux panes, starts coding agents, sends prompts, and monitors progress. By default, work lands directly through git with no GitHub or Linear dependency: `orca enqueue ISSUE_OR_BRANCH` rebases a worker branch onto a configured base branch, runs a local quality gate when configured, pushes the base branch, and then cleans up the clone. GitHub PR landing and Linear status updates are optional integrations enabled per project.
 
 ## Install
 
@@ -74,13 +74,23 @@ stuck_text_patterns = ["permission prompt"]
 nudge_command = "Enter"
 max_nudge_retries = 3
 
-# Optional: pull ready beads work when clones are free.
+# Optional: pull ready local beads work when clones are free.
 [worksource]
 enabled = false
 source = "manual"
 # source = "beads"
 # beads_bin = "bd"
 # agent = "codex"
+
+[landing]
+mode = "direct"
+base_branch = "main"
+# quality_gate = "uv run pytest -q"
+
+# Optional external integrations. Disabled by default.
+[integrations]
+github = false
+linear = false
 EOF
 
 # 4. Create clones with pool markers
@@ -91,12 +101,10 @@ done
 
 # 5. Start the daemon
 export AMUX_SESSION=my-session
-# Optional: isolate daemon GitHub polling from your interactive gh budget.
-export ORCA_GITHUB_TOKEN=github_pat_or_app_installation_token
 orca start --project ~/sync/github/myproject/myproject
 
 # 6. Assign work
-orca assign LAB-123 --prompt "Fix the auth bug. TDD. Open a PR when done."
+orca assign myproject-123 --prompt "Fix the auth bug. TDD. Commit and queue direct landing when done."
 
 # 7. Monitor
 orca status
@@ -104,8 +112,8 @@ orca workers
 orca pool
 orca events        # NDJSON event stream
 
-# 7b. Queue a ready PR for serialized landing
-orca enqueue 123
+# 7b. Queue an active issue or branch for serialized direct landing
+orca enqueue myproject-123
 
 # 8. Cancel or stop
 orca cancel LAB-123
@@ -113,6 +121,47 @@ orca stop
 ```
 
 All commands accept `--project` to target another checkout explicitly. If you omit it, Orca resolves the current working directory to the canonical git repo root. `orca start` uses `AMUX_SESSION` by default when it is set; otherwise it falls back to the repo basename. `orca start` requires `<repo>/.orca/config.toml` and fails clearly when it is missing.
+
+## Landing modes
+
+Direct mode is the default and works with local filesystem remotes and local beads issue tracking without GitHub or Linear:
+
+```toml
+[landing]
+mode = "direct"
+base_branch = "main"
+quality_gate = "uv run pytest -q"
+```
+
+In direct mode, assignment prompts tell workers to commit, push their branch, and run `orca enqueue ISSUE_OR_BRANCH`; they do not ask workers to open a PR. Orca fetches `origin/<base_branch>`, rebases the worker branch in its managed clone, runs `quality_gate` from that clone when configured, and pushes `HEAD:<base_branch>` to `origin`.
+
+Local filesystem remotes are supported when `origin` is a bare repository path, for example `/path/to/repo.git`. Pushing to a non-bare local checkout's checked-out branch is intentionally not supported because Git rejects that shape by default.
+
+For local beads dispatch and completion, enable the beads worksource:
+
+```toml
+[worksource]
+enabled = true
+source = "beads"
+beads_bin = "bd"
+agent = "codex"
+```
+
+This uses the local `bd` database and closes beads issues after successful direct landing. Linear sync is not required.
+
+GitHub PR mode is preserved for projects that opt in:
+
+```toml
+[landing]
+mode = "pr"
+base_branch = "main"
+
+[integrations]
+github = true
+linear = true # optional Linear status/title sync
+```
+
+In PR mode, workers receive the existing `gh pr create --base main` prompt and `orca enqueue PR_NUMBER` uses GitHub PR checks and squash merge behavior. Set `ORCA_GITHUB_TOKEN` if you want the daemon to use a separate GitHub token from your interactive `gh` session.
 
 ## Design principles
 

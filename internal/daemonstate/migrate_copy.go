@@ -314,20 +314,26 @@ func copyEvents(ctx context.Context, source *SQLiteStore, destination pgx.Tx) er
 
 func copyMergeQueue(ctx context.Context, source *SQLiteStore, destination pgx.Tx) error {
 	return copySQLiteRows(ctx, source, destination, "merge_queue", "merge queue",
-		[]string{"project", "pr_number", "issue", "status", "created_at", "updated_at"},
+		[]string{"project", "pr_number", "issue", "mode", "target", "branch", "clone_path", "base_branch", "quality_gate", "status", "created_at", "updated_at"},
 		`
-		SELECT project, pr_number, issue, status, created_at, updated_at
+		SELECT project, pr_number, issue, mode, target, branch, clone_path, base_branch, quality_gate, status, created_at, updated_at
 		FROM merge_queue
 		ORDER BY project ASC, pr_number ASC
 	`, func(rows *sql.Rows) ([]any, error) {
 			var project string
 			var prNumber int64
 			var issue string
+			var mode string
+			var target string
+			var branch string
+			var clonePath string
+			var baseBranch string
+			var qualityGate string
 			var entryStatus string
 			var createdAtText string
 			var updatedAtText string
 
-			if err := rows.Scan(&project, &prNumber, &issue, &entryStatus, &createdAtText, &updatedAtText); err != nil {
+			if err := rows.Scan(&project, &prNumber, &issue, &mode, &target, &branch, &clonePath, &baseBranch, &qualityGate, &entryStatus, &createdAtText, &updatedAtText); err != nil {
 				return nil, fmt.Errorf("scan sqlite merge queue entry: %w", err)
 			}
 
@@ -340,7 +346,7 @@ func copyMergeQueue(ctx context.Context, source *SQLiteStore, destination pgx.Tx
 				return nil, err
 			}
 
-			return []any{project, prNumber, issue, entryStatus, createdAt, updatedAt}, nil
+			return []any{project, prNumber, issue, mode, target, branch, clonePath, baseBranch, qualityGate, entryStatus, createdAt, updatedAt}, nil
 		})
 }
 

@@ -85,8 +85,27 @@ func (d *testDeps) newDaemon(t *testing.T) *Daemon {
 
 func (d *testDeps) newDaemonWithOptions(t *testing.T, mutate func(*Options)) *Daemon {
 	t.Helper()
+	opts := d.daemonOptions()
+	opts.LandingConfig = LandingConfig{Mode: LandingModePR, BaseBranch: "main"}
+	opts.IntegrationConfig = IntegrationConfig{Linear: true}
+	if mutate != nil {
+		mutate(&opts)
+	}
+	return d.newDaemonFromOptions(t, opts)
+}
 
-	opts := Options{
+func (d *testDeps) newDaemonWithProductDefaults(t *testing.T, mutate func(*Options)) *Daemon {
+	t.Helper()
+
+	opts := d.daemonOptions()
+	if mutate != nil {
+		mutate(&opts)
+	}
+	return d.newDaemonFromOptions(t, opts)
+}
+
+func (d *testDeps) daemonOptions() Options {
+	return Options{
 		Project:         "/tmp/project",
 		Session:         "test-session",
 		PIDPath:         d.pidPath,
@@ -106,9 +125,10 @@ func (d *testDeps) newDaemonWithOptions(t *testing.T, mutate func(*Options)) *Da
 		StatsInterval:    -1,
 		MergeGracePeriod: 2 * time.Minute,
 	}
-	if mutate != nil {
-		mutate(&opts)
-	}
+}
+
+func (d *testDeps) newDaemonFromOptions(t *testing.T, opts Options) *Daemon {
+	t.Helper()
 
 	daemon, err := New(opts)
 	if err != nil {

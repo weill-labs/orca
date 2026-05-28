@@ -38,7 +38,7 @@ commands:
   plan     Plan non-conflicting parallel assignments
   assign   Assign an issue to a worker
   spawn    Open a clone in a new amux pane
-  enqueue  Queue a PR for serialized landing
+  enqueue  Queue a direct branch or PR for serialized landing
   cancel   Cancel a task
   resume   Resume a task, recreating its pane if needed
   workers  List workers and their state
@@ -113,9 +113,9 @@ Flags:
 	"spawn": `usage: orca spawn [--project PATH] [--session SESSION] [--lead-pane PANE] [--title TITLE] [--agent NAME] [--prompt TEXT] [--json]
 
 Open a clone in a new amux pane.`,
-	"enqueue": `usage: orca enqueue PR_NUMBER [--project PATH] [--json]
+	"enqueue": `usage: orca enqueue TARGET [--project PATH] [--json]
 
-Queue a PR for serialized landing.`,
+Queue a direct-mode issue/branch or PR number for serialized landing.`,
 	"cancel": `usage: orca cancel ISSUE [--project PATH] [--force] [--json]
 
 Cancel a task.`,
@@ -685,14 +685,14 @@ func (a *App) runEnqueue(ctx context.Context, args []string) error {
 	fs.StringVar(&projectPath, "project", "", "project path")
 	fs.BoolVar(&jsonOutput, "json", false, "emit JSON output")
 
-	rawPR, err := parseRequiredSinglePositional(fs, args, "enqueue requires PR_NUMBER")
+	target, err := parseRequiredSinglePositional(fs, args, "enqueue requires TARGET")
 	if err != nil {
 		return err
 	}
 
-	prNumber, err := strconv.Atoi(strings.TrimSpace(rawPR))
-	if err != nil || prNumber <= 0 {
-		return fmt.Errorf("enqueue requires numeric PR_NUMBER")
+	prNumber := 0
+	if parsed, err := strconv.Atoi(strings.TrimSpace(target)); err == nil && parsed > 0 {
+		prNumber = parsed
 	}
 
 	projectPath, err = a.resolveProject(projectPath)
@@ -703,6 +703,7 @@ func (a *App) runEnqueue(ctx context.Context, args []string) error {
 	result, err := a.daemon.Enqueue(ctx, daemon.EnqueueRequest{
 		Project:  projectPath,
 		PRNumber: prNumber,
+		Target:   strings.TrimSpace(target),
 	})
 	if err != nil {
 		return err
@@ -712,8 +713,22 @@ func (a *App) runEnqueue(ctx context.Context, args []string) error {
 		return writeJSON(a.stdout, result)
 	}
 
+	if result.Mode == daemon.LandingModeDirect {
+		landingTarget := firstNonEmptyString(result.Issue, result.Branch, result.Target)
+		_, err = fmt.Fprintf(a.stdout, "queued %s for direct landing at position %d\n", landingTarget, result.Position)
+		return err
+	}
 	_, err = fmt.Fprintf(a.stdout, "queued PR #%d for landing at position %d\n", result.PRNumber, result.Position)
 	return err
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return "-"
 }
 
 func (a *App) runCancel(ctx context.Context, args []string) error {
@@ -1167,11 +1182,11 @@ func writeProjectStatusAt(w io.Writer, status state.ProjectStatus, daemonBuildCo
 	}
 
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	if _, err := fmt.Fprintln(tw, "\nISSUE\tSTATUS\tAGENT\tWORKER\tCLONE\tUPDATED"); err != nil {
+	if _, err := fmt.Fprintln(tw, "\nISSUE\tSTATUS\tSTATE\tAGENT\tWORKER\tCLONE\tUPDATED"); err != nil {
 		return err
 	}
 	for _, task := range status.Tasks {
-		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", task.Issue, task.Status, fallback(task.Agent), fallback(task.WorkerID), fallback(task.ClonePath), formatTimestamp(task.UpdatedAt)); err != nil {
+		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", task.Issue, task.Status, fallback(task.State), fallback(task.Agent), fallback(task.WorkerID), fallback(task.ClonePath), formatTimestamp(task.UpdatedAt)); err != nil {
 			return err
 		}
 	}
@@ -1236,6 +1251,11 @@ func writeTaskStatus(w io.Writer, taskStatus state.TaskStatus) error {
 	}
 	if _, err := fmt.Fprintf(w, "status: %s\n", task.Status); err != nil {
 		return err
+	}
+	if strings.TrimSpace(task.State) != "" {
+		if _, err := fmt.Fprintf(w, "state: %s\n", task.State); err != nil {
+			return err
+		}
 	}
 	if _, err := fmt.Fprintf(w, "agent: %s\n", fallback(task.Agent)); err != nil {
 		return err

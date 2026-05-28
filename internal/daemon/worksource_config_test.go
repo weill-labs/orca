@@ -130,17 +130,30 @@ func TestLoadLandingConfig(t *testing.T) {
 		wantError string
 	}{
 		{
-			name: "missing project uses pr defaults",
+			name: "missing project uses direct defaults",
 			want: defaultLandingConfig(),
 		},
 		{
-			name: "repo config without landing uses pr defaults",
+			name: "repo config without landing uses direct defaults",
 			content: strings.Join([]string{
 				"[worksource]",
 				`source = "manual"`,
 				"",
 			}, "\n"),
 			want: defaultLandingConfig(),
+		},
+		{
+			name: "pr landing config",
+			content: strings.Join([]string{
+				"[landing]",
+				`mode = "pr"`,
+				`base_branch = "main"`,
+				"",
+			}, "\n"),
+			want: LandingConfig{
+				Mode:       LandingModePR,
+				BaseBranch: "main",
+			},
 		},
 		{
 			name: "direct landing config",
@@ -199,6 +212,76 @@ func TestLoadLandingConfig(t *testing.T) {
 			}
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Fatalf("loadLandingConfig() = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoadIntegrationConfig(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		content   string
+		want      IntegrationConfig
+		wantError string
+	}{
+		{
+			name: "missing project disables external integrations",
+			want: defaultIntegrationConfig(),
+		},
+		{
+			name: "repo config without integrations disables external integrations",
+			content: strings.Join([]string{
+				"[landing]",
+				`mode = "direct"`,
+				"",
+			}, "\n"),
+			want: defaultIntegrationConfig(),
+		},
+		{
+			name: "github and linear integrations",
+			content: strings.Join([]string{
+				"[integrations]",
+				"github = true",
+				"linear = true",
+				"",
+			}, "\n"),
+			want: IntegrationConfig{GitHub: true, Linear: true},
+		},
+		{
+			name: "invalid toml errors when integrations section exists",
+			content: strings.Join([]string{
+				"[integrations]",
+				"github =",
+				"",
+			}, "\n"),
+			wantError: "decode repo config",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			projectPath := ""
+			if tt.content != "" {
+				projectPath = writeWorkSourceConfigTestFile(t, tt.content)
+			}
+
+			got, err := loadIntegrationConfig(projectPath)
+			if tt.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+					t.Fatalf("loadIntegrationConfig() error = %v, want substring %q", err, tt.wantError)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("loadIntegrationConfig() error = %v, want nil", err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("loadIntegrationConfig() = %#v, want %#v", got, tt.want)
 			}
 		})
 	}

@@ -115,6 +115,7 @@ type ResumeRequest struct {
 type EnqueueRequest struct {
 	Project  string
 	PRNumber int
+	Target   string
 }
 
 type TaskActionResult struct {
@@ -142,11 +143,16 @@ type SpawnPaneResult struct {
 }
 
 type MergeQueueActionResult struct {
-	Project   string    `json:"project"`
-	PRNumber  int       `json:"pr_number"`
-	Status    string    `json:"status"`
-	Position  int       `json:"position"`
-	UpdatedAt time.Time `json:"updated_at"`
+	Project    string    `json:"project"`
+	PRNumber   int       `json:"pr_number"`
+	Mode       string    `json:"mode,omitempty"`
+	Target     string    `json:"target,omitempty"`
+	Issue      string    `json:"issue,omitempty"`
+	Branch     string    `json:"branch,omitempty"`
+	BaseBranch string    `json:"base_branch,omitempty"`
+	Status     string    `json:"status"`
+	Position   int       `json:"position"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 type LocalController struct {
@@ -465,6 +471,7 @@ func (c *LocalController) Enqueue(ctx context.Context, req EnqueueRequest) (Merg
 	err = callRPC(callCtx, c.paths.socketFile(), "enqueue", enqueueRPCParams{
 		Project:  projectPath,
 		PRNumber: req.PRNumber,
+		Target:   strings.TrimSpace(req.Target),
 	}, &result)
 	if err != nil {
 		return MergeQueueActionResult{}, err

@@ -31,6 +31,9 @@ func outputIndicatesTestsPassed(output string) bool {
 }
 
 func (d *Daemon) shouldNudgeIdleWorkerToOpenPR(active ActiveAssignment, output string, now time.Time) bool {
+	if direct, err := d.taskUsesDirectLanding(active.Task); err == nil && direct {
+		return false
+	}
 	if active.Task.PRNumber != 0 {
 		return false
 	}

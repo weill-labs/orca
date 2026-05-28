@@ -31,46 +31,50 @@ const (
 )
 
 type Daemon struct {
-	project                 string
-	session                 string
-	pidPath                 string
-	allowCurrentPIDReuse    bool
-	config                  ConfigProvider
-	state                   StateStore
-	pool                    Pool
-	amux                    AmuxClient
-	issueTracker            IssueTracker
-	commands                CommandRunner
-	github                  gitHubClient
-	githubMu                sync.Mutex
-	githubClients           map[string]gitHubClient
-	githubMetricsMu         sync.Mutex
-	lastPollGitHubAPI       githubAPICounters
-	totalGitHubAPI          githubAPICounters
-	events                  EventSink
-	now                     func() time.Time
-	newTicker               func(time.Duration) Ticker
-	newWatchdogTicker       func(time.Duration) Ticker
-	sleep                   func(context.Context, time.Duration) error
-	captureInterval         time.Duration
-	pollInterval            time.Duration
-	statsInterval           time.Duration
-	mergeGracePeriod        time.Duration
-	shutdownCleanupDeadline time.Duration
-	statusWriter            daemonStatusWriter
-	statusWriteTimeout      time.Duration
-	logf                    func(string, ...any)
-	monitorGitHubCircuit    *CircuitBreaker
-	relayURL                string
-	relayToken              string
-	hostname                string
-	detectOrigin            func(projectDir string) (string, error)
-	workSourceEnabled       bool
-	workSourceProject       string
-	workSource              worksource.Source
-	workSourceAgent         string
-	workSourcePullInterval  time.Duration
-	notificationPane        string
+	project                   string
+	session                   string
+	pidPath                   string
+	allowCurrentPIDReuse      bool
+	config                    ConfigProvider
+	state                     StateStore
+	pool                      Pool
+	amux                      AmuxClient
+	issueTracker              IssueTracker
+	commands                  CommandRunner
+	github                    gitHubClient
+	githubMu                  sync.Mutex
+	githubClients             map[string]gitHubClient
+	githubMetricsMu           sync.Mutex
+	lastPollGitHubAPI         githubAPICounters
+	totalGitHubAPI            githubAPICounters
+	events                    EventSink
+	now                       func() time.Time
+	newTicker                 func(time.Duration) Ticker
+	newWatchdogTicker         func(time.Duration) Ticker
+	sleep                     func(context.Context, time.Duration) error
+	captureInterval           time.Duration
+	pollInterval              time.Duration
+	statsInterval             time.Duration
+	mergeGracePeriod          time.Duration
+	shutdownCleanupDeadline   time.Duration
+	statusWriter              daemonStatusWriter
+	statusWriteTimeout        time.Duration
+	logf                      func(string, ...any)
+	monitorGitHubCircuit      *CircuitBreaker
+	relayURL                  string
+	relayToken                string
+	hostname                  string
+	detectOrigin              func(projectDir string) (string, error)
+	workSourceEnabled         bool
+	workSourceProject         string
+	workSource                worksource.Source
+	workSourceAgent           string
+	workSourcePullInterval    time.Duration
+	notificationPane          string
+	landingConfig             LandingConfig
+	landingConfigOverride     bool
+	integrationConfig         IntegrationConfig
+	integrationConfigOverride bool
 
 	started              atomic.Bool
 	lastHeartbeat        atomic.Int64
@@ -160,6 +164,14 @@ func New(opts Options) (*Daemon, error) {
 	if opts.WorkSourcePullInterval <= 0 {
 		opts.WorkSourcePullInterval = defaultWorkSourcePullInterval
 	}
+	landingConfigOverride := landingConfigExplicit(opts.LandingConfig)
+	if landingConfigOverride {
+		opts.LandingConfig = normalizeLandingConfig(opts.LandingConfig)
+		if err := validateLandingConfig(opts.LandingConfig); err != nil {
+			return nil, err
+		}
+	}
+	integrationConfigOverride := integrationConfigExplicit(opts.IntegrationConfig)
 	if opts.ShutdownCleanupDeadline <= 0 {
 		opts.ShutdownCleanupDeadline = defaultShutdownCleanupDeadline
 	}
@@ -192,43 +204,75 @@ func New(opts Options) (*Daemon, error) {
 	}
 
 	return &Daemon{
-		project:                 opts.Project,
-		session:                 opts.Session,
-		pidPath:                 opts.PIDPath,
-		allowCurrentPIDReuse:    opts.AllowCurrentPIDReuse,
-		config:                  opts.Config,
-		state:                   opts.State,
-		pool:                    opts.Pool,
-		amux:                    opts.Amux,
-		issueTracker:            opts.IssueTracker,
-		commands:                opts.Commands,
-		github:                  newDefaultGitHubClient(opts.Project, opts.Commands, opts.Logf),
-		githubClients:           make(map[string]gitHubClient),
-		events:                  opts.Events,
-		now:                     opts.Now,
-		newTicker:               opts.NewTicker,
-		newWatchdogTicker:       opts.NewWatchdogTicker,
-		sleep:                   opts.Sleep,
-		captureInterval:         opts.CaptureInterval,
-		pollInterval:            opts.PollInterval,
-		statsInterval:           opts.StatsInterval,
-		mergeGracePeriod:        opts.MergeGracePeriod,
-		shutdownCleanupDeadline: opts.ShutdownCleanupDeadline,
-		statusWriter:            opts.DaemonStatusWriter,
-		statusWriteTimeout:      opts.DaemonStatusWriteTimeout,
-		logf:                    opts.Logf,
-		relayURL:                strings.TrimSpace(opts.RelayURL),
-		relayToken:              strings.TrimSpace(opts.RelayToken),
-		hostname:                strings.TrimSpace(opts.Hostname),
-		detectOrigin:            opts.DetectOrigin,
-		workSourceEnabled:       opts.WorkSourceEnabled,
-		workSourceProject:       strings.TrimSpace(opts.WorkSourceProject),
-		workSource:              opts.WorkSource,
-		workSourceAgent:         strings.TrimSpace(opts.WorkSourceAgent),
-		workSourcePullInterval:  opts.WorkSourcePullInterval,
-		notificationPane:        strings.TrimSpace(opts.NotificationPane),
-		monitorGitHubCircuit:    NewCircuitBreakerWithHooks(opts.Now, defaultCircuitBreakerFailureThreshold, defaultCircuitBreakerCooldown, daemonCircuitHooks(opts.Project, opts.Now, opts.State, opts.Events, "monitor github")),
+		project:                   opts.Project,
+		session:                   opts.Session,
+		pidPath:                   opts.PIDPath,
+		allowCurrentPIDReuse:      opts.AllowCurrentPIDReuse,
+		config:                    opts.Config,
+		state:                     opts.State,
+		pool:                      opts.Pool,
+		amux:                      opts.Amux,
+		issueTracker:              opts.IssueTracker,
+		commands:                  opts.Commands,
+		github:                    newDefaultGitHubClient(opts.Project, opts.Commands, opts.Logf),
+		githubClients:             make(map[string]gitHubClient),
+		events:                    opts.Events,
+		now:                       opts.Now,
+		newTicker:                 opts.NewTicker,
+		newWatchdogTicker:         opts.NewWatchdogTicker,
+		sleep:                     opts.Sleep,
+		captureInterval:           opts.CaptureInterval,
+		pollInterval:              opts.PollInterval,
+		statsInterval:             opts.StatsInterval,
+		mergeGracePeriod:          opts.MergeGracePeriod,
+		shutdownCleanupDeadline:   opts.ShutdownCleanupDeadline,
+		statusWriter:              opts.DaemonStatusWriter,
+		statusWriteTimeout:        opts.DaemonStatusWriteTimeout,
+		logf:                      opts.Logf,
+		relayURL:                  strings.TrimSpace(opts.RelayURL),
+		relayToken:                strings.TrimSpace(opts.RelayToken),
+		hostname:                  strings.TrimSpace(opts.Hostname),
+		detectOrigin:              opts.DetectOrigin,
+		workSourceEnabled:         opts.WorkSourceEnabled,
+		workSourceProject:         strings.TrimSpace(opts.WorkSourceProject),
+		workSource:                opts.WorkSource,
+		workSourceAgent:           strings.TrimSpace(opts.WorkSourceAgent),
+		workSourcePullInterval:    opts.WorkSourcePullInterval,
+		notificationPane:          strings.TrimSpace(opts.NotificationPane),
+		landingConfig:             opts.LandingConfig,
+		landingConfigOverride:     landingConfigOverride,
+		integrationConfig:         opts.IntegrationConfig,
+		integrationConfigOverride: integrationConfigOverride,
+		monitorGitHubCircuit:      NewCircuitBreakerWithHooks(opts.Now, defaultCircuitBreakerFailureThreshold, defaultCircuitBreakerCooldown, daemonCircuitHooks(opts.Project, opts.Now, opts.State, opts.Events, "monitor github")),
 	}, nil
+}
+
+func landingConfigExplicit(cfg LandingConfig) bool {
+	return strings.TrimSpace(cfg.Mode) != "" ||
+		strings.TrimSpace(cfg.BaseBranch) != "" ||
+		strings.TrimSpace(cfg.QualityGate) != ""
+}
+
+func integrationConfigExplicit(cfg IntegrationConfig) bool {
+	return cfg.GitHub || cfg.Linear
+}
+
+func (d *Daemon) landingConfigForProject(projectPath string) (LandingConfig, error) {
+	if d != nil && d.landingConfigOverride {
+		return d.landingConfig, nil
+	}
+	cfg, err := loadLandingConfig(projectPath)
+	if err != nil {
+		return LandingConfig{}, err
+	}
+	return normalizeLandingConfig(cfg), nil
+}
+
+func (d *Daemon) integrationConfigForProject(projectPath string) (IntegrationConfig, error) {
+	if d != nil && d.integrationConfigOverride {
+		return d.integrationConfig, nil
+	}
+	return loadIntegrationConfig(projectPath)
 }
 
 func daemonCircuitHooks(project string, now func() time.Time, state StateStore, events EventSink, name string) CircuitBreakerHooks {
@@ -297,7 +341,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 	d.mergeQueueDone = make(chan struct{})
 	d.mergeQueueUpdateDone = make(chan struct{})
 	go d.runMergeQueueUpdateLoop(d.stopContext, d.mergeQueueUpdateDone)
-	actor := newMergeQueueActor(d.project, d.commands, d.mergeQueueUpdates)
+	actor := newMergeQueueActor(d.project, d.commands, d.mergeQueueUpdates, d.landingConfigForProject)
 	go actor.run(d.stopContext, d.mergeQueueInbox, d.mergeQueueDone)
 	d.eventStreamDone = make(chan struct{})
 	go d.runExitedEventLoop(d.stopContext, d.eventStreamDone)

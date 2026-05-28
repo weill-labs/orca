@@ -28,6 +28,17 @@ func (d *Daemon) lookupGitHubIssue(ctx context.Context, projectPath, issue strin
 	}, true, nil
 }
 
+func (d *Daemon) assignmentGitHubIntegrationEnabled(projectPath string, landing LandingConfig) (bool, error) {
+	if !landing.directMode() {
+		return true, nil
+	}
+	integrations, err := d.integrationConfigForProject(projectPath)
+	if err != nil {
+		return false, err
+	}
+	return integrations.githubEnabled(), nil
+}
+
 func withGitHubIssueContext(issue string, details gitHubIssueDetails, prompt string) string {
 	lines := []string{"GitHub issue " + strings.TrimSpace(issue)}
 	if title := strings.TrimSpace(details.Title); title != "" {

@@ -3,6 +3,8 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"hash/fnv"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -11,11 +13,40 @@ func (d *Daemon) Enqueue(ctx context.Context, prNumber int) (MergeQueueActionRes
 	return d.enqueue(ctx, d.project, prNumber)
 }
 
+func (d *Daemon) EnqueueTarget(ctx context.Context, target string) (MergeQueueActionResult, error) {
+	return d.enqueueRequest(ctx, d.project, EnqueueRequest{
+		Project: d.project,
+		Target:  target,
+	})
+}
+
 func (d *Daemon) enqueue(ctx context.Context, projectPath string, prNumber int) (MergeQueueActionResult, error) {
+	return d.enqueueRequest(ctx, projectPath, EnqueueRequest{
+		Project:  projectPath,
+		PRNumber: prNumber,
+		Target:   strconv.Itoa(prNumber),
+	})
+}
+
+func (d *Daemon) enqueueRequest(ctx context.Context, projectPath string, req EnqueueRequest) (MergeQueueActionResult, error) {
 	if err := d.requireStarted(); err != nil {
 		return MergeQueueActionResult{}, err
 	}
 
+	landing, err := d.landingConfigForProject(projectPath)
+	if err != nil {
+		return MergeQueueActionResult{}, fmt.Errorf("load landing config: %w", err)
+	}
+	if landing.directMode() {
+		return d.enqueueDirect(ctx, projectPath, req.Target, req.PRNumber, landing)
+	}
+	if req.PRNumber <= 0 {
+		return MergeQueueActionResult{}, fmt.Errorf("enqueue requires numeric PR_NUMBER unless [landing] mode = %q", LandingModeDirect)
+	}
+	return d.enqueuePR(ctx, projectPath, req.PRNumber)
+}
+
+func (d *Daemon) enqueuePR(ctx context.Context, projectPath string, prNumber int) (MergeQueueActionResult, error) {
 	active, err := d.state.ActiveAssignmentByPRNumber(ctx, projectPath, prNumber)
 	if err != nil {
 		return MergeQueueActionResult{}, fmt.Errorf("PR #%d is not associated with an active assignment", prNumber)
@@ -43,10 +74,120 @@ func (d *Daemon) enqueue(ctx context.Context, projectPath string, prNumber int) 
 	return MergeQueueActionResult{
 		Project:   projectPath,
 		PRNumber:  prNumber,
+		Mode:      LandingModePR,
+		Target:    strconv.Itoa(prNumber),
+		Issue:     active.Task.Issue,
+		Branch:    active.Task.Branch,
 		Status:    "queued",
 		Position:  position,
 		UpdatedAt: now,
 	}, nil
+}
+
+func (d *Daemon) enqueueDirect(ctx context.Context, projectPath, target string, prNumber int, landing LandingConfig) (MergeQueueActionResult, error) {
+	target = strings.TrimSpace(target)
+	if target == "" && prNumber > 0 {
+		target = strconv.Itoa(prNumber)
+	}
+	if target == "" {
+		return MergeQueueActionResult{}, fmt.Errorf("direct landing enqueue requires ISSUE or BRANCH")
+	}
+
+	active, err := d.activeAssignmentByDirectTarget(ctx, projectPath, target)
+	if err != nil {
+		return MergeQueueActionResult{}, fmt.Errorf("%q is not associated with an active assignment", target)
+	}
+	branch := strings.TrimSpace(active.Task.Branch)
+	if branch == "" {
+		branch = active.Task.Issue
+	}
+	queueKey := directLandingQueueKey(active.Task.Project, branch)
+	if queued, err := d.directLandingAlreadyQueued(ctx, projectPath, branch); err != nil {
+		return MergeQueueActionResult{}, err
+	} else if queued {
+		return MergeQueueActionResult{}, fmt.Errorf("%s is already queued for direct landing", branch)
+	}
+
+	now := d.now()
+	position, err := d.state.EnqueueMerge(ctx, MergeQueueEntry{
+		Project:     projectPath,
+		Issue:       active.Task.Issue,
+		PRNumber:    queueKey,
+		Mode:        LandingModeDirect,
+		Target:      target,
+		Branch:      branch,
+		ClonePath:   active.Task.ClonePath,
+		BaseBranch:  landing.BaseBranch,
+		QualityGate: landing.QualityGate,
+		Status:      MergeQueueStatusQueued,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	})
+	if err != nil {
+		lowered := strings.ToLower(err.Error())
+		if strings.Contains(lowered, "queued") || strings.Contains(lowered, "unique") {
+			return MergeQueueActionResult{}, fmt.Errorf("%s is already queued for direct landing", branch)
+		}
+		return MergeQueueActionResult{}, err
+	}
+
+	event := d.mergeQueueEvent(&active, EventDirectEnqueued, queueKey, "branch queued for direct landing", now)
+	event.LandingMode = LandingModeDirect
+	event.Target = target
+	event.Branch = branch
+	event.BaseBranch = landing.BaseBranch
+	event.QualityGate = landing.QualityGate
+	d.emit(ctx, event)
+
+	return MergeQueueActionResult{
+		Project:    projectPath,
+		PRNumber:   queueKey,
+		Mode:       LandingModeDirect,
+		Target:     target,
+		Issue:      active.Task.Issue,
+		Branch:     branch,
+		BaseBranch: landing.BaseBranch,
+		Status:     "queued",
+		Position:   position,
+		UpdatedAt:  now,
+	}, nil
+}
+
+func (d *Daemon) activeAssignmentByDirectTarget(ctx context.Context, projectPath, target string) (ActiveAssignment, error) {
+	if active, err := d.state.ActiveAssignmentByIssue(ctx, projectPath, normalizeIssueIdentifier(target)); err == nil {
+		return active, nil
+	}
+	return d.state.ActiveAssignmentByBranch(ctx, projectPath, target)
+}
+
+func (d *Daemon) directLandingAlreadyQueued(ctx context.Context, projectPath, branch string) (bool, error) {
+	entries, err := d.state.MergeEntries(ctx, projectPath)
+	if err != nil {
+		return false, err
+	}
+	for _, entry := range entries {
+		if mergeQueueEntryMode(entry) == LandingModeDirect && strings.TrimSpace(entry.Branch) == branch {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func directLandingQueueKey(projectPath, branch string) int {
+	hash := fnv.New32a()
+	_, _ = hash.Write([]byte(strings.TrimSpace(projectPath)))
+	_, _ = hash.Write([]byte{0})
+	_, _ = hash.Write([]byte(strings.TrimSpace(branch)))
+	value := int(hash.Sum32() & 0x3fffffff)
+	return -value - 1
+}
+
+func mergeQueueEntryMode(entry MergeQueueEntry) string {
+	mode := strings.ToLower(strings.TrimSpace(entry.Mode))
+	if mode == "" {
+		return LandingModePR
+	}
+	return mode
 }
 
 func (d *Daemon) checkTaskPRPoll(ctx context.Context, active ActiveAssignment) (update TaskStateUpdate) {
@@ -90,6 +231,14 @@ func (d *Daemon) checkTaskPRPoll(ctx context.Context, active ActiveAssignment) (
 	if unavailable {
 		d.markClonePathMissing(&update, profile, clonePath, now)
 		traceAction = "poll_clone_missing"
+		return update
+	}
+	if direct, err := d.taskUsesDirectLanding(update.Active.Task); err == nil && direct {
+		traceAction = "direct_landing_task"
+		return update
+	} else if err != nil {
+		traceAction = "direct_landing_config_error"
+		traceErr = err
 		return update
 	}
 
@@ -199,6 +348,14 @@ func (d *Daemon) checkTaskPRPoll(ctx context.Context, active ActiveAssignment) (
 	}
 	traceAction = "follow_up_poll"
 	return d.continuePRFollowUpPolls(ctx, update, profile)
+}
+
+func (d *Daemon) taskUsesDirectLanding(task Task) (bool, error) {
+	cfg, err := d.landingConfigForProject(task.Project)
+	if err != nil {
+		return false, err
+	}
+	return cfg.directMode(), nil
 }
 
 func (d *Daemon) continuePRFollowUpPolls(ctx context.Context, update TaskStateUpdate, profile AgentProfile) TaskStateUpdate {

@@ -13,8 +13,8 @@ import (
 func TestDirectLandingSucceedsWithLocalBareRemote(t *testing.T) {
 	ctx := context.Background()
 	remote, seed := newDirectLandingRemote(t, map[string]string{"README.md": "base\n"})
-	clonePath := cloneDirectLandingRepo(t, remote)
-	deps, d := newDirectLandingDaemon(t, clonePath, LandingConfig{
+	projectPath, clonePath := cloneDirectLandingRepo(t, remote)
+	deps, d := newDirectLandingDaemon(t, projectPath, clonePath, LandingConfig{
 		Mode:        LandingModeDirect,
 		BaseBranch:  "main",
 		QualityGate: "test -f landed.txt",
@@ -46,6 +46,7 @@ func TestDirectLandingSucceedsWithLocalBareRemote(t *testing.T) {
 		task, ok := deps.state.task("LAB-1969")
 		return ok && task.Status == TaskStatusDone
 	})
+	git(t, seed, "fetch", "origin", "main")
 	if got, want := strings.TrimSpace(git(t, seed, "show", "origin/main:landed.txt")), "landed"; got != want {
 		t.Fatalf("origin/main:landed.txt = %q, want %q", got, want)
 	}
@@ -58,8 +59,8 @@ func TestDirectLandingSucceedsWithLocalBareRemote(t *testing.T) {
 func TestDirectLandingConflictNotifiesWorkerWithConflictedFiles(t *testing.T) {
 	ctx := context.Background()
 	remote, seed := newDirectLandingRemote(t, map[string]string{"README.md": "base\n"})
-	clonePath := cloneDirectLandingRepo(t, remote)
-	deps, d := newDirectLandingDaemon(t, clonePath, LandingConfig{
+	projectPath, clonePath := cloneDirectLandingRepo(t, remote)
+	deps, d := newDirectLandingDaemon(t, projectPath, clonePath, LandingConfig{
 		Mode:       LandingModeDirect,
 		BaseBranch: "main",
 	})
@@ -129,8 +130,8 @@ func TestDirectLandingConflictNotifiesWorkerWithConflictedFiles(t *testing.T) {
 func TestDirectLandingQualityGateFailureKeepsTaskActive(t *testing.T) {
 	ctx := context.Background()
 	remote, _ := newDirectLandingRemote(t, map[string]string{"README.md": "base\n"})
-	clonePath := cloneDirectLandingRepo(t, remote)
-	deps, d := newDirectLandingDaemon(t, clonePath, LandingConfig{
+	projectPath, clonePath := cloneDirectLandingRepo(t, remote)
+	deps, d := newDirectLandingDaemon(t, projectPath, clonePath, LandingConfig{
 		Mode:        LandingModeDirect,
 		BaseBranch:  "main",
 		QualityGate: "test -f missing-quality-gate-file",
@@ -164,7 +165,7 @@ func TestDirectLandingQualityGateFailureKeepsTaskActive(t *testing.T) {
 	if got, want := task.Status, TaskStatusActive; got != want {
 		t.Fatalf("task.Status = %q, want %q", got, want)
 	}
-	if entries, err := deps.state.MergeEntries(ctx, "/tmp/project"); err != nil || len(entries) != 0 {
+	if entries, err := deps.state.MergeEntries(ctx, projectPath); err != nil || len(entries) != 0 {
 		t.Fatalf("merge entries after quality failure = %#v, %v, want none", entries, err)
 	}
 	if message := deps.events.lastMessage(EventDirectLandingFailed); !strings.Contains(message, "quality gate") {
@@ -172,13 +173,14 @@ func TestDirectLandingQualityGateFailureKeepsTaskActive(t *testing.T) {
 	}
 }
 
-func newDirectLandingDaemon(t *testing.T, clonePath string, landing LandingConfig) (*testDeps, *Daemon) {
+func newDirectLandingDaemon(t *testing.T, projectPath, clonePath string, landing LandingConfig) (*testDeps, *Daemon) {
 	t.Helper()
 
 	deps := newTestDeps(t)
 	deps.pool.clone = Clone{Name: filepath.Base(clonePath), Path: clonePath}
 	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
 	d := deps.newDaemonWithOptions(t, func(opts *Options) {
+		opts.Project = projectPath
 		opts.Commands = execCommandRunner{}
 		opts.LandingConfig = landing
 	})
@@ -206,13 +208,17 @@ func newDirectLandingRemote(t *testing.T, files map[string]string) (string, stri
 	return remote, seed
 }
 
-func cloneDirectLandingRepo(t *testing.T, remote string) string {
+func cloneDirectLandingRepo(t *testing.T, remote string) (string, string) {
 	t.Helper()
 
-	clonePath := filepath.Join(t.TempDir(), "clone")
+	projectPath := filepath.Join(t.TempDir(), "project")
+	clonePath := filepath.Join(projectPath, OrcaPoolSubdir, "clone-01")
+	if err := os.MkdirAll(filepath.Dir(clonePath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", filepath.Dir(clonePath), err)
+	}
 	git(t, filepath.Dir(clonePath), "clone", remote, clonePath)
 	markClonePathForTest(t, clonePath)
-	return clonePath
+	return projectPath, clonePath
 }
 
 func writeDirectLandingFile(t *testing.T, root, name, content string) {

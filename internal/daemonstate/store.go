@@ -130,12 +130,18 @@ type Worker struct {
 }
 
 type MergeQueueEntry struct {
-	Project   string    `json:"project"`
-	Issue     string    `json:"issue"`
-	PRNumber  int       `json:"pr_number"`
-	Status    string    `json:"status"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	Project     string    `json:"project"`
+	Issue       string    `json:"issue"`
+	PRNumber    int       `json:"pr_number"`
+	Mode        string    `json:"mode,omitempty"`
+	Target      string    `json:"target,omitempty"`
+	Branch      string    `json:"branch,omitempty"`
+	ClonePath   string    `json:"clone_path,omitempty"`
+	BaseBranch  string    `json:"base_branch,omitempty"`
+	QualityGate string    `json:"quality_gate,omitempty"`
+	Status      string    `json:"status"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 type Clone struct {

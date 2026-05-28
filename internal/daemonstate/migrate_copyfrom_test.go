@@ -95,7 +95,7 @@ func TestCopyMigrationTablesUseCopyFrom(t *testing.T) {
 		{
 			name:     "merge queue",
 			table:    "merge_queue",
-			columns:  []string{"project", "pr_number", "issue", "status", "created_at", "updated_at"},
+			columns:  []string{"project", "pr_number", "issue", "mode", "target", "branch", "clone_path", "base_branch", "quality_gate", "status", "created_at", "updated_at"},
 			wantRows: 2,
 			copyFn:   copyMergeQueue,
 			assertRow: func(t *testing.T, rows [][]any) {
@@ -103,7 +103,7 @@ func TestCopyMigrationTablesUseCopyFrom(t *testing.T) {
 
 				assertCopyString(t, rows[0], 0, "/repo-alpha")
 				assertCopyInt64(t, rows[0], 1, 104)
-				assertCopyTime(t, rows[1], 5, time.Date(2026, 4, 15, 10, 5, 0, 0, time.UTC))
+				assertCopyTime(t, rows[1], 11, time.Date(2026, 4, 15, 10, 5, 0, 0, time.UTC))
 			},
 		},
 		{

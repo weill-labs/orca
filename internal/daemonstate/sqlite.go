@@ -87,6 +87,12 @@ CREATE TABLE IF NOT EXISTS merge_queue (
 	project TEXT NOT NULL,
 	pr_number INTEGER NOT NULL,
 	issue TEXT NOT NULL,
+	mode TEXT NOT NULL DEFAULT 'pr',
+	target TEXT NOT NULL DEFAULT '',
+	branch TEXT NOT NULL DEFAULT '',
+	clone_path TEXT NOT NULL DEFAULT '',
+	base_branch TEXT NOT NULL DEFAULT '',
+	quality_gate TEXT NOT NULL DEFAULT '',
 	status TEXT NOT NULL,
 	created_at TEXT NOT NULL,
 	updated_at TEXT NOT NULL,
@@ -195,6 +201,12 @@ CREATE TABLE IF NOT EXISTS merge_queue (
 	project TEXT NOT NULL,
 	pr_number INTEGER NOT NULL,
 	issue TEXT NOT NULL,
+	mode TEXT NOT NULL DEFAULT 'pr',
+	target TEXT NOT NULL DEFAULT '',
+	branch TEXT NOT NULL DEFAULT '',
+	clone_path TEXT NOT NULL DEFAULT '',
+	base_branch TEXT NOT NULL DEFAULT '',
+	quality_gate TEXT NOT NULL DEFAULT '',
 	status TEXT NOT NULL,
 	created_at TEXT NOT NULL,
 	updated_at TEXT NOT NULL,
@@ -310,6 +322,9 @@ func (s *SQLiteStore) EnsureSchema(ctx context.Context) error {
 		return err
 	}
 	if err := s.ensureWorkerTrackingColumns(ctx); err != nil {
+		return err
+	}
+	if err := s.ensureMergeQueueLandingSchema(ctx); err != nil {
 		return err
 	}
 	if err := s.execWithRetry(ctx, schemaSQL); err != nil {
@@ -1246,9 +1261,9 @@ func (s *SQLiteStore) EnqueueMergeEntry(ctx context.Context, entry MergeQueueEnt
 	}()
 
 	_, err = tx.ExecContext(ctx, `
-		INSERT INTO merge_queue(project, pr_number, issue, status, created_at, updated_at)
-		VALUES(?, ?, ?, ?, ?, ?)
-	`, entry.Project, entry.PRNumber, entry.Issue, entry.Status, formatTime(entry.CreatedAt), formatTime(entry.UpdatedAt))
+		INSERT INTO merge_queue(project, pr_number, issue, mode, target, branch, clone_path, base_branch, quality_gate, status, created_at, updated_at)
+		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, entry.Project, entry.PRNumber, entry.Issue, entry.Mode, entry.Target, entry.Branch, entry.ClonePath, entry.BaseBranch, entry.QualityGate, entry.Status, formatTime(entry.CreatedAt), formatTime(entry.UpdatedAt))
 	if err != nil {
 		return 0, fmt.Errorf("enqueue merge entry: %w", err)
 	}
@@ -1270,7 +1285,7 @@ func (s *SQLiteStore) EnqueueMergeEntry(ctx context.Context, entry MergeQueueEnt
 
 func (s *SQLiteStore) MergeEntry(ctx context.Context, project string, prNumber int) (*MergeQueueEntry, error) {
 	query := `
-		SELECT project, issue, pr_number, status, created_at, updated_at
+		SELECT project, issue, pr_number, mode, target, branch, clone_path, base_branch, quality_gate, status, created_at, updated_at
 		FROM merge_queue
 		WHERE pr_number = ?
 	`
@@ -1298,7 +1313,7 @@ func (s *SQLiteStore) MergeEntries(ctx context.Context, project string) ([]Merge
 	}
 
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT project, issue, pr_number, status, created_at, updated_at
+		SELECT project, issue, pr_number, mode, target, branch, clone_path, base_branch, quality_gate, status, created_at, updated_at
 		FROM merge_queue
 		WHERE project = ?
 		ORDER BY created_at ASC, pr_number ASC
@@ -1329,9 +1344,9 @@ func (s *SQLiteStore) UpdateMergeEntry(ctx context.Context, entry MergeQueueEntr
 
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE merge_queue
-		SET issue = ?, status = ?, updated_at = ?
+		SET issue = ?, mode = ?, target = ?, branch = ?, clone_path = ?, base_branch = ?, quality_gate = ?, status = ?, updated_at = ?
 		WHERE project = ? AND pr_number = ?
-	`, entry.Issue, entry.Status, formatTime(entry.UpdatedAt), entry.Project, entry.PRNumber)
+	`, entry.Issue, entry.Mode, entry.Target, entry.Branch, entry.ClonePath, entry.BaseBranch, entry.QualityGate, entry.Status, formatTime(entry.UpdatedAt), entry.Project, entry.PRNumber)
 	if err != nil {
 		return fmt.Errorf("update merge entry: %w", err)
 	}
@@ -1877,7 +1892,7 @@ func (s *SQLiteStore) hostActiveAssignments(ctx context.Context) ([]Assignment, 
 
 func (s *SQLiteStore) AllMergeEntries(ctx context.Context) ([]MergeQueueEntry, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT project, issue, pr_number, status, created_at, updated_at
+		SELECT project, issue, pr_number, mode, target, branch, clone_path, base_branch, quality_gate, status, created_at, updated_at
 		FROM merge_queue
 		ORDER BY created_at ASC, project ASC, pr_number ASC
 	`)
@@ -2502,12 +2517,31 @@ func scanMergeQueueEntry(scanner rowScanner) (MergeQueueEntry, error) {
 	var entry MergeQueueEntry
 	var createdAt string
 	var updatedAt string
-	if err := scanner.Scan(&entry.Project, &entry.Issue, &entry.PRNumber, &entry.Status, &createdAt, &updatedAt); err != nil {
+	if err := scanner.Scan(&entry.Project, &entry.Issue, &entry.PRNumber, &entry.Mode, &entry.Target, &entry.Branch, &entry.ClonePath, &entry.BaseBranch, &entry.QualityGate, &entry.Status, &createdAt, &updatedAt); err != nil {
 		return MergeQueueEntry{}, err
 	}
 	entry.CreatedAt = parseTime(createdAt)
 	entry.UpdatedAt = parseTime(updatedAt)
 	return entry, nil
+}
+
+func (s *SQLiteStore) ensureMergeQueueLandingSchema(ctx context.Context) error {
+	if err := s.addColumnIfMissing(ctx, "merge_queue", "mode", "TEXT NOT NULL DEFAULT 'pr'"); err != nil {
+		return err
+	}
+	if err := s.addColumnIfMissing(ctx, "merge_queue", "target", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := s.addColumnIfMissing(ctx, "merge_queue", "branch", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := s.addColumnIfMissing(ctx, "merge_queue", "clone_path", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := s.addColumnIfMissing(ctx, "merge_queue", "base_branch", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	return s.addColumnIfMissing(ctx, "merge_queue", "quality_gate", "TEXT NOT NULL DEFAULT ''")
 }
 
 func taskStatusBlocksClaim(status string) bool {

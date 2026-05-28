@@ -586,7 +586,10 @@ func TestAssignPromotesLargeCodexPromptToCloneFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile(%q) error = %v", promptFile, err)
 	}
-	wantPrompt := wrapAssignmentPrompt(AgentProfile{Name: "codex"}, "LAB-1871", prompt)
+	wantPrompt := wrapAssignmentPromptForLanding(AgentProfile{Name: "codex"}, "LAB-1871", prompt, LandingConfig{
+		Mode:       LandingModePR,
+		BaseBranch: "main",
+	})
 	if got := string(content); got != wantPrompt+"\n" {
 		t.Fatalf("prompt file content = %q, want wrapped assignment prompt", got)
 	}

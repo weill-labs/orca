@@ -15,6 +15,9 @@ const (
 	workSourceManual = "manual"
 	workSourceBeads  = "beads"
 	defaultBeadsBin  = "bd"
+
+	LandingModePR     = "pr"
+	LandingModeDirect = "direct"
 )
 
 type workSourceConfig struct {
@@ -25,9 +28,22 @@ type workSourceConfig struct {
 	NotificationPane string
 }
 
+type LandingConfig struct {
+	Mode        string
+	BaseBranch  string
+	QualityGate string
+}
+
+type IntegrationConfig struct {
+	GitHub bool
+	Linear bool
+}
+
 type rawRepoConfig struct {
 	WorkSource    rawWorkSourceConfig    `toml:"worksource"`
 	Notifications rawNotificationsConfig `toml:"notifications"`
+	Landing       rawLandingConfig       `toml:"landing"`
+	Integrations  rawIntegrationConfig   `toml:"integrations"`
 }
 
 type rawWorkSourceConfig struct {
@@ -41,45 +57,85 @@ type rawNotificationsConfig struct {
 	NotificationPane string `toml:"notification_pane"`
 }
 
+type rawLandingConfig struct {
+	Mode        string `toml:"mode"`
+	BaseBranch  string `toml:"base_branch"`
+	QualityGate string `toml:"quality_gate"`
+}
+
+type rawIntegrationConfig struct {
+	GitHub bool `toml:"github"`
+	Linear bool `toml:"linear"`
+}
+
 func loadWorkSourceConfig(projectPath string) (workSourceConfig, error) {
-	cfg := defaultWorkSourceConfig()
+	cfg, _, _, err := loadRepoConfig(projectPath)
+	return cfg, err
+}
+
+func loadLandingConfig(projectPath string) (LandingConfig, error) {
+	_, cfg, _, err := loadRepoConfig(projectPath)
+	return cfg, err
+}
+
+func loadIntegrationConfig(projectPath string) (IntegrationConfig, error) {
+	_, _, cfg, err := loadRepoConfig(projectPath)
+	return cfg, err
+}
+
+func loadRepoConfig(projectPath string) (workSourceConfig, LandingConfig, IntegrationConfig, error) {
+	workSource := defaultWorkSourceConfig()
+	landing := defaultLandingConfig()
+	integrations := defaultIntegrationConfig()
 	projectPath = strings.TrimSpace(projectPath)
 	if projectPath == "" {
-		return cfg, nil
+		return workSource, landing, integrations, nil
 	}
 
 	configPath := filepath.Join(projectPath, ".orca", "config.toml")
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return cfg, nil
+			return workSource, landing, integrations, nil
 		}
-		return workSourceConfig{}, fmt.Errorf("read repo config %s: %w", configPath, err)
+		return workSourceConfig{}, LandingConfig{}, IntegrationConfig{}, fmt.Errorf("read repo config %s: %w", configPath, err)
 	}
-	if !hasRepoConfigSection(data, "worksource", "notifications") {
-		return cfg, nil
+	if !hasRepoConfigSection(data, "worksource", "notifications", "landing", "integrations") {
+		return workSource, landing, integrations, nil
 	}
 
 	var raw rawRepoConfig
 	if _, err := toml.Decode(string(data), &raw); err != nil {
-		return workSourceConfig{}, fmt.Errorf("decode repo config %s: %w", configPath, err)
+		return workSourceConfig{}, LandingConfig{}, IntegrationConfig{}, fmt.Errorf("decode repo config %s: %w", configPath, err)
 	}
 
-	cfg.Enabled = raw.WorkSource.Enabled
+	workSource.Enabled = raw.WorkSource.Enabled
 	if source := strings.ToLower(strings.TrimSpace(raw.WorkSource.Source)); source != "" {
-		cfg.Source = source
+		workSource.Source = source
 	}
 	if beadsBin := strings.TrimSpace(raw.WorkSource.BeadsBin); beadsBin != "" {
-		cfg.BeadsBin = beadsBin
+		workSource.BeadsBin = beadsBin
 	}
 	if agent := strings.TrimSpace(raw.WorkSource.Agent); agent != "" {
-		cfg.Agent = agent
+		workSource.Agent = agent
 	}
-	cfg.NotificationPane = strings.TrimSpace(raw.Notifications.NotificationPane)
-	if err := validateWorkSourceConfig(cfg); err != nil {
-		return workSourceConfig{}, fmt.Errorf("decode repo config %s: %w", configPath, err)
+	workSource.NotificationPane = strings.TrimSpace(raw.Notifications.NotificationPane)
+	if mode := strings.ToLower(strings.TrimSpace(raw.Landing.Mode)); mode != "" {
+		landing.Mode = mode
 	}
-	return cfg, nil
+	if baseBranch := strings.TrimSpace(raw.Landing.BaseBranch); baseBranch != "" {
+		landing.BaseBranch = baseBranch
+	}
+	landing.QualityGate = strings.TrimSpace(raw.Landing.QualityGate)
+	integrations.GitHub = raw.Integrations.GitHub
+	integrations.Linear = raw.Integrations.Linear
+	if err := validateWorkSourceConfig(workSource); err != nil {
+		return workSourceConfig{}, LandingConfig{}, IntegrationConfig{}, fmt.Errorf("decode repo config %s: %w", configPath, err)
+	}
+	if err := validateLandingConfig(landing); err != nil {
+		return workSourceConfig{}, LandingConfig{}, IntegrationConfig{}, fmt.Errorf("decode repo config %s: %w", configPath, err)
+	}
+	return workSource, landing, integrations, nil
 }
 
 func hasRepoConfigSection(data []byte, sections ...string) bool {
@@ -106,6 +162,17 @@ func defaultWorkSourceConfig() workSourceConfig {
 	}
 }
 
+func defaultLandingConfig() LandingConfig {
+	return LandingConfig{
+		Mode:       LandingModeDirect,
+		BaseBranch: "main",
+	}
+}
+
+func defaultIntegrationConfig() IntegrationConfig {
+	return IntegrationConfig{}
+}
+
 func validateWorkSourceConfig(cfg workSourceConfig) error {
 	switch strings.ToLower(strings.TrimSpace(cfg.Source)) {
 	case workSourceManual, workSourceBeads:
@@ -113,6 +180,42 @@ func validateWorkSourceConfig(cfg workSourceConfig) error {
 	default:
 		return fmt.Errorf("worksource.source must be %q or %q", workSourceManual, workSourceBeads)
 	}
+}
+
+func validateLandingConfig(cfg LandingConfig) error {
+	switch strings.ToLower(strings.TrimSpace(cfg.Mode)) {
+	case "", LandingModePR, LandingModeDirect:
+	default:
+		return fmt.Errorf("landing.mode must be %q or %q", LandingModePR, LandingModeDirect)
+	}
+	if strings.TrimSpace(cfg.BaseBranch) == "" {
+		return fmt.Errorf("landing.base_branch must not be empty")
+	}
+	return nil
+}
+
+func normalizeLandingConfig(cfg LandingConfig) LandingConfig {
+	out := defaultLandingConfig()
+	if mode := strings.ToLower(strings.TrimSpace(cfg.Mode)); mode != "" {
+		out.Mode = mode
+	}
+	if baseBranch := strings.TrimSpace(cfg.BaseBranch); baseBranch != "" {
+		out.BaseBranch = baseBranch
+	}
+	out.QualityGate = strings.TrimSpace(cfg.QualityGate)
+	return out
+}
+
+func (c LandingConfig) directMode() bool {
+	return strings.EqualFold(strings.TrimSpace(c.Mode), LandingModeDirect)
+}
+
+func (c IntegrationConfig) githubEnabled() bool {
+	return c.GitHub
+}
+
+func (c IntegrationConfig) linearEnabled() bool {
+	return c.Linear
 }
 
 func newWorkSourceFromConfig(cfg workSourceConfig) (worksource.Source, error) {

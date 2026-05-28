@@ -195,3 +195,76 @@ func mergeQueueChecksFailedPrompt(prNumber int) string {
 func mergeQueueMergeFailedPrompt(prNumber int) string {
 	return fmt.Sprintf("Merge queue could not land PR #%d after verification. Check the PR state, push an update if needed, and re-run `orca enqueue %d` when ready.", prNumber, prNumber)
 }
+
+func directLandingBranch(entry MergeQueueEntry) string {
+	if branch := strings.TrimSpace(entry.Branch); branch != "" {
+		return branch
+	}
+	return strings.TrimSpace(entry.Issue)
+}
+
+func directLandingBaseBranch(entry MergeQueueEntry) string {
+	if baseBranch := strings.TrimSpace(entry.BaseBranch); baseBranch != "" {
+		return baseBranch
+	}
+	return "main"
+}
+
+func directLandingStartedMessage(entry MergeQueueEntry) string {
+	return fmt.Sprintf("processing direct landing for %s onto %s", directLandingBranch(entry), directLandingBaseBranch(entry))
+}
+
+func directLandingCompletedMessage(entry MergeQueueEntry) string {
+	return fmt.Sprintf("direct landing updated %s from %s", directLandingBaseBranch(entry), directLandingBranch(entry))
+}
+
+func directLandingFailedMessage(entry MergeQueueEntry, failedAction string, err error) string {
+	message := fmt.Sprintf("direct landing failed for %s onto %s", directLandingBranch(entry), directLandingBaseBranch(entry))
+	if failedAction = strings.TrimSpace(failedAction); failedAction != "" {
+		message += ": " + failedAction
+	}
+	if err != nil {
+		message += ": " + err.Error()
+	}
+	return message
+}
+
+func directLandingConflictMessage(issue, branch, baseBranch string, files []string, failedAction string) string {
+	branch = firstNonEmpty(strings.TrimSpace(branch), strings.TrimSpace(issue))
+	baseBranch = firstNonEmpty(strings.TrimSpace(baseBranch), "main")
+	fileText := "unknown files"
+	if len(files) > 0 {
+		fileText = strings.Join(files, ", ")
+	}
+	message := fmt.Sprintf("direct landing conflict rebasing %s onto %s; conflicted files: %s", branch, baseBranch, fileText)
+	if failedAction = strings.TrimSpace(failedAction); failedAction != "" {
+		message += "; failed action: " + failedAction
+	}
+	message += fmt.Sprintf("; resolve in the preserved worker clone, commit, and re-run `orca enqueue %s` when ready", firstNonEmpty(strings.TrimSpace(issue), branch))
+	return message
+}
+
+func directLandingConflictPrompt(issue, branch, baseBranch string, files []string) string {
+	branch = firstNonEmpty(strings.TrimSpace(branch), strings.TrimSpace(issue))
+	baseBranch = firstNonEmpty(strings.TrimSpace(baseBranch), "main")
+	fileText := "unknown files"
+	if len(files) > 0 {
+		fileText = strings.Join(files, ", ")
+	}
+	return fmt.Sprintf("Direct landing could not rebase %s onto %s. Conflicted files: %s. The conflict state is preserved in this clone. Resolve the conflicts, commit the result, and re-run `orca enqueue %s` when ready.", branch, baseBranch, fileText, firstNonEmpty(strings.TrimSpace(issue), branch))
+}
+
+func directLandingFailedPrompt(issue, branch, baseBranch, qualityGate, failedAction string) string {
+	branch = firstNonEmpty(strings.TrimSpace(branch), strings.TrimSpace(issue))
+	baseBranch = firstNonEmpty(strings.TrimSpace(baseBranch), "main")
+	message := fmt.Sprintf("Direct landing could not land %s onto %s.", branch, baseBranch)
+	if strings.HasPrefix(strings.TrimSpace(failedAction), "quality gate:") {
+		message += " The configured quality gate failed."
+	} else if failedAction = strings.TrimSpace(failedAction); failedAction != "" {
+		message += " Failed action: " + failedAction + "."
+	}
+	if qualityGate = strings.TrimSpace(qualityGate); qualityGate != "" {
+		message += " Run `" + qualityGate + "` locally before retrying."
+	}
+	return message + fmt.Sprintf(" Fix the branch, commit any changes, and re-run `orca enqueue %s` when ready.", firstNonEmpty(strings.TrimSpace(issue), branch))
+}

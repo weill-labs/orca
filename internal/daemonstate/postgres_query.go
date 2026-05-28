@@ -620,7 +620,7 @@ func (s *PostgresStore) ActiveAssignmentByPRNumber(ctx context.Context, project 
 
 func (s *PostgresStore) MergeEntry(ctx context.Context, project string, prNumber int) (*MergeQueueEntry, error) {
 	query := `
-		SELECT project, issue, pr_number, status, created_at, updated_at
+		SELECT project, issue, pr_number, mode, target, branch, clone_path, base_branch, quality_gate, status, created_at, updated_at
 		FROM merge_queue
 		WHERE pr_number = $1
 	`
@@ -647,7 +647,7 @@ func (s *PostgresStore) MergeEntries(ctx context.Context, project string) ([]Mer
 	}
 
 	rows, err := s.pool.Query(ctx, `
-		SELECT project, issue, pr_number, status, created_at, updated_at
+		SELECT project, issue, pr_number, mode, target, branch, clone_path, base_branch, quality_gate, status, created_at, updated_at
 		FROM merge_queue
 		WHERE project = $1
 		ORDER BY created_at ASC, pr_number ASC
@@ -1315,7 +1315,7 @@ func (s *PostgresStore) AllActiveAssignments(ctx context.Context) ([]Assignment,
 
 func (s *PostgresStore) AllMergeEntries(ctx context.Context) ([]MergeQueueEntry, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT project, issue, pr_number, status, created_at, updated_at
+		SELECT project, issue, pr_number, mode, target, branch, clone_path, base_branch, quality_gate, status, created_at, updated_at
 		FROM merge_queue
 		ORDER BY created_at ASC, project ASC, pr_number ASC
 	`)
