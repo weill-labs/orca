@@ -196,6 +196,14 @@ func TestBeadsSourceMutations(t *testing.T) {
 			out:  `{"closed":["orca-y5r.1"],"unblocked":["orca-y5r.2"]}`,
 		},
 		{
+			name: "complete merged closes with suggest next leaf array",
+			run: func(t *testing.T, source *BeadsSource) error {
+				return source.Complete(context.Background(), "orca-y5r.1", OutcomeMerged)
+			},
+			want: []string{"close", "orca-y5r.1", "--suggest-next", "--json"},
+			out:  `["orca-y5r.1"]`,
+		},
+		{
 			name: "complete abandoned releases",
 			run: func(t *testing.T, source *BeadsSource) error {
 				return source.Complete(context.Background(), "orca-y5r.1", OutcomeAbandoned)
@@ -397,9 +405,9 @@ func TestBeadsSourceErrors(t *testing.T) {
 			wantError: "close failed",
 		},
 		{
-			name: "complete merged invalid object",
+			name: "complete merged invalid array",
 			results: []fakeBeadsResult{
-				{args: []string{"close", "orca-y5r.1", "--suggest-next", "--json"}, stdout: "[]"},
+				{args: []string{"close", "orca-y5r.1", "--suggest-next", "--json"}, stdout: "[1]"},
 			},
 			run: func(ctx context.Context, source *BeadsSource) error {
 				return source.Complete(ctx, "orca-y5r.1", OutcomeMerged)

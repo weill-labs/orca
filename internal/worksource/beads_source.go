@@ -273,6 +273,33 @@ type beadsCloseResult struct {
 	Unblocked []string `json:"unblocked"`
 }
 
+func (r *beadsCloseResult) UnmarshalJSON(data []byte) error {
+	data = bytes.TrimSpace(data)
+	if len(data) == 0 {
+		return fmt.Errorf("expected close result object or array")
+	}
+
+	switch data[0] {
+	case '{':
+		type closeResult beadsCloseResult
+		var result closeResult
+		if err := json.Unmarshal(data, &result); err != nil {
+			return err
+		}
+		*r = beadsCloseResult(result)
+		return nil
+	case '[':
+		var closed []string
+		if err := json.Unmarshal(data, &closed); err != nil {
+			return err
+		}
+		*r = beadsCloseResult{Closed: closed}
+		return nil
+	default:
+		return fmt.Errorf("expected close result object or array")
+	}
+}
+
 type beadsVersion struct {
 	Version string `json:"version"`
 }

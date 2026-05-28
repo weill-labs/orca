@@ -15,6 +15,7 @@ func TestFinishAssignmentCompletesWorkSource(t *testing.T) {
 	t.Parallel()
 
 	completeErr := errors.New("bd unavailable")
+	const issue = "orca-y5r.1"
 	tests := []struct {
 		name             string
 		status           string
@@ -31,7 +32,7 @@ func TestFinishAssignmentCompletesWorkSource(t *testing.T) {
 			eventType: EventTaskCompleted,
 			merged:    true,
 			wantCalls: []finishCompleteCall{{
-				id:      "LAB-689",
+				id:      issue,
 				outcome: worksource.OutcomeMerged,
 			}},
 		},
@@ -40,7 +41,7 @@ func TestFinishAssignmentCompletesWorkSource(t *testing.T) {
 			status:    TaskStatusCancelled,
 			eventType: EventTaskCancelled,
 			wantCalls: []finishCompleteCall{{
-				id:      "LAB-689",
+				id:      issue,
 				outcome: worksource.OutcomeAbandoned,
 			}},
 		},
@@ -49,7 +50,7 @@ func TestFinishAssignmentCompletesWorkSource(t *testing.T) {
 			status:    TaskStatusFailed,
 			eventType: EventTaskFailed,
 			wantCalls: []finishCompleteCall{{
-				id:      "LAB-689",
+				id:      issue,
 				outcome: worksource.OutcomeFailed,
 			}},
 		},
@@ -61,7 +62,7 @@ func TestFinishAssignmentCompletesWorkSource(t *testing.T) {
 			completeErr:      completeErr,
 			wantLogSubstring: "bd unavailable",
 			wantCalls: []finishCompleteCall{{
-				id:      "LAB-689",
+				id:      issue,
 				outcome: worksource.OutcomeMerged,
 			}},
 		},
@@ -94,6 +95,7 @@ func TestFinishAssignmentCompletesWorkSource(t *testing.T) {
 			})
 
 			active := newPostmortemAssignment(deps)
+			setActiveAssignmentIssue(&active, issue)
 			active.Task.Status = TaskStatusActive
 			if !tt.manualSource {
 				source.completeHook = func(id string, outcome worksource.Outcome) {
@@ -136,10 +138,15 @@ func TestFinishAssignmentCompletesWorkSource(t *testing.T) {
 func TestCompleteWorkSourceSkipsNoOpCases(t *testing.T) {
 	t.Parallel()
 
+	completeErr := errors.New("bd close should not run")
 	tests := []struct {
-		name      string
-		status    string
-		nilSource bool
+		name               string
+		issue              string
+		status             string
+		nilSource          bool
+		completeErr        error
+		wantLogSubstring   string
+		forbidLogSubstring string
 	}{
 		{
 			name:      "nil source",
@@ -150,6 +157,14 @@ func TestCompleteWorkSourceSkipsNoOpCases(t *testing.T) {
 			name:   "non terminal status",
 			status: TaskStatusActive,
 		},
+		{
+			name:               "Linear id without beads mapping skips close",
+			issue:              "LAB-689",
+			status:             TaskStatusDone,
+			completeErr:        completeErr,
+			wantLogSubstring:   "worksource complete skipped",
+			forbidLogSubstring: "worksource complete failed",
+		},
 	}
 
 	for _, tt := range tests {
@@ -158,17 +173,32 @@ func TestCompleteWorkSourceSkipsNoOpCases(t *testing.T) {
 			t.Parallel()
 
 			deps := newTestDeps(t)
-			source := &fakeFinishWorkSource{}
+			var logs []string
+			source := &fakeFinishWorkSource{completeErr: tt.completeErr}
 			d := deps.newDaemonWithOptions(t, func(opts *Options) {
 				opts.WorkSource = source
+				opts.Logf = func(format string, args ...any) {
+					logs = append(logs, fmt.Sprintf(format, args...))
+				}
 			})
 			if tt.nilSource {
 				d.workSource = nil
 			}
 
-			d.completeWorkSource(context.Background(), newPostmortemAssignment(deps), tt.status)
+			active := newPostmortemAssignment(deps)
+			if tt.issue != "" {
+				setActiveAssignmentIssue(&active, tt.issue)
+			}
+
+			d.completeWorkSource(context.Background(), active, tt.status)
 
 			source.requireCompletes(t, nil)
+			if tt.wantLogSubstring != "" && !logsContain(logs, tt.wantLogSubstring) {
+				t.Fatalf("logs = %#v, want substring %q", logs, tt.wantLogSubstring)
+			}
+			if tt.forbidLogSubstring != "" && logsContain(logs, tt.forbidLogSubstring) {
+				t.Fatalf("logs = %#v, want no substring %q", logs, tt.forbidLogSubstring)
+			}
 		})
 	}
 }
@@ -264,6 +294,15 @@ func logsContain(logs []string, substring string) bool {
 		}
 	}
 	return false
+}
+
+func setActiveAssignmentIssue(active *ActiveAssignment, issue string) {
+	paneName := workerPaneName(issue, active.Worker.WorkerID)
+	active.Task.Issue = issue
+	active.Task.Branch = issue
+	active.Task.PaneName = paneName
+	active.Worker.Issue = issue
+	active.Worker.PaneName = paneName
 }
 
 type fakeFinishWorkSource struct {
