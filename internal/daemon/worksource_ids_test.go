@@ -58,6 +58,27 @@ func TestWorkSourceIDResolutionRoutesStatusAndCompletion(t *testing.T) {
 			wantLogSubstring: "worksource complete skipped",
 		},
 		{
+			name:         "missing beads-shaped mapping still closes raw beads id",
+			issue:        "orca-dxf",
+			resolveErr:   worksource.ErrNotFound,
+			wantStatuses: []issueStatusUpdate{},
+			wantSkipped:  1,
+			wantCompletes: []finishCompleteCall{{
+				id:      "orca-dxf",
+				outcome: worksource.OutcomeMerged,
+			}},
+		},
+		{
+			name:         "empty beads id for beads-shaped task closes raw beads id",
+			issue:        "orca-dxf",
+			wantStatuses: []issueStatusUpdate{},
+			wantSkipped:  1,
+			wantCompletes: []finishCompleteCall{{
+				id:      "orca-dxf",
+				outcome: worksource.OutcomeMerged,
+			}},
+		},
+		{
 			name:        "missing Linear reverse mapping keeps status and skips close",
 			issue:       "LAB-404",
 			resolvePair: worksource.IDPair{LinearID: "LAB-404"},
