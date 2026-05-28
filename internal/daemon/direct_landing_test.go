@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -170,6 +171,48 @@ func TestDirectLandingQualityGateFailureKeepsTaskActive(t *testing.T) {
 	}
 	if message := deps.events.lastMessage(EventDirectLandingFailed); !strings.Contains(message, "quality gate") {
 		t.Fatalf("direct landing failed message = %q, want quality gate detail", message)
+	}
+}
+
+func TestDirectLandingLinearFailureStillCompletesTask(t *testing.T) {
+	ctx := context.Background()
+	remote, _ := newDirectLandingRemote(t, map[string]string{"README.md": "base\n"})
+	projectPath, clonePath := cloneDirectLandingRepo(t, remote)
+	deps, d := newDirectLandingDaemon(t, projectPath, clonePath, LandingConfig{
+		Mode:       LandingModeDirect,
+		BaseBranch: "main",
+	})
+	deps.issueTracker.errors = map[string]error{
+		IssueStateDone: errors.New("linear unavailable"),
+	}
+
+	if err := d.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Stop(context.Background())
+	})
+	if err := d.Assign(ctx, "LAB-1972", "Land despite Linear failure", "codex"); err != nil {
+		t.Fatalf("Assign() error = %v", err)
+	}
+	writeDirectLandingFile(t, clonePath, "landed.txt", "landed\n")
+	git(t, clonePath, "add", "landed.txt")
+	git(t, clonePath, "commit", "-m", "LAB-1972 direct landing")
+
+	if _, err := d.EnqueueTarget(ctx, "LAB-1972"); err != nil {
+		t.Fatalf("EnqueueTarget() error = %v", err)
+	}
+	d.dispatchMergeQueue(ctx)
+
+	waitFor(t, "direct landing completion after Linear failure", func() bool {
+		task, ok := deps.state.task("LAB-1972")
+		return ok && task.Status == TaskStatusDone
+	})
+	if got := deps.events.countType(EventTaskCompletionFailed); got != 0 {
+		t.Fatalf("task.completion_failed events = %d, want 0", got)
+	}
+	if message := deps.events.lastMessage(EventTaskCompleted); !strings.Contains(message, "failed to update Linear issue status") {
+		t.Fatalf("task.completed message = %q, want Linear failure context", message)
 	}
 }
 

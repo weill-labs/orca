@@ -141,6 +141,9 @@ func loadRepoConfig(projectPath string) (workSourceConfig, LandingConfig, Integr
 func hasRepoConfigSection(data []byte, sections ...string) bool {
 	for _, line := range strings.Split(string(data), "\n") {
 		trimmed := strings.TrimSpace(line)
+		if index := strings.Index(trimmed, "#"); index >= 0 {
+			trimmed = strings.TrimSpace(trimmed[:index])
+		}
 		if strings.HasPrefix(trimmed, "#") {
 			continue
 		}

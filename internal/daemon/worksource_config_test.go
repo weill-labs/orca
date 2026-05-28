@@ -171,6 +171,19 @@ func TestLoadLandingConfig(t *testing.T) {
 			},
 		},
 		{
+			name: "section header allows inline comment",
+			content: strings.Join([]string{
+				"[landing] # direct local landing",
+				`mode = "direct"`,
+				`base_branch = "trunk"`,
+				"",
+			}, "\n"),
+			want: LandingConfig{
+				Mode:       LandingModeDirect,
+				BaseBranch: "trunk",
+			},
+		},
+		{
 			name: "invalid landing mode errors",
 			content: strings.Join([]string{
 				"[landing]",

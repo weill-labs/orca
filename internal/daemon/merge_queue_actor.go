@@ -497,14 +497,11 @@ func (d *Daemon) handleDirectLandingFailure(ctx context.Context, active ActiveAs
 }
 
 func (d *Daemon) completeDirectLanding(ctx context.Context, active ActiveAssignment) {
+	completionMessage := "task finished"
 	if err := d.setIssueStatus(ctx, active.Task.Project, active.Task.Issue, IssueStateDone); err != nil {
-		profile, profileErr := d.profileForTask(ctx, active.Task)
-		if profileErr != nil {
-			profile = AgentProfile{Name: active.Task.AgentProfile}
-		}
-		d.emit(ctx, d.assignmentEvent(active, profile, EventTaskCompletionFailed, fmt.Sprintf("direct landing completed but failed to update Linear issue status: %v", err)))
+		completionMessage = fmt.Sprintf("direct landing completed (failed to update Linear issue status: %v)", err)
 	}
-	if err := d.finishAssignmentWithMessageAndPrompt(ctx, active, TaskStatusDone, EventTaskCompleted, true, "Direct landing completed, wrap up.", "task finished"); err != nil {
+	if err := d.finishAssignmentWithMessageAndPrompt(ctx, active, TaskStatusDone, EventTaskCompleted, true, "Direct landing completed, wrap up.", completionMessage); err != nil {
 		profile, profileErr := d.profileForTask(ctx, active.Task)
 		if profileErr != nil {
 			profile = AgentProfile{Name: active.Task.AgentProfile}
