@@ -77,6 +77,7 @@ func (d *Daemon) beadsIDForCompletion(ctx context.Context, active ActiveAssignme
 	}
 	if err != nil {
 		if isBeadsIssueIdentifier(taskID) {
+			d.logWorkSourceCompleteRawIDFallback(active, status, outcome, fmt.Sprintf("resolve beads issue id: %v", err))
 			return taskID, true
 		}
 		d.logWorkSourceCompleteSkip(active, status, outcome, fmt.Sprintf("resolve beads issue id: %v", err))
@@ -84,6 +85,7 @@ func (d *Daemon) beadsIDForCompletion(ctx context.Context, active ActiveAssignme
 	}
 	if ids.beadsID == "" {
 		if isBeadsIssueIdentifier(taskID) {
+			d.logWorkSourceCompleteRawIDFallback(active, status, outcome, "resolver returned no beads issue id")
 			return taskID, true
 		}
 		d.logWorkSourceCompleteSkip(active, status, outcome, "no linked beads issue id")

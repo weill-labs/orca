@@ -248,8 +248,22 @@ func (d *Daemon) logWorkSourceCompleteSkip(active ActiveAssignment, status strin
 	log.Print(message)
 }
 
+func (d *Daemon) logWorkSourceCompleteRawIDFallback(active ActiveAssignment, status string, outcome worksource.Outcome, reason string) {
+	message := workSourceCompleteRawIDFallbackMessage(active, status, outcome, reason)
+	if d.logf != nil {
+		d.logf("%s", message)
+		return
+	}
+	log.Print(message)
+}
+
 func workSourceCompleteSkipMessage(active ActiveAssignment, status string, outcome worksource.Outcome, reason string) string {
 	return fmt.Sprintf("worksource complete skipped: project=%s issue=%s status=%s outcome=%s reason=%s",
+		active.Task.Project, active.Task.Issue, status, workSourceOutcomeName(outcome), reason)
+}
+
+func workSourceCompleteRawIDFallbackMessage(active ActiveAssignment, status string, outcome worksource.Outcome, reason string) string {
+	return fmt.Sprintf("worksource complete using raw beads id: project=%s issue=%s status=%s outcome=%s reason=%s",
 		active.Task.Project, active.Task.Issue, status, workSourceOutcomeName(outcome), reason)
 }
 
