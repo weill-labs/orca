@@ -36,13 +36,14 @@ func (c *CLIClient) spawnPaneWithNewWindowFallback(ctx context.Context, session,
 		return pane, nil
 	}
 
-	if targetWindowMissingSpawnError(window, err) {
-		if windowErr := c.ensureWindow(ctx, session, window); windowErr != nil {
-			return Pane{}, errors.Join(err, fmt.Errorf("create missing target window %q: %w", strings.TrimSpace(window), windowErr))
+	targetWindow := strings.TrimSpace(window)
+	if targetWindowMissingSpawnError(targetWindow, err) {
+		if windowErr := c.ensureWindow(ctx, session, targetWindow); windowErr != nil {
+			return Pane{}, errors.Join(err, fmt.Errorf("create missing target window %q: %w", targetWindow, windowErr))
 		}
-		pane, err = c.spawnPane(ctx, session, window, name)
+		pane, err = c.spawnPane(ctx, session, targetWindow, name)
 		if err != nil {
-			return Pane{}, fmt.Errorf("spawn in created target window %q: %w", strings.TrimSpace(window), err)
+			return Pane{}, fmt.Errorf("spawn in created target window %q: %w", targetWindow, err)
 		}
 		return pane, nil
 	}
@@ -108,7 +109,9 @@ func windowAlreadyExistsError(err error) bool {
 	}
 
 	message := strings.ToLower(strings.TrimSpace(err.Error()))
-	return strings.Contains(message, "window") && strings.Contains(message, "already exists")
+	return strings.Contains(message, "window already exists") ||
+		(strings.Contains(message, `window "`) && strings.Contains(message, "already exists")) ||
+		(strings.Contains(message, `window '`) && strings.Contains(message, "already exists"))
 }
 
 func parseCreatedWindowName(output string) string {
