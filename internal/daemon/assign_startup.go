@@ -60,6 +60,10 @@ func (d *Daemon) startAssignmentWorker(ctx context.Context, projectPath string, 
 		if err != nil {
 			return result, fmt.Errorf("spawn pane: %w", err)
 		}
+		result.pane = pane
+		if err := d.amux.WaitIdle(ctx, pane.ID, agentStartupTimeout(profile)); err != nil {
+			return result, fmt.Errorf("wait for spawned pane idle: %w", err)
+		}
 
 		attemptTask, attemptWorker := d.assignmentStartupState(projectPath, clone, task, worker, pane)
 		result = assignStartupResult{

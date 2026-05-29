@@ -53,6 +53,7 @@ func TestPRMergePollingSendsWrapUpAndCleansClone(t *testing.T) {
 	}
 	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
 		{PaneID: "pane-1", Timeout: 30 * time.Second},
+		{PaneID: "pane-1", Timeout: 30 * time.Second},
 		{PaneID: "pane-1", Timeout: 30 * time.Second, Settle: 2 * time.Second},
 		{PaneID: "pane-1", Timeout: codexPromptRetryIdleProbeTime},
 		{PaneID: "pane-1", Timeout: codexPromptRetryIdleProbeTime},
@@ -426,6 +427,7 @@ func TestPRMergePollingStillSendsPostmortemAfterWrapUpError(t *testing.T) {
 	})
 
 	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
+		{PaneID: "pane-1", Timeout: 30 * time.Second},
 		{PaneID: "pane-1", Timeout: 30 * time.Second},
 		{PaneID: "pane-1", Timeout: 30 * time.Second, Settle: 2 * time.Second},
 		{PaneID: "pane-1", Timeout: codexPromptRetryIdleProbeTime},
@@ -1585,6 +1587,7 @@ func TestPRMergeablePollingNudgesWorkerOnConflictTransitions(t *testing.T) {
 	}
 	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
 		{PaneID: "pane-1", Timeout: 30 * time.Second},
+		{PaneID: "pane-1", Timeout: 30 * time.Second},
 		{PaneID: "pane-1", Timeout: 30 * time.Second, Settle: 2 * time.Second},
 		{PaneID: "pane-1", Timeout: codexPromptRetryIdleProbeTime},
 		{PaneID: "pane-1", Timeout: 30 * time.Second, Settle: 2 * time.Second},
@@ -1820,6 +1823,7 @@ func TestPRMergeablePollingRetriesConflictNudgeAfterWaitIdleFailure(t *testing.T
 	})
 	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
 		{PaneID: "pane-1", Timeout: 30 * time.Second},
+		{PaneID: "pane-1", Timeout: 30 * time.Second},
 		{PaneID: "pane-1", Timeout: 30 * time.Second, Settle: 2 * time.Second},
 		{PaneID: "pane-1", Timeout: codexPromptRetryIdleProbeTime},
 		{PaneID: "pane-1", Timeout: 30 * time.Second, Settle: 2 * time.Second},
@@ -1993,6 +1997,7 @@ func TestEnqueueNotifiesWorkerWhenRebaseFailsAndAllowsRequeue(t *testing.T) {
 		t.Fatalf("merge queue enter count = %d, want %d", got, want)
 	}
 	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
+		{PaneID: "pane-1", Timeout: 30 * time.Second},
 		{PaneID: "pane-1", Timeout: 30 * time.Second},
 		{PaneID: "pane-1", Timeout: 30 * time.Second, Settle: 2 * time.Second},
 		{PaneID: "pane-1", Timeout: codexPromptRetryIdleProbeTime},
