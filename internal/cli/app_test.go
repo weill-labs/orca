@@ -2421,6 +2421,49 @@ func TestAppCommandsAcceptProjectFlag(t *testing.T) {
 	}
 }
 
+func TestAppEnqueueFromPoolCloneCWDUsesParentProject(t *testing.T) {
+	t.Parallel()
+
+	projectRoot := newRepoRoot(t)
+	cloneRoot := filepath.Join(projectRoot, ".orca", "pool", "clone-01")
+	if err := os.MkdirAll(filepath.Join(cloneRoot, ".git"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(clone .git): %v", err)
+	}
+	cloneSubdir := filepath.Join(cloneRoot, "internal", "daemon")
+	if err := os.MkdirAll(cloneSubdir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", cloneSubdir, err)
+	}
+
+	d := &fakeDaemon{
+		enqueueResult: daemon.MergeQueueActionResult{
+			Project:   projectRoot,
+			Target:    "LAB-1995",
+			Status:    "queued",
+			Position:  1,
+			UpdatedAt: time.Now().UTC(),
+		},
+	}
+	app := New(Options{
+		Daemon: d,
+		State:  &fakeState{},
+		Stdout: &bytes.Buffer{},
+		Stderr: &bytes.Buffer{},
+		Cwd: func() (string, error) {
+			return cloneSubdir, nil
+		},
+	})
+
+	if err := app.Run(context.Background(), []string{"enqueue", "LAB-1995"}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if d.enqueueRequest == nil {
+		t.Fatal("enqueue request missing")
+	}
+	if got := d.enqueueRequest.Project; got != projectRoot {
+		t.Fatalf("enqueue project = %q, want parent project %q", got, projectRoot)
+	}
+}
+
 func TestWriteProjectStatusAndTaskStatus(t *testing.T) {
 	t.Parallel()
 
