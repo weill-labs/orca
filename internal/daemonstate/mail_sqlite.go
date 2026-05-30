@@ -17,39 +17,17 @@ const mailSelectColumns = `id, project, thread_id, sender, recipient, body, impo
 
 // SendMail persists a note or ask and returns the stored message.
 func (s *SQLiteStore) SendMail(ctx context.Context, msg mailbox.Send) (mailbox.Message, error) {
-	now := s.now()
-	importance := msg.Importance
-	if importance == "" {
-		importance = mailbox.ImportanceNormal
-	}
-	kind := msg.Kind
-	if kind == "" {
-		kind = mailbox.KindNote
-	}
-
-	result, err := s.db.ExecContext(ctx, `
-		INSERT INTO mail(project, thread_id, sender, recipient, body, importance, kind, ask_id, reply_body, read_at, created_at)
-		VALUES(?, ?, ?, ?, ?, ?, ?, NULL, '', NULL, ?)
-	`, msg.Project, msg.ThreadID, msg.Sender, msg.Recipient, msg.Body, string(importance), string(kind), formatTime(now))
-	if err != nil {
-		return mailbox.Message{}, fmt.Errorf("send mail: %w", err)
-	}
-	id, err := result.LastInsertId()
-	if err != nil {
-		return mailbox.Message{}, fmt.Errorf("send mail last insert id: %w", err)
-	}
-
-	return mailbox.Message{
-		ID:         id,
+	stored := mailbox.Message{
 		Project:    msg.Project,
 		ThreadID:   msg.ThreadID,
 		Sender:     msg.Sender,
 		Recipient:  msg.Recipient,
 		Body:       msg.Body,
-		Importance: importance,
-		Kind:       kind,
-		CreatedAt:  now,
-	}, nil
+		Importance: defaultImportance(msg.Importance),
+		Kind:       defaultKind(msg.Kind),
+		CreatedAt:  s.now(),
+	}
+	return s.insertMail(ctx, stored)
 }
 
 // Inbox returns messages addressed to recipient in the project, newest first.
@@ -103,35 +81,15 @@ func (s *SQLiteStore) MarkMailRead(ctx context.Context, project string, id int64
 	return nil
 }
 
-// ReplyMail records a reply to an ask and stamps the ask's reply_body.
+// ReplyMail records a reply to an ask and stamps the ask's reply_body so a
+// worker polling the ask sees the answer without a join.
 func (s *SQLiteStore) ReplyMail(ctx context.Context, project string, askID int64, sender, body string) (mailbox.Message, error) {
 	ask, err := s.lookupMail(ctx, project, askID)
 	if err != nil {
 		return mailbox.Message{}, err
 	}
 
-	now := s.now()
-	result, err := s.db.ExecContext(ctx, `
-		INSERT INTO mail(project, thread_id, sender, recipient, body, importance, kind, ask_id, reply_body, read_at, created_at)
-		VALUES(?, ?, ?, ?, ?, ?, ?, ?, '', NULL, ?)
-	`, project, ask.ThreadID, sender, ask.Sender, body, string(mailbox.ImportanceNormal), string(mailbox.KindReply), askID, formatTime(now))
-	if err != nil {
-		return mailbox.Message{}, fmt.Errorf("reply mail: %w", err)
-	}
-	id, err := result.LastInsertId()
-	if err != nil {
-		return mailbox.Message{}, fmt.Errorf("reply mail last insert id: %w", err)
-	}
-
-	if _, err := s.db.ExecContext(ctx, `
-		UPDATE mail SET reply_body = ? WHERE project = ? AND id = ?
-	`, body, project, askID); err != nil {
-		return mailbox.Message{}, fmt.Errorf("reply mail update ask: %w", err)
-	}
-
-	askIDCopy := askID
-	return mailbox.Message{
-		ID:         id,
+	reply, err := s.insertMail(ctx, mailbox.Message{
 		Project:    project,
 		ThreadID:   ask.ThreadID,
 		Sender:     sender,
@@ -139,9 +97,42 @@ func (s *SQLiteStore) ReplyMail(ctx context.Context, project string, askID int64
 		Body:       body,
 		Importance: mailbox.ImportanceNormal,
 		Kind:       mailbox.KindReply,
-		AskID:      &askIDCopy,
-		CreatedAt:  now,
-	}, nil
+		AskID:      &askID,
+		CreatedAt:  s.now(),
+	})
+	if err != nil {
+		return mailbox.Message{}, err
+	}
+
+	if _, err := s.db.ExecContext(ctx, `
+		UPDATE mail SET reply_body = ? WHERE project = ? AND id = ?
+	`, body, project, askID); err != nil {
+		return mailbox.Message{}, fmt.Errorf("reply mail update ask: %w", err)
+	}
+	return reply, nil
+}
+
+// insertMail writes a fully-populated message row and returns it with the
+// assigned id. CreatedAt, Importance and Kind must already be set.
+func (s *SQLiteStore) insertMail(ctx context.Context, msg mailbox.Message) (mailbox.Message, error) {
+	var askID any
+	if msg.AskID != nil {
+		askID = *msg.AskID
+	}
+	result, err := s.db.ExecContext(ctx, `
+		INSERT INTO mail(project, thread_id, sender, recipient, body, importance, kind, ask_id, reply_body, read_at, created_at)
+		VALUES(?, ?, ?, ?, ?, ?, ?, ?, '', NULL, ?)
+	`, msg.Project, msg.ThreadID, msg.Sender, msg.Recipient, msg.Body,
+		string(msg.Importance), string(msg.Kind), askID, formatTime(msg.CreatedAt))
+	if err != nil {
+		return mailbox.Message{}, fmt.Errorf("insert mail: %w", err)
+	}
+	id, err := result.LastInsertId()
+	if err != nil {
+		return mailbox.Message{}, fmt.Errorf("insert mail last insert id: %w", err)
+	}
+	msg.ID = id
+	return msg, nil
 }
 
 func (s *SQLiteStore) lookupMail(ctx context.Context, project string, id int64) (mailbox.Message, error) {
@@ -184,4 +175,18 @@ func scanMailRow(scanner rowScanner) (mailbox.Message, error) {
 	}
 	msg.CreatedAt = parseTime(createdAt)
 	return msg, nil
+}
+
+func defaultImportance(i mailbox.Importance) mailbox.Importance {
+	if i == "" {
+		return mailbox.ImportanceNormal
+	}
+	return i
+}
+
+func defaultKind(k mailbox.Kind) mailbox.Kind {
+	if k == "" {
+		return mailbox.KindNote
+	}
+	return k
 }
