@@ -9,6 +9,7 @@ import (
 )
 
 var createdWindowPattern = regexp.MustCompile(`(?m)^Created\s+(\S+)\s*$`)
+
 const fallbackWindowLabel = "new window"
 
 func (c *CLIClient) spawnPane(ctx context.Context, session, window, name string) (Pane, error) {
@@ -31,7 +32,23 @@ func (c *CLIClient) spawnPane(ctx context.Context, session, window, name string)
 
 func (c *CLIClient) spawnPaneWithNewWindowFallback(ctx context.Context, session, window, name string) (Pane, error) {
 	pane, err := c.spawnPane(ctx, session, window, name)
-	if err == nil || !splitSpaceSpawnError(err) {
+	if err == nil {
+		return pane, nil
+	}
+
+	targetWindow := strings.TrimSpace(window)
+	if targetWindowMissingSpawnError(targetWindow, err) {
+		if windowErr := c.ensureWindow(ctx, session, targetWindow); windowErr != nil {
+			return Pane{}, errors.Join(err, fmt.Errorf("create missing target window %q: %w", targetWindow, windowErr))
+		}
+		pane, err = c.spawnPane(ctx, session, targetWindow, name)
+		if err != nil {
+			return Pane{}, fmt.Errorf("spawn in created target window %q: %w", targetWindow, err)
+		}
+		return pane, nil
+	}
+
+	if !splitSpaceSpawnError(err) {
 		return pane, err
 	}
 
@@ -55,6 +72,46 @@ func splitSpaceSpawnError(err error) bool {
 
 	message := strings.ToLower(strings.TrimSpace(err.Error()))
 	return strings.Contains(message, "exit status 1") && strings.Contains(message, "not enough space to split")
+}
+
+func targetWindowMissingSpawnError(window string, err error) bool {
+	if err == nil {
+		return false
+	}
+
+	target := strings.ToLower(strings.TrimSpace(window))
+	if target == "" {
+		return false
+	}
+
+	message := strings.ToLower(strings.TrimSpace(err.Error()))
+	return strings.Contains(message, `window "`+target+`" not found`) ||
+		strings.Contains(message, `window '`+target+`' not found`) ||
+		strings.Contains(message, `no such window "`+target+`"`)
+}
+
+func (c *CLIClient) ensureWindow(ctx context.Context, session, window string) error {
+	target := strings.TrimSpace(window)
+	if target == "" {
+		return nil
+	}
+
+	_, err := c.run(ctx, session, "new-window", "--name", target)
+	if windowAlreadyExistsError(err) {
+		return nil
+	}
+	return err
+}
+
+func windowAlreadyExistsError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	message := strings.ToLower(strings.TrimSpace(err.Error()))
+	return strings.Contains(message, "window already exists") ||
+		(strings.Contains(message, `window "`) && strings.Contains(message, "already exists")) ||
+		(strings.Contains(message, `window '`) && strings.Contains(message, "already exists"))
 }
 
 func parseCreatedWindowName(output string) string {

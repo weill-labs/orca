@@ -217,7 +217,20 @@ func TestFailedAssignStartingZombieCanBeCancelledAndReassigned(t *testing.T) {
 
 	deps := newTestDeps(t)
 	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
-	deps.amux.waitIdleErr = errors.New("wait idle failed")
+	waitIdleErr := errors.New("wait idle failed")
+	waitIdleCalls := 0
+	deps.amux.waitIdleFunc = func(_ context.Context, _ string, timeout, settle time.Duration) error {
+		if timeout == defaultAgentHandshakeTimeout && settle == 0 {
+			waitIdleCalls++
+		}
+		if waitIdleCalls == 2 {
+			return waitIdleErr
+		}
+		if timeout == codexPromptRetryIdleProbeTime && len(snapshotSentKeys(deps.amux)["pane-1"]) > 0 {
+			return errors.New("idle timeout")
+		}
+		return nil
+	}
 	deps.state.restoreTaskErr = errors.New("restore failed")
 	d := deps.newDaemon(t)
 	ctx := context.Background()

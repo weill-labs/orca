@@ -58,6 +58,7 @@ func TestAssignConfirmsCodexTrustPromptBeforeSendingPrompt(t *testing.T) {
 	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
 		{PaneID: "pane-1", Timeout: defaultAgentHandshakeTimeout},
 		{PaneID: "pane-1", Timeout: defaultAgentHandshakeTimeout},
+		{PaneID: "pane-1", Timeout: defaultAgentHandshakeTimeout},
 		{PaneID: "pane-1", Timeout: defaultAgentHandshakeTimeout, Settle: 2 * time.Second},
 		{PaneID: "pane-1", Timeout: codexPromptRetryIdleProbeTime},
 	}; !reflect.DeepEqual(got, want) {
@@ -99,6 +100,7 @@ func TestAssignDoesNotBlindlyConfirmWhenTrustPromptNotPresent(t *testing.T) {
 		t.Fatalf("waitContent calls = %#v, want %#v", got, want)
 	}
 	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
+		{PaneID: "pane-1", Timeout: defaultAgentHandshakeTimeout},
 		{PaneID: "pane-1", Timeout: defaultAgentHandshakeTimeout},
 		{PaneID: "pane-1", Timeout: defaultAgentHandshakeTimeout, Settle: 2 * time.Second},
 		{PaneID: "pane-1", Timeout: codexPromptRetryIdleProbeTime},
@@ -156,6 +158,7 @@ func TestAssignResumesCodexBeforeSendingPrompt(t *testing.T) {
 	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
 		{PaneID: "pane-1", Timeout: defaultAgentHandshakeTimeout},
 		{PaneID: "pane-1", Timeout: defaultAgentHandshakeTimeout},
+		{PaneID: "pane-1", Timeout: defaultAgentHandshakeTimeout},
 		{PaneID: "pane-1", Timeout: defaultAgentHandshakeTimeout, Settle: 2 * time.Second},
 		{PaneID: "pane-1", Timeout: codexPromptRetryIdleProbeTime},
 	}; !reflect.DeepEqual(got, want) {
@@ -168,7 +171,17 @@ func TestAssignRollsBackOnAgentHandshakeFailure(t *testing.T) {
 
 	deps := newTestDeps(t)
 	deps.tickers.enqueue(newFakeTicker(), newFakeTicker())
-	deps.amux.waitIdleErr = errors.New("wait idle failed")
+	waitIdleErr := errors.New("wait idle failed")
+	waitIdleCalls := 0
+	deps.amux.waitIdleFunc = func(_ context.Context, _ string, timeout, settle time.Duration) error {
+		if timeout == defaultAgentHandshakeTimeout && settle == 0 {
+			waitIdleCalls++
+		}
+		if waitIdleCalls == 2 {
+			return waitIdleErr
+		}
+		return nil
+	}
 	d := deps.newDaemon(t)
 	ctx := context.Background()
 
@@ -268,6 +281,7 @@ func TestAssignWaitsForCodexReadyPatternBeforeSendingPrompt(t *testing.T) {
 		t.Fatalf("waitContent calls = %#v, want %#v", got, want)
 	}
 	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
+		{PaneID: "pane-1", Timeout: defaultAgentHandshakeTimeout},
 		{PaneID: "pane-1", Timeout: defaultAgentHandshakeTimeout},
 		{PaneID: "pane-1", Timeout: defaultAgentHandshakeTimeout, Settle: defaultPromptSettleDuration},
 		{PaneID: "pane-1", Timeout: codexPromptRetryIdleProbeTime},
@@ -481,7 +495,10 @@ func TestAssignRollsBackWhenCodexReadyPatternNeverAppearsAfterIdle(t *testing.T)
 	}
 	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
 		{PaneID: "pane-1", Timeout: defaultAgentHandshakeTimeout},
+		{PaneID: "pane-1", Timeout: defaultAgentHandshakeTimeout},
 		{PaneID: "pane-2", Timeout: defaultAgentHandshakeTimeout},
+		{PaneID: "pane-2", Timeout: defaultAgentHandshakeTimeout},
+		{PaneID: "pane-3", Timeout: defaultAgentHandshakeTimeout},
 		{PaneID: "pane-3", Timeout: defaultAgentHandshakeTimeout},
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("waitIdle calls = %#v, want %#v", got, want)

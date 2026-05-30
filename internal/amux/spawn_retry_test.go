@@ -48,3 +48,82 @@ func TestCLIClientSpawnFallsBackToNewWindowWhenTargetWindowHasNoSplitSpace(t *te
 		t.Fatalf("Spawn() pane = %#v, want %#v", gotPane, wantPane)
 	}
 }
+
+func TestCLIClientSpawnCreatesMissingTargetWindowBeforeRetry(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeRunner{
+		queue: []runnerResult{
+			{
+				output: []byte(`window "alphaosZ" not found`),
+				err:    errors.New("exit status 1"),
+			},
+			{output: []byte("Created alphaosZ\n")},
+			{output: []byte("Split horizontal: new pane w-LAB-977\n")},
+		},
+	}
+	client := newTestClient(Config{Session: "main"}, runner)
+
+	gotPane, err := client.Spawn(context.Background(), SpawnRequest{
+		Window: "alphaosZ",
+		Name:   "w-LAB-977",
+	})
+	if err != nil {
+		t.Fatalf("Spawn() error = %v", err)
+	}
+
+	wantCmds := []recordedCommand{
+		{name: "amux", args: []string{"-s", "main", "spawn", "--auto", "--window", "alphaosZ", "--name", "w-LAB-977"}},
+		{name: "amux", args: []string{"-s", "main", "new-window", "--name", "alphaosZ"}},
+		{name: "amux", args: []string{"-s", "main", "spawn", "--auto", "--window", "alphaosZ", "--name", "w-LAB-977"}},
+	}
+	if !reflect.DeepEqual(runner.calls, wantCmds) {
+		t.Fatalf("Spawn() commands = %#v, want %#v", runner.calls, wantCmds)
+	}
+
+	wantPane := Pane{ID: "w-LAB-977", Name: "w-LAB-977"}
+	if gotPane != wantPane {
+		t.Fatalf("Spawn() pane = %#v, want %#v", gotPane, wantPane)
+	}
+}
+
+func TestCLIClientSpawnRetriesWhenMissingTargetWindowAlreadyExists(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeRunner{
+		queue: []runnerResult{
+			{
+				output: []byte(`window "alphaosZ" not found`),
+				err:    errors.New("exit status 1"),
+			},
+			{
+				output: []byte(`window "alphaosZ" already exists`),
+				err:    errors.New("exit status 1"),
+			},
+			{output: []byte("Split horizontal: new pane w-LAB-978\n")},
+		},
+	}
+	client := newTestClient(Config{Session: "main"}, runner)
+
+	gotPane, err := client.Spawn(context.Background(), SpawnRequest{
+		Window: "alphaosZ",
+		Name:   "w-LAB-978",
+	})
+	if err != nil {
+		t.Fatalf("Spawn() error = %v", err)
+	}
+
+	wantCmds := []recordedCommand{
+		{name: "amux", args: []string{"-s", "main", "spawn", "--auto", "--window", "alphaosZ", "--name", "w-LAB-978"}},
+		{name: "amux", args: []string{"-s", "main", "new-window", "--name", "alphaosZ"}},
+		{name: "amux", args: []string{"-s", "main", "spawn", "--auto", "--window", "alphaosZ", "--name", "w-LAB-978"}},
+	}
+	if !reflect.DeepEqual(runner.calls, wantCmds) {
+		t.Fatalf("Spawn() commands = %#v, want %#v", runner.calls, wantCmds)
+	}
+
+	wantPane := Pane{ID: "w-LAB-978", Name: "w-LAB-978"}
+	if gotPane != wantPane {
+		t.Fatalf("Spawn() pane = %#v, want %#v", gotPane, wantPane)
+	}
+}

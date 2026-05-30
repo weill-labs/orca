@@ -478,6 +478,7 @@ func TestAssignRetriesCodexPromptUntilWorkingAppears(t *testing.T) {
 	}
 	if got, want := deps.amux.waitIdleCalls, []waitIdleCall{
 		{PaneID: "pane-1", Timeout: defaultAgentHandshakeTimeout},
+		{PaneID: "pane-1", Timeout: defaultAgentHandshakeTimeout},
 		{PaneID: "pane-1", Timeout: defaultAgentHandshakeTimeout, Settle: defaultPromptSettleDuration},
 		{PaneID: "pane-1", Timeout: codexPromptRetryIdleProbeTime},
 		{PaneID: "pane-1", Timeout: codexPromptRetryIdleProbeTime},
