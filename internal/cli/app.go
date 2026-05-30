@@ -699,6 +699,7 @@ func (a *App) runEnqueue(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	requestedProjectPath := projectPath
 	projectPath = project.NormalizeWorkerProjectPath(projectPath)
 
 	result, err := a.daemon.Enqueue(ctx, daemon.EnqueueRequest{
@@ -707,7 +708,7 @@ func (a *App) runEnqueue(ctx context.Context, args []string) error {
 		Target:   strings.TrimSpace(target),
 	})
 	if err != nil {
-		return err
+		return enqueueErrorWithProjectHint(err, strings.TrimSpace(target), requestedProjectPath, projectPath)
 	}
 
 	if jsonOutput {

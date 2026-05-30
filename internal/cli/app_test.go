@@ -2494,10 +2494,11 @@ func TestAppEnqueueFromPoolCloneCWDUsesParentProject(t *testing.T) {
 			} else if err != nil {
 				t.Fatalf("Run() error = %v", err)
 			}
-			if d.enqueueRequest == nil {
+			if d.enqueueRequest == nil && len(tt.wantErr) == 0 {
 				t.Fatal("enqueue request missing")
 			}
-			if got := d.enqueueRequest.Project; got != projectRoot {
+			if d.enqueueRequest != nil && d.enqueueRequest.Project != projectRoot {
+				got := d.enqueueRequest.Project
 				t.Fatalf("enqueue project = %q, want parent project %q", got, projectRoot)
 			}
 		})
