@@ -122,21 +122,6 @@ CREATE TABLE IF NOT EXISTS events (
 	created_at TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS mail (
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
-	project TEXT NOT NULL,
-	thread_id TEXT NOT NULL DEFAULT '',
-	sender TEXT NOT NULL,
-	recipient TEXT NOT NULL,
-	body TEXT NOT NULL,
-	importance TEXT NOT NULL DEFAULT 'normal',
-	kind TEXT NOT NULL DEFAULT 'note',
-	ask_id INTEGER,
-	reply_body TEXT NOT NULL DEFAULT '',
-	read_at TEXT,
-	created_at TEXT NOT NULL
-);
-
 CREATE INDEX IF NOT EXISTS idx_tasks_project_updated ON tasks(project, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_tasks_project_branch_status ON tasks(project, branch, status, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_workers_project_last_seen ON workers(project, last_seen_at DESC, worker_id ASC);
@@ -145,8 +130,6 @@ CREATE INDEX IF NOT EXISTS idx_events_project_id ON events(project, id);
 CREATE INDEX IF NOT EXISTS idx_events_project_issue_id ON events(project, issue, id);
 CREATE INDEX IF NOT EXISTS idx_events_project_worker_id ON events(project, worker_id, id);
 CREATE INDEX IF NOT EXISTS idx_merge_queue_project_created ON merge_queue(project, created_at ASC, pr_number ASC);
-CREATE INDEX IF NOT EXISTS idx_mail_project_recipient_id ON mail(project, recipient, id DESC);
-CREATE INDEX IF NOT EXISTS idx_mail_project_thread_id ON mail(project, thread_id, id);
 `
 
 const schemaBootstrapSQL = `
@@ -253,28 +236,11 @@ CREATE TABLE IF NOT EXISTS events (
 	created_at TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS mail (
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
-	project TEXT NOT NULL,
-	thread_id TEXT NOT NULL DEFAULT '',
-	sender TEXT NOT NULL,
-	recipient TEXT NOT NULL,
-	body TEXT NOT NULL,
-	importance TEXT NOT NULL DEFAULT 'normal',
-	kind TEXT NOT NULL DEFAULT 'note',
-	ask_id INTEGER,
-	reply_body TEXT NOT NULL DEFAULT '',
-	read_at TEXT,
-	created_at TEXT NOT NULL
-);
-
 CREATE INDEX IF NOT EXISTS idx_tasks_project_updated ON tasks(project, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_clones_project_updated ON clones(project, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_events_project_id ON events(project, id);
 CREATE INDEX IF NOT EXISTS idx_events_project_issue_id ON events(project, issue, id);
 CREATE INDEX IF NOT EXISTS idx_merge_queue_project_created ON merge_queue(project, created_at ASC, pr_number ASC);
-CREATE INDEX IF NOT EXISTS idx_mail_project_recipient_id ON mail(project, recipient, id DESC);
-CREATE INDEX IF NOT EXISTS idx_mail_project_thread_id ON mail(project, thread_id, id);
 `
 
 type SQLiteStore struct {
