@@ -699,6 +699,7 @@ func (a *App) runEnqueue(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	projectPath = project.NormalizeWorkerProjectPath(projectPath)
 
 	result, err := a.daemon.Enqueue(ctx, daemon.EnqueueRequest{
 		Project:  projectPath,

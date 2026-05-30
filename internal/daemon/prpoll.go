@@ -33,23 +33,26 @@ func (d *Daemon) enqueueRequest(ctx context.Context, projectPath string, req Enq
 		return MergeQueueActionResult{}, err
 	}
 
+	scope := newEnqueueProjectScope(projectPath)
+	projectPath = scope.projectPath()
 	landing, err := d.landingConfigForProject(projectPath)
 	if err != nil {
 		return MergeQueueActionResult{}, fmt.Errorf("load landing config: %w", err)
 	}
 	if landing.directMode() {
-		return d.enqueueDirect(ctx, projectPath, req.Target, req.PRNumber, landing)
+		return d.enqueueDirect(ctx, scope, req.Target, req.PRNumber, landing)
 	}
 	if req.PRNumber <= 0 {
 		return MergeQueueActionResult{}, fmt.Errorf("enqueue requires numeric PR_NUMBER unless [landing] mode = %q", LandingModeDirect)
 	}
-	return d.enqueuePR(ctx, projectPath, req.PRNumber)
+	return d.enqueuePR(ctx, scope, req.PRNumber)
 }
 
-func (d *Daemon) enqueuePR(ctx context.Context, projectPath string, prNumber int) (MergeQueueActionResult, error) {
+func (d *Daemon) enqueuePR(ctx context.Context, scope enqueueProjectScope, prNumber int) (MergeQueueActionResult, error) {
+	projectPath := scope.projectPath()
 	active, err := d.state.ActiveAssignmentByPRNumber(ctx, projectPath, prNumber)
 	if err != nil {
-		return MergeQueueActionResult{}, fmt.Errorf("PR #%d is not associated with an active assignment", prNumber)
+		return MergeQueueActionResult{}, scope.activeAssignmentError(fmt.Sprintf("PR #%d", prNumber), strconv.Itoa(prNumber))
 	}
 
 	now := d.now()
@@ -84,7 +87,8 @@ func (d *Daemon) enqueuePR(ctx context.Context, projectPath string, prNumber int
 	}, nil
 }
 
-func (d *Daemon) enqueueDirect(ctx context.Context, projectPath, target string, prNumber int, landing LandingConfig) (MergeQueueActionResult, error) {
+func (d *Daemon) enqueueDirect(ctx context.Context, scope enqueueProjectScope, target string, prNumber int, landing LandingConfig) (MergeQueueActionResult, error) {
+	projectPath := scope.projectPath()
 	target = strings.TrimSpace(target)
 	if target == "" && prNumber > 0 {
 		target = strconv.Itoa(prNumber)
@@ -95,7 +99,7 @@ func (d *Daemon) enqueueDirect(ctx context.Context, projectPath, target string, 
 
 	active, err := d.activeAssignmentByDirectTarget(ctx, projectPath, target)
 	if err != nil {
-		return MergeQueueActionResult{}, fmt.Errorf("%q is not associated with an active assignment", target)
+		return MergeQueueActionResult{}, scope.activeAssignmentError(fmt.Sprintf("%q", target), target)
 	}
 	branch := strings.TrimSpace(active.Task.Branch)
 	if branch == "" {
