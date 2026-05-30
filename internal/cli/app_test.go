@@ -2434,33 +2434,73 @@ func TestAppEnqueueFromPoolCloneCWDUsesParentProject(t *testing.T) {
 		t.Fatalf("MkdirAll(%q): %v", cloneSubdir, err)
 	}
 
-	d := &fakeDaemon{
-		enqueueResult: daemon.MergeQueueActionResult{
-			Project:   projectRoot,
-			Target:    "LAB-1995",
-			Status:    "queued",
-			Position:  1,
-			UpdatedAt: time.Now().UTC(),
+	tests := []struct {
+		name    string
+		target  string
+		err     error
+		wantErr []string
+	}{
+		{
+			name:   "sends parent project",
+			target: "LAB-1995",
+		},
+		{
+			name:   "unknown issue includes clone project hint",
+			target: "LAB-404",
+			err:    errors.New(`"LAB-404" is not associated with an active assignment`),
+			wantErr: []string{
+				"LAB-404",
+				"resolved from clone-pool path",
+				"orca enqueue LAB-404 --project",
+			},
 		},
 	}
-	app := New(Options{
-		Daemon: d,
-		State:  &fakeState{},
-		Stdout: &bytes.Buffer{},
-		Stderr: &bytes.Buffer{},
-		Cwd: func() (string, error) {
-			return cloneSubdir, nil
-		},
-	})
 
-	if err := app.Run(context.Background(), []string{"enqueue", "LAB-1995"}); err != nil {
-		t.Fatalf("Run() error = %v", err)
-	}
-	if d.enqueueRequest == nil {
-		t.Fatal("enqueue request missing")
-	}
-	if got := d.enqueueRequest.Project; got != projectRoot {
-		t.Fatalf("enqueue project = %q, want parent project %q", got, projectRoot)
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			d := &fakeDaemon{
+				err: tt.err,
+				enqueueResult: daemon.MergeQueueActionResult{
+					Project:   projectRoot,
+					Target:    tt.target,
+					Status:    "queued",
+					Position:  1,
+					UpdatedAt: time.Now().UTC(),
+				},
+			}
+			app := New(Options{
+				Daemon: d,
+				State:  &fakeState{},
+				Stdout: &bytes.Buffer{},
+				Stderr: &bytes.Buffer{},
+				Cwd: func() (string, error) {
+					return cloneSubdir, nil
+				},
+			})
+
+			err := app.Run(context.Background(), []string{"enqueue", tt.target})
+			if len(tt.wantErr) > 0 {
+				if err == nil {
+					t.Fatal("Run() succeeded, want error")
+				}
+				for _, want := range tt.wantErr {
+					if !strings.Contains(err.Error(), want) {
+						t.Fatalf("Run() error = %v, want substring %q", err, want)
+					}
+				}
+			} else if err != nil {
+				t.Fatalf("Run() error = %v", err)
+			}
+			if d.enqueueRequest == nil {
+				t.Fatal("enqueue request missing")
+			}
+			if got := d.enqueueRequest.Project; got != projectRoot {
+				t.Fatalf("enqueue project = %q, want parent project %q", got, projectRoot)
+			}
+		})
 	}
 }
 
