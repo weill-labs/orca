@@ -2,7 +2,22 @@
 
 Date: 2026-05-30. Supersedes the raw `send-keys` channel in
 [worker-lieutenant-comms.md](worker-lieutenant-comms.md) (open question #1).
-Status: **proposed** — design for review, no code yet.
+
+> **Status: SUPERSEDED / WITHDRAWN (2026-05-30).** This design proposed building
+> a mail store inside orca. Before it shipped, **amux gained a native pane
+> mailbox** (`amux msg send/inbox/read/ack`, amux LAB-1985..1994: an in-memory
+> store, checkpoint persistence, unread badges, events + `wait`, and MCP tools).
+> That is the correct home for the primitive — it matches this repo's own
+> layering rule (coordination primitives belong to amux; orca provides policy),
+> addresses by **pane id** (how orca already tracks the lead/worker), and routes
+> **cross-host** for free, which was `orca mail`'s hardest open problem.
+>
+> Decision: **retire `orca mail`, adopt `amux msg`.** The Phase 1 SQLite store
+> (`internal/mailbox` + `internal/daemonstate/mail_sqlite.go` + the `mail` table)
+> was reverted. Orca will instead inject an `amux msg send --to <lead-pane>`
+> convention into the assign prompt (replacing the raw `send-keys` line). Beads
+> `orca-y5r.10.*` are closed as obsoleted. The analysis below is kept as a record
+> of why we did **not** build our own store and did **not** adopt `am`.
 
 ## Motivation
 
