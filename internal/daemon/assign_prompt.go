@@ -102,9 +102,6 @@ func appendNotifyConvention(prompt, issue, pane string) string {
 
 func notifyConvention(issue, pane string) string {
 	subject := normalizeIssueIdentifier(issue)
-	if subject == "" {
-		subject = "<issue>"
-	}
 	return strings.Join([]string{
 		fmt.Sprintf("To notify or ask the lead, run `amux msg send --from \"$AMUX_PANE\" --to %s --subject %s --body \"<one-line message>\"`.", shellQuote(pane), shellQuote(subject)),
 		"Use it for: a blocking question before you guess, or a milestone.",

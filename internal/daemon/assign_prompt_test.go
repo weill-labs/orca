@@ -82,14 +82,10 @@ func TestWrapAssignmentPrompt(t *testing.T) {
 func TestAppendNotifyConvention(t *testing.T) {
 	t.Parallel()
 
-	convention := strings.Join([]string{
-		"To notify or ask the lead, run `amux msg send --from \"$AMUX_PANE\" --to 'pane-13' --subject 'LAB-1946' --body \"<one-line message>\"`.",
-		"Use it for: a blocking question before you guess, or a milestone.",
-		"Keep messages to one line; do not spam.",
-	}, "\n")
-	spaceConvention := strings.Replace(convention, "'pane-13'", "'my pane'", 1)
-	quoteConvention := strings.Replace(convention, "'pane-13'", "'it'\\''s-a-pane'", 1)
-	subjectConvention := strings.Replace(convention, "'LAB-1946'", "'orca-hmq'", 1)
+	convention := notifyConventionForTest(`amux msg send --from "$AMUX_PANE" --to 'pane-13' --subject 'LAB-1946' --body "<one-line message>"`)
+	spaceConvention := notifyConventionForTest(`amux msg send --from "$AMUX_PANE" --to 'my pane' --subject 'LAB-1946' --body "<one-line message>"`)
+	quoteConvention := notifyConventionForTest(`amux msg send --from "$AMUX_PANE" --to 'it'\''s-a-pane' --subject 'LAB-1946' --body "<one-line message>"`)
+	subjectConvention := notifyConventionForTest(`amux msg send --from "$AMUX_PANE" --to 'pane-13' --subject 'orca-hmq' --body "<one-line message>"`)
 
 	tests := []struct {
 		name   string
@@ -475,4 +471,12 @@ func normalizedPromptForTest(t *testing.T, prompt string) string {
 		t.Fatalf("normalizePromptForDelivery() error = %v", err)
 	}
 	return normalized
+}
+
+func notifyConventionForTest(command string) string {
+	return strings.Join([]string{
+		"To notify or ask the lead, run `" + command + "`.",
+		"Use it for: a blocking question before you guess, or a milestone.",
+		"Keep messages to one line; do not spam.",
+	}, "\n")
 }
