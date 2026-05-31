@@ -88,7 +88,7 @@ func (d *Daemon) assignWithPlanningDecision(ctx context.Context, projectPath, is
 		prompt = withGitHubIssueContext(issue, gitHubIssue, prompt)
 	}
 	prompt = wrapAssignmentPromptForLanding(profile, issue, prompt, landingConfig)
-	prompt = appendNotifyConvention(prompt, resolveNotifyPane(notifyPane, callerPane, d.notificationPane))
+	prompt = appendNotifyConvention(prompt, issue, resolveNotifyPane(notifyPane, callerPane, d.notificationPane))
 
 	assignmentBranch := issue
 	preflightSkipped := false

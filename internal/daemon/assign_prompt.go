@@ -9,7 +9,7 @@ const workerPRCreateCommand = "gh pr create --base main"
 const codexAssignmentPromptSuffix = "When tests pass, commit, push, and open a PR with " + workerPRCreateCommand + "."
 const codexDirectLandingPromptSuffix = "When tests pass, commit, push the branch, and queue direct landing with `orca enqueue %s`. Do not open a GitHub PR."
 const assignPreflightSkippedPrompt = "Orca skipped its open PR preflight because GitHub is rate limited. Before editing, check whether an open PR already exists for %s. If one exists, fetch and resume that branch before making changes."
-const notifyConventionPrefix = "To notify or ask the lieutenant, run `amux send-keys "
+const notifyConventionPrefix = "To notify or ask the lead, run `amux msg send --from \"$AMUX_PANE\" --to "
 
 func wrapAssignmentPrompt(profile AgentProfile, issue, prompt string) string {
 	return wrapAssignmentPromptForLanding(profile, issue, prompt, defaultLandingConfig())
@@ -83,14 +83,14 @@ func withAssignPreflightSkippedPrompt(prompt, issue string) string {
 	return prompt + "\n\n" + note
 }
 
-func appendNotifyConvention(prompt, pane string) string {
+func appendNotifyConvention(prompt, issue, pane string) string {
 	prompt = strings.TrimSpace(prompt)
 	pane = strings.TrimSpace(pane)
 	if pane == "" {
 		return prompt
 	}
 
-	convention := notifyConvention(pane)
+	convention := notifyConvention(issue, pane)
 	if strings.Contains(prompt, notifyConventionPrefix) {
 		return prompt
 	}
@@ -100,9 +100,13 @@ func appendNotifyConvention(prompt, pane string) string {
 	return prompt + "\n\n" + convention
 }
 
-func notifyConvention(pane string) string {
+func notifyConvention(issue, pane string) string {
+	subject := normalizeIssueIdentifier(issue)
+	if subject == "" {
+		subject = "<issue>"
+	}
 	return strings.Join([]string{
-		fmt.Sprintf("To notify or ask the lieutenant, run `amux send-keys %s \"<one-line message>\"`.", shellQuote(pane)),
+		fmt.Sprintf("To notify or ask the lead, run `amux msg send --from \"$AMUX_PANE\" --to %s --subject %s --body \"<one-line message>\"`.", shellQuote(pane), shellQuote(subject)),
 		"Use it for: a blocking question before you guess, or a milestone.",
 		"Keep messages to one line; do not spam.",
 	}, "\n")
