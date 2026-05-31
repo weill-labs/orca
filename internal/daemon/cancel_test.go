@@ -247,6 +247,69 @@ func TestCancelCleansOrphanWorkerWhenTaskIsTerminal(t *testing.T) {
 	deps.events.requireTypes(t, EventTaskCancelled)
 }
 
+func TestCancelStaleActiveTaskSkipsMissingPaneWaits(t *testing.T) {
+	t.Parallel()
+
+	deps := newTestDeps(t)
+	now := deps.clock.Now()
+	deps.amux.paneExists = map[string]bool{"pane-stale": false}
+	deps.amux.waitIdleErr = errors.New("wait idle should not run for missing pane")
+	deps.amux.killErr = errors.New("kill should not run for missing pane")
+	deps.state.putTaskForTest(Task{
+		Project:      "/tmp/project",
+		Issue:        "LAB-1999",
+		Status:       TaskStatusActive,
+		State:        TaskStateAssigned,
+		PaneID:       "pane-stale",
+		PaneName:     "w-LAB-1999",
+		WorkerID:     "worker-stale",
+		CloneName:    deps.pool.clone.Name,
+		ClonePath:    deps.pool.clone.Path,
+		Branch:       "LAB-1999",
+		AgentProfile: "codex",
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	})
+	if err := deps.state.PutWorker(context.Background(), Worker{
+		Project:      "/tmp/project",
+		WorkerID:     "worker-stale",
+		PaneID:       "pane-stale",
+		PaneName:     "w-LAB-1999",
+		Issue:        "LAB-1999",
+		ClonePath:    deps.pool.clone.Path,
+		AgentProfile: "codex",
+		Health:       WorkerHealthHealthy,
+		CreatedAt:    now,
+		LastSeenAt:   now,
+		UpdatedAt:    now,
+	}); err != nil {
+		t.Fatalf("PutWorker() error = %v", err)
+	}
+	d := deps.newDaemon(t)
+	d.started.Store(true)
+
+	if err := d.Cancel(context.Background(), "LAB-1999"); err != nil {
+		t.Fatalf("Cancel() error = %v", err)
+	}
+	task, ok := deps.state.task("LAB-1999")
+	if !ok {
+		t.Fatal("LAB-1999 task missing")
+	}
+	if got, want := task.Status, TaskStatusCancelled; got != want {
+		t.Fatalf("task.Status = %q, want %q", got, want)
+	}
+	if got := deps.amux.waitIdleCalls; len(got) != 0 {
+		t.Fatalf("wait idle calls = %#v, want none", got)
+	}
+	if got := deps.amux.killCalls; len(got) != 0 {
+		t.Fatalf("kill calls = %#v, want none", got)
+	}
+	if _, ok := deps.state.worker("worker-stale"); ok {
+		t.Fatal("worker-stale still present after cancellation")
+	}
+	deps.events.requireTypes(t, EventWorkerPostmortem, EventTaskCancelled)
+}
+
 func TestCancelDoesNotKillPaneWhenAnotherTaskBlocks(t *testing.T) {
 	t.Parallel()
 

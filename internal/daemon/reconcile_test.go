@@ -932,6 +932,90 @@ func TestReconcileDiscoversMergedPRByIssueID(t *testing.T) {
 	}
 }
 
+func TestReconcileFixCompletesDirectLandingFromLocalMainContainment(t *testing.T) {
+	projectPath, clonePath := newLocalDirectLandingRepo(t, map[string]string{"README.md": "base\n"})
+	git(t, projectPath, "checkout", "-b", "LAB-1999")
+	writeDirectLandingFile(t, projectPath, "landed.txt", "landed\n")
+	git(t, projectPath, "add", "landed.txt")
+	git(t, projectPath, "commit", "-m", "LAB-1999 direct landing")
+	git(t, projectPath, "checkout", "main")
+	git(t, projectPath, "merge", "--ff-only", "LAB-1999")
+
+	git(t, clonePath, "fetch", "origin", "LAB-1999:refs/remotes/origin/LAB-1999")
+	git(t, clonePath, "checkout", "-B", "LAB-1999", "origin/LAB-1999")
+	writeDirectLandingFile(t, clonePath, "worker-only.txt", "not pushed\n")
+	git(t, clonePath, "add", "worker-only.txt")
+	git(t, clonePath, "commit", "-m", "LAB-1999 diverged worker branch")
+
+	deps := newTestDeps(t)
+	now := deps.clock.Now()
+	deps.amux.paneExists = map[string]bool{"pane-1999": false}
+	deps.state.putTaskForTest(Task{
+		Project:      projectPath,
+		Issue:        "LAB-1999",
+		Status:       TaskStatusActive,
+		State:        TaskStateAssigned,
+		PaneID:       "pane-1999",
+		PaneName:     "w-LAB-1999",
+		WorkerID:     "worker-1999",
+		CloneName:    filepath.Base(clonePath),
+		ClonePath:    clonePath,
+		Branch:       "LAB-1999",
+		AgentProfile: "codex",
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	})
+	if err := deps.state.PutWorker(context.Background(), Worker{
+		Project:      projectPath,
+		WorkerID:     "worker-1999",
+		PaneID:       "pane-1999",
+		PaneName:     "w-LAB-1999",
+		Issue:        "LAB-1999",
+		ClonePath:    clonePath,
+		AgentProfile: "codex",
+		Health:       WorkerHealthHealthy,
+		CreatedAt:    now,
+		LastSeenAt:   now,
+		UpdatedAt:    now,
+	}); err != nil {
+		t.Fatalf("PutWorker() error = %v", err)
+	}
+
+	d := deps.newDaemonWithOptions(t, func(opts *Options) {
+		opts.Project = projectPath
+		opts.Commands = execCommandRunner{}
+		opts.LandingConfig = LandingConfig{Mode: LandingModeDirect, BaseBranch: "main"}
+	})
+	result, err := d.Reconcile(context.Background(), ReconcileRequest{
+		Project: projectPath,
+		Fix:     true,
+	})
+	if err != nil {
+		t.Fatalf("Reconcile(--fix) error = %v", err)
+	}
+	if got, want := result.Fixed, 1; got != want {
+		t.Fatalf("result.Fixed = %d, want %d", got, want)
+	}
+	if got, want := len(result.Findings), 1; got != want {
+		t.Fatalf("len(findings) = %d, want %d: %#v", got, want, result.Findings)
+	}
+	finding := result.Findings[0]
+	if finding.Kind != ReconcileRecoverableGhost || finding.PRState != reconcilePRStateMerged {
+		t.Fatalf("finding = %#v, want recoverable merged direct landing", finding)
+	}
+
+	task, ok := deps.state.task("LAB-1999")
+	if !ok {
+		t.Fatal("LAB-1999 task missing")
+	}
+	if got, want := task.Status, TaskStatusDone; got != want {
+		t.Fatalf("task.Status = %q, want %q", got, want)
+	}
+	if got := strings.TrimSpace(git(t, projectPath, "status", "--short")); got != "" {
+		t.Fatalf("manager status --short = %q, want clean", got)
+	}
+}
+
 func TestReconcileFixReportsClosedPRWithoutCompleting(t *testing.T) {
 	t.Parallel()
 
