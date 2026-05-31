@@ -83,58 +83,74 @@ func TestAppendNotifyConvention(t *testing.T) {
 	t.Parallel()
 
 	convention := strings.Join([]string{
-		"To notify or ask the lieutenant, run `amux send-keys 'pane-13' \"<one-line message>\"`.",
+		"To notify or ask the lead, run `amux msg send --from \"$AMUX_PANE\" --to 'pane-13' --subject 'LAB-1946' --body \"<one-line message>\"`.",
 		"Use it for: a blocking question before you guess, or a milestone.",
 		"Keep messages to one line; do not spam.",
 	}, "\n")
 	spaceConvention := strings.Replace(convention, "'pane-13'", "'my pane'", 1)
 	quoteConvention := strings.Replace(convention, "'pane-13'", "'it'\\''s-a-pane'", 1)
+	subjectConvention := strings.Replace(convention, "'LAB-1946'", "'orca-hmq'", 1)
 
 	tests := []struct {
 		name   string
 		prompt string
+		issue  string
 		pane   string
 		want   string
 	}{
 		{
 			name:   "appends convention when pane resolves",
 			prompt: "Implement daemon core",
+			issue:  "LAB-1946",
 			pane:   "pane-13",
 			want:   "Implement daemon core\n\n" + convention,
 		},
 		{
 			name:   "returns convention for empty prompt",
 			prompt: "",
+			issue:  "LAB-1946",
 			pane:   "pane-13",
 			want:   convention,
 		},
 		{
 			name:   "quotes pane names with spaces",
 			prompt: "Implement daemon core",
+			issue:  "LAB-1946",
 			pane:   "my pane",
 			want:   "Implement daemon core\n\n" + spaceConvention,
 		},
 		{
 			name:   "quotes pane names with single quotes",
 			prompt: "Implement daemon core",
+			issue:  "LAB-1946",
 			pane:   "it's-a-pane",
 			want:   "Implement daemon core\n\n" + quoteConvention,
 		},
 		{
+			name:   "subject carries issue id",
+			prompt: "Implement daemon core",
+			issue:  "orca-hmq",
+			pane:   "pane-13",
+			want:   "Implement daemon core\n\n" + subjectConvention,
+		},
+		{
 			name:   "omits convention when pane is empty",
 			prompt: "Implement daemon core",
+			issue:  "LAB-1946",
 			pane:   "",
 			want:   "Implement daemon core",
 		},
 		{
 			name:   "does not duplicate existing convention",
 			prompt: "Implement daemon core\n\n" + convention,
+			issue:  "LAB-1946",
 			pane:   "pane-13",
 			want:   "Implement daemon core\n\n" + convention,
 		},
 		{
 			name:   "does not duplicate existing convention for different pane",
 			prompt: "Implement daemon core\n\n" + convention,
+			issue:  "LAB-1946",
 			pane:   "pane-99",
 			want:   "Implement daemon core\n\n" + convention,
 		},
@@ -145,8 +161,8 @@ func TestAppendNotifyConvention(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := appendNotifyConvention(tt.prompt, tt.pane)
-			got = appendNotifyConvention(got, tt.pane)
+			got := appendNotifyConvention(tt.prompt, tt.issue, tt.pane)
+			got = appendNotifyConvention(got, tt.issue, tt.pane)
 			if got != tt.want {
 				t.Fatalf("appendNotifyConvention() = %q, want %q", got, tt.want)
 			}
@@ -224,7 +240,7 @@ func TestAssignAppendsNotifyConventionFromCallerPane(t *testing.T) {
 		return ok && task.Status == TaskStatusActive
 	})
 
-	wantPrompt := appendNotifyConvention(wantedCodexAssignmentPrompt("LAB-1946", "Implement worker comms"), "pane-13")
+	wantPrompt := appendNotifyConvention(wantedCodexAssignmentPrompt("LAB-1946", "Implement worker comms"), "LAB-1946", "pane-13")
 	task, ok := deps.state.task("LAB-1946")
 	if !ok {
 		t.Fatal("task not stored in state")
@@ -261,7 +277,7 @@ func TestAssignAppendsNotifyConventionFromConfigPane(t *testing.T) {
 		return ok && task.Status == TaskStatusActive
 	})
 
-	wantPrompt := appendNotifyConvention(wantedCodexAssignmentPrompt("LAB-1947", "Implement config comms"), "pane-config")
+	wantPrompt := appendNotifyConvention(wantedCodexAssignmentPrompt("LAB-1947", "Implement config comms"), "LAB-1947", "pane-config")
 	task, ok := deps.state.task("LAB-1947")
 	if !ok {
 		t.Fatal("task not stored in state")
