@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os/exec"
 	"strings"
 
@@ -118,7 +119,7 @@ func (a *App) writeDirectLandingSummary(ctx context.Context, projectPath string,
 	return a.writeDirectLandingLocalState(ctx, projectPath, baseBranch, landedSHA)
 }
 
-func writeRefDelta(w interface{ Write([]byte) (int, error) }, subject, ref, before, after string) error {
+func writeRefDelta(w io.Writer, subject, ref, before, after string) error {
 	before = strings.TrimSpace(before)
 	after = strings.TrimSpace(after)
 	if before == "" || after == "" {

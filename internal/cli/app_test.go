@@ -2524,9 +2524,28 @@ func TestAppEnqueuePrintsDirectLandingSummary(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name string
+		name            string
+		originAfter     func(t *testing.T, repoRoot string) string
+		wantLocal       string
+		wantNextCommand bool
 	}{
-		{name: "manual sync needed"},
+		{
+			name: "manual sync needed",
+			originAfter: func(t *testing.T, _ string) string {
+				t.Helper()
+				return "cccccccccccccccccccccccccccccccccccccccc"
+			},
+			wantLocal:       "local checkout not synced:",
+			wantNextCommand: true,
+		},
+		{
+			name: "local checkout already synced",
+			originAfter: func(t *testing.T, repoRoot string) string {
+				t.Helper()
+				return strings.TrimSpace(runTestCommandOutput(t, repoRoot, "git", "rev-parse", "HEAD"))
+			},
+			wantLocal: "local checkout synced: main at ",
+		},
 	}
 
 	for _, tt := range tests {
@@ -2537,7 +2556,7 @@ func TestAppEnqueuePrintsDirectLandingSummary(t *testing.T) {
 			repoRoot := newGitRepoWithOrigin(t)
 			now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
 			originBefore := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-			originAfter := "cccccccccccccccccccccccccccccccccccccccc"
+			originAfter := tt.originAfter(t, repoRoot)
 			featureBefore := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 
 			d := &fakeDaemon{
@@ -2594,13 +2613,21 @@ func TestAppEnqueuePrintsDirectLandingSummary(t *testing.T) {
 				"landed LAB-2016 (branch LAB-2016)",
 				"remote main advanced (origin/main): " + originBefore + " -> " + originAfter,
 				"feature branch updated: LAB-2016 " + featureBefore + " -> " + originAfter,
-				"local checkout not synced:",
-				"expected main at " + originAfter,
-				"next: git fetch origin main && git checkout main && git reset --hard origin/main",
+				tt.wantLocal,
 			} {
 				if !strings.Contains(stdout.String(), want) {
 					t.Fatalf("stdout = %q, want substring %q", stdout.String(), want)
 				}
+			}
+			syncCommand := "next: git fetch origin main && git checkout main && git reset --hard origin/main"
+			if tt.wantNextCommand {
+				if !strings.Contains(stdout.String(), "expected main at "+originAfter) || !strings.Contains(stdout.String(), syncCommand) {
+					t.Fatalf("stdout = %q, want expected local state and sync command", stdout.String())
+				}
+				return
+			}
+			if strings.Contains(stdout.String(), syncCommand) {
+				t.Fatalf("stdout = %q, did not want sync command", stdout.String())
 			}
 		})
 	}
@@ -3004,12 +3031,19 @@ func newGitRepoWithOrigin(t *testing.T) string {
 func runTestCommand(t *testing.T, dir, name string, args ...string) {
 	t.Helper()
 
+	_ = runTestCommandOutput(t, dir, name, args...)
+}
+
+func runTestCommandOutput(t *testing.T, dir, name string, args ...string) string {
+	t.Helper()
+
 	cmd := exec.Command(name, args...)
 	cmd.Dir = dir
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("%s %s: %v\n%s", name, strings.Join(args, " "), err, strings.TrimSpace(string(output)))
 	}
+	return string(output)
 }
 
 type fakeDaemon struct {
