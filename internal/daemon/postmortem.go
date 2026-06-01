@@ -121,6 +121,14 @@ func (d *Daemon) finishAssignmentWithMessageAndPrompt(ctx context.Context, activ
 	cancelled := status == TaskStatusCancelled
 	cleanupCtx := d.cleanupContext(ctx)
 	d.stopTaskMonitorForProject(active.Task.Project, active.Task.Issue)
+	missingCancelPane := false
+	if cancelled {
+		missing, err := d.cancellationPaneMissing(cleanupCtx, active)
+		if err != nil {
+			result = errors.Join(result, err)
+		}
+		missingCancelPane = missing
+	}
 
 	if prompt := completionWrapUpPrompt(merged, wrapUpPrompt); prompt != "" {
 		if err := d.sendLifecyclePrompt(cleanupCtx, active.Task.PaneID, active.Task.AgentProfile, prompt); err != nil {
@@ -138,12 +146,16 @@ func (d *Daemon) finishAssignmentWithMessageAndPrompt(ctx context.Context, activ
 	}
 
 	if status != TaskStatusFailed {
-		postmortemErr := d.ensurePostmortem(cleanupCtx, active)
-		if cancelled {
-			postmortemErr = ignorePaneAlreadyGoneError(postmortemErr)
+		if missingCancelPane {
+			d.emitSkippedPostmortemForMissingPane(cleanupCtx, active)
+		} else {
+			postmortemErr := d.ensurePostmortem(cleanupCtx, active)
+			if cancelled {
+				postmortemErr = ignorePaneAlreadyGoneError(postmortemErr)
+			}
+			result = errors.Join(result, postmortemErr)
 		}
-		result = errors.Join(result, postmortemErr)
-		if active.Task.PaneID != "" {
+		if active.Task.PaneID != "" && !missingCancelPane {
 			metadata, err := d.completionPaneMetadata(cleanupCtx, active, merged)
 			if err != nil {
 				result = errors.Join(result, err)
@@ -157,7 +169,7 @@ func (d *Daemon) finishAssignmentWithMessageAndPrompt(ctx context.Context, activ
 		}
 	}
 
-	if cancelled {
+	if cancelled && !missingCancelPane {
 		if err := ignorePaneAlreadyGoneError(d.amux.KillPane(cleanupCtx, active.Task.PaneID)); err != nil {
 			result = errors.Join(result, err)
 		}
@@ -177,6 +189,11 @@ func (d *Daemon) finishAssignmentWithMessageAndPrompt(ctx context.Context, activ
 	active.Task.UpdatedAt = d.now()
 	result = errors.Join(result, d.state.PutTask(cleanupCtx, active.Task))
 	result = errors.Join(result, d.releaseWorkerClaim(cleanupCtx, active.Worker))
+	if cancelled && missingCancelPane {
+		if err := d.state.DeleteWorker(cleanupCtx, active.Task.Project, active.Worker.WorkerID); err != nil && !errors.Is(err, ErrWorkerNotFound) {
+			result = errors.Join(result, err)
+		}
+	}
 	if active.Task.PRNumber > 0 {
 		if err := d.state.DeleteMergeEntry(cleanupCtx, active.Task.Project, active.Task.PRNumber); err != nil && !errors.Is(err, ErrTaskNotFound) {
 			result = errors.Join(result, err)

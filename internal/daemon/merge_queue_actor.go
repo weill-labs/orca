@@ -143,64 +143,6 @@ type directLandingOutcome struct {
 	failedAction           string
 }
 
-func (a *mergeQueueActor) landDirect(ctx context.Context, entry MergeQueueEntry) directLandingOutcome {
-	baseBranch := directLandingBaseBranch(entry)
-	branch := directLandingBranch(entry)
-	clonePath := strings.TrimSpace(entry.ClonePath)
-	if clonePath == "" {
-		return directLandingOutcome{err: errors.New("direct landing entry missing clone path"), failedAction: "load worker clone"}
-	}
-	commands := []struct {
-		action string
-		args   []string
-	}{
-		{action: "git fetch origin " + baseBranch, args: []string{"fetch", "origin", baseBranch}},
-		{action: "git checkout " + branch, args: []string{"checkout", branch}},
-		{action: "git rebase origin/" + baseBranch, args: []string{"rebase", "origin/" + baseBranch}},
-	}
-
-	for _, command := range commands {
-		if _, err := a.commands.Run(ctx, clonePath, "git", command.args...); err != nil {
-			outcome := directLandingOutcome{err: err, failedAction: command.action}
-			if strings.HasPrefix(command.action, "git rebase ") {
-				outcome.conflictedFiles = a.conflictedFiles(ctx, clonePath)
-				if len(outcome.conflictedFiles) > 0 {
-					outcome.conflict = true
-					outcome.conflictStatePreserved = true
-				}
-			}
-			return outcome
-		}
-	}
-
-	if gate := strings.TrimSpace(entry.QualityGate); gate != "" {
-		if _, err := a.commands.Run(ctx, clonePath, "sh", "-c", gate); err != nil {
-			return directLandingOutcome{err: err, failedAction: "quality gate: " + gate}
-		}
-	}
-
-	pushAction := "git push origin HEAD:" + baseBranch
-	if _, err := a.commands.Run(ctx, clonePath, "git", "push", "origin", "HEAD:"+baseBranch); err != nil {
-		return directLandingOutcome{err: err, failedAction: pushAction}
-	}
-	return directLandingOutcome{}
-}
-
-func (a *mergeQueueActor) conflictedFiles(ctx context.Context, projectPath string) []string {
-	out, err := a.commands.Run(ctx, projectPath, "git", "diff", "--name-only", "--diff-filter=U")
-	if err != nil {
-		return nil
-	}
-	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-	files := make([]string, 0, len(lines))
-	for _, line := range lines {
-		if file := strings.TrimSpace(line); file != "" {
-			files = append(files, file)
-		}
-	}
-	return files
-}
-
 func (a *mergeQueueActor) fillDirectLandingConfig(entry MergeQueueEntry) MergeQueueEntry {
 	if mergeQueueEntryMode(entry) != LandingModeDirect || a.landingConfigForProject == nil {
 		return entry

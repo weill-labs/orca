@@ -306,6 +306,14 @@ func (d *Daemon) reconcileTaskPRInfo(ctx context.Context, task Task) (reconcileP
 		return info, nil
 	}
 
+	directInfo, directMerged, err := d.directLandingReconcilePRInfo(ctx, task, info)
+	if err != nil {
+		return reconcilePRInfo{}, err
+	}
+	if directMerged {
+		return directInfo, nil
+	}
+
 	branch := strings.TrimSpace(task.Branch)
 	if branch == "" {
 		branch = strings.TrimSpace(task.Issue)
@@ -313,6 +321,9 @@ func (d *Daemon) reconcileTaskPRInfo(ctx context.Context, task Task) (reconcileP
 	if branch != "" {
 		number, merged, err := d.lookupOpenOrMergedPRNumber(ctx, prProjectForTask(task), branch)
 		if err != nil {
+			if isNoGitHubRemoteError(err) {
+				return directInfo, nil
+			}
 			return reconcilePRInfo{}, err
 		}
 		if number > 0 {
@@ -329,6 +340,9 @@ func (d *Daemon) reconcileTaskPRInfo(ctx context.Context, task Task) (reconcileP
 
 	number, discoveredBranch, err := d.findPRByIssueID(ctx, prProjectForTask(task), task.Issue)
 	if err != nil {
+		if isNoGitHubRemoteError(err) {
+			return directInfo, nil
+		}
 		return reconcilePRInfo{}, err
 	}
 	if number == 0 {
