@@ -277,6 +277,21 @@ func TestAppRunDispatchesCommands(t *testing.T) {
 					UpdatedAt: now,
 				}
 			},
+			prepareState: func(s *fakeState) {
+				s.events = []state.Event{{
+					Kind:      daemon.EventDirectLanded,
+					Issue:     "LAB-1969",
+					CreatedAt: now.Add(time.Second),
+					Payload: []byte(`{
+						"type":"direct.landed",
+						"issue":"LAB-1969",
+						"branch":"LAB-1969",
+						"base_branch":"main",
+						"origin_main_before_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+						"origin_main_after_sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+					}`),
+				}}
+			},
 			assert: func(t *testing.T, d *fakeDaemon, _ *fakeState, stdout, _ string, _, _ string) {
 				t.Helper()
 				if d.enqueueRequest == nil {
@@ -2500,6 +2515,92 @@ func TestAppEnqueueFromPoolCloneCWDUsesParentProject(t *testing.T) {
 			if d.enqueueRequest != nil && d.enqueueRequest.Project != projectRoot {
 				got := d.enqueueRequest.Project
 				t.Fatalf("enqueue project = %q, want parent project %q", got, projectRoot)
+			}
+		})
+	}
+}
+
+func TestAppEnqueuePrintsDirectLandingSummary(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+	}{
+		{name: "manual sync needed"},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			repoRoot := newGitRepoWithOrigin(t)
+			now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+			originBefore := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+			originAfter := "cccccccccccccccccccccccccccccccccccccccc"
+			featureBefore := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+			d := &fakeDaemon{
+				enqueueResult: daemon.MergeQueueActionResult{
+					Mode:       daemon.LandingModeDirect,
+					Project:    repoRoot,
+					Issue:      "LAB-2016",
+					Branch:     "LAB-2016",
+					Target:     "LAB-2016",
+					BaseBranch: "main",
+					Status:     "queued",
+					Position:   1,
+					UpdatedAt:  now,
+				},
+			}
+			s := &fakeState{
+				events: []state.Event{{
+					Project:   repoRoot,
+					Kind:      daemon.EventDirectLanded,
+					Issue:     "LAB-2016",
+					Message:   "direct landing updated main from LAB-2016",
+					CreatedAt: now.Add(time.Second),
+					Payload: []byte(`{
+						"type":"direct.landed",
+						"project":"` + repoRoot + `",
+						"issue":"LAB-2016",
+						"branch":"LAB-2016",
+						"base_branch":"main",
+						"origin_main_before_sha":"` + originBefore + `",
+						"origin_main_after_sha":"` + originAfter + `",
+						"feature_branch_before_sha":"` + featureBefore + `",
+						"feature_branch_after_sha":"` + originAfter + `"
+					}`),
+				}},
+			}
+
+			var stdout bytes.Buffer
+			app := New(Options{
+				Daemon: d,
+				State:  s,
+				Stdout: &stdout,
+				Stderr: &bytes.Buffer{},
+				Cwd: func() (string, error) {
+					return repoRoot, nil
+				},
+			})
+
+			if err := app.Run(context.Background(), []string{"enqueue", "LAB-2016"}); err != nil {
+				t.Fatalf("Run() error = %v", err)
+			}
+
+			for _, want := range []string{
+				"queued LAB-2016 for direct landing at position 1",
+				"landed LAB-2016 (branch LAB-2016)",
+				"remote main advanced (origin/main): " + originBefore + " -> " + originAfter,
+				"feature branch updated: LAB-2016 " + featureBefore + " -> " + originAfter,
+				"local checkout not synced:",
+				"expected main at " + originAfter,
+				"next: git fetch origin main && git checkout main && git reset --hard origin/main",
+			} {
+				if !strings.Contains(stdout.String(), want) {
+					t.Fatalf("stdout = %q, want substring %q", stdout.String(), want)
+				}
 			}
 		})
 	}

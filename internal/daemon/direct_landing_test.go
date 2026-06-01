@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -151,6 +152,90 @@ func TestDirectLandingLocalWorktreeOriginRollbackWhenMainAdvances(t *testing.T) 
 	}
 	if message := deps.events.lastMessage(EventDirectLandingFailed); !strings.Contains(message, "local origin main advanced") {
 		t.Fatalf("direct landing failed message = %q, want local origin advancement detail", message)
+	}
+}
+
+func TestDirectLandingReportsRefSummary(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+	}{
+		{name: "rebased feature branch advances remote main"},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx := context.Background()
+			remote, seed := newDirectLandingRemote(t, map[string]string{"README.md": "base\n"})
+			projectPath, clonePath := cloneDirectLandingRepo(t, remote)
+			deps, d := newDirectLandingDaemon(t, projectPath, clonePath, LandingConfig{
+				Mode:       LandingModeDirect,
+				BaseBranch: "main",
+			})
+
+			if err := d.Start(ctx); err != nil {
+				t.Fatalf("Start() error = %v", err)
+			}
+			t.Cleanup(func() {
+				_ = d.Stop(context.Background())
+			})
+			if err := d.Assign(ctx, "LAB-2016", "Report direct landing refs", "codex"); err != nil {
+				t.Fatalf("Assign() error = %v", err)
+			}
+
+			writeDirectLandingFile(t, clonePath, "worker.txt", "worker\n")
+			git(t, clonePath, "add", "worker.txt")
+			git(t, clonePath, "commit", "-m", "LAB-2016 worker change")
+			featureBefore := strings.TrimSpace(git(t, clonePath, "rev-parse", "HEAD"))
+
+			writeDirectLandingFile(t, seed, "main.txt", "main\n")
+			git(t, seed, "add", "main.txt")
+			git(t, seed, "commit", "-m", "advance main")
+			git(t, seed, "push", "origin", "main")
+			originMainBefore := strings.TrimSpace(git(t, seed, "rev-parse", "HEAD"))
+
+			if _, err := d.EnqueueTarget(ctx, "LAB-2016"); err != nil {
+				t.Fatalf("EnqueueTarget() error = %v", err)
+			}
+			d.dispatchMergeQueue(ctx)
+
+			waitFor(t, "direct landing ref summary", func() bool {
+				_, ok := deps.events.lastEventOfType(EventDirectLanded)
+				return ok
+			})
+
+			event, ok := deps.events.lastEventOfType(EventDirectLanded)
+			if !ok {
+				t.Fatal("direct landed event missing")
+			}
+			payload, err := json.Marshal(event)
+			if err != nil {
+				t.Fatalf("Marshal(event) error = %v", err)
+			}
+			var details map[string]any
+			if err := json.Unmarshal(payload, &details); err != nil {
+				t.Fatalf("Unmarshal(event) error = %v", err)
+			}
+
+			git(t, seed, "fetch", "origin", "main")
+			featureAfter := strings.TrimSpace(git(t, seed, "rev-parse", "origin/main"))
+			if got := details["origin_main_before_sha"]; got != originMainBefore {
+				t.Fatalf("origin_main_before_sha = %q, want %q", got, originMainBefore)
+			}
+			if got := details["origin_main_after_sha"]; got != featureAfter {
+				t.Fatalf("origin_main_after_sha = %q, want %q", got, featureAfter)
+			}
+			if got := details["feature_branch_before_sha"]; got != featureBefore {
+				t.Fatalf("feature_branch_before_sha = %q, want %q", got, featureBefore)
+			}
+			if got := details["feature_branch_after_sha"]; got != featureAfter {
+				t.Fatalf("feature_branch_after_sha = %q, want %q", got, featureAfter)
+			}
+		})
 	}
 }
 
