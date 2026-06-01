@@ -717,8 +717,10 @@ func (a *App) runEnqueue(ctx context.Context, args []string) error {
 
 	if result.Mode == daemon.LandingModeDirect {
 		landingTarget := firstNonEmptyString(result.Issue, result.Branch, result.Target)
-		_, err = fmt.Fprintf(a.stdout, "queued %s for direct landing at position %d\n", landingTarget, result.Position)
-		return err
+		if _, err = fmt.Fprintf(a.stdout, "queued %s for direct landing at position %d\n", landingTarget, result.Position); err != nil {
+			return err
+		}
+		return a.waitAndWriteDirectLandingSummary(ctx, projectPath, result)
 	}
 	_, err = fmt.Fprintf(a.stdout, "queued PR #%d for landing at position %d\n", result.PRNumber, result.Position)
 	return err

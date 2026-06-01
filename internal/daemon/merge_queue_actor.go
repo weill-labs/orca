@@ -127,11 +127,15 @@ func (a *mergeQueueActor) processDirectLanding(ctx context.Context, entry MergeQ
 	}
 
 	a.sendUpdate(ctx, MergeQueueUpdate{
-		Entry:          entry,
-		Delete:         true,
-		CompleteDirect: true,
-		EventType:      EventDirectLanded,
-		EventMessage:   directLandingCompletedMessage(entry),
+		Entry:                  entry,
+		Delete:                 true,
+		CompleteDirect:         true,
+		OriginMainBeforeSHA:    outcome.originMainBeforeSHA,
+		OriginMainAfterSHA:     outcome.originMainAfterSHA,
+		FeatureBranchBeforeSHA: outcome.featureBranchBeforeSHA,
+		FeatureBranchAfterSHA:  outcome.featureBranchAfterSHA,
+		EventType:              EventDirectLanded,
+		EventMessage:           directLandingCompletedMessage(entry),
 	})
 }
 
@@ -141,6 +145,10 @@ type directLandingOutcome struct {
 	conflictStatePreserved bool
 	conflictedFiles        []string
 	failedAction           string
+	originMainBeforeSHA    string
+	originMainAfterSHA     string
+	featureBranchBeforeSHA string
+	featureBranchAfterSHA  string
 }
 
 func (a *mergeQueueActor) fillDirectLandingConfig(entry MergeQueueEntry) MergeQueueEntry {
@@ -394,6 +402,10 @@ func applyMergeQueueEventMetadata(event *Event, update MergeQueueUpdate) {
 	event.QualityGate = update.Entry.QualityGate
 	event.ConflictedFiles = mergeQueueUpdateConflictedFiles(update)
 	event.FailedAction = update.FailedAction
+	event.OriginMainBeforeSHA = update.OriginMainBeforeSHA
+	event.OriginMainAfterSHA = update.OriginMainAfterSHA
+	event.FeatureBranchBeforeSHA = update.FeatureBranchBeforeSHA
+	event.FeatureBranchAfterSHA = update.FeatureBranchAfterSHA
 	event.ConflictStatePreserved = update.ConflictStatePreserved
 }
 

@@ -318,6 +318,10 @@ type MergeQueueUpdate struct {
 	ConflictStatePreserved bool
 	ConflictedFiles        string
 	FailedAction           string
+	OriginMainBeforeSHA    string
+	OriginMainAfterSHA     string
+	FeatureBranchBeforeSHA string
+	FeatureBranchAfterSHA  string
 	EventType              string
 	EventMessage           string
 	FailurePrompt          string
@@ -342,6 +346,10 @@ type Event struct {
 	QualityGate            string    `json:"quality_gate,omitempty"`
 	ConflictedFiles        []string  `json:"conflicted_files,omitempty"`
 	FailedAction           string    `json:"failed_action,omitempty"`
+	OriginMainBeforeSHA    string    `json:"origin_main_before_sha,omitempty"`
+	OriginMainAfterSHA     string    `json:"origin_main_after_sha,omitempty"`
+	FeatureBranchBeforeSHA string    `json:"feature_branch_before_sha,omitempty"`
+	FeatureBranchAfterSHA  string    `json:"feature_branch_after_sha,omitempty"`
 	ConflictStatePreserved bool      `json:"conflict_state_preserved,omitempty"`
 	Retry                  int       `json:"retry,omitempty"`
 	RestartAttempt         int       `json:"restart_attempt,omitempty"`

@@ -16,48 +16,67 @@ func (a *mergeQueueActor) landDirect(ctx context.Context, entry MergeQueueEntry)
 	if clonePath == "" {
 		return directLandingOutcome{err: errors.New("direct landing entry missing clone path"), failedAction: "load worker clone"}
 	}
-	commands := []struct {
-		action string
-		args   []string
-	}{
-		{action: "git fetch origin " + baseBranch, args: []string{"fetch", "origin", baseBranch}},
-		{action: "git checkout " + branch, args: []string{"checkout", branch}},
-		{action: "git rebase origin/" + baseBranch, args: []string{"rebase", "origin/" + baseBranch}},
-	}
 
-	for _, command := range commands {
-		if _, err := a.commands.Run(ctx, clonePath, "git", command.args...); err != nil {
-			outcome := directLandingOutcome{err: err, failedAction: command.action}
-			if strings.HasPrefix(command.action, "git rebase ") {
-				outcome.conflictedFiles = a.conflictedFiles(ctx, clonePath)
-				if len(outcome.conflictedFiles) > 0 {
-					outcome.conflict = true
-					outcome.conflictStatePreserved = true
-				}
-			}
+	outcome := directLandingOutcome{}
+	if _, err := a.commands.Run(ctx, clonePath, "git", "fetch", "origin", baseBranch); err != nil {
+		outcome.err = err
+		outcome.failedAction = "git fetch origin " + baseBranch
+		return outcome
+	}
+	baseCommit, err := a.gitTrim(ctx, clonePath, "rev-parse", "origin/"+baseBranch)
+	if err != nil {
+		outcome.err = err
+		outcome.failedAction = "git rev-parse origin/" + baseBranch
+		return outcome
+	}
+	outcome.originMainBeforeSHA = baseCommit
+
+	if _, err := a.commands.Run(ctx, clonePath, "git", "checkout", branch); err != nil {
+		outcome.err = err
+		outcome.failedAction = "git checkout " + branch
+		return outcome
+	}
+	outcome.featureBranchBeforeSHA = a.gitRevision(ctx, clonePath, "HEAD")
+
+	if _, err := a.commands.Run(ctx, clonePath, "git", "rebase", "origin/"+baseBranch); err != nil {
+		outcome.err = err
+		outcome.failedAction = "git rebase origin/" + baseBranch
+		outcome.conflictedFiles = a.conflictedFiles(ctx, clonePath)
+		if len(outcome.conflictedFiles) > 0 {
+			outcome.conflict = true
+			outcome.conflictStatePreserved = true
+		}
+		return outcome
+	}
+	outcome.featureBranchAfterSHA = a.gitRevision(ctx, clonePath, "HEAD")
+
+	if gate := strings.TrimSpace(entry.QualityGate); gate != "" {
+		if _, err := a.commands.Run(ctx, clonePath, "sh", "-c", gate); err != nil {
+			outcome.err = err
+			outcome.failedAction = "quality gate: " + gate
 			return outcome
 		}
 	}
 
-	if gate := strings.TrimSpace(entry.QualityGate); gate != "" {
-		if _, err := a.commands.Run(ctx, clonePath, "sh", "-c", gate); err != nil {
-			return directLandingOutcome{err: err, failedAction: "quality gate: " + gate}
-		}
-	}
-
-	baseCommit, err := a.gitTrim(ctx, clonePath, "rev-parse", "origin/"+baseBranch)
-	if err != nil {
-		return directLandingOutcome{err: err, failedAction: "git rev-parse origin/" + baseBranch}
-	}
 	if localOrigin, ok := a.localWorktreeOrigin(ctx, entry, clonePath); ok {
-		return a.landLocalWorktreeOrigin(ctx, localOrigin, clonePath, baseBranch, baseCommit)
+		localOutcome := a.landLocalWorktreeOrigin(ctx, localOrigin, clonePath, baseBranch, baseCommit)
+		localOutcome.originMainBeforeSHA = outcome.originMainBeforeSHA
+		localOutcome.featureBranchBeforeSHA = outcome.featureBranchBeforeSHA
+		localOutcome.featureBranchAfterSHA = outcome.featureBranchAfterSHA
+		if localOutcome.err == nil {
+			localOutcome.originMainAfterSHA = firstNonEmpty(outcome.featureBranchAfterSHA, a.gitRevision(ctx, clonePath, "HEAD"))
+		}
+		return localOutcome
 	}
 
 	pushAction := "git push origin HEAD:" + baseBranch
 	if _, err := a.commands.Run(ctx, clonePath, "git", "push", "origin", "HEAD:"+baseBranch); err != nil {
-		return directLandingOutcome{err: err, failedAction: pushAction}
+		outcome.err = err
+		outcome.failedAction = pushAction
+		return outcome
 	}
-	return directLandingOutcome{}
+	outcome.originMainAfterSHA = firstNonEmpty(outcome.featureBranchAfterSHA, a.gitRevision(ctx, clonePath, "HEAD"))
+	return outcome
 }
 
 func (a *mergeQueueActor) landLocalWorktreeOrigin(ctx context.Context, projectPath, clonePath, baseBranch, expectedBase string) directLandingOutcome {
@@ -212,6 +231,14 @@ func (a *mergeQueueActor) gitTrim(ctx context.Context, dir string, args ...strin
 		return "", err
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+func (a *mergeQueueActor) gitRevision(ctx context.Context, projectPath, revision string) string {
+	out, err := a.gitTrim(ctx, projectPath, "rev-parse", "--verify", revision)
+	if err != nil {
+		return ""
+	}
+	return out
 }
 
 func (a *mergeQueueActor) conflictedFiles(ctx context.Context, projectPath string) []string {
